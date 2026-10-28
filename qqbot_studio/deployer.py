@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .astrbot_api import AstrBotAPIError, AstrBotClient
-from .configgen import generate_artifacts
+from .configgen import generate_artifacts, image_names_for_prefix, mirror_prefixes, set_image_names
 from .dockerctl import DockerController, DockerError
 from .store import (
     DEFAULT_PROMPT,
@@ -419,16 +419,39 @@ class DeployManager:
         )
         self.store.save_config(config)
         add_log("本地配置已生成，包含随机 OneBot token 与 AstrBot 登录凭据。")
+        candidate_prefixes = mirror_prefixes() if use_mirror else [""]
         if use_mirror:
-            add_log("已启用国内镜像：m.daocloud.io/docker.io/")
+            add_log("已启用国内镜像加速，候选源：" + "、".join(candidate_prefixes[:4]))
 
         self._set_job(job, step="拉取 Docker 镜像", progress=24, message="正在拉取 AstrBot 与 SnowLuma 镜像，首次运行可能需要数分钟…")
-        try:
-            pull_result = self.docker.pull()
-        except DockerError as exc:
-            suggestion = "如果位于中国大陆，请返回配置页启用“国内镜像加速”后重试。" if not use_mirror else "请检查网络或更换 Docker 镜像源。"
-            raise DeploymentError(f"拉取镜像失败：{exc} {suggestion}") from exc
-        add_log(self.docker._tail(pull_result.output, 2500) or "镜像拉取完成。")
+        pull_result = None
+        last_pull_error: Exception | None = None
+        for index, prefix in enumerate(candidate_prefixes):
+            if index > 0:
+                astrbot_image, snowluma_image = image_names_for_prefix(prefix)
+                set_image_names(artifacts["env"], astrbot_image, snowluma_image)
+                add_log(f"镜像源不可用，自动切换到：{prefix or 'Docker Hub'}")
+            try:
+                pull_result = self.docker.pull()
+            except DockerError as exc:
+                last_pull_error = exc
+                add_log(f"镜像源拉取失败（{prefix or 'Docker Hub'}）：{exc}")
+                continue
+            if use_mirror:
+                config["docker_mirror"] = prefix
+                self.store.save_config(config)
+                add_log(f"镜像拉取成功，当前镜像源：{prefix}")
+            add_log(self.docker._tail(pull_result.output, 2500) or "镜像拉取完成。")
+            break
+
+        if pull_result is None:
+            suggestion = (
+                "请检查网络，稍后重试；也可以在环境变量 QQBOT_IMAGE_MIRROR_PREFIXES 中配置自己的可用镜像前缀。"
+                if use_mirror
+                else "如果位于中国大陆，请返回配置页启用“国内镜像加速”后重试。"
+            )
+            detail = f" 最后错误：{last_pull_error}" if last_pull_error else ""
+            raise DeploymentError(f"拉取镜像失败，已尝试的镜像源均不可用。{suggestion}{detail}")
 
         self._set_job(job, step="启动容器", progress=46, message="正在创建并启动 AstrBot 与 SnowLuma 容器…")
         up_result = self.docker.up()

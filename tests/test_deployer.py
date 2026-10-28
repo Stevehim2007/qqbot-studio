@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import tempfile
 import time
 import unittest
@@ -6,7 +8,7 @@ from unittest import mock
 from pathlib import Path
 
 from qqbot_studio.deployer import DeployManager, DeploymentError, PERSONA_ID
-from qqbot_studio.dockerctl import CommandResult, DockerStatus
+from qqbot_studio.dockerctl import CommandResult, DockerError, DockerStatus
 from qqbot_studio.store import Store
 
 
@@ -69,6 +71,24 @@ class FakeApi:
         self.prompts.append(prompt)
 
 
+
+class FallbackDocker(FakeDocker):
+    def __init__(self, data_dir):
+        super().__init__()
+        self.data_dir = Path(data_dir)
+        self.pull_calls = 0
+        self.env_images = []
+
+    def pull(self):
+        self.pull_calls += 1
+        env = (self.data_dir / ".env").read_text(encoding="utf-8")
+        match = re.search(r"^ASTRBOT_IMAGE=(.+)$", env, re.MULTILINE)
+        self.env_images.append(match.group(1) if match else "")
+        if self.pull_calls == 1:
+            raise DockerError("mirror-a 无法连接")
+        return super().pull()
+
+
 class DeployerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -88,10 +108,11 @@ class DeployerTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _wait_job(self, job_id, timeout=10):
+    def _wait_job(self, job_id, timeout=10, manager=None):
+        active_manager = manager or self.manager
         deadline = time.time() + timeout
         while time.time() < deadline:
-            job = self.manager.get_job(job_id)
+            job = active_manager.get_job(job_id)
             if job and job["status"] != "running":
                 return job
             time.sleep(0.05)
@@ -119,6 +140,40 @@ class DeployerTests(unittest.TestCase):
                 prompt="prompt",
                 accept_risk=False,
             )
+
+
+    def test_mirror_pull_falls_back_to_next_source(self):
+        docker = FallbackDocker(self.tmp.name)
+        manager = DeployManager(
+            store=self.store,
+            docker=docker,
+            api_client_factory=lambda base, user, password: self.api,
+        )
+        manager.probe_deepseek_key = lambda key: (True, "ok", 200)
+        with mock.patch.dict(
+            os.environ,
+            {"QQBOT_IMAGE_MIRROR_PREFIXES": "mirror-a.example/,mirror-b.example/"},
+            clear=False,
+        ):
+            job_id = manager.start_deploy(
+                qq_account="12345678",
+                deepseek_api_key="sk-test-secret",
+                prompt="prompt",
+                use_mirror=True,
+                accept_risk=True,
+            )
+            job = self._wait_job(job_id, manager=manager)
+        self.assertEqual(job["status"], "success", job.get("error"))
+        self.assertEqual(docker.pull_calls, 2)
+        self.assertEqual(
+            docker.env_images,
+            [
+                "mirror-a.example/soulter/astrbot:latest",
+                "mirror-b.example/soulter/astrbot:latest",
+            ],
+        )
+        self.assertEqual(self.store.load_config().get("docker_mirror"), "mirror-b.example/")
+        self.assertTrue(any("自动切换" in line for line in job["logs"]))
 
     def test_full_deployment_success_and_status(self):
         job_id = self.manager.start_deploy(

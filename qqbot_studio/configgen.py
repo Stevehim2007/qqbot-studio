@@ -15,7 +15,15 @@ from .store import MODEL_NAME
 
 ASTRBOT_IMAGE = "soulter/astrbot:latest"
 SNOWLUMA_IMAGE = "motricseven7/snowluma:latest"
-MIRROR_PREFIX = "m.daocloud.io/docker.io/"
+# Ordered fallbacks for users in mainland China.  Prefixes are intentionally
+# expressed as image-repository prefixes, not Docker daemon registry mirrors.
+DEFAULT_MIRROR_PREFIXES = (
+    "m.daocloud.io/docker.io/",
+    "docker.1ms.run/",
+    "docker.xuanyuan.me/",
+    "hub.rat.dev/",
+)
+MIRROR_ENV_VAR = "QQBOT_IMAGE_MIRROR_PREFIXES"
 DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
 DEFAULT_PORTS = {
     "astrbot_webui": 6185,
@@ -120,8 +128,71 @@ def choose_ports(
     return chosen
 
 
-def _image_name(default: str, use_mirror: bool) -> str:
-    return f"{MIRROR_PREFIX}{default}" if use_mirror else default
+def _normalize_mirror_prefix(prefix: str) -> str:
+    value = str(prefix or "").strip()
+    if not value:
+        return ""
+    if not value.endswith("/"):
+        value += "/"
+    return value
+
+
+def mirror_prefixes() -> list[str]:
+    """Return mirror prefixes, with optional user-defined sources first.
+
+    Set ``QQBOT_IMAGE_MIRROR_PREFIXES`` to a comma-separated list to override
+    the default order, for example::
+
+        QQBOT_IMAGE_MIRROR_PREFIXES="docker.1ms.run/,m.daocloud.io/docker.io/"
+    """
+
+    custom = [
+        _normalize_mirror_prefix(item)
+        for item in os.environ.get(MIRROR_ENV_VAR, "").split(",")
+        if item.strip()
+    ]
+    ordered: list[str] = []
+    for prefix in [*custom, *DEFAULT_MIRROR_PREFIXES]:
+        prefix = _normalize_mirror_prefix(prefix)
+        if prefix and prefix not in ordered:
+            ordered.append(prefix)
+    return ordered
+
+
+def image_names_for_prefix(prefix: str) -> tuple[str, str]:
+    """Return the two image names to use with a repository prefix."""
+
+    normalized = _normalize_mirror_prefix(prefix)
+    if not normalized:
+        return ASTRBOT_IMAGE, SNOWLUMA_IMAGE
+    return f"{normalized}{ASTRBOT_IMAGE}", f"{normalized}{SNOWLUMA_IMAGE}"
+
+
+def set_image_names(env_path: Path | str, astrbot_image: str, snowluma_image: str) -> None:
+    """Update only image entries in the generated .env file."""
+
+    path = Path(env_path)
+    try:
+        original = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"找不到环境变量文件：{path}") from exc
+    replacements = {
+        "ASTRBOT_IMAGE": str(astrbot_image),
+        "SNOWLUMA_IMAGE": str(snowluma_image),
+    }
+    found: set[str] = set()
+    lines: list[str] = []
+    for line in original.splitlines():
+        key = line.split("=", 1)[0] if "=" in line else ""
+        if key in replacements:
+            lines.append(f"{key}={replacements[key]}")
+            found.add(key)
+        else:
+            lines.append(line)
+    for key, value in replacements.items():
+        if key not in found:
+            lines.append(f"{key}={value}")
+    _atomic_write_text(path, "\n".join(lines) + "\n", mode=0o600)
 
 
 def _compose_yaml() -> str:
@@ -197,11 +268,12 @@ def _env_file(
     host_uid: int,
     host_gid: int,
     vnc_password: str,
-    use_mirror: bool,
+    mirror_prefix: str = "",
 ) -> str:
+    astrbot_image, snowluma_image = image_names_for_prefix(mirror_prefix)
     values = [
-        ("ASTRBOT_IMAGE", _image_name(ASTRBOT_IMAGE, use_mirror)),
-        ("SNOWLUMA_IMAGE", _image_name(SNOWLUMA_IMAGE, use_mirror)),
+        ("ASTRBOT_IMAGE", astrbot_image),
+        ("SNOWLUMA_IMAGE", snowluma_image),
         ("ASTRBOT_WEBUI_PORT", str(ports["astrbot_webui"])),
         ("SNOWLUMA_WEBUI_PORT_HOST", str(ports["snowluma_webui"])),
         ("NOVNC_PORT", str(ports["novnc"])),
@@ -417,6 +489,7 @@ def generate_artifacts(
     selected_ports = choose_ports(ports or secrets_data.get("ports") or None)
     uid = os.getuid() if host_uid is None else int(host_uid)
     gid = os.getgid() if host_gid is None else int(host_gid)
+    mirror_prefix = mirror_prefixes()[0] if use_mirror else ""
 
     compose_path = root / "compose.yml"
     env_path = root / ".env"
@@ -432,7 +505,7 @@ def generate_artifacts(
             host_uid=uid,
             host_gid=gid,
             vnc_password=str(secrets_data["vnc_password"]),
-            use_mirror=use_mirror,
+            mirror_prefix=mirror_prefix,
         ),
         mode=0o600,
     )
@@ -471,5 +544,6 @@ def generate_artifacts(
         "astrbot_data": astrbot_dir,
         "snowluma_data": snowluma_dir,
         "ports": selected_ports,
+        "mirror_prefix": mirror_prefix,
     }
     return result

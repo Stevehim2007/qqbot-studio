@@ -3,12 +3,16 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from qqbot_studio.configgen import (
     choose_ports,
     generate_artifacts,
+    image_names_for_prefix,
     md5_password,
+    mirror_prefixes,
+    set_image_names,
 )
 from qqbot_studio.store import DEFAULT_CONFIG, Store, generate_password
 
@@ -67,6 +71,37 @@ class StoreTests(unittest.TestCase):
 
 
 class ConfigGenerationTests(unittest.TestCase):
+
+    def test_mirror_prefix_order_and_custom_override(self):
+        with mock.patch.dict(
+            "os.environ",
+            {"QQBOT_IMAGE_MIRROR_PREFIXES": "custom.example/ , docker.1ms.run"},
+            clear=False,
+        ):
+            prefixes = mirror_prefixes()
+        self.assertEqual(prefixes[0], "custom.example/")
+        self.assertEqual(prefixes[1], "docker.1ms.run/")
+        self.assertIn("m.daocloud.io/docker.io/", prefixes)
+        images = image_names_for_prefix("docker.1ms.run")
+        self.assertEqual(images[0], "docker.1ms.run/soulter/astrbot:latest")
+        self.assertEqual(images[1], "docker.1ms.run/motricseven7/snowluma:latest")
+
+    def test_update_env_images_preserves_other_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "ASTRBOT_IMAGE=old/astrbot:latest\n"
+                "SNOWLUMA_IMAGE=old/snowluma:latest\n"
+                "NOVNC_PORT=6081\n",
+                encoding="utf-8",
+            )
+            set_image_names(env_path, "new/astrbot:latest", "new/snowluma:latest")
+            content = env_path.read_text(encoding="utf-8")
+            self.assertIn("ASTRBOT_IMAGE=new/astrbot:latest", content)
+            self.assertIn("SNOWLUMA_IMAGE=new/snowluma:latest", content)
+            self.assertIn("NOVNC_PORT=6081", content)
+            self.assertEqual(os.stat(env_path).st_mode & 0o777, 0o600)
+
     def test_all_generated_files_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             secrets_data = fake_secrets()
@@ -116,6 +151,7 @@ class ConfigGenerationTests(unittest.TestCase):
 
             env = result["env"].read_text(encoding="utf-8")
             self.assertIn("VNC_PASSWD=", env)
+            self.assertIn("ASTRBOT_IMAGE=soulter/astrbot:latest", env)
             self.assertNotIn(api_key, env)
             self.assertEqual(os.stat(result["env"]).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(result["astrbot_config"]).st_mode & 0o777, 0o600)

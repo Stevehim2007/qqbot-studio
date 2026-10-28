@@ -250,12 +250,69 @@ sudo usermod -aG docker "$USER"
 
 ### 拉取镜像很慢或失败
 
-打开向导中的“使用国内镜像加速”后重新部署。工具会使用：
+向导默认已勾选“使用国内镜像加速”。工具会依次尝试：
 
-- `m.daocloud.io/docker.io/soulter/astrbot:latest`
-- `m.daocloud.io/docker.io/motricseven7/snowluma:latest`
+1. `m.daocloud.io/docker.io/`
+2. `docker.1ms.run/`
+3. `docker.xuanyuan.me/`
+4. `hub.rat.dev/`
 
-镜像镜像站可能不可用；如仍失败，请配置自己的 Docker 镜像源或网络代理。
+每个源对应的镜像名形如：
+
+```text
+m.daocloud.io/docker.io/soulter/astrbot:latest
+docker.1ms.run/motricseven7/snowluma:latest
+```
+
+如果当前源超时或拒绝连接，部署任务会自动切换到下一个源，并把成功源记录在
+`~/.local/share/qqbot-studio/config.json` 的 `docker_mirror` 字段中。
+
+自定义镜像前缀（逗号分隔，按顺序优先尝试）：
+
+```bash
+QQBOT_IMAGE_MIRROR_PREFIXES="docker.1ms.run/,m.daocloud.io/docker.io/" ./start.sh
+```
+
+前缀必须支持 Docker Hub 路径拼接，即 `<prefix>/soulter/astrbot:latest` 可以正常拉取。
+如果镜像站仍不可用，可改用 Docker 官方镜像或网络代理。
+
+#### 使用 Docker daemon 加速器
+
+如果你已经有阿里云等 Docker 镜像加速地址，也可以配置到
+`/etc/docker/daemon.json`：
+
+```json
+{
+  "registry-mirrors": ["https://<你的专属镜像加速地址>"]
+}
+```
+
+然后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+
+配置 daemon 加速后，在向导中可以取消“使用国内镜像加速”，直接拉取官方镜像名。
+
+#### 离线导入镜像
+
+在能正常访问 Docker Hub 的机器上：
+
+```bash
+docker pull soulter/astrbot:latest
+docker pull motricseven7/snowluma:latest
+docker save -o qqbot-images.tar soulter/astrbot:latest motricseven7/snowluma:latest
+```
+
+把 `qqbot-images.tar` 拷贝到目标 Ubuntu 后：
+
+```bash
+docker load -i qqbot-images.tar
+```
+
+离线导入时，向导中请**取消**“使用国内镜像加速”，让 Compose 使用官方镜像名。
 
 ### AstrBot 提示 “aiocqhttp 适配器已被关闭”或连接不上
 

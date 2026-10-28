@@ -268,11 +268,11 @@
 
             <label class="switch-row" for="use-mirror">
               <span class="switch-copy">
-                <strong>使用国内镜像加速</strong>
-                <span>通过本地服务配置的镜像源拉取依赖，适合国内网络环境。</span>
+                <strong>使用国内镜像加速（自动多源）</strong>
+                <span>依次尝试 DaoCloud、1ms.run、轩辕、RatHub 等镜像源，无需手动切换。</span>
               </span>
               <span class="switch">
-                <input id="use-mirror" name="use_mirror" type="checkbox">
+                <input id="use-mirror" name="use_mirror" type="checkbox" checked>
                 <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
               </span>
             </label>
