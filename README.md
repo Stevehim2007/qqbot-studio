@@ -70,6 +70,31 @@ sudo -v
 ./start.sh
 ```
 
+### 指定本地向导端口
+
+向导本身默认自动选择一个空闲端口。也可以通过命令行指定：
+
+```bash
+./start.sh --port 8765
+```
+
+或使用环境变量：
+
+```bash
+QQBOT_STUDIO_PORT=8765 ./start.sh
+```
+
+运行后终端会打印实际向导地址，例如：
+
+```text
+打开向导：http://127.0.0.1:8765/
+```
+
+- 端口必须为 `1024–65535` 之间且未被占用。
+- `--port 0` 表示让系统自动选择空闲端口。
+- 如果你是双击 `.desktop` 启动的，可以编辑启动器的 `Exec` 行，在 `start.sh` 后追加 `--port 8765`。
+- 这里修改的是**本地网页向导端口**，不是 AstrBot WebUI、SnowLuma WebUI 或 noVNC 的部署端口；部署端口仍由向导在生成配置时自动避开占用。
+
 ---
 
 ## 3. 向导会做什么？
@@ -234,19 +259,48 @@ docker compose -p qqbot-studio up -d
 
 ## 9. 常见问题
 
-### Docker 安装失败
+### Docker 安装失败或被取消
 
-检查网络和 apt 源，或手动安装 Docker：
+新版启动器会在启动网页向导前严格检查：
+
+1. `docker` 命令是否存在；
+2. `docker compose` 是否可用；
+3. Docker 守护进程是否能访问（包括 `sudo -n docker` 权限）。
+
+任何一项不满足都会直接退出并打印修复命令，不会“假装 Docker 已安装”继续进入向导。
+
+如果你在安装过程中取消了，先关闭当前终端里的向导进程，然后重新运行：
+
+```bash
+cd "/你的路径/QQ Ai bot"
+./install.sh
+```
+
+也可以手动安装并验证：
 
 ```bash
 sudo apt update
 sudo apt install -y docker.io docker-compose-v2
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
+
+# 注销并重新登录后验证
+docker --version
+docker compose version
+docker info
 ```
 
-注销并重新登录后重试。也可以参考：
+Ubuntu 22.04 如果找不到 `docker-compose-v2`，请参照 Docker 官方文档安装
+`docker-compose-plugin`。也可以参考：
 <https://docs.docker.com/engine/install/ubuntu/>
+
+如果 Docker CLI 已安装但 `docker info` 报权限错误：
+
+```bash
+sudo systemctl start docker
+sudo usermod -aG docker "$USER"
+# 注销并重新登录，或运行 sudo -v 后重新打开本程序
+```
 
 ### 拉取镜像很慢或失败
 

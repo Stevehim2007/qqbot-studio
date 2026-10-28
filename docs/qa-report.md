@@ -1,6 +1,8 @@
 > **版本说明（2026-10-28 后续更新）：** 本报告主体对应早期 Docker 单镜像源版本（commit `6066872`）。
-> 之后已新增“国内镜像多源自动回退”和离线镜像说明；相关新增单元测试使测试总数为 28/28 通过，
-> 但未重新执行完整 QA 与真实 Docker E2E。镜像加速改动涉及 `configgen.py`、`deployer.py`、前端开关文案和 README。
+> 之后已新增“国内镜像多源自动回退”、离线镜像说明、Docker 安装完成严格检查，以及
+> `--port` / `QQBOT_STUDIO_PORT` 指定本地向导端口；相关新增单元测试目前通过，
+> 但未重新执行完整 QA 与真实 Docker E2E。改动涉及 `configgen.py`、`deployer.py`、`server.py`、
+> 启动脚本、前端开关文案、测试和 README。
 
 # QQ Bot Studio 最终 QA 报告
 

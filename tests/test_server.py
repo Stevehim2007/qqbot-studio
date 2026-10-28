@@ -1,11 +1,13 @@
 import json
+import os
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
 from qqbot_studio.dockerctl import DockerError
-from qqbot_studio.server import create_server
+from qqbot_studio.server import build_arg_parser, create_server
 
 
 class FakeManager:
@@ -54,6 +56,19 @@ class FakeManager:
     def update_persona(self, prompt):
         return "提示词已更新"
 
+
+
+class CliTests(unittest.TestCase):
+    def test_port_can_come_from_environment(self):
+        with mock.patch.dict(os.environ, {"QQBOT_STUDIO_PORT": "8765"}, clear=False):
+            args = build_arg_parser().parse_args([])
+        self.assertEqual(args.port, 8765)
+        self.assertEqual(build_arg_parser().parse_args(["--port", "9000"]).port, 9000)
+
+    def test_invalid_environment_port_falls_back_to_random(self):
+        with mock.patch.dict(os.environ, {"QQBOT_STUDIO_PORT": "not-a-port"}, clear=False):
+            args = build_arg_parser().parse_args([])
+        self.assertEqual(args.port, 0)
 
 class ServerTests(unittest.TestCase):
     def setUp(self):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import os
 import json
 import secrets
 import sys
@@ -329,13 +330,29 @@ def create_server(
     return server
 
 
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qqbot-studio",
         description="QQ Bot Studio - 本地一键部署 AstrBot + SnowLuma + DeepSeek",
     )
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认仅本机 127.0.0.1）")
-    parser.add_argument("--port", type=int, default=0, help="本地 Web 端口（默认自动选择）")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=_env_int("QQBOT_STUDIO_PORT", 0, 0, 65535),
+        help="本地向导端口（默认 0=自动选择；也可设置 QQBOT_STUDIO_PORT）",
+    )
     parser.add_argument("--data-dir", default=None, help="数据目录（默认 ~/.local/share/qqbot-studio）")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

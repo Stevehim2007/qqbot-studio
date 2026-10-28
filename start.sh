@@ -6,7 +6,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 say() { printf '%s\n' "$*"; }
-die() { printf '\n错误：%s\n' "$*" >&2; exit 1; }
+die() { printf '\n错误：%b\n' "$*" >&2; exit 1; }
 running_as_root() { [[ "${EUID}" -eq 0 ]]; }
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -71,7 +71,9 @@ fi
 # 如果当前用户已有 docker 组权限、但当前 shell 尚未刷新组信息，可用 sg
 # 进入 docker 组后启动。参数逐项转义，避免路径或参数中的空格导致命令拆错。
 if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
-  if command -v sg >/dev/null 2>&1 && id -nG "${USER:-$(id -un)}" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+  if command -v sg >/dev/null 2>&1 \
+    && id -nG "${USER:-$(id -un)}" 2>/dev/null | tr ' ' '\n' | grep -qx docker \
+    && sg docker -c "docker info" >/dev/null 2>&1; then
     say "正在以 docker 组身份启动（无需重新登录）..."
     ROOT_Q="$(printf '%q' "$ROOT_DIR")"
     ARGS_Q=""
@@ -90,6 +92,28 @@ if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
   fi
   export QQBOT_SUDO_DOCKER=1
   say "本次运行将使用 sudo 调用 Docker。"
+fi
+
+# 安装/授权流程被取消、失败，或 Docker 只装了一半时，必须在这里明确停止，
+# 不能带着“Docker 未就绪”的状态照常启动向导。
+if ! command -v docker >/dev/null 2>&1; then
+  die "Docker 安装未完成（可能已取消或失败），未启动向导。\n请重新运行 ./install.sh，或手动执行：\n  sudo apt update && sudo apt install -y docker.io docker-compose-v2\n  sudo systemctl enable --now docker\n  sudo usermod -aG docker \"${USER:-$(id -un)}\"\n然后注销并重新登录。"
+
+fi
+if ! docker compose version >/dev/null 2>&1; then
+  die "Docker Compose 插件未安装，未启动向导。请运行：\nsudo apt update && sudo apt install -y docker-compose-v2\n或参考 Docker 官方文档安装 docker-compose-plugin。"
+fi
+
+docker_accessible() {
+  docker info >/dev/null 2>&1 && return 0
+  if [[ "${QQBOT_SUDO_DOCKER:-0}" == "1" ]] && sudo -n docker info >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+if ! docker_accessible; then
+  die "Docker 服务未运行，或当前用户没有 Docker 权限，未启动向导。\n请执行以下命令后重试：\n  sudo systemctl start docker\n  sudo usermod -aG docker \"${USER:-$(id -un)}\"\n然后注销并重新登录；也可以运行 sudo -v 后重新打开本程序。\n验证：docker info"
 fi
 
 if [[ ! -f "$ROOT_DIR/qqbot_studio/__init__.py" ]]; then

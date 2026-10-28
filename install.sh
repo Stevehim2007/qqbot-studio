@@ -40,6 +40,17 @@ else
   echo "Docker 与 Docker Compose CLI 已安装；守护进程状态将在启动阶段检查。"
 fi
 
+if ! command -v docker >/dev/null 2>&1; then
+  echo "错误：Docker 安装未完成（可能已取消或失败），未启动向导。" >&2
+  echo "请重新运行 ./install.sh，或手动安装 Docker 后重试。" >&2
+  exit 1
+fi
+if ! docker compose version >/dev/null 2>&1; then
+  echo "错误：Docker Compose 插件不可用，未启动向导。" >&2
+  echo "请安装 docker-compose-v2 / docker-compose-plugin 后重试。" >&2
+  exit 1
+fi
+
 if bash "$ROOT_DIR/scripts/install-desktop-entry.sh" "$ROOT_DIR"; then
   echo "桌面启动项已创建；以后可从应用菜单打开“QQ 机器人一键部署”。"
 else
