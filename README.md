@@ -13,6 +13,9 @@
 > **QQ 密码不需要填，也不应填。** 现代 QQ 登录采用扫码；设备验证、短信验证或安全验证必须在
 > noVNC 中的 QQ 官方登录界面按提示完成。
 
+> **服务器实战排错：** Git SSL 后端错误、Docker 服务启动失败、Docker 卸载重装、
+> SSH 隧道远程访问等完整步骤，见 [`docs/server-troubleshooting.md`](docs/server-troubleshooting.md)。
+
 ---
 
 ## 1. 运行要求
@@ -259,6 +262,46 @@ docker compose -p qqbot-studio up -d
 
 ## 9. 常见问题
 
+> 服务器上遇到的 Git SSL、Docker 服务启动失败、Docker 重装、SSH 远程访问等问题，
+> 详细步骤见 [`docs/server-troubleshooting.md`](docs/server-troubleshooting.md)。
+
+### Git 报 Unsupported SSL backend 'openssl'
+
+现象：
+
+```text
+fatal: Unsupported SSL backend 'openssl'. Supported SSL backends:
+        gnutls
+fatal: remote helper 'https' aborted session
+```
+
+原因是 Git 配置了 `http.sslBackend=openssl`，但当前 Git/libcurl 只支持 GnuTLS。
+本项目服务器上的实际问题已通过删除该配置解决：
+
+```bash
+git config --show-origin --show-scope --get-all http.sslBackend
+git config --global --unset-all http.sslBackend 2>/dev/null || true
+git config --local --unset-all http.sslBackend 2>/dev/null || true
+unset GIT_SSL_BACKEND
+
+# 确认无输出后重试
+git config --show-origin --get-all http.sslBackend
+git pull --ff-only
+```
+
+如果仍有问题，可临时使用：
+
+```bash
+git -c http.sslBackend=gnutls ls-remote https://github.com/Stevehim2007/qqbot-studio.git
+```
+
+或改用 SSH remote：
+
+```bash
+git remote set-url origin git@github.com:Stevehim2007/qqbot-studio.git
+git push origin main
+```
+
 ### Docker 安装失败或被取消
 
 新版启动器会在启动网页向导前严格检查：
@@ -301,6 +344,147 @@ sudo systemctl start docker
 sudo usermod -aG docker "$USER"
 # 注销并重新登录，或运行 sudo -v 后重新打开本程序
 ```
+
+### Docker 服务启动失败：Start request repeated too quickly
+
+这个提示只是 systemd 的限流，真正原因要看更早的日志：
+
+```bash
+sudo journalctl -xeu docker.service -b --no-pager -n 200
+sudo systemctl status containerd --no-pager
+sudo journalctl -u containerd -b --no-pager -n 100
+```
+
+最常见的原因是 `/etc/docker/daemon.json` 写错，尤其是镜像加速地址写成了占位符：
+
+```bash
+sudo cat /etc/docker/daemon.json 2>/dev/null || echo '没有 daemon.json'
+sudo python3 -m json.tool /etc/docker/daemon.json 2>/dev/null
+```
+
+有问题时先移除并重启：
+
+```bash
+sudo cp /etc/docker/daemon.json /etc/docker/daemon.json.bak 2>/dev/null || true
+sudo rm -f /etc/docker/daemon.json
+sudo systemctl daemon-reload
+sudo systemctl reset-failed docker.service docker.socket
+sudo systemctl restart containerd
+sudo systemctl start docker
+sudo systemctl status docker --no-pager -l
+```
+
+其他常见原因包括 containerd 未启动、旧 PID/socket、iptables/nftables 冲突、
+磁盘满或 `/var/lib/docker` 损坏。完整排查和“卸载重装 Docker”步骤见
+[`docs/server-troubleshooting.md`](docs/server-troubleshooting.md)。
+
+### 卸载并重装 Docker（摘要）
+
+先停止项目容器并备份机器人数据：
+
+```bash
+cd ~/.local/share/qqbot-studio 2>/dev/null && \
+  docker compose -p qqbot-studio down 2>/dev/null || true
+
+tar czf ~/qqbot-studio-data-backup.tar.gz \
+  -C ~/.local/share/qqbot-studio data 2>/dev/null || true
+```
+
+判断安装来源：
+
+```bash
+dpkg -l | awk '/^ii/ && ($2 ~ /docker|containerd/) {print $2}'
+```
+
+Docker 官方源（常见包名 `docker-ce`）：
+
+```bash
+sudo apt-get purge -y \
+  docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin \
+  docker-ce-rootless-extras
+sudo apt-get autoremove --purge -y
+```
+
+Ubuntu 源（常见包名 `docker.io`）：
+
+```bash
+sudo apt-get purge -y \
+  docker.io docker-compose-v2 docker-compose \
+  docker-doc podman-docker
+sudo apt-get autoremove --purge -y
+```
+
+如果只是修复安装，**不要删除 `/var/lib/docker`**，这样不用重新拉镜像。
+确定要彻底重装时再执行：
+
+```bash
+sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker
+```
+
+然后重新安装：
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-v2
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+```
+
+注销并重新登录后验证：
+
+```bash
+docker --version
+docker compose version
+docker info
+```
+
+完整判断、备份和容器数据说明见
+[`docs/server-troubleshooting.md`](docs/server-troubleshooting.md)。
+
+### 服务器上运行，自己的电脑如何访问
+
+不要直接把向导暴露到 `0.0.0.0`。推荐使用 SSH 隧道。
+
+服务器上：
+
+```bash
+./start.sh --port 8765
+```
+
+自己电脑上：
+
+```bash
+ssh -N -L 8765:127.0.0.1:8765 用户名@服务器IP
+```
+
+然后本地浏览器打开：
+
+```text
+http://127.0.0.1:8765/
+```
+
+`-N` 表示只建立隧道、不执行远程命令；`-L` 表示本地端口转发。
+
+如果还要访问 AstrBot、SnowLuma、noVNC，先从服务器读取实际端口：
+
+```bash
+cat ~/.local/share/qqbot-studio/config.json
+```
+
+假设是 `6185`、`5099`、`6081`：
+
+```bash
+ssh -N \
+  -L 8765:127.0.0.1:8765 \
+  -L 6185:127.0.0.1:6185 \
+  -L 5099:127.0.0.1:5099 \
+  -L 6081:127.0.0.1:6081 \
+  用户名@服务器IP
+```
+
+不建议直接绑定 `0.0.0.0`：管理页会展示 AstrBot、SnowLuma、VNC 凭据，
+并且可以控制容器。当前版本会明确拒绝 `--host 0.0.0.0`。
 
 ### 拉取镜像很慢或失败
 
