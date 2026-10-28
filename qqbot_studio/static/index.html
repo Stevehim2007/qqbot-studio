@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#081a33">
+  <title>QQ Bot Studio · 本地部署向导</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+  <!-- 所有图标均为内联 SVG，不依赖外部字体或图片。 -->
+  <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.7"/><path d="M20 4v7h-7"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><path d="M13 15h4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8"/><path d="m16 7 3 3"/><path d="m13 10 3 3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2 20 6v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4Z"/><path d="m8.5 12 2.3 2.3 4.7-5"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h2v2h-2zM19 15h2M15 19h2M19 19h2v2h-2z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6V2Z"/><path d="M14 2v5h5"/><path d="M9 13h6M9 17h6"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="m4 20 4.5-1 11-11a2.1 2.1 0 0 0-3-3l-11 11L4 20Z"/><path d="m14 7 3 3"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><path d="M12 20h.01"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 7 9 5 9-5"/><path d="M3 7v10l9 5 9-5V7"/><path d="M12 12v10"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7h.01"/></symbol>
+  </svg>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="安装向导侧栏">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="2" y="2" width="44" height="44" rx="14" fill="#0e3458"/>
+          <path d="M14 14h20a5 5 0 0 1 5 5v11a5 5 0 0 1-5 5h-9l-8 5v-5h-3a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5Z" fill="none" stroke="#61e8c4" stroke-width="3"/>
+          <path d="M18 23h.01M24 23h.01M30 23h.01" stroke="#61e8c4" stroke-width="3.4" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <p class="brand-name">QQ Bot <span>Studio</span></p>
+          <p class="brand-tagline">本地智能助手部署向导</p>
+        </div>
+      </div>
+
+      <nav class="wizard-nav" aria-label="部署步骤">
+        <ol class="stepper">
+          <li class="step-item is-active" data-step-item="env">
+            <button class="step-button" type="button" data-step="env" aria-current="step">
+              <span class="step-index" aria-hidden="true">1</span>
+              <span class="step-copy"><span class="step-label">检查环境</span><span class="step-hint">Ubuntu 与 Docker</span></span>
+            </button>
+          </li>
+          <li class="step-item" data-step-item="config">
+            <button class="step-button" type="button" data-step="config">
+              <span class="step-index" aria-hidden="true">2</span>
+              <span class="step-copy"><span class="step-label">账号与模型</span><span class="step-hint">QQ、API Key 与提示词</span></span>
+            </button>
+          </li>
+          <li class="step-item" data-step-item="deploy">
+            <button class="step-button" type="button" data-step="deploy">
+              <span class="step-index" aria-hidden="true">3</span>
+              <span class="step-copy"><span class="step-label">部署进度</span><span class="step-hint">分步执行与实时日志</span></span>
+            </button>
+          </li>
+          <li class="step-item" data-step-item="done">
+            <button class="step-button" type="button" data-step="done">
+              <span class="step-index" aria-hidden="true">4</span>
+              <span class="step-copy"><span class="step-label">完成与运行</span><span class="step-hint">扫码、连接与控制</span></span>
+            </button>
+          </li>
+        </ol>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="privacy-badge">
+          <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+          <span>本地运行 · 密钥不出本机</span>
+        </div>
+        <p>DeepSeek API Key 仅写入本机 AstrBot 配置，不上传、不保存在浏览器存储中。</p>
+        <p class="version-label">版本 <span id="app-version">读取中…</span></p>
+      </div>
+    </aside>
+
+    <main id="main-content" class="main-content" tabindex="-1">
+      <header class="topbar">
+        <div class="topbar-copy">
+          <p class="eyebrow">本地部署控制台</p>
+          <h1 id="page-title">开始搭建你的 QQ 智能助手</h1>
+          <p id="page-subtitle" class="page-subtitle">先确认这台 Ubuntu 已准备好 Docker 环境，再填写账号与模型信息。</p>
+        </div>
+        <div class="topbar-actions">
+          <span class="local-pill"><svg class="icon" aria-hidden="true"><use href="#i-wifi"></use></svg>仅本机访问</span>
+          <button id="refresh-state" class="btn btn-quiet btn-small" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+            <span>重新检测</span>
+          </button>
+        </div>
+      </header>
+
+      <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
+
+      <div id="state-error" class="notice notice-danger" role="alert" hidden>
+        <svg class="icon notice-icon" aria-hidden="true"><use href="#i-alert"></use></svg>
+        <div class="notice-body">
+          <strong>无法读取本地服务状态</strong>
+          <p id="state-error-text">请确认启动器仍在运行，然后重试。</p>
+        </div>
+        <button id="state-error-retry" class="btn btn-small btn-quiet" type="button">重试连接</button>
+      </div>
+
+      <div id="global-notice" class="notice notice-info" role="status" hidden>
+        <svg class="icon notice-icon" aria-hidden="true"><use href="#i-info"></use></svg>
+        <div class="notice-body">
+          <strong>来自本地服务的提示</strong>
+          <p id="global-notice-text"></p>
+        </div>
+      </div>
+
+      <section class="step-panel" data-panel="env" aria-labelledby="env-heading">
+        <div class="welcome-card">
+          <div class="welcome-copy">
+            <span class="kicker"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>本机安全优先</span>
+            <h2 id="env-heading" tabindex="-1">准备一台已安装 Docker 的 Ubuntu</h2>
+            <p>这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。所有操作均在本机浏览器与本地服务之间完成。</p>
+          </div>
+          <div class="welcome-orbit" aria-hidden="true">
+            <div class="orbit-ring orbit-ring--one"></div>
+            <div class="orbit-ring orbit-ring--two"></div>
+            <svg class="orbit-icon orbit-icon--bot" viewBox="0 0 48 48"><rect x="8" y="12" width="32" height="24" rx="8"/><circle cx="18" cy="24" r="2"/><circle cx="30" cy="24" r="2"/><path d="M19 31h10M24 12V6M19 6h10"/></svg>
+            <svg class="orbit-icon orbit-icon--lock" viewBox="0 0 32 32"><rect x="7" y="14" width="18" height="13" rx="3"/><path d="M11 14v-4a5 5 0 0 1 10 0v4M16 19v3"/></svg>
+          </div>
+        </div>
+
+        <div class="section-heading">
+          <div>
+            <p class="section-label">步骤 1 / 4</p>
+            <h2>环境检查</h2>
+          </div>
+          <p id="requirements-summary" class="section-note" role="status">正在读取本机环境…</p>
+        </div>
+
+        <div id="requirements-grid" class="requirement-grid" aria-busy="true">
+          <div class="requirement-card is-loading" aria-hidden="true"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-short"></div></div>
+          <div class="requirement-card is-loading" aria-hidden="true"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-short"></div></div>
+          <div class="requirement-card is-loading" aria-hidden="true"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-short"></div></div>
+          <div class="requirement-card is-loading" aria-hidden="true"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-short"></div></div>
+        </div>
+
+        <div class="callout callout-muted">
+          <svg class="icon" aria-hidden="true"><use href="#i-terminal"></use></svg>
+          <div>
+            <strong>不知道怎么安装？</strong>
+            <p>每张未就绪的检查卡都会提供可复制的终端命令。打开 Ubuntu 终端，粘贴并执行即可；权限组变更后可能需要重新登录。</p>
+          </div>
+        </div>
+
+        <div class="panel-actions">
+          <button id="retry-requirements" class="btn btn-secondary" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+            重新检查环境
+          </button>
+          <button id="env-next" class="btn btn-primary" type="button" disabled>
+            <span id="env-next-text">下一步：账号与模型</span>
+            <svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg>
+          </button>
+        </div>
+      </section>
+
+      <section class="step-panel" data-panel="config" aria-labelledby="config-heading" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="section-label">步骤 2 / 4</p>
+            <h2 id="config-heading" tabindex="-1">连接 QQ 与 DeepSeek</h2>
+          </div>
+          <p class="section-note">标有 <span class="required-mark" aria-hidden="true">*</span> 的项目为必填。</p>
+        </div>
+
+        <form id="config-form" class="config-form" novalidate>
+          <div class="card form-card">
+            <div class="card-heading">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-user"></use></svg></span>
+              <div>
+                <h3>QQ 账号</h3>
+                <p>仅填写 QQ 号。本工具不收集、不保存 QQ 密码；现代 QQ 需要扫码登录。</p>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="qq-account">机器人 QQ 号 <span class="required-mark" aria-hidden="true">*</span></label>
+              <input id="qq-account" name="qq_account" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{5,12}" maxlength="12" placeholder="例如：123456789" aria-describedby="qq-account-help qq-account-error" required>
+              <p id="qq-account-help" class="field-help">请输入 5–12 位数字。建议使用专门的 QQ 小号。</p>
+              <p id="qq-account-error" class="field-error" role="alert" hidden></p>
+            </div>
+
+            <div class="safety-inline">
+              <svg class="icon" aria-hidden="true"><use href="#i-qr"></use></svg>
+              <p><strong>扫码登录：</strong>部署完成后，在 noVNC 中打开 QQ，使用手机 QQ 扫一扫完成登录。如果扫码后要求设备验证、短信验证、滑块或安全验证，必须在 noVNC 里按 QQ 官方提示操作；本工具不能绕过验证。如你选择在 QQ 客户端中使用密码登录，密码也只在 noVNC 的官方界面输入，本工具不会读取或保存。</p>
+            </div>
+          </div>
+
+          <div class="card form-card">
+            <div class="card-heading">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg></span>
+              <div>
+                <h3>DeepSeek 模型</h3>
+                <p>密钥只写入本机 AstrBot 配置，不会写进浏览器 localStorage，也不会发送给 QQ。</p>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="deepseek-key">DeepSeek API Key <span class="required-mark" aria-hidden="true">*</span></label>
+              <div class="input-action-row">
+                <div class="input-with-button">
+                  <input id="deepseek-key" name="deepseek_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." aria-describedby="deepseek-key-help deepseek-key-error key-test-status" required>
+                  <button id="toggle-key" class="icon-button" type="button" aria-label="显示 API Key" aria-pressed="false" title="显示或隐藏 API Key">
+                    <svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg>
+                  </button>
+                </div>
+                <button id="test-key" class="btn btn-secondary" type="button">测试密钥</button>
+              </div>
+              <p id="deepseek-key-help" class="field-help">DeepSeek API Key 仅写入本机 AstrBot 配置。测试时会通过本地服务请求校验，不会保存密钥。</p>
+              <p id="deepseek-key-error" class="field-error" role="alert" hidden></p>
+              <p id="key-test-status" class="inline-status" role="status" hidden></p>
+            </div>
+          </div>
+
+          <div class="card form-card">
+            <div class="card-heading">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-pen"></use></svg></span>
+              <div>
+                <h3>预设提示词</h3>
+                <p>这是机器人的人格设定，部署前可以直接编辑。部署后也能在完成页修改。</p>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="label-row">
+                <label for="prompt">机器人提示词 <span class="required-mark" aria-hidden="true">*</span></label>
+                <span id="prompt-count" class="character-count">0 / 12000</span>
+              </div>
+              <textarea id="prompt" name="prompt" rows="9" maxlength="12000" aria-describedby="prompt-help prompt-error" required></textarea>
+              <div class="field-footer">
+                <p id="prompt-help" class="field-help">提示词会写入本机 AstrBot 配置。请勿在提示词中放入密码、验证码或 API Key。</p>
+                <button id="restore-prompt" class="btn btn-link btn-small" type="button">恢复默认</button>
+              </div>
+              <p id="prompt-error" class="field-error" role="alert" hidden></p>
+            </div>
+          </div>
+
+          <div class="card form-card">
+            <div class="card-heading">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg></span>
+              <div>
+                <h3>下载与安全确认</h3>
+                <p>使用国内镜像可加快 Docker 镜像下载。端口由本地服务决定，不需要在页面里填写。</p>
+              </div>
+            </div>
+
+            <label class="switch-row" for="use-mirror">
+              <span class="switch-copy">
+                <strong>使用国内镜像加速</strong>
+                <span>通过本地服务配置的镜像源拉取依赖，适合国内网络环境。</span>
+              </span>
+              <span class="switch">
+                <input id="use-mirror" name="use_mirror" type="checkbox">
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <div class="risk-box">
+              <svg class="icon risk-icon" aria-hidden="true"><use href="#i-alert"></use></svg>
+              <div>
+                <h4>账号与合规风险提示</h4>
+                <p>第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。登录及安全验证只能由你在 QQ 官方界面完成。</p>
+              </div>
+            </div>
+
+            <div class="checkbox-field">
+              <input id="accept-risk" name="accept_risk" type="checkbox" aria-describedby="risk-error" required>
+              <label for="accept-risk">我已阅读并理解上述风险，确认使用小号，并遵守 QQ 用户协议与当地法律法规。<span class="required-mark" aria-hidden="true">*</span></label>
+              <p id="risk-error" class="field-error" role="alert" hidden></p>
+            </div>
+
+            <div id="form-error" class="notice notice-danger form-error" role="alert" hidden>
+              <svg class="icon notice-icon" aria-hidden="true"><use href="#i-alert"></use></svg>
+              <div class="notice-body"><p id="form-error-text"></p></div>
+            </div>
+
+            <div class="panel-actions form-actions">
+              <button id="config-back" class="btn btn-secondary" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg>
+                返回环境检查
+              </button>
+              <button id="deploy-submit" class="btn btn-primary btn-large" type="submit">
+                <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>
+                <span id="deploy-submit-text">开始部署</span>
+              </button>
+            </div>
+            <p class="action-hint">点击开始部署即表示你同意只在本机使用本工具，并自行承担账号与合规风险。</p>
+          </div>
+        </form>
+      </section>
+
+      <section class="step-panel" data-panel="deploy" aria-labelledby="deploy-heading" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="section-label">步骤 3 / 4</p>
+            <h2 id="deploy-heading" tabindex="-1">正在部署你的智能助手</h2>
+          </div>
+          <p id="job-status-label" class="section-note" role="status">任务准备中…</p>
+        </div>
+
+        <div class="card progress-card">
+          <div class="progress-topline">
+            <div class="progress-title-wrap">
+              <span id="job-state-icon" class="status-orb status-orb--running" aria-hidden="true">
+                <svg class="icon"><use href="#i-package"></use></svg>
+              </span>
+              <div>
+                <p class="progress-kicker">当前步骤</p>
+                <h3 id="job-step">等待开始</h3>
+              </div>
+            </div>
+            <span id="job-progress-text" class="progress-value">0%</span>
+          </div>
+
+          <div id="job-progress-bar" class="progress-track" role="progressbar" aria-label="部署进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span class="progress-fill" style="width: 0%"></span>
+          </div>
+          <p id="job-message" class="progress-message" role="status">正在创建本地部署任务…</p>
+
+          <div class="log-header">
+            <div class="log-title">
+              <svg class="icon" aria-hidden="true"><use href="#i-terminal"></use></svg>
+              <span>实时日志</span>
+            </div>
+            <span class="log-live"><span class="live-dot" aria-hidden="true"></span>自动刷新</span>
+          </div>
+          <pre id="job-logs" class="log-output" tabindex="0" aria-label="部署实时日志">等待日志输出…</pre>
+
+          <div id="deploy-error" class="notice notice-danger" role="alert" hidden>
+            <svg class="icon notice-icon" aria-hidden="true"><use href="#i-alert"></use></svg>
+            <div class="notice-body">
+              <strong>部署未完成</strong>
+              <p id="deploy-error-text"></p>
+            </div>
+          </div>
+
+          <div class="panel-actions">
+            <button id="job-retry-config" class="btn btn-secondary" type="button" hidden>返回修改配置</button>
+            <button id="job-retry-poll" class="btn btn-primary" type="button" hidden>
+              <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+              继续获取进度
+            </button>
+          </div>
+        </div>
+
+        <div class="callout callout-warning">
+          <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+          <div>
+            <strong>请保持页面开启</strong>
+            <p>部署期间请勿关闭本地启动器。完成后仍需进入 noVNC 用手机 QQ 扫码；设备验证、短信验证、滑块或安全验证必须在 QQ 官方界面中按提示完成。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="step-panel" data-panel="done" aria-labelledby="done-heading" hidden>
+        <div class="success-hero">
+          <div class="success-mark" aria-hidden="true"><svg class="icon"><use href="#i-check-circle"></use></svg></div>
+          <div class="success-copy">
+            <span class="kicker kicker--success">本地部署已完成</span>
+            <h2 id="done-heading" tabindex="-1">登录 QQ，开始对话</h2>
+            <p>服务已部署到这台电脑。请先打开 noVNC，在 QQ 官方界面扫码登录，再检查 OneBot 连接状态。</p>
+          </div>
+          <div class="success-status-stack" aria-label="部署状态">
+            <span id="deployment-overall" class="pill pill--success">已部署</span>
+            <span id="service-running-status" class="pill pill--neutral">运行状态未知</span>
+          </div>
+        </div>
+
+        <div class="status-strip" aria-label="连接与登录状态">
+          <div class="status-item">
+            <span class="status-label">AstrBot 服务</span>
+            <span id="astrbot-service-status" class="status-value"><span class="status-dot"></span>状态未知</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">QQ 登录</span>
+            <span id="qq-login-status" class="status-value"><span class="status-dot"></span>状态未知</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">OneBot 连接</span>
+            <span id="onebot-status" class="status-value"><span class="status-dot"></span>状态未知</span>
+          </div>
+          <button id="refresh-connection" class="btn btn-quiet btn-small" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+            刷新连接状态
+          </button>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="card endpoint-card">
+            <div class="endpoint-heading">
+              <span class="card-icon card-icon--blue"><svg class="icon" aria-hidden="true"><use href="#i-server"></use></svg></span>
+              <div><h3>AstrBot WebUI</h3><p>机器人框架与模型控制台</p></div>
+            </div>
+            <p id="astrbot-url-text" class="url-text">未提供</p>
+            <div class="credential-grid">
+              <div><span class="credential-label">用户名</span><code id="astrbot-username" class="credential-value">未提供</code></div>
+              <div><span class="credential-label">密码</span><code id="astrbot-password" class="credential-value">未提供</code></div>
+            </div>
+            <div class="card-actions">
+              <a id="astrbot-open" class="btn btn-secondary btn-small" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">一键打开<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
+              <button id="copy-astrbot" class="btn btn-quiet btn-small" type="button" data-copy-card="astrbot"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>复制登录信息</button>
+            </div>
+          </div>
+
+          <div class="card endpoint-card">
+            <div class="endpoint-heading">
+              <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg></span>
+              <div><h3>SnowLuma WebUI</h3><p>OneBot 协议端管理界面</p></div>
+            </div>
+            <p id="snowluma-url-text" class="url-text">未提供</p>
+            <div class="credential-grid">
+              <div><span class="credential-label">访问密码</span><code id="snowluma-password" class="credential-value">未提供</code></div>
+            </div>
+            <div class="card-actions">
+              <a id="snowluma-open" class="btn btn-secondary btn-small" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">一键打开<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
+              <button id="copy-snowluma" class="btn btn-quiet btn-small" type="button" data-copy-card="snowluma"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>复制登录信息</button>
+            </div>
+          </div>
+
+          <div class="card endpoint-card endpoint-card--highlight">
+            <div class="endpoint-heading">
+              <span class="card-icon card-icon--amber"><svg class="icon" aria-hidden="true"><use href="#i-qr"></use></svg></span>
+              <div><h3>noVNC 桌面</h3><p>扫码与官方安全验证入口</p></div>
+            </div>
+            <p id="novnc-url-text" class="url-text">未提供</p>
+            <div class="credential-grid">
+              <div><span class="credential-label">VNC 密码</span><code id="novnc-password" class="credential-value">未提供</code></div>
+            </div>
+            <div class="card-actions">
+              <a id="novnc-open" class="btn btn-primary btn-small" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">一键打开 noVNC<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
+              <button id="copy-novnc" class="btn btn-quiet btn-small" type="button" data-copy-card="novnc"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>复制登录信息</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card guide-card">
+          <div class="guide-heading">
+            <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-qr"></use></svg></span>
+            <div><h3>扫码登录步骤</h3><p>QQ 登录必须在官方界面完成</p></div>
+          </div>
+          <ol class="guide-steps">
+            <li><span>1</span><p><strong>打开 noVNC</strong>：使用上方 VNC 密码进入桌面。</p></li>
+            <li><span>2</span><p><strong>启动 QQ 并扫码</strong>：在桌面中打开 QQ，使用手机 QQ 的“扫一扫”确认登录。</p></li>
+            <li><span>3</span><p><strong>完成官方安全验证</strong>：如果扫码后要求设备验证、短信验证、滑块或安全验证，必须在 noVNC 里按 QQ 官方提示操作；本工具不能绕过验证。</p></li>
+            <li><span>4</span><p><strong>检查连接</strong>：登录完成后回到这里，点击“刷新连接状态”，确认 QQ 登录与 OneBot 连接均为正常。</p></li>
+          </ol>
+          <div class="safety-inline safety-inline--warm">
+            <svg class="icon" aria-hidden="true"><use href="#i-alert"></use></svg>
+            <p>不收集、不保存 QQ 密码；现代 QQ 需要扫码登录。第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。</p>
+          </div>
+        </div>
+
+        <div class="dashboard-grid dashboard-grid--controls">
+          <div class="card control-card">
+            <div class="card-heading">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg></span>
+              <div><h3>服务控制</h3><p>启动、停止或重启本地容器</p></div>
+            </div>
+            <div class="control-actions">
+              <button class="btn btn-secondary control-btn" type="button" data-service-action="start"><svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>启动</button>
+              <button class="btn btn-secondary control-btn" type="button" data-service-action="stop"><svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg>停止</button>
+              <button class="btn btn-secondary control-btn" type="button" data-service-action="restart"><svg class="icon" aria-hidden="true"><use href="#i-restart"></use></svg>重启</button>
+            </div>
+            <p id="action-status" class="inline-status" role="status" hidden></p>
+          </div>
+
+          <div class="card control-card">
+            <div class="card-heading">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-pen"></use></svg></span>
+              <div><h3>机器人提示词</h3><p>修改 AstrBot 中的人格设定</p></div>
+            </div>
+            <p id="persona-preview" class="prompt-preview">尚未读取提示词。</p>
+            <button id="edit-prompt" class="btn btn-secondary btn-small" type="button"><svg class="icon" aria-hidden="true"><use href="#i-pen"></use></svg>编辑提示词</button>
+            <form id="persona-form" class="persona-form" novalidate hidden>
+              <label class="sr-only" for="persona-input">机器人提示词</label>
+              <textarea id="persona-input" rows="7" maxlength="12000" required></textarea>
+              <p id="persona-error" class="field-error" role="alert" hidden></p>
+              <div class="persona-actions">
+                <button id="persona-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
+                <button id="persona-save" class="btn btn-primary btn-small" type="submit">保存提示词</button>
+              </div>
+              <p id="persona-status" class="inline-status" role="status" hidden></p>
+            </form>
+          </div>
+
+          <div class="card control-card control-card--logs">
+            <div class="card-heading">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg></span>
+              <div><h3>查看日志</h3><p>读取最近 200 行本地服务日志</p></div>
+            </div>
+            <div class="log-actions">
+              <button class="btn btn-secondary btn-small log-service-btn" type="button" data-log-service="astrbot"><svg class="icon" aria-hidden="true"><use href="#i-server"></use></svg>AstrBot 日志</button>
+              <button class="btn btn-secondary btn-small log-service-btn" type="button" data-log-service="snowluma"><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg>SnowLuma 日志</button>
+            </div>
+            <div id="dashboard-logs" class="dashboard-logs" hidden>
+              <div class="log-header">
+                <span id="dashboard-logs-title" class="log-title">日志</span>
+                <div class="log-tools">
+                  <span id="dashboard-logs-status" class="inline-status" role="status">正在读取…</span>
+                  <button id="dashboard-logs-refresh" class="btn btn-link btn-small" type="button">刷新</button>
+                  <button id="dashboard-logs-close" class="btn btn-link btn-small" type="button">收起</button>
+                </div>
+              </div>
+              <pre id="dashboard-logs-output" class="log-output log-output--compact" tabindex="0">选择服务以查看日志。</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="card disclaimer-card">
+          <svg class="icon disclaimer-icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+          <div>
+            <h3>安全提示与免责声明</h3>
+            <p>本工具不收集、不保存 QQ 密码，API Key 仅写入本机 AstrBot 配置。第三方协议端存在账号风控/封禁风险，请务必使用小号，并遵守 QQ 用户协议与当地法律法规。设备验证、短信验证、滑块或安全验证必须在 noVNC 中按 QQ 官方提示完成，本工具不能绕过验证。因使用本工具造成的账号、数据或合规风险由使用者自行承担。</p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="installer-footer">
+        <div class="footer-brand"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg><span>本地优先 · 安全验证不可绕过</span></div>
+        <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek、AstrBot 与 SnowLuma 均为其各自权利人的产品或项目。</p>
+      </footer>
+    </main>
+  </div>
+
+  <!-- 服务端会将下一行的占位符替换为本次本地会话的一次性访问令牌。 -->
+  <script>window.QB_TOKEN = "{{TOKEN}}";</script>
+  <script src="app.js"></script>
+</body>
+</html>

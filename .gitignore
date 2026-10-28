@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+data/
+runtime/
+*.log
+.env
+.DS_Store
+
+# Generated for the current machine by scripts/install-desktop-entry.sh
+/QQ机器人一键部署.desktop

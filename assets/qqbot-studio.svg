@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="QQ Bot Studio">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#163a5f"/>
+      <stop offset="1" stop-color="#0b1e33"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6ef2c4"/>
+      <stop offset="1" stop-color="#37c6f4"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <path d="M154 211c0-66 46-113 103-113s103 47 103 113c0 17-3 33-9 48 21 21 34 50 34 82 0 65-57 111-128 111s-128-46-128-111c0-32 13-61 34-82a137 137 0 0 1-9-48Z" fill="url(#mint)"/>
+  <ellipse cx="207" cy="219" rx="18" ry="25" fill="#0b1e33"/>
+  <ellipse cx="307" cy="219" rx="18" ry="25" fill="#0b1e33"/>
+  <path d="M224 292c10 11 22 17 33 17s23-6 33-17" fill="none" stroke="#0b1e33" stroke-width="14" stroke-linecap="round"/>
+  <path d="M104 383c-17-4-32-18-32-40 0-23 16-40 39-40M408 383c17-4 32-18 32-40 0-23-16-40-39-40" fill="none" stroke="#37c6f4" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="380" cy="121" r="36" fill="#6ef2c4" stroke="#163a5f" stroke-width="14"/>
+  <path d="m366 121 10 10 20-23" fill="none" stroke="#0b1e33" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
