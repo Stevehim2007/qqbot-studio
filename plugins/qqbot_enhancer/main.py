@@ -33,6 +33,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 DEFAULTS: dict[str, Any] = {
+    "memory_mode": "direct",
     "reply_probability": 0.12,
     "group_cooldown_seconds": 30,
     "user_cooldown_seconds": 90,
@@ -135,6 +136,12 @@ class QQBotEnhancerPlugin(Star):
             raw = DEFAULTS.get(key, "")
         return str(raw)
 
+    def _memory_mode(self) -> str:
+        value = self._cfg_str("memory_mode").strip().lower()
+        if value in {"astrbot", "memory", "conversation", "long-term", "long_term"}:
+            return "astrbot"
+        return "direct"
+
     def _cfg_list(self, key: str) -> list[str]:
         raw = self._config_value(key)
         if isinstance(raw, str):
@@ -195,6 +202,18 @@ class QQBotEnhancerPlugin(Star):
             else:
                 mode = "explicit"
 
+            if self._memory_mode() == "astrbot":
+                # 交给 AstrBot 默认 Agent：它会使用会话管理器、人格和持久化
+                # 对话历史。非 @ 概率命中时，临时把事件标记为可唤醒，让默认
+                # Agent 在这一条消息上继续执行；未命中概率的分支已经在上面阻断。
+                event.set_extra("qqbot_enhancer_memory_reply", True)
+                event.set_extra(
+                    "qqbot_enhancer_sticker_text",
+                    message_text or event.message_str,
+                )
+                event.is_at_or_wake_command = True
+                return
+
             # 本插件已经决定回复，下面直接调用 provider，随后阻止默认 LLM 管线。
             # 注意 should_call_llm(True) 在 AstrBot 中表示“禁止默认 LLM”。
             should_stop = True
@@ -225,6 +244,34 @@ class QQBotEnhancerPlugin(Star):
             # 这样本次回复可以发送，同时后面的默认 LLM 不会重复回复。
             if should_stop:
                 event.stop_event()
+
+    @filter.on_decorating_result()
+    async def attach_memory_mode_sticker(self, event: AstrMessageEvent):
+        """Add a local sticker after AstrBot default Agent replies in memory mode."""
+
+        if not event.get_extra("qqbot_enhancer_memory_reply"):
+            return
+        if not self._cfg_bool("sticker_enabled") or not self._sticker_entries:
+            return
+        result = event.get_result()
+        chain = getattr(result, "chain", None) if result is not None else None
+        if not isinstance(chain, list):
+            return
+        message_text = str(
+            event.get_extra("qqbot_enhancer_sticker_text")
+            or getattr(event, "message_str", "")
+            or ""
+        )
+        sticker = self._maybe_pick_sticker(event, message_text)
+        if sticker is None:
+            return
+        try:
+            chain.append(Comp.Image.fromFileSystem(str(sticker)))
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 默认 Agent 表情包追加失败",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Message analysis

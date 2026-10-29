@@ -324,6 +324,7 @@ Docker Compose 操作是幂等的，重新部署会复用已完成的镜像和�
 
 | 配置 | 默认值 | 含义 |
 |---|---:|---|
+| `memory_mode` | `direct` | `direct`=省 Token 直连；`astrbot`=使用 AstrBot 会话记忆 |
 | `reply_probability` | `0.12` | 非 @ 群消息回复概率，0.12 = 12% |
 | `group_cooldown_seconds` | `30` | 同一群两次概率回复的最小间隔 |
 | `user_cooldown_seconds` | `90` | 同一用户两次概率回复的最小间隔 |
@@ -335,11 +336,27 @@ Docker Compose 操作是幂等的，重新部署会复用已完成的镜像和�
 - @ 机器人和私聊不受概率、群冷却、用户冷却限制；
 - 保存后一般立即生效，不生效时重启对应 AstrBot 容器。
 
+### 长期对话记忆模式
+
+插件默认 `memory_mode=direct`：只发送 system prompt + 当前消息，不保存跨轮上下文。
+
+如果希望机器人记住之前的对话，在 AstrBot WebUI → 插件 → QQ Bot 增强回复 → 配置中把：
+
+```text
+memory_mode = astrbot
+```
+
+切换后，@、私聊和概率命中的非 @ 消息会交给 AstrBot 默认 Agent 处理，使用 AstrBot
+的会话管理器、人格和持久化历史。每组/每个私聊会话拥有自己的上下文；可以用
+`/reset` 清空当前会话，用 `/new` 开启新会话。
+
+记忆模式的代价是历史越长 token 越多，详见下一节。
+
 ### Token 说明
 
 DeepSeek 的聊天 API 是无状态的：每次请求都会重新携带 system prompt 和本轮输入。
-本项目插件采用轻量直连方式，不携带完整的 AstrBot 会话历史，因此单次输入通常比
-“每轮带完整历史”的 Agent 模式小。
+本项目插件在 `direct` 模式下采用轻量直连方式，不携带完整的 AstrBot 会话历史，
+因此单次输入通常比“每轮带完整历史”的 Agent 模式小。
 
 DeepSeek 会自动启用 Context Caching：稳定不变的系统提示词前缀命中缓存时，
 会以更便宜的缓存 token 计费。不要每轮把时间、随机数等动态内容写入 system prompt，

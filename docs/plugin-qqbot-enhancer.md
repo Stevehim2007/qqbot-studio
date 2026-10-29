@@ -115,6 +115,7 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 
 | 配置 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
+| `memory_mode` | string | `direct` | `direct`=省 Token 直连；`astrbot`=使用 AstrBot 默认 Agent 的会话历史 |
 | `reply_probability` | float | `0.12` | 非 @ 群消息回复概率 |
 | `group_cooldown_seconds` | int | `30` | 每群概率回复冷却 |
 | `user_cooldown_seconds` | int | `90` | 每用户概率回复冷却 |
@@ -141,6 +142,26 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `sticker_cooldown_seconds` | int | `120` | 同一会话表情包冷却 |
 | `sticker_prevent_repeat` | bool | `true` | 避免连续发同一张 |
 | `max_images_per_message` | int | `4` | 单条消息最多送入 provider 的图片数 |
+
+### 4.4 长期对话记忆模式
+
+`memory_mode` 有两个选项：
+
+- `direct`（默认）：插件直接调用 provider，只发送稳定的系统提示词和当前消息，
+  不携带跨轮对话历史。Token 更省，适合低概率陪聊。
+- `astrbot`：插件把本次回复交给 AstrBot 默认 Agent 处理。AstrBot 会使用自己的
+  会话管理器、人格、上下文历史和 Agent 能力；历史按群聊/私聊会话分别保存。
+
+在 `astrbot` 模式下：
+
+1. @ 和私聊消息会直接交给默认 Agent；
+2. 非 @ 群消息只有在概率、冷却、过滤条件都通过后，才把该条消息标记为可唤醒，
+   让默认 Agent 处理；未命中时仍然阻断默认 LLM，避免机器人对每条群消息都回复；
+3. 表情包通过 `on_decorating_result` 钩子追加，不阻断 Agent 的主回复；
+4. 对话历史、会话切换、`/reset` 和 `/new` 由 AstrBot 自带会话功能管理。
+
+记忆模式的 token 成本会随历史变长而增加。可以用 `/reset` 清空当前会话上下文，
+用 `/new` 开启新会话；也可以降低 `reply_probability`、增大冷却或缩短保留的历史轮数。
 
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 

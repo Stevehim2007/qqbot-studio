@@ -50,6 +50,10 @@ class FakeFilter:
     def platform_adapter_type(*args, **kwargs):
         return lambda func: func
 
+    @staticmethod
+    def on_decorating_result(*args, **kwargs):
+        return lambda func: func
+
 
 class FakeStar:
     def __init__(self, context, config=None):
@@ -199,6 +203,9 @@ class FakeEvent:
         self.call_llm = False
         self.should_call_llm_calls = []
         self.stopped = False
+        self.is_at_or_wake_command = private
+        self._extras = {}
+        self.result = None
 
     def get_messages(self):
         return self.message_obj.message
@@ -233,6 +240,17 @@ class FakeEvent:
 
     def stop_event(self):
         self.stopped = True
+
+    def set_extra(self, key, value):
+        self._extras[key] = value
+
+    def get_extra(self, key=None, default=None):
+        if key is None:
+            return self._extras
+        return self._extras.get(key, default)
+
+    def get_result(self):
+        return self.result
 
     def plain_result(self, text):
         return FakeResult([Plain(text)])
@@ -502,6 +520,63 @@ class TestReplyRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertIn("QQ 表情", context.calls[0]["prompt"])
         self.assertTrue(event.stopped)
+
+
+    async def test_explicit_message_memory_mode_delegates_to_default_agent(self):
+        context = FakeContext(responder=lambda kwargs: "不应直接调用")
+        plugin = make_plugin(context, memory_mode="astrbot")
+        event = FakeEvent([Plain("你好呀")], message_str="你好呀", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.is_at_or_wake_command)
+        self.assertTrue(event.get_extra("qqbot_enhancer_memory_reply"))
+        self.assertFalse(event.call_llm)
+        self.assertFalse(event.stopped)
+
+    async def test_random_message_memory_mode_delegates_to_default_agent(self):
+        context = FakeContext(responder=lambda kwargs: "不应直接调用")
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            reply_probability=1.0,
+            group_cooldown_seconds=0,
+            user_cooldown_seconds=0,
+        )
+        event = FakeEvent([Plain("今天天气不错呀")], message_str="今天天气不错呀")
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.is_at_or_wake_command)
+        self.assertTrue(event.get_extra("qqbot_enhancer_memory_reply"))
+        self.assertFalse(event.call_llm)
+        self.assertFalse(event.stopped)
+
+    async def test_memory_mode_non_reply_still_blocks_default_llm(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用")
+        plugin = make_plugin(context, memory_mode="astrbot", reply_probability=0.0)
+        event = FakeEvent([Plain("今天天气不错呀")], message_str="今天天气不错呀")
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+        self.assertFalse(event.is_at_or_wake_command)
+
+    async def test_memory_mode_sticker_hook_appends_local_image(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+        )
+        event = FakeEvent([Plain("哈哈")], message_str="哈哈")
+        event.set_extra("qqbot_enhancer_memory_reply", True)
+        event.set_extra("qqbot_enhancer_sticker_text", "哈哈")
+        event.result = FakeResult([Plain("好呀")])
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertTrue(any(isinstance(comp, Image) for comp in event.result.chain))
 
     async def test_yielded_result_occurs_before_stop_event(self):
         """handler 先 yield，finally 才 stop；因此下游 RespondStage 能发送结果。"""

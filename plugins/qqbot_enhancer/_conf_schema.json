@@ -1,4 +1,12 @@
 {
+  "memory_mode": {
+    "description": "对话记忆模式",
+    "type": "string",
+    "options": ["direct", "astrbot"],
+    "labels": ["省 Token：直连模型（不带跨轮历史）", "长期记忆：使用 AstrBot 默认 Agent 会话"],
+    "default": "direct",
+    "hint": "direct 只发送当前消息和系统提示，token 更省；astrbot 会使用 AstrBot 会话历史、人格和 Agent 能力，历史越长 token 越多。修改后建议重启 AstrBot。"
+  },
   "reply_probability": {
     "description": "群聊非 @ 消息的回复概率",
     "type": "float",
