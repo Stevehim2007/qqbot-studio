@@ -1,4 +1,5 @@
 import argparse
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +69,25 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("--port 9123", command)
         self.assertIn(str(self.studio.root), command)
         self.assertIn("--no-browser", command)
+
+
+    def test_docker_check_works_with_real_subprocess_and_existing_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            fake_docker = fake_bin / "docker"
+            fake_docker.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = \"--version\" ]; then echo 'Docker version 29.9.2'; exit 0; fi\n"
+                "if [ \"$1\" = \"compose\" ]; then echo 'Docker Compose version v5.6.1'; exit 0; fi\n"
+                "if [ \"$1\" = \"info\" ]; then echo '29.9.2'; exit 0; fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_docker.chmod(0o755)
+            studio = StudioManager(Path(tmp) / "studio-root")
+            with mock.patch.dict(os.environ, {"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"}):
+                launcher._docker_check(studio)
 
     def test_docker_check_uses_injected_controller(self):
         fake = mock.MagicMock()

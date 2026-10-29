@@ -859,7 +859,7 @@ class DeployManager:
         qq_logged_in = self._detect_qq_login(str(config.get("qq_account") or "")) if deployed else False
 
         if not docker_status.installed:
-            notice = "未检测到 Docker。请先运行 ./install.sh 安装 Docker，或手动安装后重试。"
+            notice = "未检测到可用的 Docker CLI。请先运行 ./install.sh 安装 Docker，或手动安装后重试。"
         elif not docker_status.compose_installed:
             notice = "Docker Compose 插件不可用。请安装 docker-compose-plugin 后重试。"
         elif not docker_status.daemon_running:

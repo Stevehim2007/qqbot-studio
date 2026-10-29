@@ -215,8 +215,9 @@ def _ensure_server(studio: StudioManager, settings: dict, *, force_restart: bool
 
 
 def _docker_check(studio: StudioManager) -> None:
-    # A throw-away controller is enough: detect() only checks Docker/compose.
-    controller = DockerController(studio.root / "doctor")
+    # detect() only checks Docker/compose.  Use an existing directory so
+    # subprocess cwd handling can never masquerade as a missing Docker CLI.
+    controller = DockerController(studio.root)
     try:
         controller.require_ready()
     except DockerError as exc:

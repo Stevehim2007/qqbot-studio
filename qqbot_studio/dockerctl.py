@@ -91,6 +91,14 @@ class DockerController:
         snowluma_container: str = "qqbot-snowluma",
     ) -> None:
         self.data_dir = Path(data_dir).expanduser().resolve()
+        # ``subprocess.run(cwd=...)`` fails with FileNotFoundError if the
+        # directory does not exist.  The old launcher used a throw-away
+        # ``doctor`` directory that was never created, so Docker was reported
+        # missing even when the CLI and daemon were perfectly healthy.
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         self.project_name = str(project_name or PROJECT_NAME)
         self.ASTRBOT_CONTAINER = str(astrbot_container or "qqbot-astrbot")
         self.SNOWLUMA_CONTAINER = str(snowluma_container or "qqbot-snowluma")
@@ -115,6 +123,13 @@ class DockerController:
         try:
             proc = self._runner(command, self.data_dir, timeout, extra_env)
         except FileNotFoundError:
+            if not self.data_dir.exists():
+                return CommandResult(
+                    tuple(command),
+                    127,
+                    "",
+                    f"工作目录不存在或不可访问：{self.data_dir}",
+                )
             return CommandResult(tuple(command), 127, "", f"找不到命令：{command[0]}")
         except subprocess.TimeoutExpired:
             return CommandResult(tuple(command), 124, "", f"命令执行超时（{timeout}s）：{' '.join(command[:3])}…")
@@ -149,6 +164,7 @@ class DockerController:
         version_result = self._exec(["docker", "--version"], timeout=10)
         installed = version_result.ok
         version = version_result.stdout.strip() if version_result.ok else ""
+        version_detail = self._tail(version_result.output, 500) if not installed else ""
         compose_installed = False
         compose_detail = ""
         if installed:
@@ -191,6 +207,9 @@ class DockerController:
                     else:
                         detail = "Docker 守护进程当前不可用。"
 
+        if not installed and version_detail:
+            detail = version_detail
+
         status = DockerStatus(
             installed=installed,
             daemon_running=daemon_running,
@@ -207,7 +226,11 @@ class DockerController:
     def require_ready(self) -> DockerStatus:
         status = self.detect(force=True)
         if not status.installed:
-            raise DockerError("未检测到 Docker。请先运行 ./install.sh 安装 Docker，或手动安装后重试。")
+            reason = f"：{status.detail}" if status.detail else ""
+            raise DockerError(
+                "未检测到可用的 Docker CLI"
+                f"{reason}。请先运行 ./install.sh 安装 Docker，或手动安装后重试。"
+            )
         if not status.compose_installed:
             raise DockerError("Docker Compose 插件不可用。请安装 docker-compose-plugin / docker-compose-v2 后重试。")
         if not status.daemon_running:

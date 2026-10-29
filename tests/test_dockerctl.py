@@ -70,6 +70,14 @@ class DockerControllerTests(unittest.TestCase):
             self.assertEqual(compose_calls[-1][:3], ["sudo", "-n", "docker"])
             self.assertIn("--env-file", compose_calls[-1])
 
+
+    def test_controller_creates_its_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "nested" / "doctor"
+            self.assertFalse(missing.exists())
+            DockerController(missing, runner=FakeDockerRunner())
+            self.assertTrue(missing.is_dir())
+
     def test_missing_docker_is_reported_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner = FakeDockerRunner(installed=False)
