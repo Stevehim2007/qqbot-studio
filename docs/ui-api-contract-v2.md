@@ -95,9 +95,10 @@
       "novnc": "http://127.0.0.1:6081"
     },
     "credentials": {
-      "astrbot_username": "astrbot",
+      "astrbot_username": "admin",
       "astrbot_password": "本地随机密码",
-      "snowluma_password": "本地临时密码",
+      "snowluma_username": "admin",
+      "snowluma_password": "本地预置初始密码",
       "vnc_password": "本地 VNC 密码"
     },
     "onebot_connected": true,

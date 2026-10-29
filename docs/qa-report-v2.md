@@ -36,6 +36,8 @@ python3 -m unittest discover -s tests -v
 - 服务器 API、token 鉴权、Host 校验、多实例接口、镜像接口
 - 首次运行 IP/端口配置持久化
 - Docker 检测使用已存在的工作目录；真实 subprocess 回归测试可避免把 `cwd` 缺失误判为 Docker 未安装
+- SnowLuma WebUI 使用稳定 bootstrap 密码环境变量，并兼容日志密码轮换后的同步
+- SnowLuma 用户名 `admin` 与“每个新实例首次部署需要扫码登录 QQ”的 UI/README 提醒
 - `start.sh` 部署模式和 `console.sh` 控制台模式的后台 URL 行为
 - QQ 增强插件 20 个 mock 用例（@ 必回、概率回复、图片、表情包、默认 LLM 阻断）
 
@@ -145,7 +147,7 @@ HTML/CSS 静态检查：
 
 ## 6. 发布建议
 
-当前可发布为 **v2.0.1 条件通过**，但 README 和发布说明必须明确：
+当前可发布为 **v2.0.2 条件通过**，但 README 和发布说明必须明确：
 
 - 默认 `0.0.0.0` 的安全风险；
 - 真实 Docker/QQ/DeepSeek E2E 尚未完成；

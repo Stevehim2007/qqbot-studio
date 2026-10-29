@@ -218,6 +218,7 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(status["deployment"]["model"], "deepseek-flash")
         self.assertTrue(status["deployment"]["onebot_connected"])
         self.assertTrue(status["deployment"]["qq_logged_in"])
+        self.assertEqual(status["deployment"]["credentials"]["snowluma_username"], "admin")
         self.assertEqual(status["deployment"]["credentials"]["snowluma_password"], "SnowPass123")
         self.assertTrue(status["deployment"]["urls"]["novnc"].startswith("http://127.0.0.1:"))
 
@@ -364,6 +365,24 @@ class DeployerTests(unittest.TestCase):
             deployer_module.time.sleep = original_sleep
         self.assertEqual(parsed, "Abcd1234")
         self.assertEqual(self.store.load_secrets()["snowluma_password"], "Abcd1234")
+
+        # If SnowLuma rotates its bootstrap password, a stale local value must
+        # be replaced by the newest credentials line from the logs.
+        self.docker.logs_by_service["snowluma"] = (
+            "initial credentials: user=admin password=Rotated9876abcd\n"
+        )
+        import qqbot_studio.deployer as deployer_module
+        original_sleep = deployer_module.time.sleep
+        deployer_module.time.sleep = lambda *_: None
+        try:
+            rotated = self.manager._capture_snowluma_password()
+        finally:
+            deployer_module.time.sleep = original_sleep
+        self.assertEqual(rotated, "Rotated9876abcd")
+        self.assertEqual(
+            self.store.load_secrets()["snowluma_password"],
+            "Rotated9876abcd",
+        )
 
 
 if __name__ == "__main__":

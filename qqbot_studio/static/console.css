@@ -433,3 +433,11 @@
   .instance-web-link { justify-content: space-between; }
   .console-toast-region { width: calc(100vw - 28px); right: 14px; bottom: 14px; }
 }
+
+.field-hint {
+  max-width: 760px;
+  margin-top: 8px;
+  color: var(--ink-500);
+  font-size: 10px;
+  line-height: 1.7;
+}

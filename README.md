@@ -39,7 +39,7 @@ cd "/你的项目路径/QQ Ai bot"
 ./start.sh
 ```
 
-每次执行 `./start.sh` 都会创建一个新的隔离实例，拥有独立的：
+每次执行 `./start.sh` 都会创建一个**全新的隔离实例**，拥有独立的：
 
 - 数据目录
 - QQ 号
@@ -49,6 +49,11 @@ cd "/你的项目路径/QQ Ai bot"
 - 容器名
 - Docker 网络
 - AstrBot / SnowLuma / noVNC 端口
+
+> **QQ 登录提醒：** 每个新实例首次部署都必须在 noVNC 中扫码登录 QQ。
+> 重复运行 `./start.sh` 会创建新实例，需要重新扫码；管理已有机器人请使用 `./console.sh`。
+> 重启已有容器通常复用 SnowLuma 保存的登录态，但 QQ 登录过期或触发验证时仍需在
+> noVNC 中重新完成官方验证。
 
 ### 打开多实例控制台
 
@@ -313,6 +318,42 @@ Docker Compose 操作是幂等的，重新部署会复用已完成的镜像和�
 
 - [`docs/plugin-qqbot-enhancer.md`](docs/plugin-qqbot-enhancer.md)
 
+### 设置群聊主动回复概率
+
+打开 AstrBot WebUI → 插件 → **QQ Bot 增强回复** → 配置：
+
+| 配置 | 默认值 | 含义 |
+|---|---:|---|
+| `reply_probability` | `0.12` | 非 @ 群消息回复概率，0.12 = 12% |
+| `group_cooldown_seconds` | `30` | 同一群两次概率回复的最小间隔 |
+| `user_cooldown_seconds` | `90` | 同一用户两次概率回复的最小间隔 |
+| `min_message_chars` | `3` | 太短的消息不参与概率回复 |
+| `ignore_pure_image` | `true` | 非 @ 纯图片不参与概率回复 |
+| `sticker_probability` | `0.35` | 已回复时附加表情包的概率 |
+
+- 设为 `0.05` 就是约 5%，设为 `0` 则只有 @ 和私聊回复；
+- @ 机器人和私聊不受概率、群冷却、用户冷却限制；
+- 保存后一般立即生效，不生效时重启对应 AstrBot 容器。
+
+### Token 说明
+
+DeepSeek 的聊天 API 是无状态的：每次请求都会重新携带 system prompt 和本轮输入。
+本项目插件采用轻量直连方式，不携带完整的 AstrBot 会话历史，因此单次输入通常比
+“每轮带完整历史”的 Agent 模式小。
+
+DeepSeek 会自动启用 Context Caching：稳定不变的系统提示词前缀命中缓存时，
+会以更便宜的缓存 token 计费。不要每轮把时间、随机数等动态内容写入 system prompt，
+否则会破坏缓存前缀。
+
+进一步省 token 可以：
+
+- 降低 `reply_probability`，或增大群/用户冷却；
+- 增大 `min_message_chars`；
+- 纯图片不参与概率回复时保持 `ignore_pure_image=true`；
+- 把 `max_images_per_message` 调小（图片 token 很贵）；
+- 保持系统提示词简洁且稳定；
+- 表情包不会额外调用 LLM，`sticker_probability` 不增加模型 token。
+
 > 图片理解需要可用的多模态模型；DeepSeek Flash 本身是否支持图片输入以实际 API 为准，
 > 不支持时需要额外配置视觉模型/图片描述 provider。
 
@@ -504,6 +545,59 @@ unset GIT_SSL_BACKEND
 如果服务器本机 `curl http://127.0.0.1:8765/healthz` 正常，但自己的电脑打不开，
 优先检查腾讯云安全组/轻量防火墙是否放行 `8765`，以及程序是否监听 `0.0.0.0`。
 完整步骤见：[腾讯云开放端口 / 防火墙教程](docs/server-troubleshooting.md)。
+
+### SnowLuma WebUI 登录不上 / 密码错误
+
+SnowLuma WebUI 的默认用户名是：
+
+```text
+admin
+```
+
+密码有两种情况：
+
+- 新版部署会在 `.env` 中预置 `SNOWLUMA_WEBUI_PASSWORD`，完成页会显示这个初始密码；
+- 如果你在 SnowLuma WebUI 首次登录后修改过密码，请使用你修改后的密码，完成页不会自动更新。
+
+如果旧实例的密码已经失效（例如未修改就被重启导致 SnowLuma 轮换了一次性密码），可以从日志读取当前密码：
+
+```bash
+# 先确认 SnowLuma 容器名
+docker ps --format 'table {{.Names}}	{{.Ports}}'
+
+# 以实际容器名为准
+docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials\|初始登录"
+```
+
+日志中会显示：
+
+```text
+initial credentials: user=admin password=xxxxxxxxxxxxxxxx
+```
+
+如果日志里已经找不到一次性密码，可以重置 SnowLuma **WebUI 登录密码**：
+
+```bash
+# 找到实例的 webui.json
+find ~/.local/share/qqbot-studio/instances -path '*/data/snowluma/config/webui.json' -print
+
+# 假设找到的是 bot-1，先备份再删除
+cp ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json \
+   ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json.bak
+
+rm ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json
+
+# 重启 SnowLuma 容器
+docker restart qqbot-bot-1-snowluma
+
+# 等待几秒后读取新一次性密码
+sleep 5
+docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials"
+```
+
+用日志中的 `password`、用户名 `admin` 登录，并按 SnowLuma 要求设置自己的新密码。
+删除 `webui.json` 只会重置 SnowLuma WebUI 登录，不会删除 QQ 数据目录；
+QQ 登录态是否会保留取决于 SnowLuma 版本，必要时仍需在 noVNC 中重新验证。
 
 ### 重新进入没有显示部署进度
 

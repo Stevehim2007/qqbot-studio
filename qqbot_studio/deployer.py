@@ -653,8 +653,6 @@ class DeployManager:
     ) -> str:
         secrets_data = secrets_data or self.store.load_secrets()
         existing = str(secrets_data.get("snowluma_password") or "").strip()
-        if existing:
-            return existing
         try:
             time.sleep(2)
             logs = self.docker.logs("snowluma", 800)
@@ -675,13 +673,17 @@ class DeployManager:
                 found = str(matches[-1]).strip()
                 break
         if found:
-            secrets_data["snowluma_password"] = found
-            self.store.save_secrets(secrets_data)
-            if log:
-                log("已获取 SnowLuma WebUI 初始密码并保存到本地 secrets.json。")
-        elif log:
+            if found != existing:
+                secrets_data["snowluma_password"] = found
+                self.store.save_secrets(secrets_data)
+                if log:
+                    log("已从最新日志同步 SnowLuma WebUI 密码到本地 secrets.json。")
+            return found
+        if existing:
+            return existing
+        if log:
             log("SnowLuma 初始密码尚未出现在日志中；可在完成页刷新状态，或查看 SnowLuma 日志。")
-        return found
+        return ""
 
     def _detect_onebot_connection(self, lines: int = 400) -> bool | None:
         try:
@@ -892,6 +894,7 @@ class DeployManager:
                 "credentials": {
                     "astrbot_username": str(secrets_data.get("astrbot_username") or ""),
                     "astrbot_password": str(secrets_data.get("astrbot_password") or ""),
+                    "snowluma_username": "admin",
                     "snowluma_password": snowluma_password,
                     "vnc_password": str(secrets_data.get("vnc_password") or ""),
                 },

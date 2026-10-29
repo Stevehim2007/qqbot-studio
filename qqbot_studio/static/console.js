@@ -22,7 +22,9 @@
     loading: false,
     loadedOnce: false,
     actionInstanceId: '',
-    creating: false
+    creating: false,
+    lastSyncedAt: 0,
+    pollTimer: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -287,6 +289,30 @@
     if (nameInput) nameInput.disabled = busy;
   }
 
+  function formatSyncTime(timestamp) {
+    if (!timestamp) return '';
+    try {
+      return new Date(timestamp).toLocaleTimeString('zh-CN', { hour12: false });
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function scheduleNextSync(delay = 8000) {
+    if (state.pollTimer) window.clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+    if (document.hidden) return;
+    state.pollTimer = window.setTimeout(async () => {
+      state.pollTimer = null;
+      if (document.hidden) return;
+      try {
+        await loadConsole({ silent: true });
+      } finally {
+        scheduleNextSync();
+      }
+    }, delay);
+  }
+
   function renderSettings() {
     const settings = asRecord(state.settings);
     const host = textValue(settings.bind_host, '').trim();
@@ -309,7 +335,9 @@
 
     let mirrorCount = '';
     if (Array.isArray(settings.mirror_nodes)) mirrorCount = ` · 镜像节点 ${settings.mirror_nodes.length} 个`;
-    const status = `本地服务监听：${address}${publicHost ? ` · 公开地址：${publicHost}` : ''}${mirrorCount}`;
+    const syncTime = formatSyncTime(state.lastSyncedAt);
+    const syncText = syncTime ? ` · 最后同步 ${syncTime}` : '';
+    const status = `本地服务监听：${address}${publicHost ? ` · 公开地址：${publicHost}` : ''}${mirrorCount}${syncText}`;
     const statusElement = $('console-settings-status');
     if (statusElement) statusElement.textContent = status;
   }
@@ -535,12 +563,14 @@
 
       state.instances = merged;
       state.loadedOnce = true;
+      state.lastSyncedAt = Date.now();
       renderInstances();
+      renderSettings();
       setConsoleError('');
       if (!silent) {
         showToast(`实例列表已更新，共 ${merged.length} 个实例。`, 'success', 2800);
       }
-      if (stateFailureCount > 0) {
+      if (stateFailureCount > 0 && !silent) {
         showToast(`${stateFailureCount} 个实例的实时状态读取失败，请点击右上角“刷新”重试。`, 'warning', 6000);
       }
       return true;
@@ -706,7 +736,17 @@
   async function init() {
     bindEvents();
     await loadConsole({ silent: true });
+    scheduleNextSync();
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (state.pollTimer) window.clearTimeout(state.pollTimer);
+      state.pollTimer = null;
+      return;
+    }
+    void loadConsole({ silent: true }).finally(() => scheduleNextSync());
+  });
 
   document.addEventListener('DOMContentLoaded', () => {
     init().catch((error) => {

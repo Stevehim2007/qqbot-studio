@@ -14,4 +14,8 @@ if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
   fi
 fi
 
+echo "提示：每次运行 ./start.sh 都会创建一个全新的机器人实例；"
+echo "新实例首次部署必须在 noVNC 中扫码登录 QQ。管理已有机器人请使用 ./console.sh。"
+echo
+
 exec python3 -m qqbot_studio.launcher deploy "$@"

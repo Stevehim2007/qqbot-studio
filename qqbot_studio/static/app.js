@@ -153,6 +153,7 @@
         credentials: {
           astrbot_username: textValue(credentials.astrbot_username, ''),
           astrbot_password: textValue(credentials.astrbot_password, ''),
+          snowluma_username: textValue(credentials.snowluma_username, 'admin'),
           snowluma_password: textValue(credentials.snowluma_password, ''),
           vnc_password: textValue(credentials.vnc_password, '')
         },
@@ -1816,6 +1817,7 @@
     setOpenLink($('astrbot-open'), urls.astrbot_webui);
 
     setText('snowluma-url-text', fallbackDisplay(urls.snowluma_webui));
+    setText('snowluma-username', fallbackDisplay(credentials.snowluma_username || 'admin'));
     setText('snowluma-password', fallbackDisplay(credentials.snowluma_password));
     setOpenLink($('snowluma-open'), urls.snowluma_webui);
 
@@ -1983,7 +1985,8 @@
     } else if (card === 'snowluma') {
       lines = [
         `SnowLuma WebUI: ${fallbackDisplay(urls.snowluma_webui)}`,
-        `访问密码: ${fallbackDisplay(credentials.snowluma_password)}`
+        `用户名: ${fallbackDisplay(credentials.snowluma_username || 'admin')}`,
+        `初始密码: ${fallbackDisplay(credentials.snowluma_password)}`
       ];
     } else if (card === 'novnc') {
       lines = [

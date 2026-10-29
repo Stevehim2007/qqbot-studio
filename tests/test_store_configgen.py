@@ -147,11 +147,15 @@ class ConfigGenerationTests(unittest.TestCase):
             compose = result["compose"].read_text(encoding="utf-8")
             for fragment in ("SYS_PTRACE", "seccomp=unconfined", "shm_size: 1gb", "127.0.0.1:"):
                 self.assertIn(fragment, compose)
+            self.assertIn("SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: ${SNOWLUMA_WEBUI_PASSWORD}", compose)
             self.assertNotIn(api_key, compose)
 
             env = result["env"].read_text(encoding="utf-8")
             self.assertIn("VNC_PASSWD=", env)
             self.assertIn("ASTRBOT_IMAGE=soulter/astrbot:latest", env)
+            webui_password = secrets_data["snowluma_password"]
+            self.assertTrue(webui_password)
+            self.assertIn(f"SNOWLUMA_WEBUI_PASSWORD={webui_password}", env)
             self.assertNotIn(api_key, env)
             self.assertEqual(os.stat(result["env"]).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(result["astrbot_config"]).st_mode & 0o777, 0o600)

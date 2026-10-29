@@ -140,6 +140,7 @@
             <span class="kicker"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>本机安全优先</span>
             <h2 id="env-heading" tabindex="-1">准备一台已安装 Docker 的 Ubuntu</h2>
             <p>这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。所有操作均在本机浏览器与本地服务之间完成。</p>
+            <p class="field-hint"><strong>注意：</strong>每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。重复运行 <code>./start.sh</code> 会创建新实例并需要重新扫码；管理已有实例请使用 <code>./console.sh</code>。</p>
           </div>
           <div class="welcome-orbit" aria-hidden="true">
             <div class="orbit-ring orbit-ring--one"></div>
@@ -474,8 +475,10 @@
             </div>
             <p id="snowluma-url-text" class="url-text">未提供</p>
             <div class="credential-grid">
-              <div><span class="credential-label">访问密码</span><code id="snowluma-password" class="credential-value">未提供</code></div>
+              <div><span class="credential-label">用户名</span><code id="snowluma-username" class="credential-value">admin</code></div>
+              <div><span class="credential-label">初始密码</span><code id="snowluma-password" class="credential-value">未提供</code></div>
             </div>
+            <p class="field-hint">如果首次登录时修改过密码，请使用你修改后的密码；这里显示的是部署时预置/日志中的初始密码。</p>
             <div class="card-actions">
               <a id="snowluma-open" class="btn btn-secondary btn-small" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">一键打开<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
               <button id="copy-snowluma" class="btn btn-quiet btn-small" type="button" data-copy-card="snowluma"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>复制登录信息</button>

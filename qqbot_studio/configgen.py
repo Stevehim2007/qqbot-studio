@@ -249,6 +249,7 @@ services:
       SNOWLUMA_GID: ${{HOST_GID}}
       SNOWLUMA_WEBUI_HOST: 0.0.0.0
       SNOWLUMA_WEBUI_PORT: "{INTERNAL_SNOWLUMA_WEBUI_PORT}"
+      SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: ${{SNOWLUMA_WEBUI_PASSWORD}}
       SNOWLUMA_HOOK_AUTOLOAD: "1"
       SNOWLUMA_LOG_LEVEL: info
       SNOWLUMA_QQ_FLAGS: "--disable-gpu --disable-software-rasterizer --disable-gpu-compositing"
@@ -275,11 +276,13 @@ def _env_file(
     host_uid: int,
     host_gid: int,
     vnc_password: str,
+    snowluma_webui_password: str = "",
     mirror_prefix: str = "",
     bind_address: str = "127.0.0.1",
 ) -> str:
     astrbot_image, snowluma_image = image_names_for_prefix(mirror_prefix)
     values = [
+        ("SNOWLUMA_WEBUI_PASSWORD", str(snowluma_webui_password)),
         ("ASTRBOT_IMAGE", astrbot_image),
         ("SNOWLUMA_IMAGE", snowluma_image),
         ("BIND_ADDRESS", str(bind_address or "127.0.0.1")),
@@ -509,7 +512,13 @@ def generate_artifacts(
     gid = os.getgid() if host_gid is None else int(host_gid)
     if not mirror_prefix and use_mirror:
         mirror_prefix = mirror_prefixes()[0]
-    mirror_prefix = _normalize_mirror_prefix(mirror_prefix)
+    webui_password = str(secrets_data.get("snowluma_password") or "").strip()
+    if not webui_password:
+        # SnowLuma supports a stable bootstrap password on a fresh data dir.
+        # Generate it before writing compose/.env so the UI never has to show
+        # a stale one-time password after a restart.
+        webui_password = secrets.token_hex(8)
+        secrets_data["snowluma_password"] = webui_password
 
     compose_path = root / "compose.yml"
     env_path = root / ".env"
@@ -534,6 +543,7 @@ def generate_artifacts(
             host_uid=uid,
             host_gid=gid,
             vnc_password=str(secrets_data["vnc_password"]),
+            snowluma_webui_password=webui_password,
             mirror_prefix=mirror_prefix,
             bind_address=bind_address,
         ),

@@ -228,15 +228,22 @@ SnowLuma 在 Linux Docker 中运行 Linux QQ + Xvfb + noVNC。
 4. 若 QQ 要求设备验证、短信/邮箱验证、滑块或安全验证，必须在 noVNC 中的 QQ 官方界面完成。
 5. 登录态保存在 `/app/.local/share` 对应的持久化目录中。
 
-SnowLuma WebUI 首次启动会在容器日志打印一次性临时密码，常见格式：
+SnowLuma WebUI 默认用户名为 `admin`。v2 部署会在 `.env` 中预置
+`SNOWLUMA_WEBUI_PASSWORD`，并通过容器的 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD`
+在全新数据目录上生成稳定初始密码；完成页会展示该初始密码。
+
+为兼容不支持 bootstrap 环境变量的旧镜像，部署器仍会解析日志中的：
 
 ```text
 临时密码: xxxxxxxx
 initial credentials: user=admin password=xxxxxxxx
 ```
 
-本项目用 `docker compose logs snowluma` 解析类似文本并保存到本地 `secrets.json`。若日志中尚未出现，
-可在完成页刷新状态或查看 SnowLuma 日志。
+并同步到本地 `secrets.json`。如果用户在 SnowLuma 里手动改过密码，完成页不会自动获知新密码。
+若旧实例的初始密码因未修改就重启而轮换，需要按 README 的 SnowLuma 密码重置步骤处理。
+
+每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ；`./start.sh` 每次创建新实例，
+管理已有实例请使用 `./console.sh`。重启已有容器通常复用 SnowLuma 登录态，但 QQ 会话过期时仍需重新验证。
 
 **限制（重要）**：QQ 密码登录、验证码代填、滑块破解、设备验证绕过均不在本项目实现范围内。
 现代 QQ 在服务器/容器环境通常要求扫码或额外验证；本工具只负责将官方客户端呈现给用户，由用户完成官方验证。
