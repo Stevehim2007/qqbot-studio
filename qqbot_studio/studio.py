@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .dockerctl import DockerController, DockerError
-from .store import Store, default_data_dir, utc_now
+from .store import Store, chmod_best_effort, default_data_dir, utc_now
 
 STUDIO_SCHEMA_VERSION = 1
 INSTANCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
@@ -111,10 +111,10 @@ class StudioManager:
     def __init__(self, root: Path | str | None = None) -> None:
         self.root = Path(root).expanduser().resolve() if root else default_data_dir()
         self.root.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.root, 0o700)
+        chmod_best_effort(self.root, 0o700)
         self.instances_dir = self.root / "instances"
         self.instances_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.instances_dir, 0o700)
+        chmod_best_effort(self.instances_dir, 0o700)
         self.settings_path = self.root / "studio.json"
         self.server_pid_path = self.root / "server.pid"
         self._mirror_cache: dict[str, dict[str, Any]] = {}
@@ -160,7 +160,7 @@ class StudioManager:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.settings_path)
-            os.chmod(self.settings_path, 0o600)
+            chmod_best_effort(self.settings_path, 0o600)
         finally:
             if tmp.exists():
                 try:
@@ -369,7 +369,7 @@ class StudioManager:
         settings["next_instance_seq"] = seq + 1
         self.save_settings(settings)
         path.mkdir(parents=True, exist_ok=False)
-        os.chmod(path, 0o700)
+        chmod_best_effort(path, 0o700)
         display_name = str(name or "").strip() or f"QQ 机器人 {seq}"
         if len(display_name) > 60:
             display_name = display_name[:60]
@@ -399,7 +399,7 @@ class StudioManager:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, target)
-            os.chmod(target, 0o600)
+            chmod_best_effort(target, 0o600)
         finally:
             if tmp.exists():
                 try:

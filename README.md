@@ -10,6 +10,9 @@
 - 浏览器向导、控制台和多实例管理
 - 实时部署日志和中断恢复
 - Docker/容器启动检查与自动修复
+- 控制台内置离线使用助手
+- `/找图` / `/搜图` 网络图片搜索与本地表情包
+- Windows 10/11 初始移植（Docker Desktop + WSL2，未完成真实 Windows E2E）
 
 > QQ 密码不需要填写。现代 QQ 登录使用扫码；设备验证、短信验证、滑块等只能在
 > noVNC 中的 QQ 官方登录界面完成，工具不会绕过验证。
@@ -23,6 +26,10 @@
 | `install.sh` | 安装 Docker、Python、screen 等依赖，首次配置 IP/端口，然后自动调用 `start.sh` |
 | `start.sh` | 新建一个机器人实例，启动后台管理服务并打印部署向导 URL；可重复运行创建多个机器人 |
 | `console.sh` | 打开/启动 Web 管理控制台，查看所有已创建机器人、运行状态和 WebUI 链接 |
+
+Windows 初始移植使用 Docker Desktop + WSL2，入口和限制见
+[`windows/README.md`](windows/README.md)。当前没有完成真实 Windows/Docker Desktop 联调，
+不能视为与 Ubuntu 版同等级的生产可用承诺。
 
 ### 安装并启动第一个机器人
 
@@ -79,6 +86,9 @@ cd "/你的项目路径/QQ Ai bot"
 
 控制台可查看每个实例的部署状态、容器状态、QQ 号、AstrBot / SnowLuma / noVNC 链接，
 并执行启动、停止、重启和打开部署向导。
+
+控制台右上角的 **使用助手** 是离线教程面板：不会上传问题、不消耗 DeepSeek token，
+可查询安装、更新、端口、扫码、SnowLuma 密码、概率/记忆、Docker 和日志等问题。
 
 ---
 
@@ -327,7 +337,9 @@ Docker Compose 操作是幂等的，重新部署会复用已完成的镜像和�
 - 被 @ 或私聊必定回复
 - 非 @ 群消息按概率回复
 - 图片消息理解并回复
-- 本地表情包发送
+- 本地表情包发送（8 张自绘 PNG）
+- `/找图 关键词` / `/搜图 关键词` 网络图片搜索并发送
+- 搜索冷却、安全搜索级别、结果数量和失败降级
 - 冷却、过滤和防刷屏
 
 插件文档：
@@ -351,6 +363,29 @@ Docker Compose 操作是幂等的，重新部署会复用已完成的镜像和�
 - 设为 `0.05` 就是约 5%，设为 `0` 则只有 @ 和私聊回复；
 - @ 机器人和私聊不受概率、群冷却、用户冷却限制；
 - 保存后一般立即生效，不生效时重启对应 AstrBot 容器。
+
+### 图片搜索与表情包
+
+在 QQ 群里使用：
+
+```text
+/找图 橘猫
+/搜图 风景
+```
+
+机器人会从 Bing Images 搜索结果页解析真实图片直链并发送 1–5 张（可配置）。
+该功能不需要额外 API Key，但依赖 Bing HTML 页面；改版/反爬时可能暂时无结果。
+
+AstrBot WebUI → 插件 → QQ Bot 增强回复 → 配置中可调整：
+
+- `image_search_enabled`：是否启用；
+- `image_search_result_count`：单次最多发送几张；
+- `image_search_safe_search`：`strict` / `moderate` / `off`；
+- `image_search_group_cooldown_seconds`、`image_search_user_cooldown_seconds`：冷却；
+- `image_search_timeout_seconds`、`image_search_max_response_bytes`：网络边界。
+
+本地表情包共 8 张，按关键词/情绪/随机选择发送；`sticker_probability` 只控制表情包，
+不会额外消耗 LLM token。
 
 ### 长期对话记忆模式
 
@@ -675,6 +710,7 @@ bash -n start.sh console.sh install.sh scripts/*.sh
 - [QQ 增强插件说明](docs/plugin-qqbot-enhancer.md)
 - [服务器排错指南](docs/server-troubleshooting.md)
 - [AstrBot / SnowLuma / DeepSeek 集成调研](docs/integration-research.md)
+- [Windows 初始移植说明](windows/README.md)
 
 ---
 

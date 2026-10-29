@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Sequence
 
+from .store import default_data_dir
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "auto-update.sh"
 GitRunner = Callable[[Sequence[str], Path, int], subprocess.CompletedProcess[str]]
@@ -23,13 +25,16 @@ def _default_git_runner(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    env.setdefault("GIT_ASKPASS", "/bin/true")
-    # Avoid an unattended management server hanging on an SSH host-key prompt.
-    env.setdefault(
-        "GIT_SSH_COMMAND",
-        "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
-        "-o ConnectTimeout=15 -o ControlMaster=no -o ControlPath=none",
-    )
+    if os.name != "nt":
+        env.setdefault("GIT_ASKPASS", "/bin/true")
+        # Avoid an unattended management server hanging on an SSH host-key
+        # prompt.  The Windows Git port does not use /bin/true; leave its
+        # configured credential helper and SSH agent untouched.
+        env.setdefault(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
+            "-o ConnectTimeout=15 -o ControlMaster=no -o ControlPath=none",
+        )
     return subprocess.run(
         [str(item) for item in argv],
         cwd=str(cwd),
@@ -149,6 +154,11 @@ def start_update(
 ) -> dict:
     """Validate and launch the detached update/restart script."""
 
+    if os.name == "nt":
+        raise UpdateError(
+            "Windows 初始移植版暂不支持网页内一键更新；请在 PowerShell 中手动 git pull，"
+            "然后运行 windows\\console.ps1 -RestartService。"
+        )
     repo = Path(root or PROJECT_ROOT).expanduser().resolve()
     info = check_update(repo, runner=runner)
     if not info.get("ok"):
@@ -158,7 +168,7 @@ def start_update(
     script = repo / "scripts" / "auto-update.sh"
     if not script.is_file():
         raise UpdateError("找不到 scripts/auto-update.sh。")
-    data = Path(data_dir or (Path.home() / ".local" / "share" / "qqbot-studio")).expanduser().resolve()
+    data = Path(data_dir).expanduser().resolve() if data_dir else default_data_dir()
     data.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["QQBOT_AUTO_UPDATE_ROOT"] = str(repo)

@@ -6,6 +6,7 @@ import glob
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import threading
@@ -25,6 +26,7 @@ from .store import (
     DEFAULT_PROMPT,
     MODEL_NAME,
     Store,
+    chmod_best_effort,
     default_data_dir,
     generate_token,
     utc_now,
@@ -115,7 +117,7 @@ class DeployManager:
         self.jobs_dir = self.data_dir / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         try:
-            os.chmod(self.jobs_dir, 0o700)
+            chmod_best_effort(self.jobs_dir, 0o700)
         except OSError:
             pass
         self._last_persist_at: dict[str, float] = {}
@@ -166,7 +168,7 @@ class DeployManager:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, path)
-            os.chmod(path, 0o600)
+            chmod_best_effort(path, 0o600)
         finally:
             if tmp.exists():
                 try:
@@ -210,7 +212,7 @@ class DeployManager:
                     json.dump(data, handle, ensure_ascii=False, indent=2)
                     handle.write("\n")
                 os.replace(tmp, path)
-                os.chmod(path, 0o600)
+                chmod_best_effort(path, 0o600)
             except OSError:
                 pass
 
@@ -726,14 +728,14 @@ class DeployManager:
         }
         expected.parent.mkdir(parents=True, exist_ok=True)
         try:
-            os.chmod(expected.parent, 0o700)
+            chmod_best_effort(expected.parent, 0o700)
             payload = json.dumps(auth_state, ensure_ascii=False, indent=2) + "\n"
             fd = os.open(expected, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.chmod(expected, 0o600)
+            chmod_best_effort(expected, 0o600)
         except OSError as exc:
             raise DeploymentError(f"写入 SnowLuma webui.json 失败：{exc}") from exc
 
@@ -841,6 +843,11 @@ class DeployManager:
 
     @staticmethod
     def _read_os_name() -> str:
+        if os.name == "nt":
+            try:
+                return platform.platform()
+            except OSError:
+                return "Windows"
         try:
             with open("/etc/os-release", encoding="utf-8") as handle:
                 for line in handle:
@@ -911,7 +918,7 @@ class DeployManager:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, target)
-            os.chmod(target, 0o600)
+            chmod_best_effort(target, 0o600)
         finally:
             if tmp.exists():
                 try:

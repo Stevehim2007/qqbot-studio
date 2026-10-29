@@ -12,6 +12,7 @@ import inspect
 import sys
 import types
 import unittest
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +53,10 @@ class FakeFilter:
 
     @staticmethod
     def on_decorating_result(*args, **kwargs):
+        return lambda func: func
+
+    @staticmethod
+    def command(*args, **kwargs):
         return lambda func: func
 
 
@@ -104,6 +109,12 @@ class Image:
     @staticmethod
     def fromFileSystem(path, **kwargs):
         return Image(file=f"file://{path}", path=str(path), **kwargs)
+
+    @staticmethod
+    def fromURL(url, **kwargs):
+        if not str(url).startswith(("http://", "https://")):
+            raise ValueError("not an http(s) URL")
+        return Image(file=str(url), url=str(url), **kwargs)
 
     async def convert_to_base64(self):
         # Deterministic tiny fake payload; tests only verify the wrapper.
@@ -333,6 +344,19 @@ class FakeClock:
         return self.value
 
 
+class FakeHttpResponse:
+    def __init__(self, data, content_type="text/html; charset=utf-8", content_length=None):
+        self._data = data
+        self.headers = {"Content-Type": content_type}
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            return self._data
+        return self._data[:size]
+
+
 class FixedRng:
     def __init__(self, random_value=0.0, choice_index=0):
         self.random_value = random_value
@@ -367,6 +391,13 @@ def make_plugin(context, *, clock=None, **overrides):
 async def run_handler(plugin, event):
     results = []
     async for result in plugin.on_qq_message(event):
+        results.append(result)
+    return results
+
+
+async def run_image_search_command(plugin, event):
+    results = []
+    async for result in plugin.find_image_command(event):
         results.append(result)
     return results
 
@@ -595,6 +626,202 @@ class TestReplyRouting(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(event.stopped)
 
 
+BING_HTML_FIXTURE = """
+<html><body>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/cat-one.jpg&quot;,&quot;turl&quot;:&quot;https://bing.example/thumb.jpg&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/cat-two.png?w=640&amp;h=480&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;file:///etc/passwd&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;http://127.0.0.1/private.jpg&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://example.com/not-an-image.html&quot;}"></a>
+<script>window.direct = "https://cdn.example.com/direct.webp";</script>
+</body></html>
+"""
+
+
+class TestImageSearch(unittest.IsolatedAsyncioTestCase):
+    def test_extract_keyword_and_alias(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        event = FakeEvent([Plain("/找图 橘猫")], message_str="/找图 橘猫", private=True)
+        self.assertEqual(plugin._extract_image_search_keyword(event), "橘猫")
+
+        event = FakeEvent([Plain("/搜图 山水 风景")], message_str="/搜图 山水 风景", private=True)
+        self.assertEqual(plugin._extract_image_search_keyword(event), "山水 风景")
+
+        event = FakeEvent([Plain("/找图")], message_str="/找图", private=True)
+        self.assertEqual(plugin._extract_image_search_keyword(event), "")
+
+    def test_build_search_url_encodes_query_and_safe_search(self):
+        context = FakeContext()
+        plugin = make_plugin(context, image_search_safe_search="strict")
+        url = plugin._build_bing_image_search_url("橘猫 & 猫")
+        parsed = urllib.parse.urlsplit(url)
+        params = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(parsed.netloc, "www.bing.com")
+        self.assertEqual(params["q"], ["橘猫 & 猫"])
+        self.assertEqual(params["adlt"], ["strict"])
+
+    def test_parse_bing_html_filters_unsafe_and_non_image_urls(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        urls = plugin._parse_bing_image_urls(BING_HTML_FIXTURE, limit=5)
+        self.assertEqual(
+            urls[:2],
+            [
+                "https://cdn.example.com/cat-one.jpg",
+                "https://cdn.example.com/cat-two.png?w=640&h=480",
+            ],
+        )
+        self.assertIn("https://cdn.example.com/direct.webp", urls)
+        self.assertNotIn("file:///etc/passwd", urls)
+        self.assertNotIn("http://127.0.0.1/private.jpg", urls)
+        self.assertNotIn("https://example.com/not-an-image.html", urls)
+
+    async def test_command_success_sends_images_and_stops(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_result_count=2,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+            image_search_success_prefix="结果如下：",
+        )
+        plugin._fetch_image_search_html_sync = lambda url: BING_HTML_FIXTURE
+        event = FakeEvent(
+            [Plain("/找图 橘猫")],
+            message_str="/找图 橘猫",
+            private=True,
+        )
+        results = await run_image_search_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        chain = results[0].chain
+        self.assertEqual(chain[0].text, "结果如下：")
+        self.assertEqual(len(chain), 3)
+        self.assertIsInstance(chain[1], Image)
+        self.assertEqual(chain[1].url, "https://cdn.example.com/cat-one.jpg")
+        self.assertEqual(chain[2].url, "https://cdn.example.com/cat-two.png?w=640&h=480")
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_command_no_results_returns_graceful_reply(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+            image_search_empty_reply="没有搜到，换一个词。",
+        )
+        plugin._fetch_image_search_html_sync = lambda url: "<html>no results</html>"
+        event = FakeEvent(
+            [Plain("/找图 不存在的词")],
+            message_str="/找图 不存在的词",
+            private=True,
+        )
+        results = await run_image_search_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "没有搜到，换一个词。")
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertTrue(event.stopped)
+
+    async def test_command_network_failure_returns_graceful_reply(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+            image_search_error_reply="搜索网络出错了。",
+        )
+
+        def fail(url):
+            raise OSError("network down")
+
+        plugin._fetch_image_search_html_sync = fail
+        event = FakeEvent(
+            [Plain("/找图 山")],
+            message_str="/找图 山",
+            private=True,
+        )
+        results = await run_image_search_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "搜索网络出错了。")
+        self.assertTrue(event.stopped)
+
+    async def test_command_cooldown_blocks_second_search(self):
+        clock = FakeClock(100.0)
+        calls = []
+
+        def fake_fetch(url):
+            calls.append(url)
+            return BING_HTML_FIXTURE
+
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            clock=clock,
+            image_search_result_count=1,
+            image_search_group_cooldown_seconds=60,
+            image_search_user_cooldown_seconds=60,
+        )
+        plugin._fetch_image_search_html_sync = fake_fetch
+        first = FakeEvent(
+            [Plain("/找图 猫")],
+            message_str="/找图 猫",
+            private=True,
+            session_id="search-session",
+        )
+        first_results = await run_image_search_command(plugin, first)
+        self.assertEqual(len(first_results), 1)
+        self.assertEqual(len(calls), 1)
+
+        clock.value = 110.0
+        second = FakeEvent(
+            [Plain("/找图 猫")],
+            message_str="/找图 猫",
+            private=True,
+            session_id="search-session",
+        )
+        second_results = await run_image_search_command(plugin, second)
+        self.assertEqual(len(second_results), 1)
+        self.assertIn("50", second_results[0].text)
+        self.assertEqual(len(calls), 1)  # 冷却期内不再发网络请求
+        self.assertTrue(second.stopped)
+
+    async def test_command_usage_when_keyword_missing(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_usage_reply="用法提示",
+        )
+        plugin._fetch_image_search_html_sync = lambda url: self.fail("不应调用")
+        event = FakeEvent([Plain("/找图")], message_str="/找图", private=True)
+        results = await run_image_search_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "用法提示")
+        self.assertTrue(event.stopped)
+
+    async def test_response_size_limit_is_enforced(self):
+        context = FakeContext()
+        plugin = make_plugin(context, image_search_max_response_bytes=2048)
+        response = FakeHttpResponse(b"x" * 2049, content_length=2049)
+        with self.assertRaises(MODULE.ImageSearchError):
+            plugin._read_search_response(response)
+
+    async def test_disabled_search_returns_friendly_reply(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_enabled=False,
+            image_search_disabled_reply="搜索已关闭。",
+        )
+        plugin._fetch_image_search_html_sync = lambda url: self.fail("不应调用")
+        event = FakeEvent([Plain("/找图 猫")], message_str="/找图 猫", private=True)
+        results = await run_image_search_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "搜索已关闭。")
+        self.assertTrue(event.stopped)
+
+
 class TestImageHandling(unittest.IsolatedAsyncioTestCase):
     async def test_native_vision_provider_is_preferred(self):
         context = FakeContext(
@@ -792,6 +1019,18 @@ class TestStickerHandling(unittest.IsolatedAsyncioTestCase):
         selected = plugin._select_sticker("我有点好奇，这是啥", "emotion-session")
         self.assertIsNotNone(selected)
         self.assertEqual(Path(selected).name, "thinking.png")
+
+    def test_at_least_eight_self_drawn_stickers_are_available(self):
+        png_files = sorted(STICKER_DIR.glob("*.png"))
+        self.assertGreaterEqual(len(png_files), 8)
+        context = FakeContext()
+        plugin = make_plugin(context)
+        valid_entries = [
+            entry
+            for entry in plugin._sticker_entries
+            if Path(entry["path"]).is_file()
+        ]
+        self.assertGreaterEqual(len(valid_entries), 8)
 
     async def test_missing_sticker_file_degrades_to_text(self):
         context = FakeContext(responder=lambda kwargs: "纯文本也行")

@@ -22,6 +22,7 @@ from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager, detect_
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCREEN_NAME = "qqbot-studio-server"
+IS_WINDOWS = os.name == "nt"
 
 
 def _prompt(prompt: str, default: str) -> str:
@@ -102,6 +103,20 @@ def _read_pid(studio: StudioManager) -> int | None:
 
 
 def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if IS_WINDOWS:
+        # On Windows, os.kill(pid, 0) is not a harmless existence probe: it
+        # maps to TerminateProcess.  tasklist is the standard-library-safe
+        # alternative for the launcher's legacy/direct-use path.
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0 and str(int(pid)) in result.stdout
     try:
         os.kill(pid, 0)
         return True
@@ -110,6 +125,25 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _stop_server(studio: StudioManager) -> None:
+    if IS_WINDOWS:
+        pid = _read_pid(studio)
+        if pid and _pid_alive(pid):
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            for _ in range(30):
+                if not _pid_alive(pid):
+                    break
+                time.sleep(0.2)
+        try:
+            studio.server_pid_path.unlink()
+        except OSError:
+            pass
+        return
+
     # Quit the named screen session first; then fall back to the pid file for
     # nohup/legacy launches.
     screen = shutil.which("screen")
@@ -137,7 +171,7 @@ def _stop_server(studio: StudioManager) -> None:
 
 
 def _screen_available() -> bool:
-    return bool(shutil.which("screen"))
+    return False if IS_WINDOWS else bool(shutil.which("screen"))
 
 
 def _server_command(studio: StudioManager, host: str, port: int) -> str:
@@ -157,9 +191,41 @@ def _start_server(studio: StudioManager, settings: dict) -> None:
     host = str(settings.get("bind_host") or DEFAULT_BIND_HOST)
     port = int(settings.get("bind_port") or DEFAULT_BIND_PORT)
     command = _server_command(studio, host, port)
-    screen = shutil.which("screen")
+    screen = None if IS_WINDOWS else shutil.which("screen")
     screen_error = ""
-    if screen:
+    if IS_WINDOWS:
+        # Direct-launcher fallback for Windows.  windows\\start.ps1 is the
+        # supported entry point and uses Start-Process with visible PID/log
+        # handling; this branch keeps the Python launcher usable by itself.
+        log_path = studio.root / "studio-server.log"
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+            subprocess, "DETACHED_PROCESS", 0
+        )
+        log_handle = log_path.open("ab")
+        try:
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "qqbot_studio",
+                    "--host",
+                    host,
+                    "--port",
+                    str(int(port)),
+                    "--data-dir",
+                    str(studio.root),
+                    "--no-browser",
+                ],
+                cwd=str(PROJECT_ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+                close_fds=True,
+            )
+        finally:
+            log_handle.close()
+    elif screen:
         result = subprocess.run(
             [screen, "-dmS", SCREEN_NAME, "bash", "-c", command],
             stdout=subprocess.PIPE,
@@ -169,7 +235,7 @@ def _start_server(studio: StudioManager, settings: dict) -> None:
         )
         if result.returncode != 0:
             screen_error = (result.stderr or result.stdout or "screen 启动失败").strip()
-    if not screen or screen_error:
+    if not IS_WINDOWS and (not screen or screen_error):
         # Screen is installed by install.sh, but container/restricted systems
         # may make /run/screen read-only. Fall back to nohup so the manager
         # still starts; deployment/job persistence remains available.
@@ -291,7 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ip", default=None, help="管理服务监听 IP（默认 0.0.0.0）")
     parser.add_argument("--port", type=int, default=None, help="管理服务端口（首次运行会询问并保存）")
     parser.add_argument("--public-host", default=None, help="浏览器访问使用的外部 IP/域名")
-    parser.add_argument("--data-dir", default=None, help="数据目录（默认 ~/.local/share/qqbot-studio）")
+    parser.add_argument("--data-dir", default=None, help="数据目录（默认使用平台用户数据目录）")
     parser.add_argument("--name", default=None, help="新建机器人实例的显示名称")
     parser.add_argument("--no-open", action="store_true", help="不尝试自动打开浏览器")
     parser.add_argument("--restart-service", action="store_true", help="强制重启后台管理服务")
@@ -307,7 +373,9 @@ def main(argv: list[str] | None = None) -> int:
         # If the owner changed parameters, the old listener may be on a
         # different port. Restart it when explicitly requested or when health
         # on the configured port is absent.
-        if not _screen_available():
+        if IS_WINDOWS:
+            print("提示：Windows 推荐使用 windows\\start.ps1 或 windows\\console.ps1 管理后台服务。")
+        elif not _screen_available():
             print("提示：未检测到 screen。install.sh 会自动安装 screen；当前将使用 nohup 后台模式。")
         # Fail before launching a background management server if Docker is not
         # usable.  This prevents the confusing "UI is up, deployment is dead"

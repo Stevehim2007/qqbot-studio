@@ -19,12 +19,36 @@
       "file": "thinking.png",
       "keywords": ["为什么", "怎么", "想想", "不懂", "？"],
       "emotion": "thinking"
+    },
+    {
+      "file": "love.png",
+      "keywords": ["喜欢", "爱你", "贴贴", "抱抱", "么么"],
+      "emotion": "love"
+    },
+    {
+      "file": "sleepy.png",
+      "keywords": ["晚安", "困了", "睡觉", "累了", "休息"],
+      "emotion": "sleepy"
+    },
+    {
+      "file": "surprised.png",
+      "keywords": ["震惊", "居然", "不会吧", "哇塞", "惊了"],
+      "emotion": "surprised"
+    },
+    {
+      "file": "cool.png",
+      "keywords": ["酷", "牛", "厉害", "666", "稳了"],
+      "emotion": "cool"
     }
   ],
   "emotion_keywords": {
     "happy": ["高兴", "愉快", "兴奋", "太好了"],
-    "sad": ["失落", "低落", "难受"],
-    "angry": ["恼火", "火大", "讨厌"],
-    "thinking": ["疑惑", "好奇", "琢磨"]
+    "sad": ["失落", "低落", "难受", "emo"],
+    "angry": ["恼火", "火大", "讨厌", "气人"],
+    "thinking": ["疑惑", "好奇", "琢磨", "想不通"],
+    "love": ["心动", "可爱", "亲亲", "甜蜜"],
+    "sleepy": ["困倦", "好困", "想睡", "累死"],
+    "surprised": ["意外", "没想到", "吃惊", "惊讶"],
+    "cool": ["帅气", "厉害", "优秀", "给力"]
   }
 }

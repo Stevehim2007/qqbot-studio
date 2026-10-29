@@ -2,47 +2,197 @@
   "memory_mode": {
     "description": "对话记忆模式",
     "type": "string",
-    "options": ["direct", "astrbot"],
-    "labels": ["省 Token：直连模型（不带跨轮历史）", "长期记忆：使用 AstrBot 默认 Agent 会话"],
+    "options": [
+      "direct",
+      "astrbot"
+    ],
+    "labels": [
+      "省 Token：直连模型（不带跨轮历史）",
+      "长期记忆：使用 AstrBot 默认 Agent 会话"
+    ],
     "default": "direct",
     "hint": "direct 只发送当前消息和系统提示，token 更省；astrbot 会使用 AstrBot 会话历史、人格和 Agent 能力，历史越长 token 越多。修改后建议重启 AstrBot。"
+  },
+  "image_search_enabled": {
+    "description": "启用 /找图 和 /搜图 网络图片搜索",
+    "type": "bool",
+    "default": true
+  },
+  "image_search_timeout_seconds": {
+    "description": "Bing Images HTML 搜索超时（秒）",
+    "type": "int",
+    "default": 12,
+    "slider": {
+      "min": 3,
+      "max": 60,
+      "step": 1
+    },
+    "hint": "仅发起一次搜索结果页请求；不递归抓取网页。"
+  },
+  "image_search_result_count": {
+    "description": "单次命令最多发送的图片数",
+    "type": "int",
+    "default": 1,
+    "slider": {
+      "min": 1,
+      "max": 5,
+      "step": 1
+    },
+    "hint": "只从 Bing 搜索结果页解析真实图片直链，不批量抓取图片内容。"
+  },
+  "image_search_safe_search": {
+    "description": "Bing 安全搜索级别",
+    "type": "string",
+    "default": "strict",
+    "options": [
+      "strict",
+      "moderate",
+      "off"
+    ],
+    "labels": [
+      "严格",
+      "适中",
+      "关闭"
+    ],
+    "hint": "映射到 Bing Images 的 adlt 参数；默认严格。"
+  },
+  "image_search_group_cooldown_seconds": {
+    "description": "图片搜索每群冷却（秒）",
+    "type": "int",
+    "default": 15,
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 5
+    }
+  },
+  "image_search_user_cooldown_seconds": {
+    "description": "图片搜索每用户冷却（秒）",
+    "type": "int",
+    "default": 10,
+    "slider": {
+      "min": 0,
+      "max": 1800,
+      "step": 5
+    }
+  },
+  "image_search_max_response_bytes": {
+    "description": "搜索结果 HTML 最大字节数",
+    "type": "int",
+    "default": 2000000,
+    "slider": {
+      "min": 65536,
+      "max": 5000000,
+      "step": 65536
+    },
+    "hint": "超过上限立即拒绝，最多读取上限+1 字节；不会无限读取响应。"
+  },
+  "image_search_max_keyword_chars": {
+    "description": "图片搜索关键词最大长度",
+    "type": "int",
+    "default": 100,
+    "slider": {
+      "min": 10,
+      "max": 300,
+      "step": 10
+    }
+  },
+  "image_search_success_prefix": {
+    "description": "找到图片后的文字前缀",
+    "type": "text",
+    "default": "为你找到这些图片："
+  },
+  "image_search_usage_reply": {
+    "description": "未提供关键词时的提示",
+    "type": "text",
+    "default": "用法：/找图 关键词（也可以 /搜图 关键词）"
+  },
+  "image_search_disabled_reply": {
+    "description": "图片搜索关闭时的提示",
+    "type": "text",
+    "default": "图片搜索功能当前未启用。"
+  },
+  "image_search_empty_reply": {
+    "description": "没有解析到安全图片直链时的提示",
+    "type": "text",
+    "default": "没有找到合适的图片，换个关键词试试吧。"
+  },
+  "image_search_error_reply": {
+    "description": "网络/解析失败时的提示",
+    "type": "text",
+    "default": "搜索图片失败了，请稍后再试。"
+  },
+  "image_search_timeout_reply": {
+    "description": "图片搜索超时时的提示",
+    "type": "text",
+    "default": "搜索图片超时了，请稍后再试。"
+  },
+  "image_search_cooldown_reply": {
+    "description": "图片搜索冷却提示模板",
+    "type": "text",
+    "default": "图片搜索冷却中，请约 {seconds} 秒后再试。",
+    "hint": "支持 {seconds} 占位符。"
   },
   "reply_probability": {
     "description": "群聊非 @ 消息的回复概率",
     "type": "float",
     "default": 0.12,
-    "slider": {"min": 0, "max": 1, "step": 0.01},
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.01
+    },
     "hint": "默认 0.12；只影响非 @ 群消息，@ 机器人与私聊不受概率限制。"
   },
   "group_cooldown_seconds": {
     "description": "每群概率回复冷却（秒）",
     "type": "int",
     "default": 30,
-    "slider": {"min": 0, "max": 600, "step": 5}
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 5
+    }
   },
   "user_cooldown_seconds": {
     "description": "每用户概率回复冷却（秒）",
     "type": "int",
     "default": 90,
-    "slider": {"min": 0, "max": 1800, "step": 10}
+    "slider": {
+      "min": 0,
+      "max": 1800,
+      "step": 10
+    }
   },
   "min_message_chars": {
     "description": "非 @ 群消息最小长度",
     "type": "int",
     "default": 3,
-    "slider": {"min": 0, "max": 100, "step": 1}
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 1
+    }
   },
   "max_input_chars": {
     "description": "送入 LLM 的用户文字最大长度",
     "type": "int",
     "default": 2000,
-    "slider": {"min": 50, "max": 10000, "step": 50}
+    "slider": {
+      "min": 50,
+      "max": 10000,
+      "step": 50
+    }
   },
   "max_reply_chars": {
     "description": "单条回复最大长度",
     "type": "int",
     "default": 500,
-    "slider": {"min": 20, "max": 4000, "step": 10}
+    "slider": {
+      "min": 20,
+      "max": 4000,
+      "step": 10
+    }
   },
   "ignore_pure_image": {
     "description": "非 @ 群聊忽略纯图片消息",
@@ -63,8 +213,12 @@
   "ignore_command_prefixes": {
     "description": "不参与概率回复的指令前缀",
     "type": "list",
-    "default": ["/"],
-    "items": {"type": "string"}
+    "default": [
+      "/"
+    ],
+    "items": {
+      "type": "string"
+    }
   },
   "inherit_astrbot_wake_prefix": {
     "description": "同时使用 AstrBot 配置的 wake_prefix 作为指令前缀",
@@ -80,7 +234,11 @@
     "description": "单次 LLM/视觉请求超时（秒）",
     "type": "int",
     "default": 45,
-    "slider": {"min": 5, "max": 300, "step": 5}
+    "slider": {
+      "min": 5,
+      "max": 300,
+      "step": 5
+    }
   },
   "native_vision_first": {
     "description": "优先尝试当前会话 provider 的原生视觉能力",
@@ -108,7 +266,11 @@
     "description": "图片描述最大长度",
     "type": "int",
     "default": 1200,
-    "slider": {"min": 100, "max": 5000, "step": 100}
+    "slider": {
+      "min": 100,
+      "max": 5000,
+      "step": 100
+    }
   },
   "image_unavailable_reply": {
     "description": "当前模型与图片转述模型都不可用时的兜底回复",
@@ -134,13 +296,21 @@
     "description": "每次回复附加表情包的概率",
     "type": "float",
     "default": 0.35,
-    "slider": {"min": 0, "max": 1, "step": 0.05}
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
   },
   "sticker_cooldown_seconds": {
     "description": "同一会话表情包发送冷却（秒）",
     "type": "int",
     "default": 120,
-    "slider": {"min": 0, "max": 3600, "step": 10}
+    "slider": {
+      "min": 0,
+      "max": 3600,
+      "step": 10
+    }
   },
   "sticker_prevent_repeat": {
     "description": "避免同一会话连续发送同一张表情包",
@@ -151,6 +321,10 @@
     "description": "单条消息最多送入 provider 的图片数",
     "type": "int",
     "default": 4,
-    "slider": {"min": 1, "max": 10, "step": 1}
+    "slider": {
+      "min": 1,
+      "max": 10,
+      "step": 1
+    }
   }
 }

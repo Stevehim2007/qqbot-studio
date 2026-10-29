@@ -7,7 +7,9 @@
 - 群里被机器人 `@` 时必回；`AtAll`（@全体成员）或 `At.qq == "all"` 不算被机器人 `@`。
 - 私聊消息必回。
 - 非 `@` 群消息默认按 12% 概率回复，受每群冷却、每用户冷却、最小长度、纯图片/纯表情/空消息过滤限制。
+- 支持 `direct` / `astrbot` 两种 `memory_mode`：前者省 Token 直连模型，后者交给 AstrBot 默认 Agent 使用长期会话历史。
 - 图片消息优先尝试当前会话 provider 的原生多模态能力；失败后回退到插件配置的视觉 provider，或 AstrBot 的全局图片转述 provider。
+- `/找图 关键词`（别名 `/搜图`）通过免 API Key 的 Bing Images HTML 页面搜索网络图片并发送；带超时、安全搜索、结果数、群/用户冷却、响应大小限制和中文失败降级。
 - 从插件的 `stickers/` 目录发送本地表情包；支持关键词、情绪和随机选择，并带会话冷却、防连续重复、文件缺失降级。
 - 指令前缀消息不参与概率回复，避免抢占 AstrBot 指令。
 - 回复成功后阻止 AstrBot 默认 LLM 再回复一次，避免重复。
@@ -20,12 +22,16 @@ plugins/qqbot_enhancer/
 ├── metadata.yaml           # v4.29 插件元数据
 ├── _conf_schema.json       # AstrBot WebUI 配置 Schema
 ├── README.md
-└── stickers/
+└── stickers/               # 8 张自绘 96x96 PNG，无外部版权素材
     ├── sticker_rules.json
     ├── happy.png
     ├── sad.png
     ├── angry.png
-    └── thinking.png
+    ├── thinking.png
+    ├── love.png
+    ├── sleepy.png
+    ├── surprised.png
+    └── cool.png
 ```
 
 AstrBot v4.29 的实际加载规则（不是本文档发明）：
@@ -116,6 +122,21 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | 配置 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `memory_mode` | string | `direct` | `direct`=省 Token 直连；`astrbot`=使用 AstrBot 默认 Agent 的会话历史 |
+| `image_search_enabled` | bool | `true` | 启用 `/找图`、`/搜图` |
+| `image_search_timeout_seconds` | int | `12` | Bing HTML 搜索页单次 HTTP 超时 |
+| `image_search_result_count` | int | `1` | 每次命令最多发送的图片数（1–5） |
+| `image_search_safe_search` | string | `strict` | Bing `adlt` 安全搜索：`strict`/`moderate`/`off` |
+| `image_search_group_cooldown_seconds` | int | `15` | 图片搜索每群冷却 |
+| `image_search_user_cooldown_seconds` | int | `10` | 图片搜索每用户冷却 |
+| `image_search_max_response_bytes` | int | `2000000` | 搜索结果 HTML 最大字节数 |
+| `image_search_max_keyword_chars` | int | `100` | 搜索关键词最大长度 |
+| `image_search_success_prefix` | text | `为你找到这些图片：` | 成功发送图片前的文字 |
+| `image_search_usage_reply` | text | 内置用法提示 | 缺少关键词提示 |
+| `image_search_disabled_reply` | text | 内置提示 | 功能关闭提示 |
+| `image_search_empty_reply` | text | 内置提示 | 无安全结果提示 |
+| `image_search_error_reply` | text | 内置提示 | 网络/解析失败提示 |
+| `image_search_timeout_reply` | text | 内置提示 | 超时提示 |
+| `image_search_cooldown_reply` | text | `图片搜索冷却中，请约 {seconds} 秒后再试。` | 冷却提示模板 |
 | `reply_probability` | float | `0.12` | 非 @ 群消息回复概率 |
 | `group_cooldown_seconds` | int | `30` | 每群概率回复冷却 |
 | `user_cooldown_seconds` | int | `90` | 每用户概率回复冷却 |
@@ -162,6 +183,38 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 
 记忆模式的 token 成本会随历史变长而增加。可以用 `/reset` 清空当前会话上下文，
 用 `/new` 开启新会话；也可以降低 `reply_probability`、增大冷却或缩短保留的历史轮数。
+
+### 4.5 `/找图` 网络图片搜索
+
+命令形式：
+
+```text
+/找图 橘猫
+/搜图 风景 山
+```
+
+命令由独立的 AstrBot `@filter.command("找图", alias={"搜图"}, priority=110)` 处理器负责，优先级高于普通 ALL 监听器（100），因此不会被概率回复逻辑吞掉。命令本身完成后 `should_call_llm(True)` + `stop_event()`，不会让默认 LLM 再解释一遍。`alias` 参数和 `priority` 均在 v4.29 `CommandFilter`/handler 注册器源码中；发送使用 `Comp.Image.fromURL`：
+
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/astrbot/core/star/filter/command.py>
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/guides/listen-message-event.md>
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/astrbot/core/message/components.py>
+
+搜索实现约束：
+
+- 固定请求 Bing Images HTML 页面：`https://www.bing.com/images/search`，使用 `urllib`，不需要 API Key；不提供任意 URL 配置，避免把搜索请求引向内部地址。
+- 只发起**一次**搜索结果页 GET，不下载原图、不递归抓取站外页面。`/找图` 不是一个通用爬虫。
+- 请求在线程中执行（`asyncio.to_thread`），不会阻塞 AstrBot 事件循环；搜索超时可配置。
+- 响应最多读取 `image_search_max_response_bytes + 1` 字节，一旦超过配置上限立即失败；还检查 `Content-Length`、`Content-Type` 和最终重定向 URL。
+- 解析 Bing `a.iusc[m]` 中的 JSON `murl`，并对缺少该包装的响应做有限的 `"murl":"..."` / 图片扩展名 URL 兜底解析。每页最多检查 200 个候选。
+- 只接受公网 `http://` / `https://` URL；拒绝 `file://`、`javascript:`、带 userinfo 的 URL、localhost/`.local`/`.internal` 等内部域名，以及私有/回环/链路本地/保留 IP。图片路径必须有图片扩展名（`.jpg/.jpeg/.png/.gif/.webp/.bmp/.avif`）。
+- 发送使用官方 `Comp.Image.fromURL(url)`；默认发送 1 张，可配置到 5 张。结果页中重复 URL 会去重。
+- 群冷却和用户冷却在网络请求前占用，防止并发刷屏；命令缺少关键词、关闭搜索、无结果、超时、网络错误均有独立中文提示配置。
+
+**限制：** Bing Images 是 HTML 页面而不是稳定 API；页面结构变化、地区/语言差异、反爬验证、网络不可达时都可能解析不到结果。插件不会下载图片校验真实内容，因此一个结构合法但已失效的图片 URL 可能交给 QQ 协议端后在平台侧加载失败；插件无法收到该平台侧加载结果。为减少风险，解析结果必须来自 Bing 页面、使用 HTTP(S)，并带图片扩展名。
+
+### 4.6 图片搜索的可选 LLM tool
+
+v4.29 确实提供 `@filter.llm_tool(...)` 官方装饰器，但本版本**没有**注册 `search_images` LLM tool。原因是默认 Agent 的 tool 结果更适合返回文本/结构化数据，而本需求的可靠交付方式是“命令直接发送图片”；在 tool 内发送图片还会涉及 Agent 后续总结和潜在重复回复。当前实现明确优先保证 `/找图` 命令可用、可 mock 测试。若后续需要“astrbot 记忆模式下自然语言找图”，可基于官方 `filter.llm_tool` 单独设计 tool 的返回协议。
 
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
@@ -293,28 +346,42 @@ yield event.chain_result(chain)
 
 ### 7.3 示例素材
 
-仓库自带 4 张 96×96 PNG 占位表情（`happy.png`、`sad.png`、`angry.png`、`thinking.png`），由本项目用标准库生成，合计约 2.4 KB，不含第三方版权素材或外部 CDN 引用。替换时请保持合法来源和相应授权。
+仓库自带 8 张 96×96 PNG 占位表情（`happy.png`、`sad.png`、`angry.png`、`thinking.png`、`love.png`、`sleepy.png`、`surprised.png`、`cool.png`），全部由本项目用标准库绘制/生成，合计约 4.6 KB，不含第三方版权素材或外部 CDN 引用。替换时请保持合法来源和相应授权。
 
 ## 8. 已知限制与未验证项
 
 以下限制是明确的，不应被理解为已验证功能：
 
 1. **未进行真实 QQ/AstrBot 联调。** 当前实现通过 AstrBot v4.29 源码核对 API，并用无 AstrBot 安装的 mock 单测验证行为；没有在真实 NapCat/QQ 账号、AstrBot WebUI 和真实模型端点上跑过端到端流程。
-2. **显式直连 provider 不包含 AstrBot 默认 Agent 的人格、完整会话历史、工具/技能和上下文压缩。** 目前只发送插件 `system_prompt`、当前消息（以及可选图片描述），会话是单轮的。若需要完整 Agent 上下文，应改为让默认管线处理或另行使用 `event.request_llm()`/`tool_loop_agent()`，但那会改变本插件的去重与回复逻辑。
+2. **`direct` 模式不包含 AstrBot 默认 Agent 的人格、完整会话历史、工具/技能和上下文压缩。** 该模式只发送插件 `system_prompt`、当前消息（以及可选图片描述），会话是单轮的。需要长期上下文时应把 `memory_mode` 设为 `astrbot`；`astrbot` 模式的 token 成本会随历史增长。
 3. **图片转述不是原生视觉的等价替代。** 它依赖管理员在 AstrBot 中配置支持图片输入的 provider。未配置或配置的 provider 不支持图片时，只能返回配置的兜底文本；无法凭插件自行获得视觉能力。
 4. **DeepSeek/OpenAI-compatible 的实际视觉行为以部署为准。** 插件的 modality 判断基于 provider 配置；若 provider 内部自动文本重试，插件可能无法判断模型是否真的看到了图片。
 5. **本地表情发送的跨平台兼容性未验证。** 通用 `Image.fromFileSystem` 是 AstrBot 官方 API，但本地文件是否能被协议端读取取决于部署路径、回调文件服务/协议端所在机器等环境因素；失败时 AstrBot 侧会记录日志，插件本身只会降级组装纯文本。
 6. **冷却/防重复状态只在内存中，重启清空，且只在单实例内有效。** 多进程/多机器人实例不会共享冷却。
 7. **高优先级 handler 成功回复后会 `stop_event()`。** 这会阻止后续插件再处理同一条消息，属于有意的去重策略；若部署中还有其他必须同时响应普通消息的插件，需要评估顺序和冲突。
 8. **纯图片/纯表情过滤只针对非 @ 群消息。** @ 机器人和私聊消息即使只有图片/表情也会处理，这是“必回”的设计取舍。
+9. **Bing Images HTML 不是官方 API。** 搜索依赖 Bing 当前页面结构；Bing 改版、地区差异、反爬验证或网络限制会导致无结果/失败。真实 Bing 请求与解析未在本环境做在线联调，单测使用本地 HTML fixture。
+10. **图片 URL 未由插件下载校验。** 为防止带宽/SSRF/无限抓取，本插件不读取原图，只解析并发送 HTTP(S) 图片直链；URL 结构合法但已经失效时，QQ 协议端可能加载失败，插件无法从平台侧确认。
+11. **没有实现可选 LLM tool。** 当前只提供命令 `/找图`、`/搜图`。AstrBot v4.29 的 `filter.llm_tool` 是真实 API，但本版本没有注册 `search_images` tool；`memory_mode=astrbot` 时自然语言找图不会自动调用本插件命令。
+12. **URL 公网过滤不做 DNS 解析。** 插件拒绝明显的私有 IP、回环、内部域名和非 HTTP(S) 地址，但公网域名仍可能解析到内网地址。当前插件只把 URL 交给 QQ 协议端，不主动 fetch 该图片 URL；若后续增加服务端下载，必须补充 DNS/IP 解析后的二次 SSRF 校验。
+13. **搜索关键词会发送给 Bing。** 与所有第三方搜索一样，不应在关键词中提交密码、Token 或其他敏感信息。
 
 ## 9. 校验记录
 
 已执行：
 
 ```bash
-python3 -m py_compile plugins/qqbot_enhancer/main.py
-python3 -m unittest discover -s tests -p 'test_enhancer_plugin.py' -v
+python3 -m py_compile plugins/qqbot_enhancer/*.py
+python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
+python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-mock 测试覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级和回复截断。
+mock 测试覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、非 HTTP(S)/内网 URL 过滤、成功发送、无结果/网络失败降级、搜索结果数、响应大小上限和搜索冷却。单测本身**不访问真实网络**。
+
+另做了一次非单测的在线冒烟检查（仅验证搜索页可访问和解析，不代表 AstrBot/QQ 联调）：
+
+- 用带浏览器 UA 的 `urllib`/curl 请求 Bing Images HTML，返回约 245 KB；
+- 从页面解析出 34 个 `m` JSON 项，插件安全过滤后成功得到图片直链；
+- 实际 `plugin._search_image_urls("橘猫")` 在线返回 3 个可通过校验的图片 URL。
+
+Bing 页面结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。

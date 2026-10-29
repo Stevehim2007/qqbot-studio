@@ -27,6 +27,10 @@
     <symbol id="c-i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
     <symbol id="c-i-edit" viewBox="0 0 24 24"><path d="m4 20 4.5-1 11-11a2.1 2.1 0 0 0-3-3l-11 11L4 20Z"/><path d="m14 7 3 3"/></symbol>
     <symbol id="c-i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7h.01"/></symbol>
+    <symbol id="c-i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.1a2.5 2.5 0 0 1 4.9.8c0 1.8-2.5 2-2.5 3.6"/><path d="M12 17h.01"/></symbol>
+    <symbol id="c-i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="c-i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/></symbol>
+    <symbol id="c-i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17H6.5A2.5 2.5 0 0 0 4 22.5v-17Z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20"/><path d="M8 7h8M8 11h6"/></symbol>
   </svg>
 
   <header class="console-header">
@@ -55,6 +59,10 @@
         <button id="console-refresh" class="console-header-btn" type="button">
           <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
           <span id="console-refresh-label">刷新</span>
+        </button>
+        <button id="assistant-open" class="console-assistant-button" type="button" aria-expanded="false" aria-controls="assistant-panel">
+          <svg class="icon" aria-hidden="true"><use href="#c-i-help"></use></svg>
+          使用助手
         </button>
         <button class="console-create-button" type="button" data-open-create>
           <svg class="icon" aria-hidden="true"><use href="#c-i-plus"></use></svg>
@@ -156,6 +164,64 @@
       <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek、AstrBot 与 SnowLuma 均为其各自权利人的产品或项目。</p>
     </footer>
   </main>
+
+  <!-- 离线使用助手：纯本地关键词匹配，不联网、不执行命令、不保存问题。 -->
+  <aside id="assistant-panel" class="assistant-panel" role="dialog" aria-modal="false" aria-labelledby="assistant-title" hidden>
+    <header class="assistant-header">
+      <span class="assistant-header-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-help"></use></svg></span>
+      <div class="assistant-header-copy">
+        <h2 id="assistant-title">使用助手</h2>
+        <p>离线教程 · 本地关键词匹配 · 不联网</p>
+      </div>
+      <button id="assistant-close" class="assistant-close" type="button" aria-label="关闭使用助手" title="关闭使用助手">
+        <svg class="icon" aria-hidden="true"><use href="#c-i-close"></use></svg>
+      </button>
+    </header>
+
+    <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions" aria-label="使用助手对话记录">
+      <div class="assistant-message assistant-message--bot">
+        <span class="assistant-avatar" aria-hidden="true"><svg class="icon"><use href="#c-i-help"></use></svg></span>
+        <div class="assistant-bubble">
+          <p>你好！我是完全离线的使用助手，可以帮你快速查安装、端口、脚本、扫码、SnowLuma 密码、插件配置、Docker、更新和 Windows 说明。</p>
+          <p>先从下面的快捷问题开始，或直接输入你的问题。这里只查阅本机内置教程，不会上传内容，也不会执行命令。</p>
+          <p class="assistant-safety-inline">请勿输入 QQ 密码、API Key、访问令牌、短信验证码或其他敏感信息。</p>
+        </div>
+      </div>
+    </div>
+
+    <section class="assistant-quick" aria-labelledby="assistant-quick-title">
+      <h3 id="assistant-quick-title">快捷问题</h3>
+      <div class="assistant-quick-list">
+        <button type="button" data-assistant-question="如何安装、更新和检查依赖？">安装、更新与依赖</button>
+        <button type="button" data-assistant-question="自动更新失败、工作区不干净怎么办？">自动更新失败</button>
+        <button type="button" data-assistant-question="腾讯云安全组、防火墙和端口怎么开通？">腾讯云端口 / 防火墙</button>
+        <button type="button" data-assistant-question="start.sh 和 console.sh 有什么区别？">start.sh vs console.sh</button>
+        <button type="button" data-assistant-question="每个新实例都要扫码吗？重启后还要吗？">首次扫码 / 登录态</button>
+        <button type="button" data-assistant-question="SnowLuma 用户名 admin 密码错误怎么重置？">SnowLuma 密码重置</button>
+        <button type="button" data-assistant-question="reply_probability、冷却、memory_mode 和 token 怎么设置？">概率、记忆与 token</button>
+        <button type="button" data-assistant-question="部署中断、查看日志和 Docker 检查怎么做？">部署中断 / 日志 / Docker</button>
+        <button type="button" data-assistant-question="有 Windows 版吗？">Windows 版说明</button>
+      </div>
+    </section>
+
+    <form id="assistant-form" class="assistant-form" novalidate>
+      <label class="sr-only" for="assistant-input">输入要咨询的问题</label>
+      <div class="assistant-input-row">
+        <input id="assistant-input" name="question" type="text" maxlength="500" autocomplete="off" placeholder="例如：怎么省 token？" aria-describedby="assistant-hint assistant-error" required>
+        <button id="assistant-send" class="assistant-send" type="submit" aria-label="发送问题" title="发送问题">
+          <svg class="icon" aria-hidden="true"><use href="#c-i-send"></use></svg>
+          <span class="sr-only">发送</span>
+        </button>
+      </div>
+      <p id="assistant-error" class="field-error" role="alert" hidden></p>
+      <p id="assistant-hint" class="assistant-hint">离线关键词匹配，不会上传问题，也不会执行命令。请勿输入密码、API Key 或验证码。</p>
+    </form>
+
+    <footer class="assistant-footer">
+      <svg class="icon" aria-hidden="true"><use href="#c-i-book"></use></svg>
+      <span>教程参考：README.md · docs/server-troubleshooting.md</span>
+    </footer>
+  </aside>
 
   <!-- 服务端会将 {{TOKEN}} 替换为本次本地会话的一次性访问令牌。 -->
   <script>window.QB_TOKEN = "{{TOKEN}}";</script>

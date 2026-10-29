@@ -185,27 +185,36 @@ class DockerController:
                 permission_ok = True
                 self._prefix = []
             else:
-                # The launcher may have cached sudo credentials.  Never prompt
-                # from the local web server: only use `sudo -n`.
-                info_sudo = self._exec(
-                    ["sudo", "-n", "docker", "info", "--format", "{{.ServerVersion}}"],
-                    timeout=15,
-                )
-                if info_sudo.ok:
-                    daemon_running = True
-                    permission_ok = True
-                    uses_sudo = True
-                    self._prefix = ["sudo", "-n"]
-                else:
+                direct_error = self._tail(info_direct.output, 500)
+                if os.name == "nt":
+                    # Docker Desktop exposes the engine through a Windows named
+                    # pipe; launching sudo or taskkill here is never correct.
                     self._prefix = []
-                    direct_error = self._tail(info_direct.output, 500)
-                    sudo_error = self._tail(info_sudo.output, 500)
-                    if "permission denied" in (direct_error + sudo_error).lower():
-                        detail = "当前用户没有 Docker 权限，请重新打开启动器以缓存 sudo 凭据，或注销后重新登录。"
-                    elif sudo_error:
-                        detail = "Docker 守护进程未运行，或 sudo 凭据已过期。请启动 Docker 后重试。"
+                    if "permission denied" in direct_error.lower():
+                        detail = "当前用户无权访问 Docker Desktop Engine，请确认 Docker Desktop 已登录并正在运行。"
                     else:
-                        detail = "Docker 守护进程当前不可用。"
+                        detail = "Docker Desktop Engine 当前不可用，请启动 Docker Desktop（Linux containers）后重试。"
+                else:
+                    # The launcher may have cached sudo credentials.  Never
+                    # prompt from the local web server: only use `sudo -n`.
+                    info_sudo = self._exec(
+                        ["sudo", "-n", "docker", "info", "--format", "{{.ServerVersion}}"],
+                        timeout=15,
+                    )
+                    if info_sudo.ok:
+                        daemon_running = True
+                        permission_ok = True
+                        uses_sudo = True
+                        self._prefix = ["sudo", "-n"]
+                    else:
+                        self._prefix = []
+                        sudo_error = self._tail(info_sudo.output, 500)
+                        if "permission denied" in (direct_error + sudo_error).lower():
+                            detail = "当前用户没有 Docker 权限，请重新打开启动器以缓存 sudo 凭据，或注销后重新登录。"
+                        elif sudo_error:
+                            detail = "Docker 守护进程未运行，或 sudo 凭据已过期。请启动 Docker 后重试。"
+                        else:
+                            detail = "Docker 守护进程当前不可用。"
 
         if not installed and version_detail:
             detail = version_detail
@@ -227,19 +236,28 @@ class DockerController:
         status = self.detect(force=True)
         if not status.installed:
             reason = f"：{status.detail}" if status.detail else ""
-            raise DockerError(
-                "未检测到可用的 Docker CLI"
-                f"{reason}。请先运行 ./install.sh 安装 Docker，或手动安装后重试。"
+            hint = (
+                "请先运行 windows\\install.ps1 检查/安装 Docker Desktop，或手动安装后重试。"
+                if os.name == "nt"
+                else "请先运行 ./install.sh 安装 Docker，或手动安装后重试。"
             )
+            raise DockerError(f"未检测到可用的 Docker CLI{reason}。{hint}")
         if not status.compose_installed:
-            raise DockerError("Docker Compose 插件不可用。请安装 docker-compose-plugin / docker-compose-v2 后重试。")
+            hint = (
+                "请启动 Docker Desktop 并确认其 Compose v2 插件可用后重试。"
+                if os.name == "nt"
+                else "请安装 docker-compose-plugin / docker-compose-v2 后重试。"
+            )
+            raise DockerError(f"Docker Compose 插件不可用。{hint}")
         if not status.daemon_running:
             raise DockerError(status.detail or "Docker 守护进程未运行。请启动 Docker 后重试。")
         if not status.permission_ok:
-            raise DockerError(
-                status.detail
-                or "当前用户没有 Docker 权限。请在终端运行 sudo -v 后重新打开本程序，或注销后重新登录。"
+            fallback = (
+                "请确认 Docker Desktop 已启动并使用 Linux containers。"
+                if os.name == "nt"
+                else "请在终端运行 sudo -v 后重新打开本程序，或注销后重新登录。"
             )
+            raise DockerError(status.detail or f"当前用户没有 Docker 权限。{fallback}")
         return status
 
     # ------------------------------------------------------------------

@@ -62,22 +62,51 @@ def default_data_dir() -> Path:
     """Return the application data directory.
 
     ``QQBOT_STUDIO_DATA_DIR`` takes precedence so that tests and advanced users
-    can keep an isolated deployment.
+    can keep an isolated deployment.  Windows uses the user's LocalAppData
+    directory instead of the XDG-style path used on Linux.
     """
 
     override = os.environ.get("QQBOT_STUDIO_DATA_DIR", "").strip()
     if override:
         return Path(override).expanduser().resolve()
+    if os.name == "nt":
+        base = (
+            os.environ.get("LOCALAPPDATA", "").strip()
+            or os.environ.get("APPDATA", "").strip()
+            or str(Path.home())
+        )
+        return (Path(base) / "QQBotStudio" / "data").resolve()
     return (Path.home() / ".local" / "share" / APP_NAME).resolve()
 
 
-def _chmod(path: Path, mode: int) -> None:
+def chmod_best_effort(path: Path, mode: int) -> None:
+    """Apply POSIX-like permissions when the filesystem supports them.
+
+    Windows only maps a small part of the POSIX mode bits and network shares
+    may reject chmod entirely.  Data remains usable in those cases; callers
+    should not fail solely because restrictive permissions could not be set.
+    """
+
     try:
         os.chmod(path, mode)
-    except OSError:
-        # File systems such as some Windows mounts do not support chmod.  The
-        # data remains usable; the user is still warned by the UI/README.
+    except (AttributeError, OSError):
         pass
+
+
+def fchmod_best_effort(fd: int, mode: int) -> None:
+    """Call os.fchmod when available (it does not exist on Windows)."""
+
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is None:
+        return
+    try:
+        fchmod(fd, mode)
+    except (AttributeError, OSError):
+        pass
+
+
+# Backwards-compatible private alias used by older parts of the codebase.
+_chmod = chmod_best_effort
 
 
 def _strip_sensitive_keys(value: Any) -> Any:
@@ -166,7 +195,7 @@ class Store:
         fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
         tmp_path = Path(tmp_name)
         try:
-            os.fchmod(fd, mode)
+            fchmod_best_effort(fd, mode)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()

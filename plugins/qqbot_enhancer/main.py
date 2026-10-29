@@ -15,10 +15,17 @@ No third-party dependency and no API key is stored in this plugin.
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
+import ipaddress
 import json
+import math
 import os
 import random
+import re
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -32,8 +39,43 @@ STICKER_DIR = PLUGIN_DIR / "stickers"
 STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
+BING_IMAGES_ENDPOINT = "https://www.bing.com/images/search"
+IMAGE_PATH_EXTENSIONS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".avif",
+)
+IMAGE_SEARCH_MAX_CANDIDATES = 200
+IMAGE_SEARCH_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
+
+class ImageSearchError(RuntimeError):
+    """Raised when a safe, bounded image-search request cannot be completed."""
+
 DEFAULTS: dict[str, Any] = {
     "memory_mode": "direct",
+    "image_search_enabled": True,
+    "image_search_timeout_seconds": 12,
+    "image_search_result_count": 1,
+    "image_search_safe_search": "strict",
+    "image_search_group_cooldown_seconds": 15,
+    "image_search_user_cooldown_seconds": 10,
+    "image_search_max_response_bytes": 2_000_000,
+    "image_search_max_keyword_chars": 100,
+    "image_search_success_prefix": "为你找到这些图片：",
+    "image_search_usage_reply": "用法：/找图 关键词（也可以 /搜图 关键词）",
+    "image_search_disabled_reply": "图片搜索功能当前未启用。",
+    "image_search_empty_reply": "没有找到合适的图片，换个关键词试试吧。",
+    "image_search_error_reply": "搜索图片失败了，请稍后再试。",
+    "image_search_timeout_reply": "搜索图片超时了，请稍后再试。",
+    "image_search_cooldown_reply": "图片搜索冷却中，请约 {seconds} 秒后再试。",
     "reply_probability": 0.12,
     "group_cooldown_seconds": 30,
     "user_cooldown_seconds": 90,
@@ -87,6 +129,8 @@ class QQBotEnhancerPlugin(Star):
         self._last_user_reply: dict[str, float] = {}
         self._last_sticker_at: dict[str, float] = {}
         self._last_sticker_file: dict[str, str] = {}
+        self._last_image_search_group: dict[str, float] = {}
+        self._last_image_search_user: dict[str, float] = {}
 
         self._sticker_entries: list[dict[str, Any]] = []
         self._emotion_keywords: dict[str, tuple[str, ...]] = {}
@@ -245,6 +289,91 @@ class QQBotEnhancerPlugin(Star):
             if should_stop:
                 event.stop_event()
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("找图", alias={"搜图"}, priority=110)
+    async def find_image_command(self, event: AstrMessageEvent):
+        """搜索并发送网络图片：/找图 关键词，别名 /搜图。"""
+
+        # 命令自行回复，禁止默认 LLM 再回复一次；最后再 stop_event。
+        event.should_call_llm(True)
+        yielded = False
+        try:
+            if not self._cfg_bool("image_search_enabled"):
+                yield event.plain_result(self._cfg_str("image_search_disabled_reply"))
+                yielded = True
+                return
+
+            keyword = self._extract_image_search_keyword(event)
+            if not keyword:
+                yield event.plain_result(self._cfg_str("image_search_usage_reply"))
+                yielded = True
+                return
+
+            remaining = self._image_search_cooldown_remaining(event)
+            if remaining > 0:
+                template = self._cfg_str("image_search_cooldown_reply")
+                try:
+                    text = template.format(seconds=remaining)
+                except (KeyError, ValueError):
+                    text = template
+                yield event.plain_result(text)
+                yielded = True
+                return
+
+            try:
+                image_urls = await self._search_image_urls(keyword)
+            except asyncio.TimeoutError:
+                logger.warning("qqbot_enhancer 图片搜索超时: %s", keyword)
+                yield event.plain_result(self._cfg_str("image_search_timeout_reply"))
+                yielded = True
+                return
+            except Exception:
+                logger.warning(
+                    "qqbot_enhancer 图片搜索失败: %s",
+                    keyword,
+                    exc_info=True,
+                )
+                yield event.plain_result(self._cfg_str("image_search_error_reply"))
+                yielded = True
+                return
+
+            if not image_urls:
+                yield event.plain_result(self._cfg_str("image_search_empty_reply"))
+                yielded = True
+                return
+
+            chain: list[Any] = [Comp.Plain(self._cfg_str("image_search_success_prefix"))]
+            for image_url in image_urls:
+                try:
+                    chain.append(Comp.Image.fromURL(image_url))
+                except Exception:
+                    logger.warning(
+                        "qqbot_enhancer 跳过无法构造的图片 URL: %s",
+                        image_url,
+                    )
+            if len(chain) == 1:
+                yield event.plain_result(self._cfg_str("image_search_empty_reply"))
+                yielded = True
+                return
+            yield event.chain_result(chain)
+            yielded = True
+        except Exception:
+            logger.exception("qqbot_enhancer /找图 命令处理失败")
+            if not yielded:
+                try:
+                    yield event.plain_result(self._cfg_str("image_search_error_reply"))
+                    yielded = True
+                except Exception:
+                    logger.exception("qqbot_enhancer /找图 错误回复发送失败")
+        finally:
+            # 与普通回复一致：结果已经 yield 给 RespondStage 后才执行这里。
+            event.stop_event()
+
     @filter.on_decorating_result()
     async def attach_memory_mode_sticker(self, event: AstrMessageEvent):
         """Add a local sticker after AstrBot default Agent replies in memory mode."""
@@ -365,6 +494,8 @@ class QQBotEnhancerPlugin(Star):
             len(self._last_group_reply)
             + len(self._last_user_reply)
             + len(self._last_sticker_at)
+            + len(self._last_image_search_group)
+            + len(self._last_image_search_user)
             < 4096
         ):
             return
@@ -373,6 +504,8 @@ class QQBotEnhancerPlugin(Star):
             self._last_group_reply,
             self._last_user_reply,
             self._last_sticker_at,
+            self._last_image_search_group,
+            self._last_image_search_user,
         ):
             for key, timestamp in list(mapping.items()):
                 if timestamp < cutoff:
@@ -768,6 +901,328 @@ class QQBotEnhancerPlugin(Star):
         if limit > 0 and len(text) > limit:
             text = text[:limit].rstrip() + "…"
         return text
+
+    # ------------------------------------------------------------------
+    # Network image search (Bing Images HTML, no API key)
+    # ------------------------------------------------------------------
+    def _extract_image_search_keyword(self, event: AstrMessageEvent) -> str:
+        text = str(getattr(event, "message_str", "") or "").strip()
+        # 真实 AstrBot 的 WakingCheckStage 通常已经去掉 wake_prefix；
+        # 测试或部分适配器可能仍保留，这里兼容两种形态。
+        for prefix in self._command_prefixes(event):
+            if prefix and text.startswith(prefix):
+                text = text[len(prefix) :].strip()
+                break
+        for command_name in ("找图", "搜图"):
+            if text == command_name:
+                return ""
+            if text.startswith(command_name):
+                rest = text[len(command_name) :]
+                if rest and rest[0].isspace():
+                    keyword = re.sub(r"\s+", " ", rest).strip()
+                    keyword = "".join(
+                        char for char in keyword if char.isprintable()
+                    ).strip()
+                    max_chars = self._cfg_int("image_search_max_keyword_chars", 1)
+                    return keyword[:max_chars]
+        return ""
+
+    def _image_search_cooldown_remaining(self, event: AstrMessageEvent) -> int:
+        now = self._clock()
+        self._prune_state(now)
+        session_key = event.unified_msg_origin
+        user_key = f"{session_key}:{event.get_sender_id()}"
+
+        group_cooldown = self._cfg_int(
+            "image_search_group_cooldown_seconds",
+            0,
+        )
+        user_cooldown = self._cfg_int(
+            "image_search_user_cooldown_seconds",
+            0,
+        )
+        last_group = self._last_image_search_group.get(session_key)
+        last_user = self._last_image_search_user.get(user_key)
+
+        remaining = 0.0
+        if last_group is not None:
+            remaining = max(remaining, group_cooldown - (now - last_group))
+        if last_user is not None:
+            remaining = max(remaining, user_cooldown - (now - last_user))
+        if remaining > 0:
+            return max(1, int(math.ceil(remaining)))
+
+        # 在发起网络请求前占用冷却，防止并发命令刷屏。
+        self._last_image_search_group[session_key] = now
+        self._last_image_search_user[user_key] = now
+        return 0
+
+    def _build_bing_image_search_url(self, keyword: str) -> str:
+        result_limit = max(
+            1,
+            min(5, self._cfg_int("image_search_result_count", 1)),
+        )
+        fetch_count = min(35, max(10, result_limit * 8))
+        safe_mode = self._cfg_str("image_search_safe_search").strip().lower()
+        if safe_mode not in {"strict", "moderate", "off"}:
+            safe_mode = "strict"
+        params = urllib.parse.urlencode(
+            {
+                "q": keyword,
+                "form": "HDRSC2",
+                "first": "1",
+                "count": str(fetch_count),
+                "adlt": safe_mode,
+            }
+        )
+        return f"{BING_IMAGES_ENDPOINT}?{params}"
+
+    async def _fetch_image_search_html(self, search_url: str) -> str:
+        timeout = self._cfg_int("image_search_timeout_seconds", 1)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._fetch_image_search_html_sync,
+                    search_url,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise
+
+    def _fetch_image_search_html_sync(self, search_url: str) -> str:
+        """Blocking HTTP GET; called through asyncio.to_thread."""
+
+        timeout = self._cfg_int("image_search_timeout_seconds", 1)
+        request = urllib.request.Request(
+            search_url,
+            headers={
+                "User-Agent": IMAGE_SEARCH_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Cache-Control": "no-cache",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            final_url = response.geturl()
+            if not self._sanitize_http_url(
+                final_url,
+                require_image_extension=False,
+            ):
+                raise ImageSearchError("图片搜索被重定向到非安全 HTTP(S) 地址")
+            return self._read_search_response(response)
+
+    def _read_search_response(self, response: Any) -> str:
+        max_bytes = self._cfg_int(
+            "image_search_max_response_bytes",
+            1024,
+        )
+        headers = getattr(response, "headers", None)
+        content_type = ""
+        content_length = ""
+        if headers is not None and hasattr(headers, "get"):
+            content_type = str(headers.get("Content-Type", "") or "")
+            content_length = str(headers.get("Content-Length", "") or "")
+
+        if content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    raise ImageSearchError("图片搜索响应超过大小限制")
+            except ValueError:
+                pass
+
+        # 多读 1 字节用于判断是否超限；绝不无限 read()。
+        data = response.read(max_bytes + 1)
+        if data is None:
+            data = b""
+        if len(data) > max_bytes:
+            raise ImageSearchError("图片搜索响应超过大小限制")
+
+        lowered_type = content_type.lower()
+        if lowered_type and "html" not in lowered_type and not lowered_type.startswith(
+            "text/"
+        ):
+            raise ImageSearchError("图片搜索返回的 Content-Type 不是 HTML")
+
+        charset = "utf-8"
+        match = re.search(r"charset=([\w.+-]+)", content_type, re.IGNORECASE)
+        if match:
+            charset = match.group(1)
+        else:
+            head = data[:2048].decode("ascii", errors="ignore")
+            meta_match = re.search(
+                r"<meta[^>]+charset=[\"']?([\w.+-]+)",
+                head,
+                re.IGNORECASE,
+            )
+            if meta_match:
+                charset = meta_match.group(1)
+        try:
+            return data.decode(charset, errors="replace")
+        except LookupError:
+            return data.decode("utf-8", errors="replace")
+
+    async def _search_image_urls(self, keyword: str) -> list[str]:
+        search_url = self._build_bing_image_search_url(keyword)
+        page = await self._fetch_image_search_html(search_url)
+        result_limit = max(
+            1,
+            min(5, self._cfg_int("image_search_result_count", 1)),
+        )
+        return self._parse_bing_image_urls(page, limit=result_limit)
+
+    def _parse_bing_image_urls(self, page: str, *, limit: int = 1) -> list[str]:
+        """Extract image URLs from Bing Images HTML without third-party libs.
+
+        Bing renders result links as ``<a class="iusc" m="{...json...}">`` and
+        the JSON contains ``murl``. Some responses omit the wrapper, so there
+        are two conservative fallbacks. Every result is filtered to a public
+        HTTP(S) URL with an image-like path before it can reach a message
+        component.
+        """
+
+        result_limit = max(1, min(5, int(limit or 1)))
+        scan_limit = min(
+            IMAGE_SEARCH_MAX_CANDIDATES,
+            max(50, result_limit * 20),
+        )
+        candidates: list[str] = []
+
+        # Primary parser: the m="..." JSON payload.
+        for match in re.finditer(r'\bm="([^"]+)"', page, re.IGNORECASE):
+            if len(candidates) >= scan_limit:
+                break
+            raw = html_lib.unescape(match.group(1))
+            try:
+                payload = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            murl = payload.get("murl")
+            if isinstance(murl, str) and murl.strip():
+                candidates.append(murl)
+
+        decoded_page = html_lib.unescape(page)
+
+        # Fallback 1: a JSON "murl":"..." fragment without the anchor wrapper.
+        if len(candidates) < scan_limit:
+            murl_pattern = re.compile(
+                r'"murl"\s*:\s*"((?:\\.|[^"\\])*)"',
+                re.IGNORECASE,
+            )
+            for match in murl_pattern.finditer(decoded_page):
+                if len(candidates) >= scan_limit:
+                    break
+                encoded = match.group(1)
+                try:
+                    url = json.loads(f'"{encoded}"')
+                except (TypeError, ValueError):
+                    url = encoded.replace("\\/", "/")
+                if isinstance(url, str) and url.strip():
+                    candidates.append(url)
+
+        # Fallback 2: image-looking absolute URLs anywhere in the HTML.
+        if len(candidates) < scan_limit:
+            for match in re.finditer(
+                r'https?://[^\s"\'<>\\]+',
+                decoded_page,
+                re.IGNORECASE,
+            ):
+                if len(candidates) >= scan_limit:
+                    break
+                candidate = match.group(0).rstrip(".,);]}\\")
+                if self._has_image_path(candidate):
+                    candidates.append(candidate)
+
+        results: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            safe_url = self._sanitize_http_url(
+                candidate,
+                require_image_extension=True,
+            )
+            if not safe_url or safe_url in seen:
+                continue
+            seen.add(safe_url)
+            results.append(safe_url)
+            if len(results) >= result_limit:
+                break
+        return results
+
+    @staticmethod
+    def _has_image_path(url: str) -> bool:
+        try:
+            path = urllib.parse.urlsplit(url).path.lower()
+        except ValueError:
+            return False
+        return any(path.endswith(extension) for extension in IMAGE_PATH_EXTENSIONS)
+
+    def _sanitize_http_url(
+        self,
+        value: Any,
+        *,
+        require_image_extension: bool,
+    ) -> str:
+        if not isinstance(value, str):
+            return ""
+        raw = html_lib.unescape(value).strip()
+        if not raw:
+            return ""
+        if raw.startswith("//"):
+            raw = "https:" + raw
+        if "\\" in raw or any(ord(char) < 32 for char in raw):
+            return ""
+        try:
+            parsed = urllib.parse.urlsplit(raw)
+        except ValueError:
+            return ""
+        scheme = parsed.scheme.lower()
+        if scheme not in {"http", "https"}:
+            return ""
+        if not parsed.netloc or not parsed.hostname:
+            return ""
+        if parsed.username is not None or parsed.password is not None:
+            return ""
+        try:
+            port = parsed.port
+        except ValueError:
+            return ""
+        if port is not None and not (0 < port <= 65535):
+            return ""
+
+        host = parsed.hostname.rstrip(".").lower()
+        if not host:
+            return ""
+        if host in {"localhost", "metadata.google.internal"} or host.endswith(
+            (".localhost", ".local", ".internal", ".lan", ".home")
+        ):
+            return ""
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            # 要求公网域名至少包含一个点，拒绝裸主机名/内网别名。
+            if "." not in host:
+                return ""
+        else:
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                return ""
+
+        if require_image_extension:
+            path = parsed.path.lower()
+            if not any(path.endswith(extension) for extension in IMAGE_PATH_EXTENSIONS):
+                return ""
+        return urllib.parse.urlunsplit(
+            (scheme, parsed.netloc, parsed.path, parsed.query, "")
+        )
 
     # ------------------------------------------------------------------
     # Stickers

@@ -543,7 +543,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=_env_int("QQBOT_STUDIO_PORT", DEFAULT_BIND_PORT, 0, 65535),
         help="管理服务端口（默认 8765；0=自动选择；可设置 QQBOT_STUDIO_PORT）",
     )
-    parser.add_argument("--data-dir", default=None, help="数据目录（默认 ~/.local/share/qqbot-studio）")
+    parser.add_argument("--data-dir", default=None, help="数据目录（默认使用平台用户数据目录）")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser

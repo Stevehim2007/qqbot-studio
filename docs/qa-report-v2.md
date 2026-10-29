@@ -21,7 +21,7 @@
 python3 -m unittest discover -s tests -v
 ```
 
-结果：**85 tests OK**。
+结果：**116 tests OK**。
 
 覆盖：
 
@@ -42,6 +42,9 @@ python3 -m unittest discover -s tests -v
 - SnowLuma WebUI 一键重置密码：备份 webui.json、scrypt 哈希重建、重启容器和日志回退
 - Git 自动更新检查、干净工作区/fast-forward 保护、后台更新脚本和更新后服务重启
 - 实例状态读取异常时返回可诊断的 `status_error`，避免控制台只显示无上下文的失败
+- QQ 增强插件 `/找图`/`/搜图` Bing Images 搜索、安全过滤、冷却与 8 张本地表情包
+- 控制台离线“使用助手”知识库，覆盖安装、端口、扫码、SnowLuma、概率、记忆、更新、Windows
+- Windows 初始移植的 PowerShell 入口、后台进程管理和静态/跨平台测试（真实 Windows E2E 未验证）
 - `start.sh` 部署模式和 `console.sh` 控制台模式的后台 URL 行为
 - QQ 增强插件 20 个 mock 用例（@ 必回、概率回复、图片、表情包、默认 LLM 阻断）
 
@@ -139,6 +142,8 @@ HTML/CSS 静态检查：
 
 ## 5. 已知限制
 
+- Windows 初始移植仅完成 PowerShell 静态检查、跨平台 Python 兼容和 Linux 回归；
+  尚无 Windows 11 + Docker Desktop/WSL2 + PowerShell 的真实 E2E/Pester 结果。
 - 本环境无 Docker daemon，容器相关行为只能单元测试和静态检查。
 - 无 QQ/noVNC 图形环境，扫码与验证流程未执行。
 - 无真实 DeepSeek Key，模型多模态能力依据官方模型列表文档与 mock。
@@ -151,7 +156,7 @@ HTML/CSS 静态检查：
 
 ## 6. 发布建议
 
-当前可发布为 **v2.0.4 条件通过**，但 README 和发布说明必须明确：
+当前可发布为 **v2.1.0 条件通过**，但 README 和发布说明必须明确：
 
 - 默认 `0.0.0.0` 的安全风险；
 - 真实 Docker/QQ/DeepSeek E2E 尚未完成；
