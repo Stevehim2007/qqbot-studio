@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
-# QQ Bot Studio 一键准备并启动脚本
+# 安装运行环境（Docker、Python、screen），然后自动启动 start.sh。
 set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 cat <<'BANNER'
 ==============================================
-  QQ Bot Studio · QQ 机器人一键部署
+  QQ Bot Studio v2
   AstrBot + SnowLuma + OneBot v11 + DeepSeek
+  多机器人实例 / 镜像节点 / 后台 screen 运行
 ==============================================
 BANNER
 echo
-echo "提示：本工具不会要求你输入 QQ 密码。QQ 登录全程使用官方扫码，"
-echo "如遇设备验证、短信验证或安全验证，请在 noVNC 中按 QQ 提示完成。"
+echo "安全提示：管理服务默认监听 0.0.0.0，可能被局域网或公网扫描。"
+echo "请务必使用防火墙/VPN/安全组限制访问，详见 README。"
 echo
 
 if [[ "${EUID}" -eq 0 ]]; then
   echo "请使用普通用户运行本脚本（不要直接 sudo ./install.sh）。" >&2
   exit 1
 fi
+command -v sudo >/dev/null 2>&1 || { echo "错误：安装需要 sudo。" >&2; exit 1; }
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "错误：未找到 python3。请先执行：sudo apt update && sudo apt install -y python3" >&2
-  exit 1
+  sudo apt-get update
+  sudo apt-get install -y python3
 fi
 
 need_install=0
@@ -31,13 +33,23 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
 fi
 
 if [[ "$need_install" -eq 1 ]]; then
-  command -v sudo >/dev/null 2>&1 || { echo "错误：安装 Docker 需要 sudo。" >&2; exit 1; }
-  sudo -v || { echo "错误：安装 Docker 需要管理员权限；请在有 sudo 权限的账户下重试。" >&2; exit 1; }
+  sudo -v || { echo "错误：安装 Docker 需要管理员权限。" >&2; exit 1; }
   sudo env QQ_BOT_STUDIO_TARGET_USER="${USER:-$(id -un)}" bash "$ROOT_DIR/scripts/install-docker.sh"
 elif docker info >/dev/null 2>&1; then
   echo "Docker、Docker Compose 与守护进程均已就绪。"
 else
-  echo "Docker 与 Docker Compose CLI 已安装；守护进程状态将在启动阶段检查。"
+  echo "Docker CLI 已安装；将在启动阶段检查守护进程和容器状态。"
+fi
+
+# screen 用于让管理服务和部署任务在关闭终端后继续运行。
+if ! command -v screen >/dev/null 2>&1; then
+  sudo -v || true
+  sudo apt-get update
+  sudo apt-get install -y screen
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y curl ca-certificates
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -51,9 +63,10 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-if bash "$ROOT_DIR/scripts/install-desktop-entry.sh" "$ROOT_DIR"; then
-  echo "桌面启动项已创建；以后可从应用菜单打开“QQ 机器人一键部署”。"
-else
-  echo "警告：桌面启动项安装失败；仍可在终端运行 ./start.sh。" >&2
+# 可选：创建桌面入口（服务器上失败不影响启动）。
+if [[ -x "$ROOT_DIR/scripts/install-desktop-entry.sh" ]]; then
+  bash "$ROOT_DIR/scripts/install-desktop-entry.sh" "$ROOT_DIR" >/dev/null 2>&1 || true
 fi
+
+# 安装完成后自动启动 start。
 exec bash "$ROOT_DIR/start.sh" "$@"

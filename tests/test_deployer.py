@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from qqbot_studio.deployer import DeployManager, DeploymentError, PERSONA_ID
+from qqbot_studio.deployer import DeployManager, DeploymentError, Job, PERSONA_ID
 from qqbot_studio.dockerctl import CommandResult, DockerError, DockerStatus
 from qqbot_studio.store import Store
 
@@ -30,7 +30,9 @@ class FakeDocker:
     def require_ready(self):
         return self.status
 
-    def pull(self):
+    def pull(self, on_line=None, images=None):
+        if on_line:
+            on_line("pulling layer 1/2")
         return CommandResult(("docker", "compose", "pull"), 0, "pulled", "")
 
     def up(self):
@@ -47,6 +49,9 @@ class FakeDocker:
 
     def logs(self, service, lines=200):
         return self.logs_by_service.get(service, "")
+
+    def container_health(self, container_name):
+        return "healthy"
 
     def _docker(self, args, timeout=60, extra_env=None):
         if "inspect" in args:
@@ -79,14 +84,14 @@ class FallbackDocker(FakeDocker):
         self.pull_calls = 0
         self.env_images = []
 
-    def pull(self):
+    def pull(self, on_line=None, images=None):
         self.pull_calls += 1
         env = (self.data_dir / ".env").read_text(encoding="utf-8")
         match = re.search(r"^ASTRBOT_IMAGE=(.+)$", env, re.MULTILINE)
         self.env_images.append(match.group(1) if match else "")
         if self.pull_calls == 1:
             raise DockerError("mirror-a 无法连接")
-        return super().pull()
+        return super().pull(on_line=on_line)
 
 
 class DeployerTests(unittest.TestCase):
@@ -197,6 +202,13 @@ class DeployerTests(unittest.TestCase):
         raw_astrbot = (Path(self.tmp.name) / "data" / "astrbot" / "cmd_config.json").read_text(encoding="utf-8")
         self.assertIn("sk-test-secret", raw_astrbot)
         self.assertNotIn("sk-test-secret", json.dumps(job, ensure_ascii=False))
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+        self.assertTrue((plugin_dir / "main.py").exists())
+        enhancer_config = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        self.assertEqual(
+            json.loads(enhancer_config.read_text(encoding="utf-8"))["system_prompt"],
+            "你是测试 QQ 机器人。",
+        )
 
         qq_config_dir = Path(self.tmp.name) / "data" / "snowluma" / "config"
         (qq_config_dir / "onebot_12345678.json").write_text("{}", encoding="utf-8")
@@ -278,6 +290,64 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(job["status"], "error")
         self.assertIn("secrets.json", job["error"])
         self.assertEqual(self.manager._active_job_id, "")
+
+
+
+    def test_state_surfaces_active_and_interrupted_jobs(self):
+        job = Job(job_id="job-active")
+        self.manager._jobs[job.job_id] = job
+        self.manager._active_job_id = job.job_id
+        state = self.manager.get_status()
+        self.assertEqual(state["deployment"]["active_job_id"], "job-active")
+        self.assertEqual(state["deployment"]["active_job_status"], "running")
+
+        with self.manager._lock:
+            self.manager._jobs.clear()
+            self.manager._active_job_id = ""
+        config = self.store.load_config()
+        config["last_job_id"] = "job-interrupted"
+        self.store.save_config(config)
+        interrupted = {
+            "status": "error",
+            "step": "拉取镜像",
+            "progress": 20,
+            "message": "interrupted",
+            "logs": [],
+            "error": "服务中断",
+            "job_id": "job-interrupted",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+        (self.manager.jobs_dir / "job-interrupted.json").write_text(
+            json.dumps(interrupted), encoding="utf-8"
+        )
+        state = self.manager.get_status()
+        self.assertEqual(state["deployment"]["active_job_id"], "job-interrupted")
+        self.assertEqual(state["deployment"]["active_job_status"], "error")
+
+    def test_repair_containers_runs_up_when_container_stopped(self):
+        config = self.store.load_config()
+        config["deployed"] = True
+        self.store.save_config(config)
+        states = {"qqbot-astrbot": "exited", "qqbot-snowluma": "running"}
+
+        def container_status(name):
+            return states.get(name)
+
+        self.docker.container_status = container_status
+        self.docker.container_health = lambda name: "healthy"
+
+        def fake_up(*args, **kwargs):
+            states[self.docker.ASTRBOT_CONTAINER] = "running"
+            states[self.docker.SNOWLUMA_CONTAINER] = "running"
+            self.docker.actions.append("up")
+            return CommandResult(("up",), 0, "", "")
+
+        self.docker.up = fake_up
+        result = self.manager.repair_containers()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "repaired")
+        self.assertIn("up", self.docker.actions)
 
     def test_snowluma_password_parser(self):
         secrets_data = self.store.load_secrets()

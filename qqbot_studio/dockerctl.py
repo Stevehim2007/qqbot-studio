@@ -86,8 +86,14 @@ class DockerController:
         runner: CommandRunner | None = None,
         compose_file: Path | str | None = None,
         env_file: Path | str | None = None,
+        project_name: str = PROJECT_NAME,
+        astrbot_container: str = "qqbot-astrbot",
+        snowluma_container: str = "qqbot-snowluma",
     ) -> None:
         self.data_dir = Path(data_dir).expanduser().resolve()
+        self.project_name = str(project_name or PROJECT_NAME)
+        self.ASTRBOT_CONTAINER = str(astrbot_container or "qqbot-astrbot")
+        self.SNOWLUMA_CONTAINER = str(snowluma_container or "qqbot-snowluma")
         self.compose_file = Path(compose_file) if compose_file else self.data_dir / "compose.yml"
         self.env_file = Path(env_file) if env_file else self.data_dir / ".env"
         self._runner = runner or _default_runner
@@ -201,7 +207,7 @@ class DockerController:
     def require_ready(self) -> DockerStatus:
         status = self.detect(force=True)
         if not status.installed:
-            raise DockerError("未检测到 Docker。请先在终端运行 ./start.sh 或 ./install.sh 完成 Docker 安装。")
+            raise DockerError("未检测到 Docker。请先运行 ./install.sh 安装 Docker，或手动安装后重试。")
         if not status.compose_installed:
             raise DockerError("Docker Compose 插件不可用。请安装 docker-compose-plugin / docker-compose-v2 后重试。")
         if not status.daemon_running:
@@ -226,7 +232,7 @@ class DockerController:
             "docker",
             "compose",
             "--project-name",
-            PROJECT_NAME,
+            self.project_name,
             "--env-file",
             str(self.env_file),
             "-f",
@@ -248,11 +254,142 @@ class DockerController:
             self._raise_for(result, what)
         return result
 
-    def pull(self) -> CommandResult:
+    def compose_stream(
+        self,
+        args: Sequence[str],
+        *,
+        on_line: Callable[[str], None],
+        timeout: int = 1800,
+        what: str = "Docker Compose 操作",
+    ) -> CommandResult:
+        """Run Compose while forwarding each output line to a callback."""
+
+        self.require_ready()
+        argv = self.compose_argv(args)
+        # In tests or unusual environments a custom runner may be injected;
+        # preserve compatibility by running it and replaying captured output.
+        if self._runner is not _default_runner:
+            result = self._exec(argv, timeout=timeout)
+            for line in result.output.splitlines():
+                on_line(line)
+            self._raise_for(result, what)
+            return result
+
+        env = os.environ.copy()
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=str(self.data_dir),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as exc:
+            raise DockerError(f"{what}启动失败：{exc}") from exc
+
+        lines: list[str] = []
+        try:
+            if process.stdout is not None:
+                for raw_line in process.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    lines.append(line)
+                    if line.strip():
+                        on_line(line)
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            process.wait()
+            raise DockerError(f"{what}超时（{timeout}s）") from exc
+        output = "\n".join(lines)
+        result = CommandResult(tuple(argv), int(returncode), output, "")
+        self._raise_for(result, what)
+        return result
+
+    def _stream_command(
+        self,
+        argv: Sequence[str],
+        *,
+        on_line: Callable[[str], None],
+        timeout: int,
+        what: str,
+    ) -> CommandResult:
+        if self._runner is not _default_runner:
+            result = self._exec(argv, timeout=timeout)
+            for line in result.output.splitlines():
+                on_line(line)
+            self._raise_for(result, what)
+            return result
+        env = os.environ.copy()
+        try:
+            process = subprocess.Popen(
+                list(argv),
+                cwd=str(self.data_dir),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as exc:
+            raise DockerError(f"{what}启动失败：{exc}") from exc
+        lines: list[str] = []
+        try:
+            if process.stdout is not None:
+                for raw_line in process.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    lines.append(line)
+                    if line.strip():
+                        on_line(line)
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            process.wait()
+            raise DockerError(f"{what}超时（{timeout}s）") from exc
+        result = CommandResult(tuple(argv), int(returncode), "\n".join(lines), "")
+        self._raise_for(result, what)
+        return result
+
+    def image_exists(self, image: str) -> bool:
+        self.require_ready()
+        return self._docker(["image", "inspect", image], timeout=20).ok
+
+    def pull_image(self, image: str, on_line: Callable[[str], None] | None = None) -> CommandResult:
+        self.require_ready()
+        if self.image_exists(image):
+            if on_line:
+                on_line(f"镜像已存在，跳过拉取：{image}")
+            return CommandResult(tuple([*self._prefix, "docker", "image", "inspect", image]), 0, "exists", "")
+        if on_line:
+            on_line(f"开始拉取镜像：{image}")
+        argv = [*self._prefix, "docker", "pull", image]
+        if on_line is not None:
+            return self._stream_command(argv, on_line=on_line, timeout=1800, what=f"拉取镜像 {image}")
+        return self._exec(argv, timeout=1800)
+
+    def pull(
+        self,
+        on_line: Callable[[str], None] | None = None,
+        *,
+        images: Sequence[str] | None = None,
+    ) -> CommandResult:
+        if images:
+            last: CommandResult | None = None
+            for image in images:
+                last = self.pull_image(str(image), on_line=on_line)
+            if last is None:
+                raise DockerError("没有需要拉取的镜像")
+            return last
+        if on_line is not None:
+            return self.compose_stream(["pull"], on_line=on_line, timeout=1800, what="拉取 Docker 镜像")
         return self.compose(["pull"], timeout=1800, what="拉取 Docker 镜像")
 
-    def up(self) -> CommandResult:
-        return self.compose(["up", "-d", "--remove-orphans"], timeout=900, what="启动容器")
+    def up(self, *, force_recreate: bool = False) -> CommandResult:
+        args = ["up", "-d", "--remove-orphans"]
+        if force_recreate:
+            args.append("--force-recreate")
+        return self.compose(args, timeout=900, what="启动容器")
 
     def stop(self) -> CommandResult:
         return self.compose(["stop"], timeout=180, what="停止容器")
@@ -265,6 +402,21 @@ class DockerController:
 
     def down(self) -> CommandResult:
         return self.compose(["down", "--remove-orphans"], timeout=240, what="停止并移除容器")
+
+    def container_health(self, container_name: str) -> str:
+        """Return `healthy`, `unhealthy`, `starting` or `none`."""
+
+        self.require_ready()
+        result = self._docker(
+            [
+                "inspect",
+                "--format",
+                "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+                container_name,
+            ],
+            timeout=20,
+        )
+        return result.stdout.strip() if result.ok else "unknown"
 
     def container_status(self, container_name: str) -> str | None:
         self.require_ready()

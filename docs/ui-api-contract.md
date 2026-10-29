@@ -1,3 +1,5 @@
+> **历史文档：** 本文件对应 v1 单实例界面。v2 的多实例、镜像节点、任务恢复和控制台接口见 [`ui-api-contract-v2.md`](ui-api-contract-v2.md)。
+
 # QQ Bot Studio 前端 / 本地服务 API 契约
 
 本文档记录 `qqbot_studio/static/index.html`、`styles.css`、`app.js` 与 Lead 提供的 Python 标准库本地服务之间的接口约定。前端为纯静态文件，无构建步骤、无第三方 CDN。

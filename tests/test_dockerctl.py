@@ -37,8 +37,10 @@ class FakeDockerRunner:
             return subprocess.CompletedProcess(command, 0, "running\n", "")
         if "logs" in command:
             return subprocess.CompletedProcess(command, 0, "log line\n", "")
+        if "image" in command and "inspect" in command:
+            return subprocess.CompletedProcess(command, 1, "", "No such image")
         if "pull" in command:
-            return subprocess.CompletedProcess(command, 0, "pulled\n", "")
+            return subprocess.CompletedProcess(command, 0, "layer 1\nlayer 2\n", "")
         if "up" in command:
             return subprocess.CompletedProcess(command, 0, "started\n", "")
         return subprocess.CompletedProcess(command, 0, "ok\n", "")
@@ -62,7 +64,7 @@ class DockerControllerTests(unittest.TestCase):
             self.assertTrue(status.permission_ok)
             self.assertTrue(status.uses_sudo)
             result = controller.pull()
-            self.assertEqual(result.stdout, "pulled\n")
+            self.assertEqual(result.stdout, "layer 1\nlayer 2\n")
             compose_calls = [call for call in runner.calls if "compose" in call and "pull" in call]
             self.assertTrue(compose_calls)
             self.assertEqual(compose_calls[-1][:3], ["sudo", "-n", "docker"])
@@ -77,6 +79,19 @@ class DockerControllerTests(unittest.TestCase):
             self.assertFalse(status.permission_ok)
             with self.assertRaises(DockerError):
                 controller.require_ready()
+
+
+    def test_pull_images_streams_layer_output_and_skips_existing_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = FakeDockerRunner(direct_info=True)
+            controller = self._controller(tmp, runner)
+            lines = []
+            controller.pull(images=["example/image:latest"], on_line=lines.append)
+            joined = "\n".join(lines)
+            self.assertIn("开始拉取镜像：example/image:latest", joined)
+            self.assertIn("layer 1", joined)
+            self.assertTrue(any("docker" in call[-3:-1] or "pull" in call for call in runner.calls))
+            self.assertTrue(any("pull" in call for call in runner.calls))
 
     def test_container_status_and_logs(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -20,7 +20,13 @@
 
   const TOKEN_RAW = typeof window.QB_TOKEN === 'string' ? window.QB_TOKEN : '';
   const QB_TOKEN = TOKEN_RAW && TOKEN_RAW !== '{{TOKEN}}' ? TOKEN_RAW : '';
-  const ACTIVE_JOB_STORAGE_KEY = 'qb_active_job_id';
+  const INSTANCE_ID = (() => {
+    try {
+      return String(new URLSearchParams(window.location.search).get('instance') || '').trim().slice(0, 120);
+    } catch (error) {
+      return '';
+    }
+  })();
 
   const STEP_META = {
     env: {
@@ -60,11 +66,25 @@
     stateLoaded: false,
     stateLoading: false,
     summary: null,
-    activeJobId: readActiveJobId(),
+    activeJobId: '',
+    activeJobStatus: '',
     jobPolling: false,
     pollGeneration: 0,
     jobStarted: false,
     jobCompleted: false,
+    jobInterrupted: false,
+    mirrors: {
+      nodes: [],
+      selectedId: '',
+      loading: false,
+      testing: false,
+      loaded: false,
+      autoTested: false,
+      pendingDeleteId: '',
+      selectingId: '',
+      adding: false,
+      deletingId: ''
+    },
     deployBusy: false,
     testBusy: false,
     actionBusy: false,
@@ -121,6 +141,8 @@
         deployed: boolOrUndefined(deployment.deployed) === true,
         running: boolOrUndefined(deployment.running),
         qq_account: textValue(deployment.qq_account, ''),
+        active_job_id: textValue(deployment.active_job_id, ''),
+        active_job_status: textValue(deployment.active_job_status, ''),
         model: textValue(deployment.model, ''),
         prompt: textValue(deployment.prompt, ''),
         urls: {
@@ -173,7 +195,7 @@
     if (method !== 'GET' && method !== 'HEAD') {
       // 所有修改请求都显式携带本地访问令牌；即使为空也让服务端给出明确拒绝。
       headers['X-QB-Token'] = QB_TOKEN || '';
-      headers['Content-Type'] = 'application/json';
+      if (options.body !== undefined) headers['Content-Type'] = 'application/json';
     }
 
     const fetchOptions = {
@@ -186,7 +208,7 @@
 
     let response;
     try {
-      response = await fetch(path, fetchOptions);
+      response = await fetch(apiPath(path), fetchOptions);
     } catch (error) {
       throw new ApiError('无法连接本地服务，请确认本地启动器仍在运行。', { status: 0 });
     }
@@ -215,20 +237,15 @@
     return data;
   }
 
-  function readActiveJobId() {
+  function apiPath(path) {
+    if (!INSTANCE_ID) return path;
     try {
-      return window.sessionStorage.getItem(ACTIVE_JOB_STORAGE_KEY) || '';
+      const url = new URL(path, window.location.href);
+      url.searchParams.set('instance', INSTANCE_ID);
+      return `${url.pathname}${url.search}`;
     } catch (error) {
-      return '';
-    }
-  }
-
-  function persistActiveJobId(jobId) {
-    try {
-      if (jobId) window.sessionStorage.setItem(ACTIVE_JOB_STORAGE_KEY, String(jobId));
-      else window.sessionStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
-    } catch (error) {
-      // 浏览器禁用 sessionStorage 时，轮询仍可在当前页面继续。
+      const separator = path.includes('?') ? '&' : '?';
+      return `${path}${separator}instance=${encodeURIComponent(INSTANCE_ID)}`;
     }
   }
 
@@ -386,6 +403,20 @@
     if (!meta) return;
     setText('page-title', meta.title);
     setText('page-subtitle', meta.subtitle);
+  }
+
+  function updateInstanceContext() {
+    const label = $('wizard-instance-label');
+    const pill = $('wizard-instance-pill');
+    if (INSTANCE_ID) {
+      if (label) label.textContent = `实例 ${INSTANCE_ID}`;
+      if (pill) pill.title = `当前机器人实例 ID：${INSTANCE_ID}`;
+      document.title = `QQ Bot Studio · ${INSTANCE_ID}`;
+    } else {
+      if (label) label.textContent = '默认实例';
+      if (pill) pill.title = '当前 URL 未指定 instance 参数，后端将使用默认实例。';
+      document.title = 'QQ Bot Studio · 本地部署向导';
+    }
   }
 
   function isStepAvailable(step) {
@@ -546,7 +577,6 @@
       qq_account: qqAccount,
       deepseek_api_key: apiKey,
       prompt,
-      use_mirror: Boolean($('use-mirror') && $('use-mirror').checked),
       accept_risk: true
     };
   }
@@ -796,6 +826,454 @@
     }
   }
 
+  function normaliseMirrorNode(raw) {
+    const node = asRecord(raw);
+    return {
+      id: textValue(node.id, ''),
+      name: textValue(node.name, '') || '未命名节点',
+      prefix: textValue(node.prefix, ''),
+      custom: boolOrUndefined(node.custom) === true,
+      selected: boolOrUndefined(node.selected) === true,
+      latency_ms: node.latency_ms === null || node.latency_ms === undefined ? null : node.latency_ms,
+      status: textValue(node.status, ''),
+      error: textValue(node.error, '')
+    };
+  }
+
+  function formatMirrorLatency(value) {
+    if (value === null || value === undefined || value === '') return '延迟 —';
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric >= 0) return `延迟 ${Math.round(numeric)} ms`;
+    const text = textValue(value, '').trim();
+    return text ? `延迟 ${text}` : '延迟 —';
+  }
+
+  function mirrorStatusMeta(status) {
+    const value = textValue(status, '').trim().toLowerCase();
+    if (['ok', 'online', 'available', 'healthy', 'success', 'succeeded', 'reachable', 'connected'].includes(value)) {
+      return { label: '可用', tone: 'success' };
+    }
+    if (['error', 'failed', 'failure', 'unreachable', 'unavailable', 'timeout', 'offline', 'disconnected'].includes(value)) {
+      return { label: '不可用', tone: 'danger' };
+    }
+    if (['warn', 'warning', 'degraded', 'partial'].includes(value)) {
+      return { label: '需留意', tone: 'warning' };
+    }
+    if (['testing', 'running', 'pending', 'queued', 'starting', 'in_progress'].includes(value)) {
+      return { label: '测速中', tone: 'warning' };
+    }
+    if (['unknown', 'untested'].includes(value)) {
+      return { label: '待测速', tone: 'neutral' };
+    }
+    return { label: value || '待测速', tone: 'neutral' };
+  }
+
+  function applyMirrorPayload(raw, options = {}) {
+    const data = asRecord(raw);
+    if (data.ok === false) {
+      throw new ApiError(textValue(data.message, '本地服务拒绝了镜像节点请求。'));
+    }
+
+    const rawNodes = Array.isArray(data.nodes) ? data.nodes : null;
+    const results = Array.isArray(data.results) ? data.results : [];
+    const fromTest = options.fromTest === true;
+    let base;
+
+    // 测速接口通常返回 nodes；若只返回 results，则保留已有节点并合并结果。
+    if (rawNodes && !(fromTest && rawNodes.length === 0 && results.length > 0)) {
+      base = rawNodes.map(normaliseMirrorNode);
+    } else {
+      base = app.mirrors.nodes.map((node) => ({ ...node }));
+    }
+
+    if (results.length > 0) {
+      const resultById = new Map();
+      results.forEach((entry) => {
+        const result = asRecord(entry);
+        const id = textValue(result.id, '');
+        if (id) resultById.set(id, result);
+      });
+      base = base.map((node) => {
+        const result = resultById.get(node.id);
+        if (!result) return node;
+        return {
+          ...node,
+          latency_ms: result.latency_ms !== undefined ? result.latency_ms : node.latency_ms,
+          status: textValue(result.status, result.error ? 'error' : node.status),
+          error: textValue(result.error, result.status === 'error' ? '测速失败' : node.error)
+        };
+      });
+    }
+
+    let selectedId = textValue(data.selected_id, '') || app.mirrors.selectedId;
+    if (!selectedId) {
+      const marked = base.find((node) => node.selected);
+      selectedId = marked ? marked.id : '';
+    }
+    if (selectedId && !base.some((node) => node.id === selectedId)) {
+      const marked = base.find((node) => node.selected);
+      selectedId = marked ? marked.id : '';
+    }
+
+    app.mirrors.nodes = base.map((node) => ({ ...node, selected: node.id === selectedId }));
+    app.mirrors.selectedId = selectedId;
+    app.mirrors.loaded = true;
+  }
+
+  function updateMirrorControls() {
+    const testButton = $('mirror-test');
+    const testLabel = $('mirror-test-text');
+    const addButton = $('mirror-add-submit');
+    const addLabel = $('mirror-add-submit-text');
+    const testBusy = app.mirrors.loading || app.mirrors.testing;
+
+    if (testButton) {
+      testButton.disabled = testBusy;
+      testButton.classList.toggle('is-loading', testBusy);
+      testButton.setAttribute('aria-busy', testBusy ? 'true' : 'false');
+    }
+    if (testLabel) {
+      testLabel.textContent = app.mirrors.loading
+        ? '刷新中…'
+        : app.mirrors.testing
+          ? '测速中…'
+          : '刷新并测速';
+    }
+    if (addButton) {
+      addButton.disabled = app.mirrors.adding;
+      addButton.classList.toggle('is-loading', app.mirrors.adding);
+    }
+    if (addLabel) addLabel.textContent = app.mirrors.adding ? '添加中…' : '添加节点';
+  }
+
+  function renderMirrors() {
+    const list = $('mirror-list');
+    const loading = $('mirror-loading');
+    const empty = $('mirror-empty');
+    const selectedName = $('mirror-selected-name');
+    if (!list) return;
+
+    updateMirrorControls();
+    if (loading) loading.hidden = !app.mirrors.loading;
+    list.setAttribute('aria-busy', app.mirrors.loading || app.mirrors.testing ? 'true' : 'false');
+    list.replaceChildren();
+
+    const selectedNode = app.mirrors.nodes.find((node) => node.id === app.mirrors.selectedId);
+    if (selectedName) {
+      selectedName.textContent = app.mirrors.loading
+        ? '读取中…'
+        : selectedNode
+          ? selectedNode.name
+          : '尚未选择节点';
+    }
+
+    if (empty) empty.hidden = app.mirrors.nodes.length > 0 || app.mirrors.loading;
+
+    app.mirrors.nodes.forEach((node) => {
+      const selected = node.id === app.mirrors.selectedId;
+      const row = makeElement('div', `mirror-node${selected ? ' is-selected' : ''}`);
+      row.dataset.mirrorId = node.id;
+
+      const choice = document.createElement('label');
+      choice.className = 'mirror-choice';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'mirror-node';
+      radio.value = node.id;
+      radio.checked = selected;
+      radio.disabled = !node.id || app.mirrors.loading || app.mirrors.testing || Boolean(app.mirrors.selectingId) || Boolean(app.mirrors.deletingId);
+      radio.setAttribute('aria-label', `选择镜像节点：${node.name}`);
+      radio.addEventListener('change', (event) => {
+        if (event.target.checked) void selectMirrorNode(node.id);
+      });
+
+      const body = makeElement('span', 'mirror-node-body');
+      const nameRow = makeElement('span', 'mirror-name-row');
+      nameRow.appendChild(makeElement('strong', 'mirror-name', node.name));
+      nameRow.appendChild(makeElement('span', 'mirror-type-badge', node.custom ? '自定义' : '内置'));
+      if (selected) nameRow.appendChild(makeElement('span', 'mirror-selected-badge', '当前使用'));
+      body.appendChild(nameRow);
+      body.appendChild(makeElement('code', 'mirror-prefix', node.prefix || '未提供镜像前缀'));
+
+      const meta = makeElement('span', 'mirror-meta');
+      const statusMeta = mirrorStatusMeta(node.status);
+      meta.appendChild(makeElement('span', `mirror-status-pill is-${statusMeta.tone}`, statusMeta.label));
+      meta.appendChild(makeElement('span', 'mirror-latency', formatMirrorLatency(node.latency_ms)));
+      body.appendChild(meta);
+      if (node.error) body.appendChild(makeElement('span', 'mirror-node-error', node.error));
+
+      choice.appendChild(radio);
+      choice.appendChild(body);
+      row.appendChild(choice);
+
+      if (node.custom) {
+        const actions = makeElement('div', 'mirror-node-actions');
+        const deleteButton = makeElement('button', 'btn btn-quiet btn-small mirror-delete', app.mirrors.deletingId === node.id ? '删除中…' : '删除');
+        deleteButton.type = 'button';
+        deleteButton.disabled = Boolean(app.mirrors.deletingId) || app.mirrors.testing || app.mirrors.loading || Boolean(app.mirrors.selectingId);
+        deleteButton.setAttribute('aria-label', `删除镜像节点：${node.name}`);
+        deleteButton.addEventListener('click', () => {
+          app.mirrors.pendingDeleteId = node.id;
+          renderMirrors();
+        });
+        actions.appendChild(deleteButton);
+        row.appendChild(actions);
+      }
+
+      if (app.mirrors.pendingDeleteId === node.id) {
+        const confirm = makeElement('div', 'mirror-delete-confirm');
+        confirm.setAttribute('role', 'group');
+        confirm.setAttribute('aria-label', `确认删除镜像节点 ${node.name}`);
+        confirm.appendChild(makeElement('p', '', `确认删除自定义节点“${node.name}”？删除后无法恢复。`));
+        const confirmActions = makeElement('div', 'mirror-delete-confirm-actions');
+        const cancelButton = makeElement('button', 'btn btn-quiet btn-small', '取消');
+        cancelButton.type = 'button';
+        cancelButton.disabled = Boolean(app.mirrors.deletingId);
+        cancelButton.addEventListener('click', () => {
+          app.mirrors.pendingDeleteId = '';
+          renderMirrors();
+        });
+        const confirmButton = makeElement(
+          'button',
+          'btn btn-small mirror-delete-confirm-button',
+          app.mirrors.deletingId === node.id ? '删除中…' : '确认删除'
+        );
+        confirmButton.type = 'button';
+        confirmButton.disabled = Boolean(app.mirrors.deletingId);
+        confirmButton.addEventListener('click', () => void deleteMirrorNode(node.id));
+        confirmActions.appendChild(cancelButton);
+        confirmActions.appendChild(confirmButton);
+        confirm.appendChild(confirmActions);
+        row.appendChild(confirm);
+      }
+
+      list.appendChild(row);
+    });
+  }
+
+  async function testMirrors(options = {}) {
+    if (app.mirrors.testing || app.mirrors.loading) return false;
+    const automatic = options.automatic === true;
+    app.mirrors.testing = true;
+    updateMirrorControls();
+    renderMirrors();
+    setInlineStatus($('mirror-status'), '正在测速 Docker 镜像节点，请稍候…', 'info');
+
+    try {
+      const data = await apiRequest('/api/mirrors/test', {
+        method: 'POST',
+        body: {}
+      });
+      applyMirrorPayload(data, { fromTest: true });
+      const available = app.mirrors.nodes.filter((node) => mirrorStatusMeta(node.status).tone === 'success').length;
+      const summary = app.mirrors.nodes.length === 0
+        ? '暂无镜像节点可测速。'
+        : `测速完成：共 ${app.mirrors.nodes.length} 个节点，${available} 个可用。`;
+      setInlineStatus($('mirror-status'), summary, available > 0 ? 'success' : 'warning');
+      if (!automatic) showToast(summary, available > 0 ? 'success' : 'warning', 4200);
+      return true;
+    } catch (error) {
+      const message = formatError(error, '镜像节点测速失败。');
+      setInlineStatus($('mirror-status'), message, 'error');
+      if (!automatic) showToast(message, 'error', 6000);
+      return false;
+    } finally {
+      app.mirrors.testing = false;
+      updateMirrorControls();
+      renderMirrors();
+    }
+  }
+
+  async function loadMirrors(options = {}) {
+    if (app.mirrors.loading) return false;
+    const shouldTest = options.test === true;
+    const automatic = options.automatic === true;
+    app.mirrors.loading = true;
+    updateMirrorControls();
+    renderMirrors();
+    setInlineStatus($('mirror-status'), '正在读取镜像节点列表…', 'info');
+
+    let loaded = false;
+    try {
+      const data = await apiRequest('/api/mirrors');
+      applyMirrorPayload(data);
+      loaded = true;
+      if (!shouldTest) {
+        const selected = app.mirrors.nodes.find((node) => node.id === app.mirrors.selectedId);
+        setInlineStatus(
+          $('mirror-status'),
+          app.mirrors.nodes.length
+            ? `已加载 ${app.mirrors.nodes.length} 个镜像节点${selected ? `，当前选择：${selected.name}` : ''}。`
+            : '尚未配置镜像节点，可在下方添加自定义节点。',
+          'success'
+        );
+      }
+    } catch (error) {
+      const message = formatError(error, '镜像节点列表读取失败。');
+      setInlineStatus($('mirror-status'), message, 'error');
+      if (!automatic) showToast(message, 'error', 6000);
+    } finally {
+      app.mirrors.loading = false;
+      updateMirrorControls();
+      renderMirrors();
+    }
+
+    if (loaded && shouldTest) return testMirrors({ automatic });
+    return loaded;
+  }
+
+  async function selectMirrorNode(id) {
+    if (!id || app.mirrors.testing || app.mirrors.loading || app.mirrors.selectingId) return;
+    const previousId = app.mirrors.selectedId;
+    app.mirrors.selectingId = id;
+    app.mirrors.selectedId = id;
+    renderMirrors();
+    setInlineStatus($('mirror-status'), '正在保存镜像节点选择…', 'info');
+
+    try {
+      const data = await apiRequest('/api/mirrors/select', {
+        method: 'POST',
+        body: { id }
+      });
+      if (data && data.ok === false) {
+        throw new ApiError(textValue(data.message, '镜像节点选择保存失败。'));
+      }
+      const serverSelected = textValue(data && data.selected_id, '');
+      if (serverSelected) app.mirrors.selectedId = serverSelected;
+      app.mirrors.nodes = app.mirrors.nodes.map((node) => ({ ...node, selected: node.id === app.mirrors.selectedId }));
+      const selected = app.mirrors.nodes.find((node) => node.id === app.mirrors.selectedId);
+      setInlineStatus($('mirror-status'), `已切换到镜像节点：${selected ? selected.name : app.mirrors.selectedId}。`, 'success');
+      showToast('镜像节点已保存。', 'success', 2800);
+    } catch (error) {
+      app.mirrors.selectedId = previousId;
+      const message = formatError(error, '镜像节点选择保存失败。');
+      setInlineStatus($('mirror-status'), message, 'error');
+      showToast(message, 'error', 6000);
+    } finally {
+      app.mirrors.selectingId = '';
+      renderMirrors();
+    }
+  }
+
+  function clearMirrorAddError() {
+    const nameInput = $('mirror-add-name');
+    const prefixInput = $('mirror-add-prefix');
+    const errorElement = $('mirror-add-error');
+    clearFieldError(nameInput, errorElement);
+    if (prefixInput) prefixInput.removeAttribute('aria-invalid');
+    if (errorElement) {
+      errorElement.textContent = '';
+      errorElement.hidden = true;
+    }
+  }
+
+  function showMirrorAddError(message, input) {
+    const errorElement = $('mirror-add-error');
+    if (input) input.setAttribute('aria-invalid', 'true');
+    if (errorElement) {
+      errorElement.textContent = message;
+      errorElement.hidden = false;
+    }
+    if (input) input.focus();
+  }
+
+  async function handleMirrorAdd(event) {
+    event.preventDefault();
+    if (app.mirrors.adding) return;
+    const nameInput = $('mirror-add-name');
+    const prefixInput = $('mirror-add-prefix');
+    const name = nameInput ? nameInput.value.trim() : '';
+    const prefix = prefixInput ? prefixInput.value.trim() : '';
+    clearMirrorAddError();
+
+    if (!name) {
+      showMirrorAddError('请输入镜像节点名称。', nameInput);
+      return;
+    }
+    if (name.length > 40) {
+      showMirrorAddError('镜像节点名称不能超过 40 个字符。', nameInput);
+      return;
+    }
+    if (!prefix) {
+      showMirrorAddError('请输入镜像前缀。', prefixInput);
+      return;
+    }
+    if (/\s/.test(prefix)) {
+      showMirrorAddError('镜像前缀不能包含空格或换行。', prefixInput);
+      return;
+    }
+    if (/^https?:\/\//i.test(prefix)) {
+      showMirrorAddError('请填写 registry 前缀，不要包含 http:// 或 https://。', prefixInput);
+      return;
+    }
+
+    app.mirrors.adding = true;
+    updateMirrorControls();
+    setInlineStatus($('mirror-status'), '正在添加自定义镜像节点…', 'info');
+
+    try {
+      const data = await apiRequest('/api/mirrors', {
+        method: 'POST',
+        body: { name, prefix }
+      });
+      if (data && data.ok === false) {
+        throw new ApiError(textValue(data.message, '镜像节点添加失败。'));
+      }
+      if (data && data.node) {
+        const added = normaliseMirrorNode(data.node);
+        if (added.id && !app.mirrors.nodes.some((node) => node.id === added.id)) {
+          app.mirrors.nodes = [...app.mirrors.nodes, { ...added, selected: added.id === app.mirrors.selectedId }];
+        }
+      }
+      if (nameInput) nameInput.value = '';
+      if (prefixInput) prefixInput.value = '';
+      setInlineStatus($('mirror-status'), '镜像节点已添加，正在刷新并测速…', 'success');
+      showToast('镜像节点已添加。', 'success', 2800);
+      await loadMirrors({ test: true, automatic: true });
+    } catch (error) {
+      const message = formatError(error, '镜像节点添加失败。');
+      setInlineStatus($('mirror-status'), message, 'error');
+      showMirrorAddError(message, prefixInput || nameInput);
+      showToast(message, 'error', 6000);
+    } finally {
+      app.mirrors.adding = false;
+      updateMirrorControls();
+      renderMirrors();
+    }
+  }
+
+  async function deleteMirrorNode(id) {
+    if (!id || app.mirrors.deletingId) return;
+    app.mirrors.deletingId = id;
+    renderMirrors();
+    setInlineStatus($('mirror-status'), '正在删除自定义镜像节点…', 'info');
+
+    try {
+      const data = await apiRequest(`/api/mirrors/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (data && data.ok === false) {
+        throw new ApiError(textValue(data.message, '镜像节点删除失败。'));
+      }
+      app.mirrors.nodes = app.mirrors.nodes.filter((node) => node.id !== id);
+      if (app.mirrors.selectedId === id) app.mirrors.selectedId = '';
+      app.mirrors.pendingDeleteId = '';
+      setInlineStatus($('mirror-status'), '镜像节点已删除，正在刷新列表…', 'success');
+      showToast('镜像节点已删除。', 'success', 2800);
+      await loadMirrors({ automatic: true });
+    } catch (error) {
+      const message = formatError(error, '镜像节点删除失败。');
+      setInlineStatus($('mirror-status'), message, 'error');
+      showToast(message, 'error', 6000);
+    } finally {
+      app.mirrors.deletingId = '';
+      renderMirrors();
+    }
+  }
+
+  function isInterruptedJobStatus(value) {
+    const status = textValue(value, '').trim().toLowerCase();
+    return ['interrupted', 'aborted', 'cancelled', 'canceled', 'paused', 'stalled', 'lost', 'terminated'].includes(status);
+  }
+
   function applyState(raw) {
     const nextState = normaliseState(raw);
     app.state = nextState;
@@ -814,23 +1292,73 @@
       qqInput.value = nextState.deployment.qq_account;
     }
 
-    if (nextState.deployment.deployed) {
+    const deployment = nextState.deployment;
+    const stateJobKind = statusKind(deployment.active_job_status);
+    app.activeJobStatus = deployment.active_job_status;
+    if (deployment.active_job_id) {
+      app.activeJobId = deployment.active_job_id;
+      app.jobStarted = true;
+      app.unlockedDeploy = true;
+    }
+
+    if (deployment.deployed || stateJobKind === 'success') {
       app.jobCompleted = true;
       app.unlockedDone = true;
       app.unlockedDeploy = true;
+      app.jobInterrupted = false;
       app.activeJobId = '';
-      persistActiveJobId('');
+      if (stateJobKind === 'success') app.activeJobStatus = 'success';
+    } else if (isInterruptedJobStatus(deployment.active_job_status) || stateJobKind === 'error') {
+      app.jobInterrupted = true;
+      app.jobStarted = true;
+      app.unlockedDeploy = true;
     } else if (app.jobStarted || app.activeJobId) {
       app.unlockedDeploy = true;
     }
 
     if (!app.formInitialised) {
-      if (!nextState.deployment.deployed) setDefaultPrompt();
+      if (!deployment.deployed) setDefaultPrompt();
       app.formInitialised = true;
     }
 
-    if (nextState.deployment.deployed) renderDashboard();
+    if (deployment.deployed || app.jobCompleted) renderDashboard();
     updateStepNavigation();
+  }
+
+  function restoreNavigationFromState(options = {}) {
+    const initial = options.initial === true;
+    const deployment = app.state.deployment;
+    const jobId = deployment.active_job_id || app.activeJobId;
+    const stateKind = statusKind(deployment.active_job_status);
+
+    if (deployment.deployed || stateKind === 'success') {
+      app.unlockedDone = true;
+      app.unlockedDeploy = true;
+      app.jobCompleted = true;
+      app.activeJobId = '';
+      app.jobInterrupted = false;
+      renderDashboard();
+      showStep('done', { focus: false });
+      return;
+    }
+
+    if (jobId) {
+      app.jobStarted = true;
+      app.unlockedDeploy = true;
+      app.activeJobId = jobId;
+      showStep('deploy', { focus: false });
+      if (isInterruptedJobStatus(deployment.active_job_status) || stateKind === 'error') {
+        showInterruptedJob(jobId, deployment.active_job_status);
+      } else {
+        resetJobProgress({ resuming: true });
+        void startJobPolling(jobId);
+      }
+      return;
+    }
+
+    if (initial && app.currentStep === 'env') {
+      showStep('env', { focus: false });
+    }
   }
 
   async function loadState(options = {}) {
@@ -846,36 +1374,18 @@
       const data = await apiRequest('/api/state');
       setStateError('');
       applyState(data);
-      if (initial) {
-        if (app.state.deployment.deployed) {
-          app.unlockedDone = true;
-          showStep('done', { focus: false });
-        } else if (app.activeJobId) {
-          app.jobStarted = true;
-          app.unlockedDeploy = true;
-          showStep('deploy', { focus: false });
-          void startJobPolling(app.activeJobId);
-        } else {
-          showStep('env', { focus: false });
-        }
-      } else if (!silent && app.state.deployment.deployed) {
-        app.unlockedDone = true;
-        updateStepNavigation();
-        if (app.currentStep !== 'deploy') showStep('done', { focus: false });
-      }
-      if (!silent) showToast('环境与部署状态已更新。', 'success', 2800);
+      if (initial || !silent) restoreNavigationFromState({ initial });
+      if (!silent) showToast('环境、实例与部署状态已更新。', 'success', 2800);
       return true;
     } catch (error) {
       const message = formatError(error, '无法读取本地服务状态。');
       setStateError(message);
       if (initial) {
         renderRequirements({}, { forced: true });
-        if (app.activeJobId) {
-          app.jobStarted = true;
-          app.unlockedDeploy = true;
-          showStep('deploy', { focus: false });
-          void startJobPolling(app.activeJobId);
+        if (INSTANCE_ID) {
+          showStep('env', { focus: false });
         } else {
+          setStateError('当前 URL 未指定 instance 参数。请从实例控制台打开向导，或在地址后添加 ?instance=<id>。');
           showStep('env', { focus: false });
         }
       }
@@ -960,9 +1470,10 @@
 
       app.jobStarted = true;
       app.jobCompleted = false;
+      app.jobInterrupted = false;
       app.activeJobId = jobId;
+      app.activeJobStatus = 'running';
       app.unlockedDeploy = true;
-      persistActiveJobId(jobId);
       resetJobProgress();
       showStep('deploy', { focus: true });
       showToast('部署任务已创建，正在执行。', 'info', 3500);
@@ -1021,20 +1532,60 @@
     if (nearBottom) logOutput.scrollTop = logOutput.scrollHeight;
   }
 
-  function resetJobProgress() {
+  function resetJobProgress(options = {}) {
+    const resuming = options.resuming === true;
     setProgress(0);
     setJobOrb('running', 'i-package');
-    setText('job-status-label', '部署进行中…');
-    setText('job-step', '正在准备部署任务');
-    setText('job-message', '正在创建本地部署任务，请保持页面开启…');
+    setText('job-status-label', resuming ? '正在恢复部署状态…' : '部署进行中…');
+    setText('job-step', resuming ? '正在重新连接部署任务' : '正在准备部署任务');
+    setText(
+      'job-message',
+      resuming
+        ? '检测到该实例存在未完成的部署任务，正在从本地服务恢复进度…'
+        : '正在创建本地部署任务，请保持页面开启…'
+    );
     const logOutput = $('job-logs');
-    if (logOutput) logOutput.textContent = '等待日志输出…';
+    if (logOutput) logOutput.textContent = resuming ? '正在读取任务日志…' : '等待日志输出…';
     clearDeployError();
     const retryConfig = $('job-retry-config');
     const retryPoll = $('job-retry-poll');
-    if (retryConfig) retryConfig.hidden = true;
+    if (retryConfig) {
+      retryConfig.hidden = true;
+      retryConfig.textContent = '重试部署';
+    }
     if (retryPoll) retryPoll.hidden = true;
     setDeploySubmitBusy(true);
+  }
+
+  function showInterruptedJob(jobId, status) {
+    app.jobPolling = false;
+    app.pollGeneration += 1;
+    app.jobInterrupted = true;
+    app.jobStarted = true;
+    app.unlockedDeploy = true;
+    app.activeJobId = jobId || '';
+    app.activeJobStatus = textValue(status, 'interrupted');
+    setDeploySubmitBusy(false);
+    setJobOrb('error', 'i-alert');
+    setText('job-status-label', '部署任务已中断');
+    setText('job-step', '部署任务中断');
+    setText(
+      'job-message',
+      '未检测到正在运行的部署任务。你可以继续获取原任务状态，或返回配置页重新部署。'
+    );
+    const statusText = textValue(status, '').trim();
+    showDeployError(
+      '部署任务已中断',
+      `${statusText ? `服务端任务状态：${statusText}。` : ''}页面不会一直卡在等待中。请点击“继续获取进度”检查原任务，或点击“重试部署”返回配置页重新开始。`
+    );
+    const retryConfig = $('job-retry-config');
+    const retryPoll = $('job-retry-poll');
+    if (retryConfig) {
+      retryConfig.textContent = '重试部署';
+      retryConfig.hidden = false;
+    }
+    if (retryPoll) retryPoll.hidden = !jobId;
+    updateStepNavigation();
   }
 
   function clearDeployError() {
@@ -1066,7 +1617,8 @@
   function statusKind(value) {
     const status = textValue(value, '').trim().toLowerCase();
     if (['success', 'succeeded', 'complete', 'completed', 'done', 'ok'].includes(status)) return 'success';
-    if (['error', 'failed', 'failure', 'cancelled', 'canceled', 'aborted'].includes(status)) return 'error';
+    if (['interrupted', 'cancelled', 'canceled', 'aborted', 'paused', 'stalled', 'lost', 'terminated'].includes(status)) return 'interrupted';
+    if (['error', 'failed', 'failure'].includes(status)) return 'error';
     if (['running', 'pending', 'queued', 'starting', 'in_progress', 'processing'].includes(status)) return 'running';
     return 'unknown';
   }
@@ -1076,6 +1628,8 @@
     app.jobPolling = true;
     app.deployBusy = true;
     app.jobStarted = true;
+    app.jobInterrupted = false;
+    app.activeJobId = jobId;
     app.unlockedDeploy = true;
     setDeploySubmitBusy(true);
     const generation = ++app.pollGeneration;
@@ -1089,13 +1643,14 @@
         transientFailures = 0;
         clearDeployError();
         updateJobUI(data);
+        app.activeJobStatus = textValue(data.status, app.activeJobStatus);
         const kind = statusKind(data.status);
 
         if (kind === 'success') {
           await finishDeployment(jobId, data);
           return;
         }
-        if (kind === 'error') {
+        if (kind === 'error' || kind === 'interrupted') {
           handleJobFailure(data);
           return;
         }
@@ -1103,19 +1658,34 @@
           setText('job-message', '本地服务暂未返回可识别的任务状态，继续等待…');
         }
       } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          showInterruptedJob(jobId, app.activeJobStatus || 'interrupted');
+          setText('job-status-label', '任务记录已丢失');
+          showDeployError(
+            '部署任务已中断',
+            `${formatError(error)} 本地服务可能已重启。请点击“重试部署”重新开始，或点击“继续获取进度”再次检查。`
+          );
+          showToast('部署任务记录不可用，请重试部署。', 'error', 6000);
+          return;
+        }
         transientFailures += 1;
         if (transientFailures >= 3) {
           app.jobPolling = false;
           app.pollGeneration += 1;
+          app.jobInterrupted = true;
+          setDeploySubmitBusy(false);
           setJobOrb('error', 'i-alert');
           setText('job-status-label', '进度读取中断');
-          setText('job-message', '暂时无法读取部署进度，部署任务可能仍在运行。请检查本地启动器后继续获取进度。');
-          showDeployError('进度读取中断', `${formatError(error, '无法连接本地服务。')} 任务可能仍在运行，建议点击“继续获取进度”，不要重复部署。`);
+          setText('job-message', '暂时无法读取部署进度，部署任务可能仍在运行。');
+          showDeployError('进度读取中断', `${formatError(error, '无法连接本地服务。')} 任务可能仍在运行。请先点击“继续获取进度”；如确认任务已丢失，可点击“重试部署”。`);
           const retryPoll = $('job-retry-poll');
           if (retryPoll) retryPoll.hidden = false;
           const retryConfig = $('job-retry-config');
-          if (retryConfig) retryConfig.hidden = true;
-          showToast('读取部署进度失败，可稍后继续获取。', 'error', 6000);
+          if (retryConfig) {
+            retryConfig.textContent = '重试部署';
+            retryConfig.hidden = false;
+          }
+          showToast('读取部署进度失败，可继续获取或重新部署。', 'error', 6000);
           return;
         }
         setText('job-message', `暂时无法获取进度（${transientFailures}/3），正在自动重试…`);
@@ -1129,11 +1699,12 @@
     app.jobPolling = false;
     app.pollGeneration += 1;
     app.jobCompleted = true;
+    app.jobInterrupted = false;
     app.deployBusy = false;
     app.activeJobId = '';
+    app.activeJobStatus = 'success';
     app.unlockedDeploy = true;
     app.unlockedDone = true;
-    persistActiveJobId('');
     setDeploySubmitBusy(false);
     setProgress(100);
     setJobOrb('success', 'i-check-circle');
@@ -1168,8 +1739,10 @@
     app.jobPolling = false;
     app.pollGeneration += 1;
     app.deployBusy = false;
+    app.jobCompleted = false;
+    app.jobInterrupted = true;
     app.activeJobId = '';
-    persistActiveJobId('');
+    app.activeJobStatus = textValue(data.status, 'error');
     setDeploySubmitBusy(false);
     app.jobStarted = true;
     app.unlockedDeploy = true;
@@ -1179,13 +1752,16 @@
     setJobOrb('error', 'i-alert');
     setText('job-status-label', '部署失败');
     setText('job-step', textValue(data.step || data.current_step, '部署未完成'));
-    setText('job-message', '部署任务返回错误，请根据日志修复后重试。');
+    setText('job-message', '部署任务已中断或失败。请查看日志后返回配置页重试。');
     updateJobLogs(data.logs);
     const errorMessage = textValue(data.error || data.message, '部署任务执行失败，请查看实时日志。');
-    showDeployError('部署未完成', errorMessage);
+    showDeployError('部署任务未完成', `${errorMessage} 可点击“重试部署”返回配置页重新开始。`);
     const retryConfig = $('job-retry-config');
     const retryPoll = $('job-retry-poll');
-    if (retryConfig) retryConfig.hidden = false;
+    if (retryConfig) {
+      retryConfig.textContent = '重试部署';
+      retryConfig.hidden = false;
+    }
     if (retryPoll) retryPoll.hidden = true;
     updateStepNavigation();
     showToast('部署失败，请查看日志后重试。', 'error', 6000);
@@ -1503,14 +2079,28 @@
       });
     }
 
+    const mirrorTest = $('mirror-test');
+    if (mirrorTest) mirrorTest.addEventListener('click', () => void loadMirrors({ test: true }));
+    const mirrorAddForm = $('mirror-add-form');
+    if (mirrorAddForm) mirrorAddForm.addEventListener('submit', handleMirrorAdd);
+    const mirrorName = $('mirror-add-name');
+    if (mirrorName) mirrorName.addEventListener('input', clearMirrorAddError);
+    const mirrorPrefix = $('mirror-add-prefix');
+    if (mirrorPrefix) mirrorPrefix.addEventListener('input', clearMirrorAddError);
+
     const jobRetryConfig = $('job-retry-config');
     if (jobRetryConfig) {
       jobRetryConfig.addEventListener('click', () => {
         app.jobPolling = false;
         app.pollGeneration += 1;
+        app.jobInterrupted = false;
+        app.activeJobId = '';
+        app.activeJobStatus = '';
         setDeploySubmitBusy(false);
         clearDeployError();
+        updateStepNavigation();
         showStep('config');
+        showToast('请确认 QQ 号、API Key 与提示词后重新部署。', 'info', 4200);
       });
     }
     const jobRetryPoll = $('job-retry-poll');
@@ -1522,6 +2112,9 @@
         }
         clearDeployError();
         jobRetryPoll.hidden = true;
+        const retryConfig = $('job-retry-config');
+        if (retryConfig) retryConfig.hidden = true;
+        app.jobInterrupted = false;
         setJobOrb('running', 'i-package');
         setText('job-status-label', '正在重新连接…');
         setText('job-message', '正在继续获取部署进度…');
@@ -1592,10 +2185,17 @@
 
   async function init() {
     setDefaultPrompt();
+    updateInstanceContext();
     bindEvents();
     updateStepNavigation();
 
-    // 首次渲染也需要先展示环境检测骨架；随后严格通过 GET /api/state 恢复。
+    // 镜像节点自动加载并测速；状态加载与实例恢复并行进行。
+    if (!app.mirrors.autoTested) {
+      app.mirrors.autoTested = true;
+      void loadMirrors({ test: true, automatic: true });
+    }
+
+    // 首次渲染也需要先展示环境检测骨架；随后严格通过 GET /api/state 恢复实例状态。
     await loadState({ initial: true, silent: true });
     app.formInitialised = true;
   }

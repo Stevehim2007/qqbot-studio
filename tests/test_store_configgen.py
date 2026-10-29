@@ -157,6 +157,37 @@ class ConfigGenerationTests(unittest.TestCase):
             self.assertEqual(os.stat(result["astrbot_config"]).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(result["snowluma_config"]).st_mode & 0o777, 0o600)
 
+
+    def test_instance_specific_names_and_remote_bind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generate_artifacts(
+                tmp,
+                api_key="sk-test",
+                prompt="prompt",
+                qq_account="12345678",
+                secrets_data=fake_secrets(),
+                ports=choose_ports(probe=False),
+                host_uid=1000,
+                host_gid=1000,
+                bind_address="0.0.0.0",
+                project_name="qqbot-studio-bot-1",
+                astrbot_container="qqbot-bot-1-astrbot",
+                snowluma_container="qqbot-bot-1-snowluma",
+                network_name="qqbot-studio-bot-1-net",
+            )
+            compose = result["compose"].read_text(encoding="utf-8")
+            self.assertIn("container_name: qqbot-bot-1-astrbot", compose)
+            self.assertIn("container_name: qqbot-bot-1-snowluma", compose)
+            self.assertIn("qqbot-studio-bot-1-net", compose)
+            self.assertIn("${BIND_ADDRESS}:${ASTRBOT_WEBUI_PORT}:6185", compose)
+            self.assertIn("${BIND_ADDRESS}:${NOVNC_PORT}:6081", compose)
+            self.assertIn("${BIND_ADDRESS}:${SNOWLUMA_WEBUI_PORT_HOST}:5099", compose)
+            self.assertIn("SNOWLUMA_WEBUI_HOST: 0.0.0.0", compose)
+            env = result["env"].read_text(encoding="utf-8")
+            self.assertIn("BIND_ADDRESS=0.0.0.0", env)
+            astrbot_config = json.loads(result["astrbot_config"].read_text(encoding="utf-8"))
+            self.assertEqual(astrbot_config["dashboard"]["host"], "0.0.0.0")
+
     def test_mirror_image_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = generate_artifacts(

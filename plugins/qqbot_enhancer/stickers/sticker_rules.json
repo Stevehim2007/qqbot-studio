@@ -1,0 +1,30 @@
+{
+  "stickers": [
+    {
+      "file": "happy.png",
+      "keywords": ["哈哈", "开心", "好耶", "笑", "棒"],
+      "emotion": "happy"
+    },
+    {
+      "file": "sad.png",
+      "keywords": ["难过", "伤心", "哭", "委屈", "唉"],
+      "emotion": "sad"
+    },
+    {
+      "file": "angry.png",
+      "keywords": ["生气", "气死", "愤怒", "烦"],
+      "emotion": "angry"
+    },
+    {
+      "file": "thinking.png",
+      "keywords": ["为什么", "怎么", "想想", "不懂", "？"],
+      "emotion": "thinking"
+    }
+  ],
+  "emotion_keywords": {
+    "happy": ["高兴", "愉快", "兴奋", "太好了"],
+    "sad": ["失落", "低落", "难受"],
+    "angry": ["恼火", "火大", "讨厌"],
+    "thinking": ["疑惑", "好奇", "琢磨"]
+  }
+}

@@ -7,8 +7,9 @@
 - Docker 服务启动失败、`Start request repeated too quickly`
 - 卸载并重装 Docker
 - 国内镜像拉取慢
-- 服务器上运行后，如何从自己的电脑访问向导和 WebUI
-- 指定本地向导端口
+- 服务器上运行后，如何从自己的电脑直接访问管理控制台 / WebUI / noVNC
+- 指定管理服务监听 IP 和端口
+- screen 后台运行与多机器人实例
 
 > 详细的日常部署步骤以项目根目录 `README.md` 为准；本文是服务器专项补充。
 
@@ -416,19 +417,20 @@ docker info
 3. `docker.xuanyuan.me/`
 4. `hub.rat.dev/`
 
-拉取失败会自动切换下一个源。成功源记录在：
+拉取失败会自动切换下一个源。成功源记录在对应机器人实例的：
 
 ```text
-~/.local/share/qqbot-studio/config.json
+~/.local/share/qqbot-studio/instances/<instance>/config.json
 ```
 
-### 自定义镜像前缀
+v2 的节点测速、切换、添加和删除都在部署向导 UI 中完成，不需要设置环境变量。
+节点列表保存在：
 
-```bash
-QQBOT_IMAGE_MIRROR_PREFIXES="docker.1ms.run/,m.daocloud.io/docker.io/" ./start.sh
+```text
+~/.local/share/qqbot-studio/studio.json
 ```
 
-要求前缀支持：
+要求自定义前缀支持：
 
 ```text
 <prefix>/soulter/astrbot:latest
@@ -474,64 +476,109 @@ docker save -o qqbot-images.tar soulter/astrbot:latest motricseven7/snowluma:lat
 docker load -i qqbot-images.tar
 ```
 
-离线导入时，在向导里取消“使用国内镜像加速”。
+程序会先检查本地镜像，已存在时跳过重复拉取。
 
 ---
 
 ## 6. 服务器上运行，自己的电脑如何访问
 
-### 推荐方案：SSH 隧道
+### v2 默认：直接使用服务器 IP
 
-不要让向导监听 `0.0.0.0` 暴露到公网。管理面板包含容器控制能力，
-并且页面里会展示 AstrBot、SnowLuma、VNC 等敏感登录信息。
+v2 默认监听：
 
-服务器上启动向导：
+```text
+0.0.0.0:8765
+```
+
+服务器上运行：
 
 ```bash
 cd "/你的项目路径/QQ Ai bot"
-./start.sh --port 8765
+./install.sh
 ```
 
-自己的电脑上建立 SSH 隧道：
+安装器完成后会自动调用 `start.sh`，创建第一个机器人实例并打印地址，例如：
+
+```text
+请用电脑/手机浏览器打开部署向导：
+http://服务器IP:8765/wizard?instance=bot-1
+
+管理控制台：
+http://服务器IP:8765/console
+```
+
+在自己电脑浏览器打开对应地址即可。AstrBot、SnowLuma、noVNC 的宿主机端口也会
+绑定到 `0.0.0.0`，具体 URL 会显示在控制台/完成页中。
+
+### 多机器人实例
+
+```bash
+# 每次运行创建一个新实例
+./start.sh
+
+# 查看和控制所有实例
+./console.sh
+```
+
+控制台会显示每个实例的 QQ、容器状态、AstrBot/SnowLuma/noVNC 链接以及部署任务。
+
+### 管理服务 IP / 端口
+
+首次运行会询问并保存到：
+
+```text
+~/.local/share/qqbot-studio/studio.json
+```
+
+以后可通过参数修改：
+
+```bash
+./start.sh --ip 0.0.0.0 --port 8765
+./console.sh --ip 0.0.0.0 --port 8765
+```
+
+只允许本机访问时：
+
+```bash
+./start.sh --ip 127.0.0.1 --port 8765
+```
+
+### 安全风险（必须阅读）
+
+v2 默认 `0.0.0.0` 是为了方便直接从电脑/手机访问，但这会把：
+
+- 管理控制台
+- AstrBot WebUI
+- SnowLuma WebUI
+- noVNC 远程桌面
+- 会显示登录凭据的部分页面
+
+暴露到服务器网络。必须使用云安全组、防火墙或 VPN 限制来源 IP；
+不要把 noVNC/VNC 端口直接开放给公网。多人共用主机时，不应把本工具当作多租户
+安全隔离方案。
+
+### 可选：SSH 隧道
+
+如果只想通过 SSH 安全访问，先让管理服务只监听回环：
+
+```bash
+./start.sh --ip 127.0.0.1 --port 8765
+```
+
+自己电脑执行：
 
 ```bash
 ssh -N -L 8765:127.0.0.1:8765 用户名@服务器IP
 ```
 
-然后本地浏览器访问：
+然后访问：
 
 ```text
-http://127.0.0.1:8765/
+http://127.0.0.1:8765/console
 ```
 
-### `-N` 和 `-L` 是什么意思
-
-```text
-ssh -N -L 本地端口:目标地址:目标端口 用户@服务器
-```
-
-- `-N`：不执行远程命令，只建立隧道；连接后终端没有提示符是正常的。
-- `-L`：本地端口转发。
-- 例如 `-L 8765:127.0.0.1:8765` 表示：
-  你电脑的 `127.0.0.1:8765` → SSH 加密隧道 → 服务器的 `127.0.0.1:8765`。
-
-关闭隧道：在 SSH 窗口按 `Ctrl+C`。
-
-后台运行：
-
-```bash
-ssh -fN -L 8765:127.0.0.1:8765 用户名@服务器IP
-```
-
-### 同时转发 AstrBot / SnowLuma / noVNC
-
-部署完成后查看服务器实际端口：
-
-```bash
-cat ~/.local/share/qqbot-studio/config.json
-```
-
-假设端口为 `6185`、`5099`、`6081`，本地电脑执行：
+`-N` 表示只建立隧道、不执行远程命令；`-L` 表示本地端口转发。
+需要访问 AstrBot/noVNC 时，可以在命令中追加多个 `-L`：
 
 ```bash
 ssh -N \
@@ -542,56 +589,39 @@ ssh -N \
   用户名@服务器IP
 ```
 
-本地访问：
-
-- 向导：`http://127.0.0.1:8765`
-- AstrBot：`http://127.0.0.1:6185`
-- SnowLuma：`http://127.0.0.1:5099`
-- noVNC：`http://127.0.0.1:6081`
-
-如果本地端口被占用，可以修改 `-L` 的第一个端口，例如：
+实际端口查看：
 
 ```bash
-ssh -N -L 18765:127.0.0.1:8765 用户名@服务器IP
+cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 ```
-
-然后访问 `http://127.0.0.1:18765`。
-
-### 为什么不建议直接 `--host 0.0.0.0`
-
-当前版本有意只允许 `127.0.0.1` / `localhost`：
-
-```bash
-./start.sh --host 0.0.0.0
-# 会被拒绝
-```
-
-因为：
-
-- 管理面板会返回明文 AstrBot、SnowLuma、VNC 密码；
-- 管理 API 可以启动/停止容器；
-- 默认是 HTTP，没有 TLS；
-- 直接暴露到公网会被扫描和攻击。
-
-### 指定向导端口
-
-```bash
-./start.sh --port 8765
-```
-
-或：
-
-```bash
-QQBOT_STUDIO_PORT=8765 ./start.sh
-```
-
-`--port 0` 表示自动选择空闲端口。
-
-注意：这里修改的是**本地向导端口**，不是 AstrBot、SnowLuma 或 noVNC 的部署端口。
 
 ---
 
-## 7. 最终验证清单
+## 7. screen 后台运行
+
+安装器会安装 screen。`start.sh` / `console.sh` 启动的后台管理服务名为：
+
+```text
+qqbot-studio-server
+```
+
+常用命令：
+
+```bash
+screen -ls
+screen -r qqbot-studio-server
+tail -f ~/.local/share/qqbot-studio/studio-server.log
+screen -S qqbot-studio-server -X quit
+```
+
+脱离 screen：先按 `Ctrl+A`，再按 `D`。
+
+如果系统限制 screen（例如 `/run/screen` 只读），启动器会自动降级为 `nohup`
+后台模式，仍可通过日志文件查看服务状态。
+
+---
+
+## 8. 最终验证清单
 
 ```bash
 # Git
@@ -606,26 +636,19 @@ docker info
 
 # 项目
 cd "/你的项目路径/QQ Ai bot"
-./start.sh --port 8765
+./start.sh --ip 0.0.0.0 --port 8765
+./console.sh --ip 0.0.0.0 --port 8765
+screen -ls
 ```
 
-服务器上看到：
-
-```text
-打开向导：http://127.0.0.1:8765/
-```
-
-自己电脑执行 SSH 隧道后，本地浏览器打开：
-
-```text
-http://127.0.0.1:8765/
-```
+浏览器打开脚本输出的 URL。
 
 如果仍有问题，请提供以下输出（敏感信息请先打码）：
 
 ```bash
 sudo journalctl -xeu docker.service -b --no-pager -n 100
 git config --show-origin --get-all http.sslBackend
+tail -n 100 ~/.local/share/qqbot-studio/studio-server.log
 docker --version
 docker compose version
 docker info

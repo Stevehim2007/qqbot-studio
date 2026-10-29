@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#081a33">
+  <title>QQ Bot Studio · 实例控制台</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="console.css">
+</head>
+<body class="console-page">
+  <a class="skip-link" href="#console-main">跳到主要内容</a>
+
+  <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="c-i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.7"/><path d="M20 4v7h-7"/></symbol>
+    <symbol id="c-i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="c-i-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="c-i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></symbol>
+    <symbol id="c-i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="c-i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="c-i-restart" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="c-i-alert" viewBox="0 0 24 24"><path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="c-i-qr" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h2v2h-2zM19 15h2M15 19h2M19 19h2v2h-2z"/></symbol>
+    <symbol id="c-i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="c-i-shield" viewBox="0 0 24 24"><path d="M12 2 20 6v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4Z"/><path d="m8.5 12 2.3 2.3 4.7-5"/></symbol>
+    <symbol id="c-i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="c-i-edit" viewBox="0 0 24 24"><path d="m4 20 4.5-1 11-11a2.1 2.1 0 0 0-3-3l-11 11L4 20Z"/><path d="m14 7 3 3"/></symbol>
+    <symbol id="c-i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7h.01"/></symbol>
+  </svg>
+
+  <header class="console-header">
+    <div class="console-header-inner">
+      <a class="console-brand" href="/console.html" aria-label="QQ Bot Studio 实例控制台首页">
+        <svg class="console-brand-mark" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="2" y="2" width="44" height="44" rx="14" fill="#0e3458"/>
+          <path d="M14 14h20a5 5 0 0 1 5 5v11a5 5 0 0 1-5 5h-9l-8 5v-5h-3a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5Z" fill="none" stroke="#61e8c4" stroke-width="3"/>
+          <path d="M18 23h.01M24 23h.01M30 23h.01" stroke="#61e8c4" stroke-width="3.4" stroke-linecap="round"/>
+        </svg>
+        <span class="console-brand-copy">
+          <strong>QQ Bot <em>Studio</em></strong>
+          <small>实例控制台</small>
+        </span>
+      </a>
+
+      <div class="console-header-actions">
+        <span id="console-bind-host" class="console-server-pill" title="本地服务地址">
+          <svg class="icon" aria-hidden="true"><use href="#c-i-server"></use></svg>
+          <span>本地服务</span>
+        </span>
+        <button id="console-refresh" class="console-header-btn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
+          <span id="console-refresh-label">刷新</span>
+        </button>
+        <button class="console-create-button" type="button" data-open-create>
+          <svg class="icon" aria-hidden="true"><use href="#c-i-plus"></use></svg>
+          新建机器人
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="console-main" class="console-main" tabindex="-1">
+    <div id="console-toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
+
+    <section class="console-hero" aria-labelledby="console-heading">
+      <div class="console-hero-copy">
+        <p class="eyebrow">多实例管理</p>
+        <h1 id="console-heading" tabindex="-1">你的 QQ 机器人</h1>
+        <p>集中查看每个机器人的部署、容器和 WebUI 状态。安全验证始终在对应实例的 noVNC 中由你本人完成。</p>
+      </div>
+      <div class="console-stats" aria-label="实例统计">
+        <div class="console-stat"><strong id="instance-count">—</strong><span>实例</span></div>
+        <div class="console-stat"><strong id="running-count">—</strong><span>运行中</span></div>
+        <div class="console-stat"><strong id="job-count">—</strong><span>部署任务</span></div>
+      </div>
+    </section>
+
+    <div id="console-error" class="notice notice-danger console-error" role="alert" hidden>
+      <svg class="icon notice-icon" aria-hidden="true"><use href="#c-i-alert"></use></svg>
+      <div class="notice-body">
+        <strong>无法读取实例列表</strong>
+        <p id="console-error-text">请确认本地服务仍在运行。</p>
+      </div>
+      <button id="console-error-retry" class="btn btn-small btn-quiet" type="button">重试连接</button>
+    </div>
+
+    <section id="create-instance-panel" class="create-instance-panel" aria-labelledby="create-instance-heading" hidden>
+      <div class="create-instance-copy">
+        <span class="create-instance-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-plus"></use></svg></span>
+        <div>
+          <h2 id="create-instance-heading">新建机器人实例</h2>
+          <p>每个实例拥有独立的 QQ 号、配置、容器和数据目录。创建后会进入该实例的部署向导。</p>
+        </div>
+      </div>
+      <form id="create-instance-form" class="create-instance-form" novalidate>
+        <label for="new-instance-name">实例名称 <span class="required-mark" aria-hidden="true">*</span></label>
+        <div class="create-instance-input-row">
+          <input id="new-instance-name" name="name" type="text" maxlength="60" autocomplete="off" placeholder="例如：群聊助手一号" aria-describedby="new-instance-error" required>
+          <button id="create-instance-cancel" class="btn btn-secondary" type="button">取消</button>
+          <button id="create-instance-submit" class="btn btn-primary" type="submit">
+            <svg class="icon" aria-hidden="true"><use href="#c-i-plus"></use></svg>
+            <span id="create-instance-submit-text">创建并打开向导</span>
+          </button>
+        </div>
+        <p id="new-instance-error" class="field-error" role="alert" hidden></p>
+      </form>
+    </section>
+
+    <div class="console-section-heading">
+      <div>
+        <h2>机器人实例</h2>
+        <p id="console-settings-status" class="console-settings-status" role="status">正在读取本地服务设置…</p>
+      </div>
+      <span id="console-first-run" class="pill pill--neutral">初始化状态未知</span>
+    </div>
+
+    <div id="instances-loading" class="instances-loading" role="status">
+      <div class="instance-skeleton"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-short"></span><span class="skeleton skeleton-wide"></span></div>
+      <div class="instance-skeleton"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-short"></span><span class="skeleton skeleton-wide"></span></div>
+    </div>
+
+    <div id="instances-grid" class="instances-grid"></div>
+
+    <section id="instances-empty" class="instances-empty" hidden aria-labelledby="instances-empty-heading">
+      <span class="instances-empty-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-server"></use></svg></span>
+      <h2 id="instances-empty-heading">还没有机器人实例</h2>
+      <p>创建第一个实例后，向导会引导你完成环境检查、QQ 扫码登录和 DeepSeek 配置。</p>
+      <button class="btn btn-primary" type="button" data-open-create>
+        <svg class="icon" aria-hidden="true"><use href="#c-i-plus"></use></svg>
+        新建第一个机器人
+      </button>
+    </section>
+
+    <section class="console-safety" aria-labelledby="console-safety-heading">
+      <div class="console-safety-heading">
+        <span class="console-safety-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-shield"></use></svg></span>
+        <div>
+          <h2 id="console-safety-heading">安全提示与免责声明</h2>
+          <p>不收集、不保存 QQ 密码；现代 QQ 需要扫码登录。如果扫码后要求设备验证、短信验证、滑块或安全验证，必须在 noVNC 里按 QQ 官方提示操作；工具不能绕过验证。</p>
+        </div>
+      </div>
+      <div class="console-safety-grid">
+        <p><strong>账号风险：</strong>第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。</p>
+        <p><strong>密钥边界：</strong>DeepSeek API Key 仅写入本机 AstrBot 配置，不写入浏览器存储，也不在控制台中显示。</p>
+      </div>
+    </section>
+
+    <footer class="console-footer">
+      <div class="console-footer-brand"><svg class="icon" aria-hidden="true"><use href="#c-i-lock"></use></svg>本地优先 · 多实例隔离</div>
+      <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek、AstrBot 与 SnowLuma 均为其各自权利人的产品或项目。</p>
+    </footer>
+  </main>
+
+  <!-- 服务端会将 {{TOKEN}} 替换为本次本地会话的一次性访问令牌。 -->
+  <script>window.QB_TOKEN = "{{TOKEN}}";</script>
+  <script src="console.js"></script>
+</body>
+</html>
