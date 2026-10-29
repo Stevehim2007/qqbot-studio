@@ -12,6 +12,10 @@ exec >>"$LOG_FILE" 2>&1
 echo "=== QQ Bot Studio auto update $(date -Is) ==="
 echo "repo=$ROOT_DIR data=$DATA_DIR"
 
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/true
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ControlMaster=no -o ControlPath=none}"
+
 # Let the HTTP response leave the old management server before replacing it.
 sleep 2
 cd "$ROOT_DIR"

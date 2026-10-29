@@ -27,7 +27,8 @@ def _default_git_runner(
     # Avoid an unattended management server hanging on an SSH host-key prompt.
     env.setdefault(
         "GIT_SSH_COMMAND",
-        "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15",
+        "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
+        "-o ConnectTimeout=15 -o ControlMaster=no -o ControlPath=none",
     )
     return subprocess.run(
         [str(item) for item in argv],
