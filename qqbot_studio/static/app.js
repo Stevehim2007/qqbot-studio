@@ -89,6 +89,8 @@
     testBusy: false,
     actionBusy: false,
     personaBusy: false,
+    snowlumaResetBusy: false,
+    snowlumaResetArmed: false,
     logLoading: false,
     logService: '',
     formInitialised: false
@@ -1887,6 +1889,55 @@
     }
   }
 
+  function resetSnowlumaButtonLabel() {
+    const button = $('snowluma-reset');
+    if (!button) return;
+    button.textContent = '重置密码';
+    button.disabled = false;
+    button.classList.remove('is-loading');
+    app.snowlumaResetArmed = false;
+  }
+
+  async function handleSnowlumaReset() {
+    const button = $('snowluma-reset');
+    if (!button || app.snowlumaResetBusy) return;
+
+    if (!app.snowlumaResetArmed) {
+      app.snowlumaResetArmed = true;
+      button.textContent = '再次点击确认重置';
+      window.setTimeout(() => {
+        if (!app.snowlumaResetBusy) resetSnowlumaButtonLabel();
+      }, 5000);
+      return;
+    }
+
+    app.snowlumaResetBusy = true;
+    app.snowlumaResetArmed = false;
+    button.disabled = true;
+    button.classList.add('is-loading');
+    button.textContent = '正在重置…';
+
+    try {
+      const data = await apiRequest('/api/snowluma-reset', { method: 'POST', body: {} });
+      if (data && data.ok === false) {
+        throw new ApiError(textValue(data.message, 'SnowLuma 密码重置失败。'));
+      }
+      const password = textValue(data && data.password, '');
+      if (!password) throw new ApiError('服务没有返回新的 SnowLuma 密码。');
+      setText('snowluma-password', password);
+      app.state.credentials.snowluma_username = textValue(data.username, 'admin') || 'admin';
+      setText('snowluma-username', app.state.credentials.snowluma_username);
+      showToast('SnowLuma 密码已重置，新密码已显示在卡片中。', 'success', 7000);
+      await loadState({ silent: true });
+    } catch (error) {
+      const message = formatError(error, 'SnowLuma 密码重置失败。');
+      showToast(message, 'error', 7000);
+    } finally {
+      app.snowlumaResetBusy = false;
+      resetSnowlumaButtonLabel();
+    }
+  }
+
   async function handlePersonaSubmit(event) {
     event.preventDefault();
     if (app.personaBusy) return;
@@ -2011,6 +2062,8 @@
 
     const refreshState = $('refresh-state');
     if (refreshState) refreshState.addEventListener('click', () => loadState({ silent: false }));
+    const snowlumaReset = $('snowluma-reset');
+    if (snowlumaReset) snowlumaReset.addEventListener('click', () => void handleSnowlumaReset());
     const retryRequirements = $('retry-requirements');
     if (retryRequirements) retryRequirements.addEventListener('click', () => loadState({ silent: false }));
     const stateErrorRetry = $('state-error-retry');

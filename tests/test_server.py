@@ -1,10 +1,12 @@
 import json
 import os
+import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
 from unittest import mock
+from pathlib import Path
 
 from qqbot_studio.dockerctl import DockerError
 from qqbot_studio.server import build_arg_parser, create_server
@@ -13,9 +15,12 @@ from qqbot_studio.server import build_arg_parser, create_server
 class FakeManager:
     def __init__(self):
         self.logs_raise = False
+        self.status_raise = False
         self.last_deploy = None
 
     def get_status(self):
+        if self.status_raise:
+            raise RuntimeError("模拟状态读取失败")
         return {
             "app_version": "2.0.0",
             "requirements": {
@@ -66,10 +71,14 @@ class FakeManager:
     def update_persona(self, prompt):
         return "提示词已更新"
 
+    def reset_snowluma_password(self):
+        return {"ok": True, "username": "admin", "password": "NewSnowPass123", "message": "reset"}
+
 
 class FakeStudio:
     def __init__(self):
         self.manager = FakeManager()
+        self.root = Path(tempfile.gettempdir()) / "qqbot-studio-fake-test"
         self.settings = {
             "bind_host": "127.0.0.1",
             "bind_port": 8765,
@@ -143,6 +152,9 @@ class FakeStudio:
 
     def candidate_mirror_prefixes(self):
         return ["mirror.example/", "m.daocloud.io/docker.io/"]
+
+    def has_active_deployments(self):
+        return False
 
 
 class CliTests(unittest.TestCase):
@@ -297,6 +309,43 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         status, body = self._delete("/api/mirrors/daocloud")
         self.assertEqual(status, 400)
+
+
+    def test_snowluma_reset_contract(self):
+        status, body = self._post("/api/snowluma-reset?instance=bot-1", {})
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["username"], "admin")
+        self.assertEqual(payload["password"], "NewSnowPass123")
+
+    def test_update_check_and_apply_contract(self):
+        with mock.patch(
+            "qqbot_studio.server.check_update",
+            return_value={"ok": True, "can_update": True, "behind": 2, "message": "2 commits"},
+        ) as check:
+            status, body = self._get("/api/update/check")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["can_update"])
+        check.assert_called_once()
+
+        with mock.patch(
+            "qqbot_studio.server.start_update",
+            return_value={"ok": True, "restarting": True, "message": "started"},
+        ) as start:
+            status, body = self._post("/api/update/apply", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["restarting"])
+        start.assert_called_once()
+
+
+    def test_state_failure_returns_diagnosable_200(self):
+        self.studio.manager.status_raise = True
+        status, body = self._get("/api/state?instance=bot-1")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertIn("模拟状态读取失败", payload["status_error"])
+        self.assertEqual(payload["instance"]["id"], "bot-1")
 
     def test_docker_errors_map_to_503_json(self):
         self.studio.manager.logs_raise = True

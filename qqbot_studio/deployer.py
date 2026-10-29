@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -646,6 +647,131 @@ class DeployManager:
     # ------------------------------------------------------------------
     # Status and operations
     # ------------------------------------------------------------------
+    @staticmethod
+    def _snowluma_passwords_from_logs(logs: str) -> list[str]:
+        clean = ANSI_RE.sub("", logs or "")
+        patterns = (
+            r"临时密码\s*[:：]\s*([A-Za-z0-9_@#%+\-]{4,128})",
+            r"initial credentials:\s*user=\S+\s+password=([^\s]+)",
+            r"password\s*[:：]\s*([A-Za-z0-9_@#%+\-]{4,128})",
+        )
+        found: list[str] = []
+        for pattern in patterns:
+            found.extend(
+                str(item).strip()
+                for item in re.findall(pattern, clean, flags=re.IGNORECASE)
+                if str(item).strip()
+            )
+        deduped: list[str] = []
+        for item in found:
+            if item not in deduped:
+                deduped.append(item)
+        return deduped
+
+    def reset_snowluma_password(self) -> dict[str, Any]:
+        """Reset SnowLuma WebUI login while preserving QQ/OneBot data."""
+
+        config = self.store.load_config()
+        if not config.get("deployed"):
+            raise DeploymentError("尚未完成部署，不能重置 SnowLuma 密码。")
+        secrets_data = self.store.load_secrets()
+
+        before_passwords: set[str] = set()
+        try:
+            before_passwords = set(
+                self._snowluma_passwords_from_logs(self.docker.logs("snowluma", 800))
+            )
+        except Exception:
+            pass
+
+        snowluma_root = self.data_dir / "data" / "snowluma"
+        config_files: list[Path] = []
+        if snowluma_root.exists():
+            try:
+                config_files = list(snowluma_root.rglob("webui.json"))
+            except OSError:
+                config_files = []
+        expected = snowluma_root / "config" / "webui.json"
+        if expected not in config_files:
+            config_files.append(expected)
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        for path in config_files:
+            if path.exists():
+                try:
+                    path.replace(path.with_name(f"{path.name}.bak.{stamp}"))
+                except OSError as exc:
+                    raise DeploymentError(f"备份 SnowLuma webui.json 失败：{exc}") from exc
+
+        # SnowLuma v2.x stores a scrypt hash (N=16384, r=8, p=1, 64-byte key).
+        # Writing this file avoids depending on a one-time password that rotates
+        # when the bootstrap password was never changed.
+        password = f"Aa1!{generate_token(18)}"
+        salt = os.urandom(16)
+        digest = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=salt,
+            n=16384,
+            r=8,
+            p=1,
+            dklen=64,
+        )
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        auth_state = {
+            "passwordHash": digest.hex(),
+            "passwordSalt": salt.hex(),
+            "mustChangePassword": False,
+            "generatedAt": now,
+            "updatedAt": now,
+        }
+        expected.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(expected.parent, 0o700)
+            payload = json.dumps(auth_state, ensure_ascii=False, indent=2) + "\n"
+            fd = os.open(expected, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(expected, 0o600)
+        except OSError as exc:
+            raise DeploymentError(f"写入 SnowLuma webui.json 失败：{exc}") from exc
+
+        restart = self.docker._docker(
+            ["restart", self.docker.SNOWLUMA_CONTAINER],
+            timeout=120,
+        )
+        if not restart.ok:
+            raise DockerError(
+                "SnowLuma 重置密码后重启失败："
+                + (self.docker._tail(restart.output, 1200) or f"退出码 {restart.returncode}")
+            )
+
+        # Some SnowLuma versions may reject the generated schema and regenerate
+        # a one-time password. Only accept a credentials line that did not exist
+        # before this reset, so an old log line cannot overwrite the new hash.
+        time.sleep(3)
+        actual_password = password
+        try:
+            after_passwords = self._snowluma_passwords_from_logs(
+                self.docker.logs("snowluma", 400)
+            )
+            new_passwords = [item for item in after_passwords if item not in before_passwords]
+            if new_passwords:
+                actual_password = new_passwords[-1]
+        except Exception:
+            pass
+
+        secrets_data["snowluma_password"] = actual_password
+        secrets_data["snowluma_username"] = "admin"
+        self.store.save_secrets(secrets_data)
+        return {
+            "ok": True,
+            "username": "admin",
+            "password": actual_password,
+            "message": "SnowLuma WebUI 密码已重置，请用新密码登录。",
+        }
+
     def _capture_snowluma_password(
         self,
         secrets_data: dict[str, Any] | None = None,
@@ -660,18 +786,8 @@ class DeployManager:
             if log:
                 log(f"暂时无法读取 SnowLuma 初始密码：{exc}")
             return ""
-        clean = ANSI_RE.sub("", logs)
-        patterns = (
-            r"临时密码\s*[:：]\s*([A-Za-z0-9_@#%+\-]{4,128})",
-            r"initial credentials:\s*user=\S+\s+password=([^\s]+)",
-            r"password\s*[:：]\s*([A-Za-z0-9_@#%+\-]{4,128})",
-        )
-        found = ""
-        for pattern in patterns:
-            matches = re.findall(pattern, clean, flags=re.IGNORECASE)
-            if matches:
-                found = str(matches[-1]).strip()
-                break
+        passwords = self._snowluma_passwords_from_logs(logs)
+        found = passwords[-1] if passwords else ""
         if found:
             if found != existing:
                 secrets_data["snowluma_password"] = found

@@ -25,6 +25,7 @@ from .deployer import DeploymentError
 from .dockerctl import DockerError
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
+from .updater import UpdateError, check_update, start_update
 
 STATIC_DIR = Path(__file__).parent / "static"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost"}
@@ -267,6 +268,9 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             if path == "/healthz":
                 self._json(HTTPStatus.OK, {"ok": True, "version": __version__})
                 return
+            if path == "/api/update/check":
+                self._json(HTTPStatus.OK, check_update())
+                return
             if path == "/api/settings":
                 settings = ctx.studio.load_settings()
                 self._json(
@@ -302,7 +306,17 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/state":
                 instance_id = ctx.instance_id(query)
                 manager = ctx.studio.get_manager(instance_id)
-                state = manager.get_status()
+                try:
+                    state = manager.get_status()
+                except Exception as exc:  # noqa: BLE001 - return a diagnosable card state
+                    traceback.print_exc()
+                    state = {
+                        "app_version": __version__,
+                        "requirements": {},
+                        "deployment": {},
+                        "notice": f"实例状态读取失败：{exc}",
+                        "status_error": str(exc),
+                    }
                 meta = ctx.studio.get_instance_meta(instance_id)
                 state["instance"] = {"id": instance_id, "name": meta.get("name") or instance_id}
                 self._json(HTTPStatus.OK, state)
@@ -331,7 +345,7 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "logs": manager.get_logs(service, lines)})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
-        except (DeploymentError, ValueError) as exc:
+        except (DeploymentError, ValueError, UpdateError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except DockerError as exc:
             self._error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
@@ -384,6 +398,12 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         query = self._query(parsed)
         ctx = self.server.context
         try:
+            if path == "/api/update/apply":
+                if ctx.studio.has_active_deployments():
+                    raise ValueError("有部署任务正在运行，不能自动更新。请在部署完成后再试。")
+                result = start_update(data_dir=ctx.studio.root)
+                self._json(HTTPStatus.OK, result)
+                return
             if path == "/api/instances":
                 name = str(payload.get("name") or "").strip()
                 meta = ctx.studio.create_instance(name or None)
@@ -436,12 +456,16 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 message = manager.container_action(str(payload.get("action") or ""))
                 self._json(HTTPStatus.OK, {"ok": True, "message": message})
                 return
+            if path == "/api/snowluma-reset":
+                result = manager.reset_snowluma_password()
+                self._json(HTTPStatus.OK, result)
+                return
             if path == "/api/persona":
                 message = manager.update_persona(str(payload.get("prompt") or ""))
                 self._json(HTTPStatus.OK, {"ok": True, "message": message})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
-        except (DeploymentError, ValueError) as exc:
+        except (DeploymentError, ValueError, UpdateError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except DockerError as exc:
             self._error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))

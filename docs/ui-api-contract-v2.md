@@ -418,6 +418,58 @@ POST /api/action?instance=<id>
 8. 前端不会构造端口；URL 仅接受绝对 `http://` / `https://`，不安全协议不生成可点击链接。
 9. 前端不使用 localStorage / sessionStorage；刷新恢复完全依赖 `/api/state.deployment.active_job_id`。
 
+## 6.1 SnowLuma 密码重置与自动更新
+
+### POST `/api/snowluma-reset?instance=<id>`
+
+需要 `X-QB-Token`。该操作会备份并重建 SnowLuma WebUI 的 `webui.json`，
+保留 QQ/OneBot 数据，然后重启 SnowLuma 容器。成功响应：
+
+```json
+{
+  "ok": true,
+  "username": "admin",
+  "password": "新的初始密码",
+  "message": "SnowLuma WebUI 密码已重置，请用新密码登录。"
+}
+```
+
+前端应在收到新密码后更新 SnowLuma 卡片，并提示用户在登录后自行修改并保存新密码。
+
+### GET `/api/update/check`
+
+需要 `X-QB-Token`。返回：
+
+```json
+{
+  "ok": true,
+  "can_update": true,
+  "current": "abc1234",
+  "remote": "def5678",
+  "behind": 2,
+  "ahead": 0,
+  "message": "发现 2 个新提交，可以自动更新。"
+}
+```
+
+如果工作区有未提交修改、不是 Git 仓库、无法访问 origin 或分支分叉，返回 `ok: false`
+和可见的 `message`。
+
+### POST `/api/update/apply`
+
+需要 `X-QB-Token`，请求体为 `{}`。后台启动 `scripts/auto-update.sh`，执行
+`git pull --ff-only`、同步已有实例插件、重启 AstrBot 容器并重启管理服务。响应：
+
+```json
+{
+  "ok": true,
+  "restarting": true,
+  "message": "更新脚本已启动，管理服务会在几秒后重启。请稍后刷新页面。"
+}
+```
+
+---
+
 ## 7. 安全文案边界
 
 v2 默认将管理服务、AstrBot WebUI、SnowLuma WebUI 和 noVNC 的宿主机监听地址都设为

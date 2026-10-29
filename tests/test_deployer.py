@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -221,6 +222,46 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(status["deployment"]["credentials"]["snowluma_username"], "admin")
         self.assertEqual(status["deployment"]["credentials"]["snowluma_password"], "SnowPass123")
         self.assertTrue(status["deployment"]["urls"]["novnc"].startswith("http://127.0.0.1:"))
+
+
+    def test_reset_snowluma_password_writes_known_hash_and_backs_up(self):
+        config = self.store.load_config()
+        config["deployed"] = True
+        self.store.save_config(config)
+        webui_path = Path(self.tmp.name) / "data" / "snowluma" / "config" / "webui.json"
+        webui_path.parent.mkdir(parents=True, exist_ok=True)
+        webui_path.write_text('{"old": true}\n', encoding="utf-8")
+        self.docker.logs_by_service["snowluma"] = (
+            "initial credentials: user=admin password=OldPass12345678\n"
+        )
+        import qqbot_studio.deployer as deployer_module
+        original_sleep = deployer_module.time.sleep
+        deployer_module.time.sleep = lambda *_: None
+        try:
+            result = self.manager.reset_snowluma_password()
+        finally:
+            deployer_module.time.sleep = original_sleep
+        self.assertTrue(result["ok"])
+        password = result["password"]
+        self.assertTrue(password)
+        self.assertNotEqual(password, "OldPass12345678")
+        self.assertTrue(webui_path.exists())
+        backups = list(webui_path.parent.glob("webui.json.bak.*"))
+        self.assertEqual(len(backups), 1)
+        state = json.loads((webui_path).read_text(encoding="utf-8"))
+        self.assertFalse(state["mustChangePassword"])
+        digest = hashlib.scrypt(
+            password.encode(),
+            salt=bytes.fromhex(state["passwordSalt"]),
+            n=16384,
+            r=8,
+            p=1,
+            dklen=64,
+        )
+        self.assertEqual(digest.hex(), state["passwordHash"])
+        stored = self.store.load_secrets()["snowluma_password"]
+        self.assertEqual(stored, password)
+        self.assertIn("SnowLuma WebUI 密码已重置", result["message"])
 
     def test_container_actions(self):
         config = self.store.load_config()

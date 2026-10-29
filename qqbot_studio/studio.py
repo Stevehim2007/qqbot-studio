@@ -503,6 +503,7 @@ class StudioManager:
                         "urls": {},
                         "active_job_id": "",
                         "active_job_status": None,
+                        "state_error": str(exc),
                         "notice": f"状态读取失败：{exc}",
                     }
                 )
@@ -528,6 +529,15 @@ class StudioManager:
                     }
                 )
         return results
+
+    def has_active_deployments(self) -> bool:
+        """Return True when any cached instance is currently deploying."""
+
+        with self._lock:
+            for manager in self._manager_cache.values():
+                if getattr(manager, "_active_job_id", ""):
+                    return True
+        return False
 
     def latest_instance_id(self) -> str:
         metas = self.list_instance_metas()

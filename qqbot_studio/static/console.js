@@ -24,7 +24,12 @@
     actionInstanceId: '',
     creating: false,
     lastSyncedAt: 0,
-    pollTimer: null
+    pollTimer: null,
+    updateBusy: false,
+    updateChecked: false,
+    updateArmed: false,
+    updateCanApply: false,
+    updateInfo: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -226,7 +231,7 @@
         snowluma_webui: textValue(urls.snowluma_webui || urls.snowluma, ''),
         novnc: textValue(urls.novnc || urls.no_vnc, '')
       },
-      state_error: ''
+      state_error: textValue(instance.state_error, '')
     };
   }
 
@@ -248,7 +253,7 @@
         snowluma_webui: textValue(stateUrls.snowluma_webui, instance.urls.snowluma_webui),
         novnc: textValue(stateUrls.novnc, instance.urls.novnc)
       },
-      state_error: ''
+      state_error: textValue(root.status_error, '')
     };
   }
 
@@ -287,6 +292,84 @@
     }
     if (label) label.textContent = busy ? '创建中…' : '创建并打开向导';
     if (nameInput) nameInput.disabled = busy;
+  }
+
+  function setUpdateLabel(label, disabled = false) {
+    const button = $('console-update');
+    const text = $('console-update-label');
+    if (button) button.disabled = disabled;
+    if (text) text.textContent = label;
+  }
+
+  function resetUpdateArm() {
+    if (state.updateBusy) return;
+    state.updateArmed = false;
+    if (state.updateCanApply && state.updateInfo) {
+      setUpdateLabel(`更新 ${state.updateInfo.behind || ''} 个提交`.trim());
+    } else {
+      setUpdateLabel('检查更新');
+    }
+  }
+
+  async function checkForUpdate(silent = false) {
+    if (state.updateBusy) return;
+    state.updateBusy = true;
+    setUpdateLabel('检查中…', true);
+    try {
+      const data = asRecord(await apiRequest('/api/update/check'));
+      state.updateChecked = true;
+      state.updateInfo = data;
+      state.updateCanApply = data.ok === true && data.can_update === true;
+      state.updateArmed = false;
+      if (state.updateCanApply) {
+        setUpdateLabel(`发现更新 ${data.behind || ''} 个提交`.trim());
+        if (!silent) showToast(data.message || '发现新版本。', 'info', 5000);
+      } else {
+        setUpdateLabel('检查更新');
+        if (!silent) {
+          showToast(data.message || (data.ok === false ? '无法检查更新。' : '当前已经是最新版本。'), data.ok === false ? 'warning' : 'success', 5000);
+        }
+      }
+    } catch (error) {
+      const message = formatError(error, '检查更新失败。');
+      setUpdateLabel('检查更新');
+      if (!silent) showToast(message, 'error', 6000);
+    } finally {
+      state.updateBusy = false;
+      const button = $('console-update');
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function handleUpdateClick() {
+    if (state.updateBusy) return;
+    if (!state.updateCanApply) {
+      await checkForUpdate(false);
+      return;
+    }
+    if (!state.updateArmed) {
+      state.updateArmed = true;
+      setUpdateLabel('再次点击确认更新并重启');
+      window.setTimeout(() => {
+        if (!state.updateBusy) resetUpdateArm();
+      }, 6000);
+      return;
+    }
+    state.updateArmed = false;
+    state.updateBusy = true;
+    setUpdateLabel('正在更新…', true);
+    try {
+      const data = asRecord(await apiRequest('/api/update/apply', { method: 'POST', body: {} }));
+      if (data.ok === false) throw new ApiError(textValue(data.message, '自动更新失败。'));
+      showToast(data.message || '更新任务已启动，管理服务即将重启。', 'success', 8000);
+      setUpdateLabel('等待服务重启…', true);
+      window.setTimeout(() => window.location.reload(), 12000);
+    } catch (error) {
+      const message = formatError(error, '自动更新失败。');
+      showToast(message, 'error', 7000);
+      setUpdateLabel('检查更新');
+      state.updateBusy = false;
+    }
   }
 
   function formatSyncTime(timestamp) {
@@ -709,6 +792,8 @@
   function bindEvents() {
     const refresh = $('console-refresh');
     if (refresh) refresh.addEventListener('click', () => void loadConsole());
+    const updateButton = $('console-update');
+    if (updateButton) updateButton.addEventListener('click', () => void handleUpdateClick());
     const retry = $('console-error-retry');
     if (retry) retry.addEventListener('click', () => void loadConsole());
 
@@ -737,6 +822,7 @@
     bindEvents();
     await loadConsole({ silent: true });
     scheduleNextSync();
+    void checkForUpdate(true);
   }
 
   document.addEventListener('visibilitychange', () => {
