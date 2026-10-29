@@ -67,11 +67,21 @@ class StudioManagerTests(unittest.TestCase):
         second_config = json.loads(
             (Path(self.tmp.name) / "instances" / second["id"] / "config.json").read_text(encoding="utf-8")
         )
-        first_ports = set(first_config["ports"].values())
-        second_ports = set(second_config["ports"].values())
-        self.assertTrue(first_ports)
-        self.assertTrue(second_ports)
-        self.assertTrue(first_ports.isdisjoint(second_ports))
+        first_ports = [
+            first_config["ports"]["astrbot_webui"],
+            first_config["ports"]["snowluma_webui"],
+            first_config["ports"]["novnc"],
+        ]
+        second_ports = [
+            second_config["ports"]["astrbot_webui"],
+            second_config["ports"]["snowluma_webui"],
+            second_config["ports"]["novnc"],
+        ]
+        self.assertEqual(first_ports, [first_ports[0], first_ports[0] + 1, first_ports[0] + 2])
+        self.assertEqual(second_ports, [second_ports[0], second_ports[0] + 1, second_ports[0] + 2])
+        self.assertGreaterEqual(first_ports[0], 5000)
+        self.assertLessEqual(second_ports[2], 10000)
+        self.assertTrue(set(first_ports).isdisjoint(second_ports))
 
     def test_delete_instance_removes_its_directory(self):
         meta = self.studio.create_instance("待删除机器人")

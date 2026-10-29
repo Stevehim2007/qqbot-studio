@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .configgen import choose_ports
+from .configgen import allocate_instance_port_block
 from .dockerctl import DockerController, DockerError
 from .store import Store, chmod_best_effort, default_data_dir, utc_now
 
@@ -466,9 +466,9 @@ class StudioManager:
             reserved.add(int(settings.get("bind_port") or DEFAULT_BIND_PORT))
         except (TypeError, ValueError):
             pass
-        ports = choose_ports(
+        ports = allocate_instance_port_block(
+            reserved,
             host=str(settings.get("bind_host") or DEFAULT_BIND_HOST),
-            reserved=reserved,
         )
         config = store.load_config()
         config["ports"] = ports

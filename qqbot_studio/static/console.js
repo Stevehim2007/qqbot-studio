@@ -324,7 +324,7 @@
       state.updateCanApply = data.ok === true && data.can_update === true;
       state.updateArmed = false;
       if (state.updateCanApply) {
-        setUpdateLabel(`发现更新 ${data.behind || ''} 个提交`.trim());
+        setUpdateLabel(`一键更新整个项目 (${data.behind || '?'} 个提交)`);
         if (!silent) showToast(data.message || '发现新版本。', 'info', 5000);
       } else {
         setUpdateLabel('检查更新');
@@ -351,7 +351,7 @@
     }
     if (!state.updateArmed) {
       state.updateArmed = true;
-      setUpdateLabel('再次点击确认更新并重启');
+      setUpdateLabel('再次点击更新整个项目并重启');
       window.setTimeout(() => {
         if (!state.updateBusy) resetUpdateArm();
       }, 6000);
@@ -920,7 +920,8 @@
             title: '需要放行哪些端口',
             bullets: [
               '管理控制台默认使用 TCP 8765；以控制台顶部显示的实际地址为准。',
-              'AstrBot、SnowLuma、noVNC 的宿主机端口由程序自动分配，请查看控制台实例卡片的链接，不要猜端口。',
+              '每个实例会分配三个相邻的宿主机端口（AstrBot、SnowLuma、noVNC），所有宿主机服务端口限制在 5000-10000，并且实例之间不重叠；请以控制台实例卡片链接为准。',
+              '删除实例请在对应卡片点击“删除实例”，第一次点击确认，第二次点击才会真正删除容器和实例数据。',
               '腾讯云 CVM 在“安全组 → 入站规则”放行；轻量应用服务器在“防火墙”放行。协议选 TCP，来源尽量限制为你自己的公网 IP。',
               '不要把 5900 或 noVNC 远程桌面直接暴露到公网；优先用安全组限制来源、VPN 或 SSH 隧道。'
             ]

@@ -186,7 +186,7 @@ def start_update(
     return {
         "ok": True,
         "restarting": True,
-        "message": "更新脚本已启动，管理服务会在几秒后重启。请稍后刷新页面。",
+        "message": "整项目更新脚本已启动，管理服务会在几秒后重启。请稍后刷新页面。",
         "current": info.get("current"),
         "remote": info.get("remote"),
         "behind": info.get("behind"),

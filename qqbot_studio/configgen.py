@@ -25,6 +25,9 @@ DEFAULT_MIRROR_PREFIXES = (
 )
 MIRROR_ENV_VAR = "QQBOT_IMAGE_MIRROR_PREFIXES"
 DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
+PORT_RANGE_START = 5000
+PORT_RANGE_END = 10000
+PORT_RANGE_SIZE = 3
 DEFAULT_PORTS = {
     "astrbot_webui": 6185,
     "snowluma_webui": 5099,
@@ -146,6 +149,42 @@ def choose_ports(
         if not found:
             raise RuntimeError(f"无法为 {name} 找到空闲端口（从 {start} 开始）")
     return chosen
+
+
+def allocate_instance_port_block(
+    used: set[int] | None = None,
+    *,
+    host: str = "127.0.0.1",
+    start: int = PORT_RANGE_START,
+    end: int = PORT_RANGE_END,
+    probe: bool = True,
+) -> dict[str, int]:
+    """Allocate three adjacent host ports for one instance.
+
+    Each instance owns a distinct block of exactly three consecutive ports:
+    AstrBot WebUI, SnowLuma WebUI and noVNC. The whole project is constrained
+    to the inclusive 5000-10000 range.
+    """
+
+    start = max(int(PORT_RANGE_START), int(start))
+    end = min(int(PORT_RANGE_END), int(end))
+    reserved = {int(item) for item in (used or set())}
+    if end - start + 1 < PORT_RANGE_SIZE:
+        raise RuntimeError("端口范围不足以容纳一个实例的三个服务端口")
+    for base in range(start, end - PORT_RANGE_SIZE + 2):
+        block = {base, base + 1, base + 2}
+        if block & reserved:
+            continue
+        if probe and not all(is_port_free(port, host) for port in block):
+            continue
+        return {
+            "astrbot_webui": base,
+            "snowluma_webui": base + 1,
+            "novnc": base + 2,
+        }
+    raise RuntimeError(
+        f"无法在 {start}-{end} 范围内为实例分配三个相邻的宿主机端口"
+    )
 
 
 def _normalize_mirror_prefix(prefix: str) -> str:

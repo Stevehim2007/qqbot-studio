@@ -7,6 +7,9 @@ from unittest import mock
 from pathlib import Path
 
 from qqbot_studio.configgen import (
+    PORT_RANGE_END,
+    PORT_RANGE_START,
+    allocate_instance_port_block,
     choose_ports,
     generate_artifacts,
     image_names_for_prefix,
@@ -101,6 +104,20 @@ class ConfigGenerationTests(unittest.TestCase):
             self.assertIn("SNOWLUMA_IMAGE=new/snowluma:latest", content)
             self.assertIn("NOVNC_PORT=6081", content)
             self.assertEqual(os.stat(env_path).st_mode & 0o777, 0o600)
+
+
+    def test_instance_port_blocks_are_adjacent_and_bounded(self):
+        first = allocate_instance_port_block(set(), host="127.0.0.1", probe=False)
+        second = allocate_instance_port_block(set(first.values()), host="127.0.0.1", probe=False)
+        for block in (first, second):
+            values = [block["astrbot_webui"], block["snowluma_webui"], block["novnc"]]
+            self.assertEqual(values, sorted(values))
+            self.assertEqual(values[1] - values[0], 1)
+            self.assertEqual(values[2] - values[1], 1)
+            self.assertGreaterEqual(values[0], PORT_RANGE_START)
+            self.assertLessEqual(values[2], PORT_RANGE_END)
+        self.assertTrue(set(first.values()).isdisjoint(second.values()))
+        self.assertEqual(second["astrbot_webui"], first["astrbot_webui"] + 3)
 
     def test_all_generated_files_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:
