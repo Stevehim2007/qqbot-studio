@@ -306,6 +306,8 @@ class FakeStudio:
             "instance_id": "",
             "port": 8766,
             "host": "127.0.0.1",
+            "public_host": "",
+            "health_url": "http://127.0.0.1:8766/",
             "pid": None,
             "log_path": "/tmp/qqbot-studio/ai-assistant/assistant.log",
             "pid_path": "/tmp/qqbot-studio/ai-assistant/assistant.pid",
@@ -323,6 +325,17 @@ class FakeStudio:
         result["instance_id"] = str(payload.get("instance_id") or "")
         result["port"] = int(payload.get("port") or 8766)
         result["host"] = str(payload.get("host") or "127.0.0.1")
+        result["public_host"] = str(payload.get("public_host") or "")
+        result["health_url"] = f"http://127.0.0.1:{result['port']}/"
+        if result["host"] == "0.0.0.0":
+            result["url"] = (
+                f"http://{result['public_host']}:{result['port']}/"
+                if result["public_host"] else ""
+            )
+            result["access_note"] = "高风险公网模式：必须使用安全组/防火墙/VPN 限制来源。"
+            result["ssh_tunnel"] = (
+                "" if result["public_host"] else f"ssh -N -L {result['port']}:127.0.0.1:{result['port']} <用户名>@<服务器地址>"
+            )
         result["key_present"] = bool(payload.get("api_key")) or result["key_source"] == "instance"
         result["configured"] = result["key_present"]
         result["message"] = "AI 助手 B 配置已保存，Key 不会回显。"
@@ -466,6 +479,8 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(payload["installed"])
         for field in ("ok", "installed", "path", "repo", "commit", "entry", "readme", "message", "error"):
             self.assertIn(field, payload)
+        self.assertIn("url", payload)
+        self.assertIn("public_host", payload)
 
         status, body = self._post("/api/assistant/install", {})
         self.assertEqual(status, 200)
@@ -531,8 +546,9 @@ class ServerTests(unittest.TestCase):
                 "key_source": "independent",
                 "api_key": secret,
                 "instance_id": "",
-                "port": 8766,
-                "host": "127.0.0.1",
+                "port": 8767,
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
             },
         )
         self.assertEqual(status, 200)
@@ -542,8 +558,15 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("api_key", body.lower())
         self.assertEqual(
             self.studio.assistant_saved_config["port"],
-            8766,
+            8767,
         )
+        self.assertEqual(
+            self.studio.assistant_saved_config["public_host"],
+            "bot.example.com",
+        )
+        self.assertEqual(result["public_host"], "bot.example.com")
+        self.assertEqual(result["url"], "http://bot.example.com:8767/")
+        self.assertNotIn("0.0.0.0", result["url"])
 
         status, body = self._post("/api/assistant/start", {})
         self.assertEqual(status, 200)
@@ -557,6 +580,40 @@ class ServerTests(unittest.TestCase):
         stopped = json.loads(body)
         self.assertFalse(stopped["running"])
         self.assertEqual(stopped["action"], "stopped")
+
+    def test_assistant_status_merges_safe_public_config_summary(self):
+        safe_config = {
+            "ok": True,
+            "installed": True,
+            "configured": True,
+            "running": True,
+            "url": "http://bot.example.com:8768/",
+            "health_url": "http://127.0.0.1:8768/",
+            "configure_url": "/api/assistant/config",
+            "config_path": "/tmp/config.json",
+            "key_present": True,
+            "key_source": "independent",
+            "instance_id": "",
+            "port": 8768,
+            "host": "0.0.0.0",
+            "public_host": "bot.example.com",
+            "pid": 123,
+            "log_path": "/tmp/assistant.log",
+            "pid_path": "/tmp/assistant.pid",
+            "access_note": "高风险公网模式：必须使用安全组/防火墙/VPN 限制来源。",
+            "ssh_tunnel": "",
+            "message": "running",
+            "error": "",
+        }
+        with mock.patch.object(self.studio, "assistant_config", return_value=safe_config):
+            status, body = self._get("/api/assistant/status")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["url"], "http://bot.example.com:8768/")
+        self.assertEqual(payload["health_url"], "http://127.0.0.1:8768/")
+        self.assertEqual(payload["public_host"], "bot.example.com")
+        self.assertIn("安全组", payload["access_note"])
+        self.assertNotIn("api_key", body.lower())
 
     def test_assistant_config_and_start_require_token(self):
         status, body = self._post(

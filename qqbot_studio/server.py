@@ -248,6 +248,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "instance_id": "",
             "port": ASSISTANT_DEFAULT_PORT,
             "host": ASSISTANT_DEFAULT_HOST,
+            "public_host": "",
+            "health_url": "",
             "pid": None,
             "log_path": str(data_dir / "ai-assistant" / "assistant.log"),
             "pid_path": str(data_dir / "ai-assistant" / "assistant.pid"),
@@ -379,6 +381,37 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     payload = self._assistant_unavailable(str(exc))
                 if not isinstance(payload, dict):
                     payload = self._assistant_unavailable("AI 助手 B 状态返回格式异常。")
+                # The install-status endpoint also exposes the safe runtime
+                # configuration summary so the console can show/open the URL
+                # without a second request.  Config getter never returns keys.
+                config_getter = getattr(ctx.studio, "assistant_config", None)
+                if callable(config_getter):
+                    try:
+                        config_payload = config_getter()
+                    except Exception:  # noqa: BLE001 - optional data only
+                        config_payload = None
+                    if isinstance(config_payload, dict):
+                        for field in (
+                            "configured",
+                            "running",
+                            "url",
+                            "configure_url",
+                            "config_path",
+                            "key_present",
+                            "key_source",
+                            "instance_id",
+                            "port",
+                            "host",
+                            "public_host",
+                            "health_url",
+                            "pid",
+                            "log_path",
+                            "pid_path",
+                            "access_note",
+                            "ssh_tunnel",
+                        ):
+                            if field in config_payload:
+                                payload[field] = config_payload[field]
                 self._json(HTTPStatus.OK, payload)
                 return
             if path == "/api/instances":

@@ -1282,3 +1282,97 @@
 .assistant-b-config-status.is-success { color: #0c745b; background: var(--mint-100); border-color: #bdeedf; }
 .assistant-b-config-status.is-warning { color: #80601f; background: #fffaf0; border-color: #efdfb8; }
 .assistant-b-config-status.is-error { color: #983441; background: var(--red-100); border-color: #f2cbd2; }
+
+/* task-21：更宽的工作区、更舒展的卡片与 B 公网配置 */
+.console-header-inner,
+.console-main {
+  padding-left: clamp(10px, 2vw, 24px);
+  padding-right: clamp(10px, 2vw, 24px);
+}
+.instances-grid { gap: 18px; }
+.instance-card { padding: 26px; }
+.instance-card-header { gap: 18px; }
+.instance-identity { gap: 12px; }
+.instance-avatar { width: 42px; height: 42px; flex-basis: 42px; font-size: 19px; }
+.instance-identity-copy h2 { font-size: 17px; }
+.instance-subtitle { font-size: 10px; }
+.instance-meta { gap: 14px; margin-top: 17px; padding: 12px 14px; }
+.instance-meta-label { font-size: 9.5px; }
+.instance-meta-value { font-size: 11.5px; }
+.instance-web-section { margin-top: 17px; }
+.instance-web-links { gap: 8px; }
+.instance-web-link { padding: 6px 9px; font-size: 10.5px; }
+.instance-actions { gap: 12px; margin-top: 18px; padding-top: 16px; }
+.instance-v3-panel { margin-top: 17px; }
+.instance-v3-summary-row { gap: 10px; padding: 12px 14px; }
+.instance-v3-summary-title { font-size: 11px; }
+.instance-v3-body { gap: 11px; padding: 12px 13px 13px; }
+.instance-v3-section { padding: 14px; }
+.instance-v3-section-heading { gap: 10px; margin-bottom: 10px; }
+.instance-v3-section-copy h4 { font-size: 12px; }
+.instance-v3-section-copy p { font-size: 9.5px; }
+.plugin-list { gap: 7px; }
+.plugin-item { gap: 12px; padding: 10px 11px; }
+.plugin-name { font-size: 11px; }
+.plugin-description { font-size: 9px; }
+.memory-mode-option { padding: 10px; gap: 8px; }
+.instance-resource-grid { gap: 8px; }
+.instance-resource-metric { padding: 9px 10px; }
+.assistant-b-card { padding: 26px 27px; }
+.assistant-b-main { gap: 16px; }
+.assistant-b-description { font-size: 11.5px; }
+.assistant-b-actions { flex-basis: 190px; gap: 8px; }
+.assistant-b-meta { gap: 9px; }
+.assistant-b-meta-item { padding: 10px; }
+.assistant-b-config-panel { padding: 18px; }
+.assistant-b-config-form { gap: 13px; }
+.assistant-b-source-group,
+.assistant-b-host-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 11px;
+  border: 1px solid #e0eaf1;
+  border-radius: 9px;
+}
+.assistant-b-host-group legend { padding: 0 4px; color: var(--ink-600); font-size: 9.5px; font-weight: 760; }
+.assistant-b-config-fields > input {
+  width: 100%;
+  max-width: 100%;
+  min-height: 37px;
+  padding: 8px 10px;
+  color: var(--ink-950);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  outline: none;
+  font-size: 11px;
+}
+.assistant-b-config-fields > input:focus {
+  border-color: var(--mint-500);
+  box-shadow: 0 0 0 3px rgba(32, 201, 151, .13);
+}
+.assistant-b-host-note.is-high-risk { color: #92323e; background: #fff2f4; border-color: #f0c5cc; }
+.assistant-b-host-note.is-high-risk code { color: #7d2531; }
+
+@media (max-width: 760px) {
+  .console-header-inner,
+  .console-main { padding-left: 14px; padding-right: 14px; }
+  .instance-card { padding: 19px 17px; }
+  .instance-card-header { gap: 12px; }
+  .instance-meta { padding: 10px 11px; }
+  .assistant-b-card { padding: 19px 17px; }
+  .assistant-b-config-panel { padding: 13px; }
+  .assistant-b-source-group,
+  .assistant-b-host-group { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .console-header-inner,
+  .console-main { padding-left: 12px; padding-right: 12px; }
+  .instance-card { padding: 16px 13px; }
+  .instance-v3-section { padding: 11px; }
+  .assistant-b-card { padding: 16px 13px; }
+  .assistant-b-config-panel { padding: 11px; }
+}

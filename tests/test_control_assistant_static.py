@@ -332,6 +332,12 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "assistant-b-api-key",
             "assistant-b-instance-select",
             "assistant-b-port",
+            "assistant-b-host-local",
+            "assistant-b-host-public",
+            "assistant-b-public-host-fields",
+            "assistant-b-public-host",
+            "assistant-b-public-host-error",
+            "assistant-b-host-note",
             "assistant-b-config-error",
             "assistant-b-config-status",
             "assistant-b-config-cancel",
@@ -348,6 +354,10 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "loopback",
             "SSH 隧道",
             "默认 8766",
+            "仅本机（127.0.0.1，推荐）",
+            "公网/所有网卡（0.0.0.0，高风险）",
+            "公网 IP 或域名",
+            "0.0.0.0",
             "当前后端不支持 AI 助手 B 配置/启动",
         ):
             self.assertIn(term, self.html + self.js)
@@ -357,6 +367,7 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "key_source",
             "instance_id",
             "api_key",
+            "public_host",
             "access_note",
             "ssh_tunnel",
             "configure_url",
@@ -367,7 +378,9 @@ class ControlAssistantStaticTests(unittest.TestCase):
             ".assistant-b-runtime",
             ".assistant-b-config-panel",
             ".assistant-b-source-group",
+            ".assistant-b-host-group",
             ".assistant-b-port-field",
+            ".assistant-b-host-note.is-high-risk",
         ):
             self.assertIn(style, self.css)
 
@@ -390,6 +403,49 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertIn("if (keyInput) keyInput.value = ''", form_block)
         for forbidden in ("localStorage", "sessionStorage", "innerHTML"):
             self.assertNotIn(forbidden, form_block)
+
+    def test_console_auto_refresh_is_thirty_minutes_and_manual_refresh(self) -> None:
+        self.assertIn("AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000", self.js)
+        self.assertIn("function scheduleNextSync(delay = AUTO_REFRESH_INTERVAL_MS)", self.js)
+        self.assertNotIn("delay = 8000", self.js)
+        self.assertNotIn("scheduleNextSync(8000", self.js)
+        self.assertIn("async function manualRefresh()", self.js)
+        self.assertIn("await loadConsole({ silent: false })", self.js)
+        self.assertIn("scheduleNextSync(AUTO_REFRESH_INTERVAL_MS)", self.js)
+        self.assertIn("refresh.addEventListener('click', () => void manualRefresh())", self.js)
+        self.assertIn("if (document.hidden)", self.js)
+        self.assertIn("scheduleNextSync();", self.js)
+        self.assertIn("自动刷新：每 30 分钟", self.js)
+        self.assertIn("手动刷新", self.html)
+        self.assertIn("自动刷新每 30 分钟", self.html)
+
+    def test_assistant_b_public_host_contract_and_card_layout(self) -> None:
+        for token in (
+            "assistant-b-host-public",
+            "assistant-b-host-local",
+            "assistant-b-public-host",
+            "body.public_host = publicHost",
+            "host: publicMode ? '0.0.0.0' : '127.0.0.1'",
+            "公网模式必须填写公网 IP 或域名",
+            "B 没有登录认证",
+            "安全组",
+            "防火墙",
+            "VPN",
+        ):
+            self.assertIn(token, self.js)
+        self.assertIn("assistant-b-public-host-fields", self.html)
+        self.assertIn("public_host", self.js)
+        for selector in (
+            ".console-header-inner",
+            ".console-main",
+            ".instance-card { padding: 26px; }",
+            ".instance-v3-section { padding: 14px; }",
+            ".assistant-b-card { padding: 26px 27px; }",
+            ".assistant-b-host-group",
+        ):
+            self.assertIn(selector, self.css)
+        self.assertIn("padding-left: clamp(10px, 2vw, 24px)", self.css)
+        self.assertIn("@media (max-width: 760px)", self.css)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_console_javascript_syntax(self) -> None:

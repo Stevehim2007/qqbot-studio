@@ -914,6 +914,8 @@ GET /api/assistant/config
   "instance_id": "",
   "port": 8766,
   "host": "127.0.0.1",
+  "public_host": "",
+  "health_url": "http://127.0.0.1:8766/",
   "pid": null,
   "log_path": "/home/user/.local/share/qqbot-studio/ai-assistant/assistant.log",
   "pid_path": "/home/user/.local/share/qqbot-studio/ai-assistant/assistant.pid",
@@ -929,10 +931,17 @@ GET /api/assistant/config
   - `independent`：B 配置文件中存在非空 `api_key`；
   - `instance`：引用的实例目录存在且其 AstrBot `cmd_config.json` 中存在 provider Key。
 - `key_present` 是布尔值，不暴露 Key 内容。
-- `running` 通过探测 `GET <url>/api/health` 判定；不会仅因 PID 文件存在就认为运行中。
-- `url` 可能是 `localhost` 或 `[::1]`，按配置 host 生成。
-- 当 host 为 loopback 时，`access_note` 和 `ssh_tunnel` 会说明远端用户应使用 SSH 隧道，
-  不要在云服务器安全组中直接开放 B 端口。
+- `running` 通过探测 `health_url + /api/health` 判定；不会仅因 PID 文件存在就认为运行中。
+  即使配置了公网 URL，健康检查也优先使用服务器本机回环地址，避免公网 NAT 回环/Hairpin 失败。
+- `url` 是给浏览器使用的地址，绝不含监听占位地址 `0.0.0.0`：
+  - host 为 `127.0.0.1`/`localhost`/`::1`：返回对应 loopback URL；
+  - host 为 `0.0.0.0` 且 `public_host` 非空：返回 `http://<public_host>:<port>/`；
+  - host 为 `0.0.0.0` 且 `public_host` 为空：`url=""`，前端应提示填写公网 IP/域名。
+- `GET /api/assistant/status` 也会合并上述安全配置摘要，包含 `url`、`public_host`、
+  `health_url`、`access_note`、`ssh_tunnel`，但仍不会包含 Key。
+- 回环模式的 `access_note` 和 `ssh_tunnel` 说明远端用户应使用 SSH 隧道。
+- 公网模式的 `access_note` 会警告 B 没有认证，必须用安全组/防火墙/VPN/认证反向代理限制来源；
+  提供公网 URL 时 `ssh_tunnel` 为空，未提供 public_host 时 ssh_tunnel 作为安全替代建议。
 
 ### 10.2 保存配置
 
@@ -964,6 +973,18 @@ Content-Type: application/json
 }
 ```
 
+显式公网/所有网卡模式（高风险）：
+
+```json
+{
+  "key_source": "independent",
+  "api_key": "sk-用户本地Key",
+  "port": 8768,
+  "host": "0.0.0.0",
+  "public_host": "bot.example.com"
+}
+```
+
 规则：
 
 - `key_source` 只能是 `independent` 或 `instance`。
@@ -973,10 +994,15 @@ Content-Type: application/json
 - `instance_id` 仅用于 `instance` 模式，必填且只允许字母、数字、点、下划线和连字符；
   不安全字符或路径穿越会被拒绝。实例不存在时仍允许保存，但 `configured/key_present`
   会是 false，界面应提示先部署实例或补齐 Key。
-- `host` 默认 `127.0.0.1`，只接受 `127.0.0.1`、`localhost`、`::1`。
-  **不接受 `0.0.0.0`**：B 本身只支持回环绑定，且其 API 没有用户认证。远端访问应使用：
-  `ssh -N -L 8766:127.0.0.1:8766 <用户>@<服务器地址>`，然后在本地打开
-  `http://127.0.0.1:8766/`。
+- `host` 默认 `127.0.0.1`；允许 `127.0.0.1`、`localhost`、`::1`，以及**显式高风险值**
+  `0.0.0.0`。默认保持回环安全模式；传入 `0.0.0.0` 表示所有网卡，必须同时评估安全组、
+  防火墙和 B 无用户认证的风险。
+- `public_host` 可选，只用于给 `host=0.0.0.0` 生成浏览器 URL；值是公网 IPv4、IPv6 或域名，
+  不能包含 `http://`/`https://`、路径、查询、用户信息、端口或空格。
+  端口使用独立 `port` 字段。`public_host` 不能是 `0.0.0.0`/`::` 等未指定地址。
+  IPv6 可传裸地址或方括号形式，响应 URL 会自动加方括号。
+- 服务端在 `host=0.0.0.0` 时仍使用 `127.0.0.1` 探测端口和健康状态；不把 `0.0.0.0`
+  写进浏览器 URL，也不使用公网 URL 做本机健康检查。
 - `port` 范围为 5000–10000（含边界）。服务端会避开管理服务监听端口和所有实例的
   AstrBot/SnowLuma/noVNC 端口。未指定端口时优先 8766，再选择范围内可用端口。
 - 写入成功后返回与 GET 配置相同的安全字段，并带 `action:"configured"`。
@@ -992,7 +1018,7 @@ body: {}   # 也接受空请求体
 
 要求已安装扩展且配置文件存在。服务端：
 
-1. 先探测 `GET <url>/api/health`；若已在运行则幂等返回 `action:"already_running"`，不重复启动。
+1. 先探测 `GET <health_url>/api/health`；若已在运行则幂等返回 `action:"already_running"`，不重复启动。
 2. 使用当前 Python 解释器执行：
    `python3 <extensions/ai-assistant>/assistant.py --config <data>/ai-assistant/config.json`
 3. 独立进程、`start_new_session`/Windows 新进程组启动；stdout/stderr 追加到
@@ -1010,10 +1036,16 @@ body: {}   # 也接受空请求体
   "running": true,
   "pid": 12345,
   "url": "http://127.0.0.1:8766/",
+  "public_host": "",
+  "health_url": "http://127.0.0.1:8766/",
   "message": "AI 助手 B 已启动：http://127.0.0.1:8766/。服务仅监听回环地址；远端访问请使用 SSH 隧道。",
   "error": ""
 }
 ```
+
+公网模式成功时 `url` 形如 `http://bot.example.com:8768/`，`health_url` 仍是
+`http://127.0.0.1:8768/`，并在 `access_note` 中返回高风险提示。若没有 `public_host`，
+`url` 为空字符串，不会返回 `http://0.0.0.0:...`。
 
 主项目要求已有可用 Key 才启动 B：`independent` 模式必须有已保存 Key，`instance` 模式必须能读取所选实例的 AstrBot Key；否则返回 `ok:false` 和中文配置提示。
 主项目不会自动启动 B，也不会调用 B 的聊天 API 或读取聊天内容。
@@ -1035,7 +1067,9 @@ body: {}   # 也接受空请求体
 ### 10.5 安全与兼容边界
 
 - `configure_url` 固定为 `/api/assistant/config`，供前端识别配置入口。
-- B 服务自身**没有用户认证**，默认只允许回环 host；不要将其端口映射到公网。
+- B 服务自身**没有用户认证**，默认 host 为 `127.0.0.1`。`0.0.0.0` 是显式高风险选项：
+  公网使用时必须使用云安全组、UFW/nftables、VPN 或带认证的反向代理限制来源；
+  禁止直接裸奔公网。无法安全限制来源时，优先回环模式 + SSH 隧道。
 - `api_key` 只在写配置请求体中出现；服务端不打印请求体、不把 Key 放进程环境/命令行、
   不在 GET 配置或错误信息中回显。错误只返回脱敏后的摘要。
 - 新接口只新增，不改变第 1–9 节已有 API 字段；旧实例目录不迁移、不删除。

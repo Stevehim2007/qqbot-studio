@@ -8,6 +8,7 @@ starts the assistant process.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -33,7 +34,7 @@ ASSISTANT_README_FILE = "README.md"
 
 ASSISTANT_CONFIG_VERSION = 1
 ASSISTANT_DEFAULT_HOST = "127.0.0.1"
-ASSISTANT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1")
+ASSISTANT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
 ASSISTANT_DEFAULT_PORT = 8766
 ASSISTANT_PORT_MIN = 5000
 ASSISTANT_PORT_MAX = 10000
@@ -513,19 +514,65 @@ class AssistantExtensionManager:
 
     @staticmethod
     def _service_url(host: str, port: int) -> str:
+        """Return a browsable URL, never the unspecified address itself."""
+
         normalized = str(host or ASSISTANT_DEFAULT_HOST).strip().lower()
-        if normalized == "::1":
-            return f"http://[::1]:{int(port)}/"
+        if normalized in {"0.0.0.0", "::"}:
+            return ""
+        if ":" in normalized:
+            return f"http://[{normalized}]:{int(port)}/"
         if normalized == "localhost":
             return f"http://localhost:{int(port)}/"
-        return f"http://127.0.0.1:{int(port)}/"
+        return f"http://{normalized}:{int(port)}/"
 
     @staticmethod
-    def _access_note() -> str:
+    def _url_host(host: str) -> str:
+        value = str(host or "").strip()
+        if ":" in value and not value.startswith("["):
+            return f"[{value}]"
+        return value
+
+    @classmethod
+    def _public_url(cls, public_host: str, port: int) -> str:
+        value = str(public_host or "").strip()
+        if not value:
+            return ""
+        return f"http://{cls._url_host(value)}:{int(port)}/"
+
+    @classmethod
+    def _browser_url(cls, bind_host: str, port: int, public_host: str) -> str:
+        normalized = str(bind_host or ASSISTANT_DEFAULT_HOST).strip().lower()
+        if normalized == "0.0.0.0":
+            return cls._public_url(public_host, port)
+        return cls._service_url(normalized, port)
+
+    @classmethod
+    def _health_url(cls, bind_host: str, port: int) -> str:
+        """Use loopback for wildcard binds; public URLs may not hairpin."""
+
+        normalized = str(bind_host or ASSISTANT_DEFAULT_HOST).strip().lower()
+        if normalized in {"0.0.0.0", "::"}:
+            return f"http://127.0.0.1:{int(port)}/"
+        return cls._service_url(normalized, port)
+
+    @staticmethod
+    def _access_note(bind_host: str, public_host: str = "", url: str = "") -> str:
+        if str(bind_host or "").strip().lower() == "0.0.0.0":
+            if public_host and url:
+                return (
+                    "高风险公网模式：AI 助手 B 绑定所有网卡，可通过 "
+                    f"{url} 访问。B 没有用户认证，必须使用安全组、防火墙、VPN 或"
+                    "带认证的反向代理限制来源，绝不能直接裸奔公网。"
+                )
+            return (
+                "高风险公网模式：AI 助手 B 已绑定所有网卡，但尚未填写公网 IP/域名，"
+                "因此没有可点击的浏览器 URL。请填写 public_host，或改用回环地址 + SSH 隧道。"
+                "B 没有用户认证，必须使用安全组、防火墙或 VPN 限制来源。"
+            )
         return (
-            "AI 助手 B 没有面向用户的访问认证，只允许监听本机回环地址。"
-            "如果从远端电脑访问，请使用 SSH 隧道或在本机浏览器打开，"
-            "不要把 B 的端口直接暴露到公网。"
+            "AI 助手 B 没有面向用户的访问认证，当前仅监听本机回环地址。"
+            "远端访问请使用 SSH 隧道或在本机浏览器打开；如改用 0.0.0.0，"
+            "必须使用安全组/防火墙/VPN 限制来源。"
         )
 
     @staticmethod
@@ -534,12 +581,13 @@ class AssistantExtensionManager:
 
     def _config_base_state(self, *, installed: bool) -> dict[str, Any]:
         port = ASSISTANT_DEFAULT_PORT
+        loopback_url = self._service_url(ASSISTANT_DEFAULT_HOST, port)
         return {
             "ok": True,
             "installed": bool(installed),
             "configured": False,
             "running": False,
-            "url": "",
+            "url": loopback_url,
             "configure_url": "/api/assistant/config",
             "config_path": str(self.config_path),
             "key_present": False,
@@ -547,10 +595,12 @@ class AssistantExtensionManager:
             "instance_id": "",
             "port": port,
             "host": ASSISTANT_DEFAULT_HOST,
+            "public_host": "",
+            "health_url": loopback_url,
             "pid": None,
             "log_path": str(self.log_path),
             "pid_path": str(self.pid_path),
-            "access_note": self._access_note(),
+            "access_note": self._access_note(ASSISTANT_DEFAULT_HOST),
             "ssh_tunnel": self._ssh_tunnel(port),
             "message": "AI 助手 B 尚未配置。",
             "error": "",
@@ -634,6 +684,7 @@ class AssistantExtensionManager:
             "key_source": "independent",
             "api_key": "",
             "instance_id": "",
+            "public_host": "",
             "timeout_seconds": 60,
             "system_prompt": "",
         }
@@ -766,14 +817,60 @@ class AssistantExtensionManager:
     @staticmethod
     def _validate_host(value: Any) -> str:
         host = str(value or ASSISTANT_DEFAULT_HOST).strip().lower()
-        if host == "0.0.0.0":
-            raise ValueError(
-                "出于安全原因，主项目不允许把 AI 助手 B 绑定到 0.0.0.0；"
-                "B 只支持回环地址。远端访问请使用 SSH 隧道。"
-            )
         if host not in ASSISTANT_ALLOWED_HOSTS:
-            raise ValueError("host 只能是 127.0.0.1、localhost 或 ::1。")
+            raise ValueError(
+                "host 只能是 127.0.0.1、localhost、::1 或显式高风险值 0.0.0.0。"
+            )
         return host
+
+    @staticmethod
+    def _validate_public_host(value: Any) -> str:
+        """Validate a URL host only (no scheme, path, port or whitespace)."""
+
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        if len(text) > 255:
+            raise ValueError("public_host 过长，最多 255 个字符。")
+        if any(ch.isspace() for ch in text):
+            raise ValueError("public_host 不能包含空格或换行。")
+        if any(token in text for token in ("://", "/", "\\", "?", "#", "@")):
+            raise ValueError("public_host 只能是公网 IP 或域名，不能包含协议、路径或用户信息。")
+
+        candidate = text
+        if candidate.startswith("[") or candidate.endswith("]"):
+            if not (candidate.startswith("[") and candidate.endswith("]")):
+                raise ValueError("IPv6 public_host 方括号不完整。")
+            candidate = candidate[1:-1]
+            try:
+                address = ipaddress.IPv6Address(candidate)
+            except ValueError:
+                raise ValueError("public_host 不是有效 IPv6 地址。") from None
+            if address.is_unspecified:
+                raise ValueError("public_host 不能是未指定地址。")
+            return str(address)
+
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError:
+            address = None
+        if address is not None:
+            if address.is_unspecified:
+                raise ValueError("public_host 不能是 0.0.0.0、:: 等未指定地址。")
+            return str(address)
+
+        if ":" in candidate:
+            raise ValueError("public_host 不能包含端口；端口请使用独立的 port 字段。")
+        domain = candidate.rstrip(".").lower()
+        if not domain or len(domain) > 253:
+            raise ValueError("public_host 域名长度无效。")
+        labels = domain.split(".")
+        label_re = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+        if any(not label_re.fullmatch(label) for label in labels):
+            raise ValueError("public_host 不是有效的公网 IP 或域名。")
+        return domain
 
     @staticmethod
     def _validate_port(value: Any, reserved: set[int]) -> int:
@@ -820,22 +917,34 @@ class AssistantExtensionManager:
         if instance_id and not ASSISTANT_INSTANCE_ID_RE.fullmatch(instance_id):
             instance_id = ""
             error = error or "配置中的 instance_id 格式无效。"
+        public_host_raw = raw.get("public_host", "")
+        try:
+            public_host = self._validate_public_host(public_host_raw)
+        except ValueError as exc:
+            public_host = ""
+            error = error or str(exc)
         key_present = False
         if source == "independent":
             key = raw.get("api_key")
             key_present = isinstance(key, str) and bool(key.strip())
         else:
             key_present = bool(instance_id) and self._instance_key_present(instance_id)
+        url = self._browser_url(host, port, public_host)
+        health_url = self._health_url(host, port)
         identity = {
             "host": host,
             "port": port,
-            "url": self._service_url(host, port),
+            "public_host": public_host,
+            "url": url,
+            "health_url": health_url,
             "key_source": source,
             "instance_id": instance_id,
             "key_present": key_present,
             "configured": bool(key_present and not error),
-            "ssh_tunnel": self._ssh_tunnel(port),
-            "access_note": self._access_note(),
+            "ssh_tunnel": self._ssh_tunnel(port)
+            if host != "0.0.0.0" or not public_host
+            else "",
+            "access_note": self._access_note(host, public_host, url),
         }
         return identity, key_present, error
 
@@ -941,7 +1050,10 @@ class AssistantExtensionManager:
                 except Exception:
                     suggested_port = ASSISTANT_DEFAULT_PORT
                 payload["port"] = suggested_port
+                payload["public_host"] = ""
                 payload["url"] = self._service_url(ASSISTANT_DEFAULT_HOST, suggested_port)
+                payload["health_url"] = payload["url"]
+                payload["access_note"] = self._access_note(ASSISTANT_DEFAULT_HOST)
                 payload["ssh_tunnel"] = self._ssh_tunnel(suggested_port)
                 payload["message"] = (
                     "AI 助手 B 尚未配置。安装后请设置独立 API Key 或复用已有实例，"
@@ -960,22 +1072,24 @@ class AssistantExtensionManager:
                     state=payload,
                 )
 
-            running, pid = self._runtime_state(str(identity["url"]))
+            running, pid = self._runtime_state(str(identity["health_url"]))
             payload["running"] = running
             payload["pid"] = pid
+            access_note = str(identity.get("access_note") or "")
             if running:
-                payload["message"] = (
-                    f"AI 助手 B 正在运行：{identity['url']}。"
-                    "该服务仅监听回环地址；远端请使用 SSH 隧道。"
-                )
+                if identity.get("url"):
+                    payload["message"] = f"AI 助手 B 正在运行：{identity['url']}。{access_note}"
+                else:
+                    payload["message"] = (
+                        "AI 助手 B 正在运行并绑定所有网卡，但尚未填写 public_host，"
+                        "没有可点击的浏览器 URL。" + access_note
+                    )
             elif key_present:
-                payload["message"] = (
-                    "AI 助手 B 已配置但尚未启动。启动后仅可从本机或 SSH 隧道访问。"
-                )
+                payload["message"] = "AI 助手 B 已配置但尚未启动。" + access_note
             else:
                 payload["message"] = (
                     "AI 助手 B 配置已存在，但未检测到可用 API Key；"
-                    "可启动查看界面，但聊天前需要补齐 Key。"
+                    "启动前需要补齐 Key。" + access_note
                 )
             payload["ok"] = True
             payload["error"] = ""
@@ -1020,6 +1134,9 @@ class AssistantExtensionManager:
                     raise ValueError("key_source 只能是 independent 或 instance。")
 
                 host = self._validate_host(incoming.get("host", current.get("host", ASSISTANT_DEFAULT_HOST)))
+                public_host = self._validate_public_host(
+                    incoming.get("public_host", current.get("public_host", ""))
+                )
                 reserved = self._reserved_ports()
                 if "port" in incoming and incoming.get("port") is not None:
                     port = self._validate_port(incoming.get("port"), reserved)
@@ -1039,6 +1156,7 @@ class AssistantExtensionManager:
                             raise ValueError("api_key 格式异常或过长。")
 
                 config["host"] = host
+                config["public_host"] = public_host
                 config["port"] = port
                 config["key_source"] = source
                 config["version"] = int(config.get("version") or ASSISTANT_CONFIG_VERSION)
@@ -1139,6 +1257,7 @@ class AssistantExtensionManager:
                 )
 
             url = str(state.get("url") or "")
+            probe_url = str(state.get("health_url") or url)
             if state.get("running"):
                 already = dict(state)
                 already["action"] = "already_running"
@@ -1252,16 +1371,23 @@ class AssistantExtensionManager:
             deadline = time.monotonic() + self.start_timeout
             last_error = ""
             while time.monotonic() < deadline:
-                if self._health_ok(url, timeout=1.0):
+                if self._health_ok(probe_url, timeout=1.0):
                     result = self.get_config()
                     result["ok"] = True
                     result["action"] = "started"
                     result["running"] = True
                     result["pid"] = pid
-                    result["message"] = (
-                        f"AI 助手 B 已启动：{url}。"
-                        "服务仅监听回环地址；远端访问请使用 SSH 隧道，不要暴露到公网。"
-                    )
+                    if result.get("url"):
+                        result["message"] = (
+                            f"AI 助手 B 已启动：{result['url']}。"
+                            f"{result.get('access_note') or ''}"
+                        )
+                    else:
+                        result["message"] = (
+                            "AI 助手 B 已启动并绑定所有网卡，但未填写 public_host，"
+                            "暂无可点击的浏览器 URL。"
+                            f"{result.get('access_note') or ''}"
+                        )
                     result["error"] = ""
                     return result
                 try:
@@ -1341,13 +1467,14 @@ class AssistantExtensionManager:
                     state=state,
                 )
 
+            probe_url = str(state.get("health_url") or state.get("url") or "")
             deadline = time.monotonic() + self.stop_timeout
             while time.monotonic() < deadline:
-                if not self._health_ok(str(state.get("url") or ""), timeout=0.8):
+                if not self._health_ok(probe_url, timeout=0.8):
                     break
                 time.sleep(min(self.poll_interval, max(0.01, deadline - time.monotonic())))
 
-            if self._health_ok(str(state.get("url") or ""), timeout=0.8):
+            if self._health_ok(probe_url, timeout=0.8):
                 return self._service_failure(
                     "AI 助手 B 停止超时，可能仍在运行；请查看日志并手动停止。",
                     installed=bool(state.get("installed")),

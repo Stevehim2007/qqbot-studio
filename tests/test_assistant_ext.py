@@ -334,6 +334,81 @@ class AssistantConfigStartTests(unittest.TestCase):
         self.assertEqual(stored["port"], 8767)
         self._assert_no_key(second, secret)
 
+    def test_public_bind_builds_public_url_and_validates_public_host(self):
+        manager = self._make_installed_manager()
+        secret = "sk-public-mode-secret-123456789"
+        result = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "port": 8776,
+                "host": "0.0.0.0",
+                "public_host": "assistant.example.com",
+            }
+        )
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["host"], "0.0.0.0")
+        self.assertEqual(result["public_host"], "assistant.example.com")
+        self.assertEqual(result["url"], "http://assistant.example.com:8776/")
+        self.assertEqual(result["health_url"], "http://127.0.0.1:8776/")
+        self.assertEqual(manager._probe_host("0.0.0.0"), "127.0.0.1")
+        self.assertNotIn("0.0.0.0", result["url"])
+        self.assertIn("安全组", result["access_note"])
+        self.assertIn("防火墙", result["access_note"])
+        self.assertEqual(result["ssh_tunnel"], "")
+        self._assert_no_key(result, secret)
+        stored = json.loads(self.expected_config.read_text(encoding="utf-8"))
+        self.assertEqual(stored["public_host"], "assistant.example.com")
+
+        # Wildcard bind without a public host remains savable but yields no
+        # browser URL; the access note must ask for a public host.
+        no_public = manager.save_config({"host": "0.0.0.0", "public_host": "", "port": 8777})
+        self.assertTrue(no_public["ok"], no_public.get("error"))
+        self.assertEqual(no_public["url"], "")
+        self.assertNotIn("0.0.0.0", no_public["url"])
+        self.assertIn("public_host", no_public["access_note"])
+        self.assertIn("ssh -N -L", no_public["ssh_tunnel"])
+        self._assert_no_key(no_public, secret)
+
+        # IPv4/IPv6 public hosts are formatted into safe URLs.
+        ipv4 = manager.save_config(
+            {"host": "0.0.0.0", "public_host": "203.0.113.10", "port": 8778}
+        )
+        self.assertEqual(ipv4["url"], "http://203.0.113.10:8778/")
+        ipv6 = manager.save_config(
+            {"host": "0.0.0.0", "public_host": "2001:db8::10", "port": 8779}
+        )
+        self.assertEqual(ipv6["url"], "http://[2001:db8::10]:8779/")
+
+        for invalid in (
+            "https://example.com",
+            "example.com/path",
+            "example.com:8080",
+            "bad host",
+            "0.0.0.0",
+            "user@example.com",
+        ):
+            rejected = manager.save_config(
+                {"host": "0.0.0.0", "public_host": invalid, "port": 8780}
+            )
+            self.assertFalse(rejected["ok"], invalid)
+            self.assertIn("public_host", rejected["error"])
+            self._assert_no_key(rejected, secret)
+
+        # Loopback mode always keeps the local URL even if a public host exists.
+        loopback = manager.save_config(
+            {
+                "host": "127.0.0.1",
+                "public_host": "assistant.example.com",
+                "port": 8781,
+            }
+        )
+        self.assertTrue(loopback["ok"], loopback.get("error"))
+        self.assertEqual(loopback["url"], "http://127.0.0.1:8781/")
+        self.assertIn("SSH", loopback["access_note"])
+        self.assertIn("ssh -N -L", loopback["ssh_tunnel"])
+        self._assert_no_key(loopback, secret)
+
     def test_instance_mode_checks_key_but_does_not_copy_it(self):
         manager = self._make_installed_manager()
         instance_secret = "sk-instance-key-never-copy-999"
@@ -390,11 +465,11 @@ class AssistantConfigStartTests(unittest.TestCase):
             result = manager.save_config({**base, "port": port})
             self.assertFalse(result["ok"])
             self.assertIn("5000-10000", result["error"])
-        # Public bind is refused explicitly.
-        result = manager.save_config({**base, "port": 8769, "host": "0.0.0.0"})
+        # Unsupported bind address is rejected; 0.0.0.0 is handled separately
+        # by the explicit high-risk public-mode tests above.
+        result = manager.save_config({**base, "port": 8769, "host": "192.168.1.5"})
         self.assertFalse(result["ok"])
         self.assertIn("0.0.0.0", result["error"])
-        self.assertIn("SSH", result["error"])
         # Unsafe instance id and key-source.
         result = manager.save_config(
             {"key_source": "instance", "instance_id": "../escape", "port": 8770}
@@ -543,6 +618,60 @@ class AssistantConfigStartTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertFalse(result["running"])
         self.assertIn("API Key", result["message"])
+
+    def test_start_public_mode_probes_loopback_and_returns_public_url(self):
+        health = {"running": False}
+        health_urls = []
+
+        class FakeProcess:
+            pid = 43213
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        def checker(url, timeout):
+            health_urls.append(url)
+            return health["running"]
+
+        def factory(command, **kwargs):
+            health["running"] = True
+            return FakeProcess()
+
+        manager = self._make_installed_manager(
+            health_checker=checker,
+            popen_factory=factory,
+            start_timeout=0.2,
+            poll_interval=0.01,
+        )
+        secret = "sk-public-start-secret-123456"
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
+                "port": 8782,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        started = manager.start()
+        self.assertTrue(started["ok"], started.get("error"))
+        self.assertEqual(started["url"], "http://bot.example.com:8782/")
+        self.assertEqual(started["health_url"], "http://127.0.0.1:8782/")
+        self.assertNotIn("0.0.0.0", started["url"])
+        self.assertIn("安全组", started["access_note"])
+        self.assertTrue(health_urls)
+        self.assertTrue(all(url == "http://127.0.0.1:8782/" for url in health_urls))
+        self._assert_no_key(started, secret)
 
     def test_stop_uses_tracked_pid_and_is_clean(self):
         health = {"running": False}

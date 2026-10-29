@@ -6,6 +6,7 @@
 
   const TOKEN_RAW = typeof window.QB_TOKEN === 'string' ? window.QB_TOKEN : '';
   const QB_TOKEN = TOKEN_RAW && TOKEN_RAW !== '{{TOKEN}}' ? TOKEN_RAW : '';
+  const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
   class ApiError extends Error {
     constructor(message, options = {}) {
@@ -80,6 +81,7 @@
         instanceId: '',
         port: 8766,
         host: '127.0.0.1',
+        publicHost: '',
         message: '',
         error: '',
         updatedAt: 0
@@ -340,7 +342,9 @@
     button.disabled = busy;
     button.classList.toggle('is-loading', busy);
     button.setAttribute('aria-busy', busy ? 'true' : 'false');
-    if (label) label.textContent = busy ? '刷新中…' : '刷新';
+    button.title = busy ? '正在刷新；自动刷新每 30 分钟' : '手动刷新；自动刷新每 30 分钟';
+    button.setAttribute('aria-label', '手动刷新；自动刷新每 30 分钟');
+    if (label) label.textContent = busy ? '刷新中…' : '手动刷新';
   }
 
   function setCreateBusy(busy) {
@@ -443,7 +447,7 @@
     }
   }
 
-  function scheduleNextSync(delay = 8000) {
+  function scheduleNextSync(delay = AUTO_REFRESH_INTERVAL_MS) {
     if (state.pollTimer) window.clearTimeout(state.pollTimer);
     state.pollTimer = null;
     if (document.hidden) return;
@@ -456,6 +460,15 @@
         scheduleNextSync();
       }
     }, delay);
+  }
+
+  async function manualRefresh() {
+    if (state.loading) return false;
+    try {
+      return await loadConsole({ silent: false });
+    } finally {
+      scheduleNextSync(AUTO_REFRESH_INTERVAL_MS);
+    }
   }
 
   function renderSettings() {
@@ -482,7 +495,7 @@
     if (Array.isArray(settings.mirror_nodes)) mirrorCount = ` · 镜像节点 ${settings.mirror_nodes.length} 个`;
     const syncTime = formatSyncTime(state.lastSyncedAt);
     const syncText = syncTime ? ` · 最后同步 ${syncTime}` : '';
-    const status = `本地服务监听：${address}${publicHost ? ` · 公开地址：${publicHost}` : ''}${mirrorCount}${syncText}`;
+    const status = `本地服务监听：${address}${publicHost ? ` · 公开地址：${publicHost}` : ''}${mirrorCount}${syncText} · 自动刷新：每 30 分钟`;
     const statusElement = $('console-settings-status');
     if (statusElement) statusElement.textContent = status;
   }
@@ -495,7 +508,7 @@
     }
     setPill($('console-first-run'), '初始化状态未知', 'neutral');
     const statusElement = $('console-settings-status');
-    if (statusElement) statusElement.textContent = `本地设置读取失败：${formatError(error, '设置接口不可用。')}`;
+    if (statusElement) statusElement.textContent = `本地设置读取失败：${formatError(error, '设置接口不可用。')} · 自动刷新：每 30 分钟`;
   }
 
   function setStats(instances) {
@@ -2346,6 +2359,7 @@
       instanceId: textValue(source.instance_id, prev.instanceId || ''),
       port,
       host: textValue(source.host, prev.host || '127.0.0.1'),
+      publicHost: textValue(source.public_host, prev.publicHost || ''),
       message,
       error,
       action: textValue(source.action, ''),
@@ -2402,7 +2416,8 @@
     for (const pair of [
       ['assistant-b-api-key', 'assistant-b-key-error'],
       ['assistant-b-instance-select', 'assistant-b-instance-error'],
-      ['assistant-b-port', 'assistant-b-port-error']
+      ['assistant-b-port', 'assistant-b-port-error'],
+      ['assistant-b-public-host', 'assistant-b-public-host-error']
     ]) {
       const input = $(pair[0]);
       const error = $(pair[1]);
@@ -2458,6 +2473,20 @@
     }
   }
 
+  function syncAssistantBHostFields() {
+    const publicRadio = $('assistant-b-host-public');
+    const publicFields = $('assistant-b-public-host-fields');
+    const hostNote = $('assistant-b-host-note');
+    const publicMode = Boolean(publicRadio && publicRadio.checked);
+    if (publicFields) publicFields.hidden = !publicMode;
+    if (hostNote) {
+      hostNote.className = `assistant-b-host-note${publicMode ? ' is-high-risk' : ''}`;
+      hostNote.textContent = publicMode
+        ? '高风险：将 AI 助手 B 绑定 0.0.0.0（所有网卡）。B 没有登录认证，必须使用云安全组、主机防火墙或 VPN/反向代理限制来源，绝不要裸露在公网。公网 URL 只由填写的公网 IP/域名生成。'
+        : '监听地址为 127.0.0.1（仅本机）。如果控制台部署在远程服务器，需要通过 SSH 隧道访问，不能把 loopback 地址当作公网地址。';
+    }
+  }
+
   function populateAssistantBConfigForm() {
     const config = state.assistantB.config;
     const source = config.keySource === 'instance' ? 'instance' : 'independent';
@@ -2466,11 +2495,17 @@
     const keyInput = $('assistant-b-api-key');
     const portInput = $('assistant-b-port');
     const select = $('assistant-b-instance-select');
+    const hostLocalRadio = $('assistant-b-host-local');
+    const hostPublicRadio = $('assistant-b-host-public');
+    const publicHostInput = $('assistant-b-public-host');
     if (independentRadio) independentRadio.checked = source === 'independent';
     if (instanceRadio) instanceRadio.checked = source === 'instance';
     populateAssistantBInstanceOptions();
     if (select) select.value = config.instanceId || '';
     if (portInput) portInput.value = String(config.port || 8766);
+    if (hostLocalRadio) hostLocalRadio.checked = config.host !== '0.0.0.0';
+    if (hostPublicRadio) hostPublicRadio.checked = config.host === '0.0.0.0';
+    if (publicHostInput) publicHostInput.value = config.publicHost || '';
     if (keyInput) {
       keyInput.value = '';
       keyInput.type = 'password';
@@ -2482,6 +2517,7 @@
     }
     clearAssistantBConfigErrors();
     syncAssistantBConfigSourceFields();
+    syncAssistantBHostFields();
     if (config.status === 'error') {
       setAssistantBConfigError(config.error || 'AI 助手 B 配置读取失败。');
     } else if (config.configured && config.running) {
@@ -2647,41 +2683,58 @@
     const keyInput = $('assistant-b-api-key');
     const instanceSelect = $('assistant-b-instance-select');
     const portInput = $('assistant-b-port');
+    const hostPublicRadio = $('assistant-b-host-public');
+    const publicHostInput = $('assistant-b-public-host');
     const apiKey = keyInput ? keyInput.value.trim() : '';
     const instanceId = instanceSelect ? instanceSelect.value.trim() : '';
+    const publicMode = Boolean(hostPublicRadio && hostPublicRadio.checked);
+    const publicHost = publicHostInput ? publicHostInput.value.trim() : '';
     const existingIndependentKey = assistant.config.keyPresent && assistant.config.keySource === 'independent';
     let valid = true;
+    let invalidTarget = null;
 
     if (source === 'independent') {
       if (!apiKey && !existingIndependentKey) {
         setAssistantBConfigFieldError(keyInput, $('assistant-b-key-error'), '请输入独立的 DeepSeek API Key。');
+        invalidTarget = invalidTarget || keyInput;
         valid = false;
       }
     } else if (!instanceId || !state.instances.some((instance) => instance.id === instanceId)) {
       setAssistantBConfigFieldError(instanceSelect, $('assistant-b-instance-error'), '请选择一个可用实例。');
+      invalidTarget = invalidTarget || instanceSelect;
       valid = false;
     }
 
     const port = Number(portInput ? portInput.value : 0);
     if (!Number.isInteger(port) || port < 5000 || port > 10000) {
       setAssistantBConfigFieldError(portInput, $('assistant-b-port-error'), '端口必须是 5000–10000 之间的整数。');
+      invalidTarget = invalidTarget || portInput;
       valid = false;
     }
+    if (publicMode) {
+      if (!publicHost) {
+        setAssistantBConfigFieldError(publicHostInput, $('assistant-b-public-host-error'), '公网模式必须填写公网 IP 或域名。');
+        invalidTarget = invalidTarget || publicHostInput;
+        valid = false;
+      } else if (/\s/.test(publicHost) || publicHost.includes('://') || /[\/?#]/.test(publicHost)) {
+        setAssistantBConfigFieldError(publicHostInput, $('assistant-b-public-host-error'), '公网 IP/域名不能包含空白、协议、路径或查询参数。');
+        invalidTarget = invalidTarget || publicHostInput;
+        valid = false;
+      }
+    }
     if (!valid) {
-      const target = source === 'independent'
-        ? (apiKey || existingIndependentKey ? portInput : keyInput)
-        : (instanceId ? portInput : instanceSelect);
-      if (target) target.focus({ preventScroll: true });
+      if (invalidTarget) invalidTarget.focus({ preventScroll: true });
       return;
     }
 
     const body = {
       key_source: source,
       port,
-      host: '127.0.0.1'
+      host: publicMode ? '0.0.0.0' : '127.0.0.1'
     };
     if (source === 'independent' && apiKey) body.api_key = apiKey;
     if (source === 'instance') body.instance_id = instanceId;
+    if (publicMode) body.public_host = publicHost;
 
     assistant.config.saving = true;
     assistant.config.phase = 'saving';
@@ -2708,7 +2761,8 @@
         keySource: source,
         instanceId: source === 'instance' ? instanceId : (saved.instanceId || ''),
         port,
-        host: '127.0.0.1',
+        host: publicMode ? '0.0.0.0' : '127.0.0.1',
+        publicHost: publicMode ? publicHost : '',
         error: ''
       };
       if (keyInput) keyInput.value = '';
@@ -2733,7 +2787,8 @@
         keySource: source,
         instanceId: source === 'instance' ? instanceId : assistant.config.instanceId,
         port,
-        host: '127.0.0.1',
+        host: publicMode ? '0.0.0.0' : '127.0.0.1',
+        publicHost: publicMode ? publicHost : '',
         saving: false,
         phase: '',
         error: '',
@@ -2895,6 +2950,8 @@
           hint.textContent = 'B 已安装，但当前后端不支持配置/启动；仍可查看状态或更新扩展。A 离线助手不受影响。';
         } else if (config.status === 'error') {
           hint.textContent = 'B 已安装，但配置状态读取失败；可点击“重试状态”。不会伪造启动地址。';
+        } else if (config.running && config.host === '0.0.0.0') {
+          hint.textContent = 'AI 助手 B 已以公网/所有网卡模式启动。B 没有登录认证，必须在安全组/防火墙/VPN 限制来源，绝不要裸露到公网。';
         } else if (config.running) {
           hint.textContent = 'AI 助手 B 已启动。若 URL 是 loopback，远程访问必须使用 SSH 隧道或在本机打开；不要把它当作公网直连地址。';
         } else if (config.configured) {
@@ -2969,19 +3026,24 @@
     if (runtime) runtime.hidden = !running;
     if (urlElement) urlElement.textContent = config.url || '未提供';
     if (urlNote) {
+      const publicMode = config.host === '0.0.0.0';
+      const accessNote = config.accessNote ? ` ${config.accessNote}` : '';
       if (!running) {
         urlNote.textContent = '';
       } else if (!config.url) {
-        urlNote.textContent = '服务端表示已启动，但没有返回访问 URL；请查看 B 的配置和日志。';
+        urlNote.textContent = publicMode
+          ? `公网模式已启用，但服务端没有返回访问 URL；请确认 public_host 已填写且服务已就绪。${accessNote}`
+          : '服务端表示已启动，但没有返回访问 URL；请查看 B 的配置和日志。';
+      } else if (publicMode) {
+        urlNote.textContent = `B 没有登录认证，当前为公网/所有网卡模式。必须在云安全组、主机防火墙或 VPN/反向代理中限制来源，绝不要裸露到公网。${accessNote}`;
       } else if (isAssistantBLoopbackUrl(config.url)) {
         const tunnel = config.sshTunnel ? ` ${config.sshTunnel}` : '';
-        const note = config.accessNote ? ` ${config.accessNote}` : '';
-        urlNote.textContent = `该地址是 loopback（仅本机回环）。从远程电脑访问必须使用 SSH 隧道，或直接在服务器本机浏览器打开；它不是公网直连地址。${note}${tunnel}`;
+        urlNote.textContent = `该地址是 loopback（仅本机回环）。从远程电脑访问必须使用 SSH 隧道，或直接在服务器本机浏览器打开；它不是公网直连地址。${accessNote}${tunnel}`;
       } else if (isAssistantBWildcardUrl(config.url)) {
-        urlNote.textContent = config.accessNote
+        urlNote.textContent = accessNote
           || '0.0.0.0 是监听地址，不是可直接连接的公网地址；请使用服务器公网 IP/域名，并确认防火墙和安全组。';
       } else {
-        urlNote.textContent = config.accessNote
+        urlNote.textContent = accessNote
           || '请确认该地址可达且防火墙/安全组已按需配置；不要把无认证的服务直接暴露到公网。';
       }
     }
@@ -3240,6 +3302,23 @@
         }
       });
     }
+    $$('input[name="assistant-b-host-mode"]').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        clearAssistantBConfigErrors();
+        syncAssistantBHostFields();
+      });
+    });
+    const assistantBPublicHost = $('assistant-b-public-host');
+    if (assistantBPublicHost) {
+      assistantBPublicHost.addEventListener('input', () => {
+        assistantBPublicHost.removeAttribute('aria-invalid');
+        const error = $('assistant-b-public-host-error');
+        if (error) {
+          error.hidden = true;
+          error.textContent = '';
+        }
+      });
+    }
 
     const assistantBInstall = $('assistant-b-install');
     if (assistantBInstall) assistantBInstall.addEventListener('click', handleAssistantBInstallClick);
@@ -3279,7 +3358,7 @@
     });
 
     const refresh = $('console-refresh');
-    if (refresh) refresh.addEventListener('click', () => void loadConsole());
+    if (refresh) refresh.addEventListener('click', () => void manualRefresh());
     const updateButton = $('console-update');
     if (updateButton) updateButton.addEventListener('click', () => void handleUpdateClick());
     const retry = $('console-error-retry');

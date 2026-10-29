@@ -62,9 +62,9 @@
           <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
           <span id="console-update-label">检查更新</span>
         </button>
-        <button id="console-refresh" class="console-header-btn" type="button">
+        <button id="console-refresh" class="console-header-btn" type="button" title="手动刷新；自动刷新每 30 分钟" aria-label="手动刷新；自动刷新每 30 分钟">
           <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
-          <span id="console-refresh-label">刷新</span>
+          <span id="console-refresh-label">手动刷新</span>
         </button>
         <button id="assistant-open" class="console-assistant-button" type="button" aria-expanded="false" aria-controls="assistant-panel">
           <svg class="icon" aria-hidden="true"><use href="#c-i-help"></use></svg>
@@ -213,7 +213,26 @@
             <p id="assistant-b-port-error" class="field-error" role="alert" hidden></p>
           </div>
 
-          <p class="assistant-b-host-note">监听地址固定为 <code>127.0.0.1</code>（仅本机）。如果控制台部署在远程服务器，需要通过 SSH 隧道访问，不能把 loopback 地址当作公网地址。</p>
+          <fieldset class="assistant-b-host-group">
+            <legend>AI 助手 B 监听方式</legend>
+            <label class="assistant-b-source-option">
+              <input id="assistant-b-host-local" type="radio" name="assistant-b-host-mode" value="127.0.0.1" checked>
+              <span><strong>仅本机（127.0.0.1，推荐）</strong><small>默认安全模式；远端使用 SSH 隧道访问。</small></span>
+            </label>
+            <label class="assistant-b-source-option">
+              <input id="assistant-b-host-public" type="radio" name="assistant-b-host-mode" value="0.0.0.0">
+              <span><strong>公网/所有网卡（0.0.0.0，高风险）</strong><small>B 无登录认证，可能直接暴露给网络访问者。</small></span>
+            </label>
+          </fieldset>
+
+          <div id="assistant-b-public-host-fields" class="assistant-b-config-fields" hidden>
+            <label for="assistant-b-public-host">公网 IP 或域名</label>
+            <input id="assistant-b-public-host" type="text" autocomplete="off" spellcheck="false" placeholder="例如：bot.example.com 或 203.0.113.10" aria-describedby="assistant-b-public-host-help assistant-b-public-host-error">
+            <p id="assistant-b-public-host-help" class="assistant-b-config-help">只用于生成可打开的 URL，不要填写 http://、路径或端口；端口使用上方值。</p>
+            <p id="assistant-b-public-host-error" class="field-error" role="alert" hidden></p>
+          </div>
+
+          <p id="assistant-b-host-note" class="assistant-b-host-note">监听地址为 <code>127.0.0.1</code>（仅本机）。如果控制台部署在远程服务器，需要通过 SSH 隧道访问。</p>
           <p id="assistant-b-config-error" class="assistant-b-config-error" role="alert" hidden></p>
           <p id="assistant-b-config-status" class="assistant-b-config-status" role="status" hidden></p>
           <div class="assistant-b-config-actions">
