@@ -20,7 +20,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import __version__
-from .assistant_ext import ASSISTANT_DIR_NAME, ASSISTANT_REPO_URL
+from .assistant_ext import (
+    ASSISTANT_DEFAULT_HOST,
+    ASSISTANT_DEFAULT_PORT,
+    ASSISTANT_DIR_NAME,
+    ASSISTANT_REPO_URL,
+)
 from .astrbot_api import AstrBotAPIError
 from .deployer import DeploymentError
 from .dockerctl import DockerError
@@ -233,6 +238,21 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "installed": False,
             "path": str(path),
             "repo": ASSISTANT_REPO_URL,
+            "configured": False,
+            "running": False,
+            "url": "",
+            "configure_url": "/api/assistant/config",
+            "config_path": str(data_dir / "ai-assistant" / "config.json"),
+            "key_present": False,
+            "key_source": "independent",
+            "instance_id": "",
+            "port": ASSISTANT_DEFAULT_PORT,
+            "host": ASSISTANT_DEFAULT_HOST,
+            "pid": None,
+            "log_path": str(data_dir / "ai-assistant" / "assistant.log"),
+            "pid_path": str(data_dir / "ai-assistant" / "assistant.pid"),
+            "access_note": "AI 助手 B 只允许监听本机回环地址；远端请使用 SSH 隧道。",
+            "ssh_tunnel": f"ssh -N -L {ASSISTANT_DEFAULT_PORT}:127.0.0.1:{ASSISTANT_DEFAULT_PORT} <用户名>@<服务器地址>",
             "commit": "",
             "entry": str(path / "assistant.py"),
             "readme": str(path / "README.md"),
@@ -326,6 +346,23 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         "selected_mirror_id": settings.get("selected_mirror_id"),
                     },
                 )
+                return
+            if path == "/api/assistant/config":
+                getter = getattr(ctx.studio, "assistant_config", None)
+                if not callable(getter):
+                    self._json(
+                        HTTPStatus.OK,
+                        self._assistant_unavailable("当前后端未提供 AI 助手 B 配置接口。"),
+                    )
+                    return
+                try:
+                    payload = getter()
+                except Exception as exc:  # noqa: BLE001 - optional feature isolation
+                    traceback.print_exc()
+                    payload = self._assistant_unavailable(str(exc))
+                if not isinstance(payload, dict):
+                    payload = self._assistant_unavailable("AI 助手 B 配置返回格式异常。")
+                self._json(HTTPStatus.OK, payload)
                 return
             if path == "/api/assistant/status":
                 getter = getattr(ctx.studio, "assistant_status", None)
@@ -507,7 +544,12 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path = parsed.path
         payload = self._read_json_body(
-            allow_empty=path in {"/api/assistant/install", "/api/assistant/update"}
+            allow_empty=path in {
+                "/api/assistant/install",
+                "/api/assistant/update",
+                "/api/assistant/start",
+                "/api/assistant/stop",
+            }
         )
         if payload is None:
             return
@@ -538,6 +580,45 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     )
                 if not isinstance(result, dict):
                     result = self._assistant_unavailable("AI 助手 B 操作返回格式异常。")
+                self._json(HTTPStatus.OK, result)
+                return
+            if path == "/api/assistant/config":
+                saver = getattr(ctx.studio, "save_assistant_config", None)
+                if not callable(saver):
+                    self._json(
+                        HTTPStatus.OK,
+                        self._assistant_unavailable("当前后端未提供 AI 助手 B 配置接口。"),
+                    )
+                    return
+                try:
+                    result = saver(payload)
+                except Exception as exc:  # noqa: BLE001 - optional feature isolation
+                    traceback.print_exc()
+                    result = self._assistant_unavailable(
+                        f"AI 助手 B 配置保存失败：{exc}。主项目仍可正常使用。"
+                    )
+                if not isinstance(result, dict):
+                    result = self._assistant_unavailable("AI 助手 B 配置返回格式异常。")
+                self._json(HTTPStatus.OK, result)
+                return
+            if path in {"/api/assistant/start", "/api/assistant/stop"}:
+                method_name = "start_assistant" if path.endswith("/start") else "stop_assistant"
+                operation = getattr(ctx.studio, method_name, None)
+                if not callable(operation):
+                    self._json(
+                        HTTPStatus.OK,
+                        self._assistant_unavailable("当前后端未提供 AI 助手 B 启停接口。"),
+                    )
+                    return
+                try:
+                    result = operation()
+                except Exception as exc:  # noqa: BLE001 - optional feature isolation
+                    traceback.print_exc()
+                    result = self._assistant_unavailable(
+                        f"AI 助手 B 启停失败：{exc}。主项目仍可正常使用。"
+                    )
+                if not isinstance(result, dict):
+                    result = self._assistant_unavailable("AI 助手 B 启停返回格式异常。")
                 self._json(HTTPStatus.OK, result)
                 return
             if path == "/api/instances":

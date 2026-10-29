@@ -19,6 +19,7 @@ class FakeManager:
         self.last_deploy = None
         self.memory_mode = "direct"
         self.toggled_plugins = []
+        self.assistant_saved_config = None
 
     def get_plugins(self):
         return {
@@ -148,6 +149,7 @@ class FakeManager:
 class FakeStudio:
     def __init__(self):
         self.manager = FakeManager()
+        self.assistant_saved_config = None
         self.root = Path(tempfile.gettempdir()) / "qqbot-studio-fake-test"
         self.settings = {
             "bind_host": "127.0.0.1",
@@ -289,6 +291,60 @@ class FakeStudio:
             "updated": True,
             "message": "AI 助手 B 已更新。",
         }
+
+    def assistant_config(self):
+        return {
+            "ok": True,
+            "installed": True,
+            "configured": True,
+            "running": False,
+            "url": "http://127.0.0.1:8766/",
+            "configure_url": "/api/assistant/config",
+            "config_path": "/tmp/qqbot-studio/ai-assistant/config.json",
+            "key_present": True,
+            "key_source": "independent",
+            "instance_id": "",
+            "port": 8766,
+            "host": "127.0.0.1",
+            "pid": None,
+            "log_path": "/tmp/qqbot-studio/ai-assistant/assistant.log",
+            "pid_path": "/tmp/qqbot-studio/ai-assistant/assistant.pid",
+            "access_note": "服务仅监听回环地址；远端访问请使用 SSH 隧道。",
+            "ssh_tunnel": "ssh -N -L 8766:127.0.0.1:8766 <用户名>@<服务器地址>",
+            "message": "AI 助手 B 已配置但尚未启动。",
+            "error": "",
+        }
+
+    def save_assistant_config(self, payload):
+        self.assistant_saved_config = dict(payload)
+        result = self.assistant_config()
+        result["action"] = "configured"
+        result["key_source"] = str(payload.get("key_source") or "independent")
+        result["instance_id"] = str(payload.get("instance_id") or "")
+        result["port"] = int(payload.get("port") or 8766)
+        result["host"] = str(payload.get("host") or "127.0.0.1")
+        result["key_present"] = bool(payload.get("api_key")) or result["key_source"] == "instance"
+        result["configured"] = result["key_present"]
+        result["message"] = "AI 助手 B 配置已保存，Key 不会回显。"
+        return result
+
+    def start_assistant(self):
+        result = self.assistant_config()
+        result.update(
+            {
+                "ok": True,
+                "running": True,
+                "pid": 43210,
+                "action": "started",
+                "message": "AI 助手 B 已启动；远端请使用 SSH 隧道。",
+            }
+        )
+        return result
+
+    def stop_assistant(self):
+        result = self.assistant_config()
+        result.update({"ok": True, "running": False, "pid": None, "action": "stopped"})
+        return result
 
     def delete_instance(self, instance_id):
         if instance_id != "bot-1":
@@ -454,6 +510,69 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertFalse(json.loads(body)["ok"])
         status, body = self._post("/api/assistant/install", {}, token=False)
+        self.assertEqual(status, 403)
+
+    def test_assistant_config_start_and_stop_contract_never_echo_key(self):
+        status, body = self._get("/api/assistant/config")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        for field in (
+            "ok", "installed", "configured", "running", "url", "configure_url",
+            "config_path", "key_present", "key_source", "instance_id", "port",
+            "host", "message", "error",
+        ):
+            self.assertIn(field, payload)
+        self.assertNotIn("api_key", body.lower())
+
+        secret = "sk-server-secret-should-not-echo"
+        status, body = self._post(
+            "/api/assistant/config",
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "instance_id": "",
+                "port": 8766,
+                "host": "127.0.0.1",
+            },
+        )
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertTrue(result["ok"])
+        self.assertNotIn(secret, body)
+        self.assertNotIn("api_key", body.lower())
+        self.assertEqual(
+            self.studio.assistant_saved_config["port"],
+            8766,
+        )
+
+        status, body = self._post("/api/assistant/start", {})
+        self.assertEqual(status, 200)
+        started = json.loads(body)
+        self.assertTrue(started["running"])
+        self.assertEqual(started["action"], "started")
+        self.assertNotIn(secret, body)
+
+        status, body = self._post("/api/assistant/stop", {})
+        self.assertEqual(status, 200)
+        stopped = json.loads(body)
+        self.assertFalse(stopped["running"])
+        self.assertEqual(stopped["action"], "stopped")
+
+    def test_assistant_config_and_start_require_token(self):
+        status, body = self._post(
+            "/api/assistant/config",
+            {"key_source": "independent", "api_key": "sk-no-token"},
+            token=False,
+        )
+        self.assertEqual(status, 403)
+        status, body = self._post("/api/assistant/start", {}, token=False)
+        self.assertEqual(status, 403)
+        request = urllib.request.Request(self.base + "/api/assistant/config")
+        try:
+            with self.opener.open(request, timeout=5) as response:
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            status = exc.code
         self.assertEqual(status, 403)
 
     def test_v3_plugin_memory_and_stats_routes(self):

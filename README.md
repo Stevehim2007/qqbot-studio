@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**3.0.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**3.1.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
 
@@ -146,21 +146,33 @@ Windows 版使用 Docker Desktop + WSL2 **Linux containers**，不是 Windows co
 | **A：离线使用助手** | **默认存在** | 控制台右上角 **使用助手** | 本地关键词知识库，不联网、不上传问题、不消耗 DeepSeek token |
 | **B：可选 DeepSeek AI 助手** | 可选，默认不安装 | 控制台 **AI 助手 B** 卡片 | 独立子项目，可选使用 DeepSeek 生成式 AI；有自己的配置和 API Key，主项目不会读取、展示或自动传递 Key |
 
-安装 B 的方式：
+安装和使用 B 的方式：
 
-- 在控制台 **AI 助手 B** 卡片点击安装（会联网 clone，必须由你确认）；
-- 或在 `install.sh` 的交互提示中选择安装；
-- 非交互安装可设置 `QQBOT_INSTALL_AI_ASSISTANT=1`；网络失败不会影响 A 和已有机器人。
+1. 在控制台 **AI 助手 B** 卡片点击安装（会联网 clone，必须由你确认）；也可以在 `install.sh` 的交互提示中选择安装，或设置 `QQBOT_INSTALL_AI_ASSISTANT=1` 非交互安装。
+2. 安装成功后控制台会自动跳转到 `/console?assistant=configure`，并自动打开 **AI 助手 B 配置面板**。
+3. 在配置面板中选择：
+   - **独立 DeepSeek Key**：只写入本机 B 配置，页面不回显；或
+   - **复用某个已部署实例的 Key**：只保存实例 ID，不复制 Key。
+4. 端口默认 `8766`（避开管理端口 `8765` 和实例端口），点击保存后控制台会调用 B 的启动接口。
+5. B 卡片显示 **打开 AI 助手 B** 和地址后，即可进入 B 的聊天页面。
 
-B 安装位置是 `<QQBOT_STUDIO_DATA_DIR>/extensions/ai-assistant`，主项目不会自动启动 B。安装后请阅读 B 仓库的 README，并在扩展目录手动运行它的安装器：
+B 默认只监听 `127.0.0.1`，这是有意的安全限制。若管理控制台在远程 Ubuntu 服务器上，请在自己电脑建立 SSH 隧道：
 
 ```bash
-cd "${QQBOT_STUDIO_DATA_DIR:-$HOME/.local/share/qqbot-studio}/extensions/ai-assistant"
-cat README.md
-./install.sh
+ssh -L 8766:127.0.0.1:8766 用户名@服务器IP
 ```
 
+然后在本机浏览器打开：
+
+```text
+http://127.0.0.1:8766/
+```
+
+不要为了方便把无认证的 B 直接暴露到公网。B 的代码、配置和 API Key 都独立于主项目；A 离线助手始终保留。
+
 B 独立仓库：<https://github.com/Stevehim2007/qqbot-studio-ai-assistant>
+
+B 安装位置是 `<QQBOT_STUDIO_DATA_DIR>/extensions/ai-assistant`；配置文件位于 `<QQBOT_STUDIO_DATA_DIR>/ai-assistant/config.json`。主控制台只管理配置和启动，不读取或展示 Key。
 
 ---
 

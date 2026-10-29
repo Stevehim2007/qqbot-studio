@@ -1314,6 +1314,26 @@ class StudioManager:
 
         return self.assistant_extension.update()
 
+    def assistant_config(self) -> dict[str, Any]:
+        """Return safe assistant B config/runtime state without its key."""
+
+        return self.assistant_extension.get_config()
+
+    def save_assistant_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist assistant B config without echoing any API key."""
+
+        return self.assistant_extension.save_config(payload)
+
+    def start_assistant(self) -> dict[str, Any]:
+        """Start assistant B through the Python entrypoint with logs/PID."""
+
+        return self.assistant_extension.start()
+
+    def stop_assistant(self) -> dict[str, Any]:
+        """Stop the PID tracked assistant B process if safe."""
+
+        return self.assistant_extension.stop()
+
     def has_active_deployments(self) -> bool:
         """Return True when any cached instance is currently deploying."""
 

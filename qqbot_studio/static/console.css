@@ -1133,3 +1133,152 @@
   .assistant-b-actions { flex-direction: column; }
   .assistant-b-actions .btn { flex: 1 1 auto; }
 }
+
+/* AI 助手 B 安装后的配置面板 */
+.assistant-b-card { flex-wrap: wrap; }
+.assistant-b-runtime {
+  display: grid;
+  gap: 3px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(115, 234, 202, .17);
+  border-radius: 8px;
+}
+.assistant-b-runtime-label { color: #85a9b9; font-size: 8.5px; font-weight: 720; }
+.assistant-b-runtime code { color: #d7fff6; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.assistant-b-url-note { color: #b6cdd7; font-size: 9px; line-height: 1.55; }
+.assistant-b-config-panel {
+  position: relative;
+  z-index: 1;
+  flex: 1 0 100%;
+  padding: 15px;
+  color: var(--ink-800);
+  background:
+    radial-gradient(circle at 100% 0, rgba(67, 221, 178, .08), transparent 18rem),
+    #f7fbfd;
+  border: 1px solid #cfe1ec;
+  border-radius: 13px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8);
+}
+.assistant-b-config-heading { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; }
+.assistant-b-config-icon {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
+  color: #0f7d63;
+  background: var(--mint-100);
+  border: 1px solid #bdeedf;
+  border-radius: 8px;
+  font-size: 16px;
+}
+.assistant-b-config-heading h3 { color: var(--ink-950); font-size: 13px; }
+.assistant-b-config-heading p { margin-top: 2px; color: var(--ink-500); font-size: 9.5px; line-height: 1.6; }
+.assistant-b-config-form { display: grid; gap: 11px; }
+.assistant-b-source-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #e0eaf1;
+  border-radius: 9px;
+}
+.assistant-b-source-group legend { padding: 0 4px; color: var(--ink-600); font-size: 9.5px; font-weight: 760; }
+.assistant-b-source-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #e2ebf2;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.assistant-b-source-option:has(input:checked) { background: var(--mint-100); border-color: #a8e4d4; }
+.assistant-b-source-option input { width: 14px; height: 14px; flex: 0 0 14px; margin: 1px 0 0; accent-color: var(--mint-500); }
+.assistant-b-source-option > span { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.assistant-b-source-option strong { color: var(--ink-700); font-size: 9.5px; line-height: 1.4; }
+.assistant-b-source-option small { color: var(--ink-400); font-size: 8px; line-height: 1.5; }
+.assistant-b-config-fields { display: grid; gap: 5px; }
+.assistant-b-config-fields > label,
+.assistant-b-port-field > label { color: var(--ink-700); font-size: 9.5px; font-weight: 720; }
+.assistant-b-key-row { display: flex; align-items: stretch; gap: 6px; }
+.assistant-b-key-row input,
+.assistant-b-config-fields select,
+.assistant-b-port-field input {
+  width: 100%;
+  max-width: 100%;
+  min-height: 37px;
+  padding: 8px 10px;
+  color: var(--ink-950);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  outline: none;
+  font-size: 11px;
+}
+.assistant-b-key-row input { flex: 1; min-width: 0; }
+.assistant-b-key-row input:focus,
+.assistant-b-config-fields select:focus,
+.assistant-b-port-field input:focus {
+  border-color: var(--mint-500);
+  box-shadow: 0 0 0 3px rgba(32, 201, 151, .13);
+}
+.assistant-b-toggle-key {
+  flex: 0 0 auto;
+  min-width: 48px;
+  padding: 0 9px;
+  color: var(--ink-600);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.assistant-b-toggle-key:hover { background: #f1f8fb; border-color: #b9cedd; }
+.assistant-b-config-help { color: var(--ink-400); font-size: 8.5px; line-height: 1.55; }
+.assistant-b-port-field { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr); align-items: center; gap: 3px 10px; }
+.assistant-b-port-field > label { grid-column: 1; }
+.assistant-b-port-field > input { grid-column: 1; min-height: 35px; }
+.assistant-b-port-field > .assistant-b-config-help { grid-column: 2; align-self: center; }
+.assistant-b-port-field > .field-error { grid-column: 1 / -1; }
+.assistant-b-host-note {
+  padding: 8px 9px;
+  color: #6d5a2d;
+  background: #fffaf0;
+  border: 1px solid #efdfb8;
+  border-radius: 7px;
+  font-size: 8.8px;
+  line-height: 1.6;
+}
+.assistant-b-host-note code { color: #5a4517; font-weight: 700; }
+.assistant-b-config-error { padding: 7px 8px; color: #983441; background: var(--red-100); border: 1px solid #f2cbd2; border-radius: 7px; font-size: 9.5px; line-height: 1.55; }
+.assistant-b-config-status { padding: 7px 8px; color: #0c745b; background: var(--mint-100); border: 1px solid #bdeedf; border-radius: 7px; font-size: 9.5px; line-height: 1.55; }
+.assistant-b-config-actions { display: flex; justify-content: flex-end; gap: 7px; padding-top: 3px; }
+.assistant-b-config-actions .btn-primary { min-width: 112px; }
+
+@media (max-width: 700px) {
+  .assistant-b-config-panel { padding: 12px; }
+  .assistant-b-source-group { grid-template-columns: 1fr; }
+  .assistant-b-port-field { grid-template-columns: 1fr; }
+  .assistant-b-port-field > .assistant-b-config-help { grid-column: 1; }
+  .assistant-b-port-field > .field-error { grid-column: 1; }
+  .assistant-b-config-actions .btn { flex: 1; }
+}
+@media (max-width: 480px) {
+  .assistant-b-config-heading h3 { font-size: 12px; }
+  .assistant-b-config-panel { padding: 10px; }
+  .assistant-b-config-actions { flex-direction: column-reverse; }
+  .assistant-b-config-actions .btn { width: 100%; }
+}
+
+.assistant-b-config-status.is-info { color: #2b5d76; background: #eff9fc; border-color: #d3eaf0; }
+.assistant-b-config-status.is-success { color: #0c745b; background: var(--mint-100); border-color: #bdeedf; }
+.assistant-b-config-status.is-warning { color: #80601f; background: #fffaf0; border-color: #efdfb8; }
+.assistant-b-config-status.is-error { color: #983441; background: var(--red-100); border-color: #f2cbd2; }

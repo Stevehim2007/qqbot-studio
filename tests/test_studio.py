@@ -256,6 +256,17 @@ class StudioV3Tests(unittest.TestCase):
             str(Path(self.tmp.name) / "extensions" / "ai-assistant"),
         )
         self.assertNotIn("api_key", json.dumps(status, ensure_ascii=False).lower())
+        config = self.studio.assistant_config()
+        self.assertTrue(config["ok"])
+        self.assertFalse(config["installed"])
+        self.assertFalse(config["configured"])
+        self.assertFalse(config["running"])
+        saved = self.studio.save_assistant_config({"api_key": "sk-not-installed-123456"})
+        self.assertFalse(saved["ok"])
+        self.assertNotIn("sk-not-installed-123456", json.dumps(saved, ensure_ascii=False))
+        started = self.studio.start_assistant()
+        self.assertFalse(started["ok"])
+        self.assertFalse(started["running"])
 
     def test_v1_root_layout_is_migrated_without_rewriting_compose_or_env(self):
         with tempfile.TemporaryDirectory() as root_name:

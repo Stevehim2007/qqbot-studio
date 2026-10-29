@@ -307,11 +307,89 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertIn("sanitiseAssistantBText", block)
         self.assertIn("entry", block)
         self.assertIn("readme", block)
-        # The B helper must not read/persist API keys or emit global errors.
-        for forbidden in ("api_key", "deepseek_api_key", "localStorage", "sessionStorage", "innerHTML"):
+        # The B helper may submit a key from the form, but must not persist or display it.
+        self.assertIn("body.api_key = apiKey", block)
+        self.assertIn("keyInput.value = ''", block)
+        for forbidden in ("localStorage", "sessionStorage", "innerHTML", "state.assistantB.apiKey"):
             self.assertNotIn(forbidden, block)
         for forbidden in ("showToast", "setConsoleError"):
             self.assertNotIn(forbidden, block)
+
+    def test_optional_assistant_b_config_ui_and_api_hooks(self) -> None:
+        required_ids = {
+            "assistant-b-runtime",
+            "assistant-b-url",
+            "assistant-b-url-note",
+            "assistant-b-configure",
+            "assistant-b-configure-label",
+            "assistant-b-open",
+            "assistant-b-config-panel",
+            "assistant-b-config-form",
+            "assistant-b-key-source-independent",
+            "assistant-b-key-source-instance",
+            "assistant-b-independent-fields",
+            "assistant-b-instance-fields",
+            "assistant-b-api-key",
+            "assistant-b-instance-select",
+            "assistant-b-port",
+            "assistant-b-config-error",
+            "assistant-b-config-status",
+            "assistant-b-config-cancel",
+            "assistant-b-config-save",
+            "assistant-b-config-save-label",
+        }
+        self.assertTrue(required_ids.issubset(set(self.ids)))
+        self.assertIn('id="assistant-b-api-key" type="password"', self.html)
+        for term in (
+            "配置 AI 助手 B",
+            "复用实例 Key",
+            "DeepSeek API Key",
+            "保存并启动",
+            "loopback",
+            "SSH 隧道",
+            "默认 8766",
+            "当前后端不支持 AI 助手 B 配置/启动",
+        ):
+            self.assertIn(term, self.html + self.js)
+        for token in (
+            "/api/assistant/config",
+            "/api/assistant/start",
+            "key_source",
+            "instance_id",
+            "api_key",
+            "access_note",
+            "ssh_tunnel",
+            "configure_url",
+            "?assistant=configure",
+        ):
+            self.assertIn(token, self.js)
+        for style in (
+            ".assistant-b-runtime",
+            ".assistant-b-config-panel",
+            ".assistant-b-source-group",
+            ".assistant-b-port-field",
+        ):
+            self.assertIn(style, self.css)
+
+    def test_assistant_b_install_redirects_and_query_opens_config(self) -> None:
+        self.assertIn("scheduleAssistantBConfigRedirect", self.js)
+        self.assertIn("const target = '/console?assistant=configure'", self.js)
+        self.assertIn("URLSearchParams(window.location.search).get('assistant') === 'configure'", self.js)
+        start = self.js.index("async function runAssistantBAction")
+        end = self.js.index("function handleAssistantBInstallClick")
+        action_block = self.js[start:end]
+        self.assertIn("redirectToConfig = true", action_block)
+        self.assertIn("scheduleAssistantBConfigRedirect()", action_block)
+        self.assertIn("openConfigRequested = true", action_block)
+        # Key must be read only from the form and not persisted to browser storage.
+        form_start = self.js.index("async function handleAssistantBConfigSubmit")
+        form_end = self.js.index("function renderAssistantBCard")
+        form_block = self.js[form_start:form_end]
+        self.assertIn("apiKey = keyInput ? keyInput.value.trim() : ''", form_block)
+        self.assertIn("body.api_key = apiKey", form_block)
+        self.assertIn("if (keyInput) keyInput.value = ''", form_block)
+        for forbidden in ("localStorage", "sessionStorage", "innerHTML"):
+            self.assertNotIn(forbidden, form_block)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_console_javascript_syntax(self) -> None:

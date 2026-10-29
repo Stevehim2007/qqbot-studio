@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from qqbot_studio.assistant_ext import (
     ASSISTANT_ENTRY_FILE,
@@ -238,6 +240,366 @@ class AssistantExtensionTests(unittest.TestCase):
         self.assertFalse(status["ok"])
         self.assertIn("sudo apt-get install -y git", status["error"])
 
+
+class AssistantConfigStartTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.expected_ext = self.root / "extensions" / "ai-assistant"
+        self.expected_config = self.root / "ai-assistant" / "config.json"
+        (self.root / "studio.json").write_text(
+            json.dumps({"bind_port": 8765}), encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _make_installed_manager(self, health_checker=None, **kwargs):
+        self.expected_ext.mkdir(parents=True)
+        (self.expected_ext / ".git").mkdir()
+        (self.expected_ext / ASSISTANT_ENTRY_FILE).write_text(
+            "# assistant entry\n", encoding="utf-8"
+        )
+        (self.expected_ext / ASSISTANT_README_FILE).write_text(
+            "# readme\n", encoding="utf-8"
+        )
+        checker = health_checker or (lambda url, timeout: False)
+        return AssistantExtensionManager(
+            self.root,
+            runner=FakeGitRunner(),
+            health_checker=checker,
+            **kwargs,
+        )
+
+    def _assert_no_key(self, text, secret):
+        serialized = json.dumps(text, ensure_ascii=False)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn("api_key", serialized)
+        self.assertNotIn("deepseek_api_key", serialized)
+
+    def test_config_before_install_is_safe_and_not_500(self):
+        manager = AssistantExtensionManager(
+            self.root,
+            runner=FakeGitRunner(),
+            health_checker=lambda url, timeout: False,
+        )
+        status = manager.get_config()
+        self.assertTrue(status["ok"])
+        self.assertFalse(status["installed"])
+        self.assertFalse(status["configured"])
+        self.assertFalse(status["running"])
+        self.assertEqual(status["configure_url"], "/api/assistant/config")
+        self.assertIn("access_note", status)
+        self.assertIn("ssh_tunnel", status)
+
+        saved = manager.save_config(
+            {"key_source": "independent", "api_key": "sk-should-not-save"}
+        )
+        self.assertFalse(saved["ok"])
+        self.assertFalse(saved["installed"])
+        self.assertFalse(self.expected_config.exists())
+
+    def test_save_independent_key_is_private_and_never_echoed(self):
+        manager = self._make_installed_manager()
+        secret = "sk-independent-secret-123456789"
+        result = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "instance_id": "ignored-for-independent",
+                "port": 8766,
+                "host": "127.0.0.1",
+            }
+        )
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(result["configured"])
+        self.assertTrue(result["key_present"])
+        self.assertEqual(result["key_source"], "independent")
+        self.assertEqual(result["port"], 8766)
+        self.assertEqual(result["host"], "127.0.0.1")
+        self.assertIn("SSH", result["access_note"])
+        self._assert_no_key(result, secret)
+
+        self.assertTrue(self.expected_config.exists())
+        self.assertEqual(self.expected_config.stat().st_mode & 0o777, 0o600)
+        stored = json.loads(self.expected_config.read_text(encoding="utf-8"))
+        self.assertEqual(stored["api_key"], secret)
+        self.assertEqual(stored["instance_id"], "")
+
+        # Port-only updates preserve the hidden independent key.
+        second = manager.save_config({"port": 8767})
+        self.assertTrue(second["ok"], second.get("error"))
+        stored = json.loads(self.expected_config.read_text(encoding="utf-8"))
+        self.assertEqual(stored["api_key"], secret)
+        self.assertEqual(stored["port"], 8767)
+        self._assert_no_key(second, secret)
+
+    def test_instance_mode_checks_key_but_does_not_copy_it(self):
+        manager = self._make_installed_manager()
+        instance_secret = "sk-instance-key-never-copy-999"
+        instance_dir = self.root / "instances" / "bot-1" / "data" / "astrbot"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "cmd_config.json").write_text(
+            json.dumps({"provider": [{"key": [instance_secret]}]}),
+            encoding="utf-8",
+        )
+        result = manager.save_config(
+            {
+                "key_source": "instance",
+                "instance_id": "bot-1",
+                "api_key": "sk-request-key-must-be-cleared",
+                "port": 8768,
+            }
+        )
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(result["configured"])
+        self.assertTrue(result["key_present"])
+        self.assertEqual(result["instance_id"], "bot-1")
+        self._assert_no_key(result, instance_secret)
+
+        stored_text = self.expected_config.read_text(encoding="utf-8")
+        stored = json.loads(stored_text)
+        self.assertEqual(stored["key_source"], "instance")
+        self.assertEqual(stored["api_key"], "")
+        self.assertNotIn(instance_secret, stored_text)
+        self.assertNotIn("sk-request-key-must-be-cleared", stored_text)
+
+    def test_config_rejects_unsafe_host_ports_and_instance_id(self):
+        manager = self._make_installed_manager()
+        base = {
+            "key_source": "independent",
+            "api_key": "sk-port-validation-123456",
+            "host": "127.0.0.1",
+        }
+        # Management service port.
+        result = manager.save_config({**base, "port": 8765})
+        self.assertFalse(result["ok"])
+        self.assertIn("已被管理服务或现有机器人实例占用", result["error"])
+        # Existing instance port.
+        instance_dir = self.root / "instances" / "bot-2"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "config.json").write_text(
+            json.dumps({"ports": {"astrbot_webui": 6000, "snowluma_webui": 6001, "novnc": 6002}}),
+            encoding="utf-8",
+        )
+        result = manager.save_config({**base, "port": 6000})
+        self.assertFalse(result["ok"])
+        self.assertIn("占用", result["error"])
+        # Range boundaries.
+        for port in (4999, 10001):
+            result = manager.save_config({**base, "port": port})
+            self.assertFalse(result["ok"])
+            self.assertIn("5000-10000", result["error"])
+        # Public bind is refused explicitly.
+        result = manager.save_config({**base, "port": 8769, "host": "0.0.0.0"})
+        self.assertFalse(result["ok"])
+        self.assertIn("0.0.0.0", result["error"])
+        self.assertIn("SSH", result["error"])
+        # Unsafe instance id and key-source.
+        result = manager.save_config(
+            {"key_source": "instance", "instance_id": "../escape", "port": 8770}
+        )
+        self.assertFalse(result["ok"])
+        result = manager.save_config(
+            {"key_source": "unknown", "api_key": "sk-x-12345678", "port": 8771}
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("key_source", result["error"])
+
+    def test_default_port_avoids_management_port(self):
+        manager = self._make_installed_manager()
+        result = manager.save_config(
+            {"key_source": "independent", "api_key": "sk-default-port-123456"}
+        )
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertGreaterEqual(result["port"], 5000)
+        self.assertLessEqual(result["port"], 10000)
+        self.assertNotEqual(result["port"], 8765)
+
+    def test_start_is_detached_idempotent_and_uses_current_python(self):
+        health = {"running": False}
+        processes = []
+
+        class FakeProcess:
+            pid = 43210
+
+            def __init__(self):
+                self.terminated = False
+                self.return_code = None
+
+            def poll(self):
+                return self.return_code
+
+            def terminate(self):
+                self.terminated = True
+                self.return_code = -15
+
+            def wait(self, timeout=None):
+                return self.return_code
+
+            def kill(self):
+                self.return_code = -9
+
+        def factory(command, **kwargs):
+            health["running"] = True
+            process = FakeProcess()
+            processes.append((list(command), dict(kwargs), process))
+            return process
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: health["running"],
+            popen_factory=factory,
+            start_timeout=0.2,
+            poll_interval=0.01,
+        )
+        secret = "sk-start-secret-abcdefghijklmnop"
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "port": 8772,
+                "host": "127.0.0.1",
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+
+        started = manager.start()
+        self.assertTrue(started["ok"], started.get("error"))
+        self.assertTrue(started["running"])
+        self.assertEqual(started["action"], "started")
+        self.assertEqual(started["pid"], 43210)
+        self.assertEqual(len(processes), 1)
+        command, kwargs, _process = processes[0]
+        self.assertEqual(command[0], sys.executable)
+        self.assertEqual(command[1], str(self.expected_ext / ASSISTANT_ENTRY_FILE))
+        self.assertEqual(command[2], "--config")
+        self.assertEqual(command[3], str(self.expected_config))
+        self.assertIn("QQBOT_STUDIO_HOME", kwargs["env"])
+        self.assertNotIn(secret, json.dumps(kwargs["env"], ensure_ascii=False))
+        self.assertEqual(self.expected_config.stat().st_mode & 0o777, 0o600)
+        self.assertTrue((self.root / "ai-assistant" / "assistant.pid").exists())
+        self.assertTrue((self.root / "ai-assistant" / "assistant.log").exists())
+        self._assert_no_key(started, secret)
+
+        again = manager.start()
+        self.assertTrue(again["ok"], again.get("error"))
+        self.assertEqual(again["action"], "already_running")
+        self.assertEqual(len(processes), 1)
+
+    def test_start_failure_is_clear_and_cleans_pid(self):
+        health = {"running": False}
+
+        class StuckProcess:
+            pid = 43211
+
+            def __init__(self):
+                self.terminated = False
+                self.return_code = None
+
+            def poll(self):
+                return self.return_code
+
+            def terminate(self):
+                self.terminated = True
+                self.return_code = -15
+
+            def wait(self, timeout=None):
+                return self.return_code
+
+            def kill(self):
+                self.return_code = -9
+
+        process = StuckProcess()
+
+        def factory(command, **kwargs):
+            return process
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: health["running"],
+            popen_factory=factory,
+            start_timeout=0.04,
+            poll_interval=0.01,
+        )
+        manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": "sk-failing-start-123456",
+                "port": 8773,
+            }
+        )
+        result = manager.start()
+        self.assertFalse(result["ok"])
+        self.assertIn("启动失败或未就绪", result["message"])
+        self.assertTrue(process.terminated)
+        self.assertFalse((self.root / "ai-assistant" / "assistant.pid").exists())
+        self._assert_no_key(result, "sk-failing-start-123456")
+
+    def test_start_requires_an_available_key(self):
+        manager = self._make_installed_manager()
+        configured = manager.save_config({"port": 8775, "key_source": "independent"})
+        self.assertTrue(configured["ok"], configured.get("error"))
+        self.assertFalse(configured["configured"])
+        result = manager.start()
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["running"])
+        self.assertIn("API Key", result["message"])
+
+    def test_stop_uses_tracked_pid_and_is_clean(self):
+        health = {"running": False}
+
+        class FakeProcess:
+            pid = 43212
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        def factory(command, **kwargs):
+            health["running"] = True
+            return FakeProcess()
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: health["running"],
+            popen_factory=factory,
+            start_timeout=0.2,
+            poll_interval=0.01,
+        )
+        manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": "sk-stop-test-123456789",
+                "port": 8774,
+            }
+        )
+        started = manager.start()
+        self.assertTrue(started["ok"], started.get("error"))
+        self.assertTrue((self.root / "ai-assistant" / "assistant.pid").exists())
+
+        def fake_kill(pid, sig):
+            health["running"] = False
+
+        with mock.patch("qqbot_studio.assistant_ext.os.kill", side_effect=fake_kill):
+            stopped = manager.stop()
+        self.assertTrue(stopped["ok"], stopped.get("error"))
+        self.assertFalse(stopped["running"])
+        self.assertEqual(stopped["action"], "stopped")
+        self.assertFalse((self.root / "ai-assistant" / "assistant.pid").exists())
+        self._assert_no_key(stopped, "sk-stop-test-123456789")
+
+    def test_start_without_config_is_rejected(self):
+        manager = self._make_installed_manager()
+        result = manager.start()
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["running"])
+        self.assertIn("尚未配置", result["message"])
 
 class AssistantInstallScriptTests(unittest.TestCase):
     def test_install_script_has_optional_fixed_repo_installer(self):

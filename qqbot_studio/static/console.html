@@ -36,6 +36,7 @@
     <symbol id="c-i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
     <symbol id="c-i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="c-i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3Z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/><path d="m5 14 .6 1.4L7 16l-1.4.6L5 18l-.6-1.4L3 16l1.4-.6L5 14Z"/></symbol>
+    <symbol id="c-i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
   </svg>
 
   <header class="console-header">
@@ -135,6 +136,11 @@
             <span class="pill pill--success">A · 离线使用助手</span>
             <span>默认可用，无需安装 B。</span>
           </div>
+          <div id="assistant-b-runtime" class="assistant-b-runtime" hidden>
+            <span class="assistant-b-runtime-label">AI 助手 B 地址</span>
+            <code id="assistant-b-url">未提供</code>
+            <p id="assistant-b-url-note" class="assistant-b-url-note"></p>
+          </div>
         </div>
       </div>
       <div class="assistant-b-actions">
@@ -146,11 +152,78 @@
           <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
           <span id="assistant-b-update-label">更新 AI 助手 B</span>
         </button>
+        <button id="assistant-b-configure" class="btn btn-secondary btn-small" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#c-i-settings"></use></svg>
+          <span id="assistant-b-configure-label">配置 AI 助手 B</span>
+        </button>
+        <a id="assistant-b-open" class="btn btn-primary btn-small" href="#" target="_blank" rel="noopener noreferrer" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#c-i-external"></use></svg>
+          打开 AI 助手 B
+        </a>
         <button id="assistant-b-retry" class="btn btn-quiet btn-small" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
           重试状态
         </button>
       </div>
+
+      <section id="assistant-b-config-panel" class="assistant-b-config-panel" aria-labelledby="assistant-b-config-title" hidden>
+        <div class="assistant-b-config-heading">
+          <span class="assistant-b-config-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-settings"></use></svg></span>
+          <div>
+            <h3 id="assistant-b-config-title">配置 AI 助手 B</h3>
+            <p>配置只写入本机 B 配置目录；API Key 不会保存到浏览器，也不会在状态接口中回显。</p>
+          </div>
+        </div>
+        <form id="assistant-b-config-form" class="assistant-b-config-form" novalidate>
+          <fieldset class="assistant-b-source-group">
+            <legend>DeepSeek Key 来源</legend>
+            <label class="assistant-b-source-option">
+              <input id="assistant-b-key-source-independent" type="radio" name="assistant-b-key-source" value="independent" checked>
+              <span><strong>独立 DeepSeek API Key</strong><small>只写入本机 B 配置；不持久化到浏览器。</small></span>
+            </label>
+            <label class="assistant-b-source-option">
+              <input id="assistant-b-key-source-instance" type="radio" name="assistant-b-key-source" value="instance">
+              <span><strong>复用实例 Key</strong><small>只提交实例 ID，浏览器不会读取实例 Key。</small></span>
+            </label>
+          </fieldset>
+
+          <div id="assistant-b-independent-fields" class="assistant-b-config-fields">
+            <label for="assistant-b-api-key">DeepSeek API Key</label>
+            <div class="assistant-b-key-row">
+              <input id="assistant-b-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." aria-describedby="assistant-b-config-key-hint assistant-b-key-error">
+              <button id="assistant-b-toggle-key" class="assistant-b-toggle-key" type="button" aria-pressed="false">显示</button>
+            </div>
+            <p id="assistant-b-config-key-hint" class="assistant-b-config-help">已保存的 Key 不会回显；如已有 Key，可留空保持原值。</p>
+            <p id="assistant-b-key-error" class="field-error" role="alert" hidden></p>
+          </div>
+
+          <div id="assistant-b-instance-fields" class="assistant-b-config-fields" hidden>
+            <label for="assistant-b-instance-select">选择机器人实例</label>
+            <select id="assistant-b-instance-select" aria-describedby="assistant-b-instance-help assistant-b-instance-error">
+              <option value="">请选择实例</option>
+            </select>
+            <p id="assistant-b-instance-help" class="assistant-b-config-help">只提交实例 ID；实例真实 DeepSeek Key 不会返回浏览器。</p>
+            <p id="assistant-b-instance-error" class="field-error" role="alert" hidden></p>
+          </div>
+
+          <div class="assistant-b-port-field">
+            <label for="assistant-b-port">AI 助手 B 端口</label>
+            <input id="assistant-b-port" type="number" inputmode="numeric" min="5000" max="10000" step="1" value="8766" aria-describedby="assistant-b-port-help assistant-b-port-error">
+            <p id="assistant-b-port-help" class="assistant-b-config-help">默认 8766；端口由本地服务校验，避免和管理服务或实例端口冲突。</p>
+            <p id="assistant-b-port-error" class="field-error" role="alert" hidden></p>
+          </div>
+
+          <p class="assistant-b-host-note">监听地址固定为 <code>127.0.0.1</code>（仅本机）。如果控制台部署在远程服务器，需要通过 SSH 隧道访问，不能把 loopback 地址当作公网地址。</p>
+          <p id="assistant-b-config-error" class="assistant-b-config-error" role="alert" hidden></p>
+          <p id="assistant-b-config-status" class="assistant-b-config-status" role="status" hidden></p>
+          <div class="assistant-b-config-actions">
+            <button id="assistant-b-config-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
+            <button id="assistant-b-config-save" class="btn btn-primary btn-small" type="submit">
+              <span id="assistant-b-config-save-label">保存并启动</span>
+            </button>
+          </div>
+        </form>
+      </section>
     </section>
 
     <section id="console-resource-summary" class="console-resource-summary" aria-labelledby="console-resource-title">

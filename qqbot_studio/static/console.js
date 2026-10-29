@@ -59,7 +59,31 @@
       busy: false,
       armed: false,
       action: '',
-      updatedAt: 0
+      updatedAt: 0,
+      configPanelOpen: false,
+      openConfigRequested: false,
+      config: {
+        status: 'idle',
+        loading: false,
+        saving: false,
+        configured: false,
+        running: false,
+        url: '',
+        configPath: '',
+        accessNote: '',
+        sshTunnel: '',
+        pid: '',
+        logPath: '',
+        pidPath: '',
+        keyPresent: false,
+        keySource: 'independent',
+        instanceId: '',
+        port: 8766,
+        host: '127.0.0.1',
+        message: '',
+        error: '',
+        updatedAt: 0
+      }
     }
   };
 
@@ -1576,6 +1600,7 @@
       const allStatsUnsupported = statsEntries.length > 0 && statsEntries.every((entry) => entry.status === 'unsupported');
       state.instances = v3Instances;
       state.loadedOnce = true;
+      if (state.assistantB.configPanelOpen) populateAssistantBInstanceOptions();
       state.lastSyncedAt = Date.now();
       state.globalResourceStats = successfulStats;
       state.globalResourceStatus = successfulStats
@@ -2255,7 +2280,7 @@
   function extractAssistantBSource(raw) {
     const root = asRecord(raw);
     let source = { ...root };
-    for (const key of ['assistant', 'status', 'result']) {
+    for (const key of ['assistant', 'status', 'result', 'config']) {
       const nested = asRecord(root[key]);
       if (Object.keys(nested).length > 0) source = { ...source, ...nested };
     }
@@ -2284,6 +2309,464 @@
     };
   }
 
+  function normaliseAssistantBConfig(raw, previous = {}) {
+    const source = extractAssistantBSource(raw);
+    const prev = asRecord(previous);
+    const ok = source.ok !== false;
+    const configuredValue = boolOrUndefined(source.configured);
+    const runningValue = boolOrUndefined(source.running);
+    const keyPresentValue = boolOrUndefined(source.key_present);
+    const keySourceValue = textValue(source.key_source || source.keySource, '').trim().toLowerCase();
+    const keySource = keySourceValue === 'instance' || keySourceValue === 'independent'
+      ? keySourceValue
+      : (prev.keySource === 'instance' ? 'instance' : 'independent');
+    const portValue = numberOrUndefined(source.port);
+    const port = portValue !== undefined
+      ? Math.round(portValue)
+      : (numberOrUndefined(prev.port) !== undefined ? Math.round(numberOrUndefined(prev.port)) : 8766);
+    const message = sanitiseAssistantBText(source.message);
+    const error = sanitiseAssistantBText(source.error || (ok ? '' : message));
+    return {
+      status: ok ? 'ok' : 'error',
+      configured: configuredValue === undefined ? Boolean(prev.configured) : configuredValue,
+      hasConfiguredField: configuredValue !== undefined,
+      running: runningValue === undefined ? Boolean(prev.running) : runningValue,
+      hasRunningField: runningValue !== undefined,
+      url: textValue(source.url, prev.url || ''),
+      configureUrl: textValue(source.configure_url, prev.configureUrl || ''),
+      configPath: textValue(source.config_path, prev.configPath || ''),
+      accessNote: sanitiseAssistantBText(textValue(source.access_note, prev.accessNote || '')),
+      sshTunnel: sanitiseAssistantBText(textValue(source.ssh_tunnel, prev.sshTunnel || '')),
+      pid: textValue(source.pid, prev.pid || ''),
+      logPath: textValue(source.log_path, prev.logPath || ''),
+      pidPath: textValue(source.pid_path, prev.pidPath || ''),
+      keyPresent: keyPresentValue === undefined ? Boolean(prev.keyPresent) : keyPresentValue,
+      hasKeyPresentField: keyPresentValue !== undefined,
+      keySource,
+      instanceId: textValue(source.instance_id, prev.instanceId || ''),
+      port,
+      host: textValue(source.host, prev.host || '127.0.0.1'),
+      message,
+      error,
+      action: textValue(source.action, ''),
+      updatedAt: Date.now()
+    };
+  }
+
+  function isAssistantBLoopbackUrl(rawUrl) {
+    const value = textValue(rawUrl, '').trim();
+    if (!value) return false;
+    try {
+      const hostname = new URL(value).hostname.toLowerCase();
+      return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1' || hostname === '[::1]';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function isAssistantBWildcardUrl(rawUrl) {
+    const value = textValue(rawUrl, '').trim();
+    if (!value) return false;
+    try {
+      const hostname = new URL(value).hostname.toLowerCase();
+      return hostname === '0.0.0.0' || hostname === '::' || hostname === '[::]';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function setAssistantBConfigStatus(message, tone = 'info') {
+    const element = $('assistant-b-config-status');
+    if (!element) return;
+    element.textContent = message || '';
+    element.className = `assistant-b-config-status is-${tone}`;
+    element.hidden = !message;
+  }
+
+  function setAssistantBConfigError(message) {
+    const element = $('assistant-b-config-error');
+    if (!element) return;
+    element.textContent = message || '';
+    element.hidden = !message;
+  }
+
+  function setAssistantBConfigFieldError(input, errorElement, message) {
+    if (input) input.setAttribute('aria-invalid', 'true');
+    if (errorElement) {
+      errorElement.textContent = message || '';
+      errorElement.hidden = !message;
+    }
+  }
+
+  function clearAssistantBConfigErrors() {
+    for (const pair of [
+      ['assistant-b-api-key', 'assistant-b-key-error'],
+      ['assistant-b-instance-select', 'assistant-b-instance-error'],
+      ['assistant-b-port', 'assistant-b-port-error']
+    ]) {
+      const input = $(pair[0]);
+      const error = $(pair[1]);
+      if (input) input.removeAttribute('aria-invalid');
+      if (error) {
+        error.textContent = '';
+        error.hidden = true;
+      }
+    }
+    setAssistantBConfigError('');
+  }
+
+  function populateAssistantBInstanceOptions() {
+    const select = $('assistant-b-instance-select');
+    if (!select) return;
+    const desired = select.value || state.assistantB.config.instanceId || '';
+    select.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = state.instances.length ? '请选择实例' : '暂无可用实例，请改用独立 Key';
+    select.appendChild(placeholder);
+    for (const instance of state.instances) {
+      const option = document.createElement('option');
+      option.value = instance.id;
+      const qq = instance.qq_account ? ` · QQ ${instance.qq_account}` : '';
+      option.textContent = `${instance.name} · ${instance.id}${qq}`;
+      select.appendChild(option);
+    }
+    if (desired && !state.instances.some((instance) => instance.id === desired)) {
+      const option = document.createElement('option');
+      option.value = desired;
+      option.textContent = `配置中的实例 · ${desired}`;
+      select.appendChild(option);
+    }
+    select.value = desired;
+  }
+
+  function syncAssistantBConfigSourceFields() {
+    const instanceRadio = $('assistant-b-key-source-instance');
+    const independentFields = $('assistant-b-independent-fields');
+    const instanceFields = $('assistant-b-instance-fields');
+    const keyHint = $('assistant-b-config-key-hint');
+    const source = instanceRadio && instanceRadio.checked ? 'instance' : 'independent';
+    if (independentFields) independentFields.hidden = source !== 'independent';
+    if (instanceFields) instanceFields.hidden = source !== 'instance';
+    if (keyHint) {
+      const config = state.assistantB.config;
+      keyHint.textContent = source === 'independent' && config.keyPresent && config.keySource === 'independent'
+        ? '本机已保存独立 Key；留空保持原值，输入新 Key 可覆盖。Key 不会回显或保存到浏览器。'
+        : source === 'independent'
+          ? '只写入本机 B 配置目录，不保存到浏览器内存之外。'
+          : '只提交所选实例 ID；实例的真实 DeepSeek Key 不会返回浏览器。';
+    }
+  }
+
+  function populateAssistantBConfigForm() {
+    const config = state.assistantB.config;
+    const source = config.keySource === 'instance' ? 'instance' : 'independent';
+    const independentRadio = $('assistant-b-key-source-independent');
+    const instanceRadio = $('assistant-b-key-source-instance');
+    const keyInput = $('assistant-b-api-key');
+    const portInput = $('assistant-b-port');
+    const select = $('assistant-b-instance-select');
+    if (independentRadio) independentRadio.checked = source === 'independent';
+    if (instanceRadio) instanceRadio.checked = source === 'instance';
+    populateAssistantBInstanceOptions();
+    if (select) select.value = config.instanceId || '';
+    if (portInput) portInput.value = String(config.port || 8766);
+    if (keyInput) {
+      keyInput.value = '';
+      keyInput.type = 'password';
+      const toggle = $('assistant-b-toggle-key');
+      if (toggle) {
+        toggle.textContent = '显示';
+        toggle.setAttribute('aria-pressed', 'false');
+      }
+    }
+    clearAssistantBConfigErrors();
+    syncAssistantBConfigSourceFields();
+    if (config.status === 'error') {
+      setAssistantBConfigError(config.error || 'AI 助手 B 配置读取失败。');
+    } else if (config.configured && config.running) {
+      setAssistantBConfigStatus('已保存配置，AI 助手 B 正在运行。', 'success');
+    } else if (config.configured) {
+      setAssistantBConfigStatus('配置已保存但尚未启动；点击“保存并启动”重试启动。', 'info');
+    } else {
+      setAssistantBConfigStatus('', 'info');
+    }
+  }
+
+  function assistantBConfigFocusTarget() {
+    const instanceRadio = $('assistant-b-key-source-instance');
+    if (instanceRadio && instanceRadio.checked) return $('assistant-b-instance-select');
+    return $('assistant-b-api-key');
+  }
+
+  function openAssistantBConfigPanel(options = {}) {
+    const assistant = state.assistantB;
+    if (!assistant.installed) return false;
+    if (assistant.config.status !== 'ok') {
+      if (assistant.config.status !== 'unsupported') {
+        void loadAssistantBConfig({ silent: false, open: true });
+      }
+      return false;
+    }
+    const panel = $('assistant-b-config-panel');
+    if (!panel) return false;
+    assistant.configPanelOpen = true;
+    panel.hidden = false;
+    renderAssistantBCard();
+    const configureButton = $('assistant-b-configure');
+    if (configureButton) configureButton.setAttribute('aria-expanded', 'true');
+    populateAssistantBConfigForm();
+    panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (options.focus !== false) {
+      const target = assistantBConfigFocusTarget();
+      if (target) target.focus({ preventScroll: true });
+    }
+    return true;
+  }
+
+  function closeAssistantBConfigPanel(options = {}) {
+    const panel = $('assistant-b-config-panel');
+    const assistant = state.assistantB;
+    assistant.configPanelOpen = false;
+    if (panel) panel.hidden = true;
+    const configureButton = $('assistant-b-configure');
+    if (configureButton) configureButton.setAttribute('aria-expanded', 'false');
+    const keyInput = $('assistant-b-api-key');
+    if (keyInput) {
+      keyInput.value = '';
+      keyInput.type = 'password';
+      keyInput.removeAttribute('aria-invalid');
+    }
+    const toggle = $('assistant-b-toggle-key');
+    if (toggle) {
+      toggle.textContent = '显示';
+      toggle.setAttribute('aria-pressed', 'false');
+    }
+    setAssistantBConfigError('');
+    setAssistantBConfigStatus('', 'info');
+    renderAssistantBCard();
+    if (options.restoreFocus !== false && configureButton && !configureButton.hidden) {
+      configureButton.focus({ preventScroll: true });
+    }
+  }
+
+  async function loadAssistantBConfig(options = {}) {
+    const assistant = state.assistantB;
+    if (!assistant.installed) return false;
+    if (assistant.config.loading) return false;
+    const silent = options.silent !== false;
+    if (assistant.config.status === 'unsupported' && silent && options.open !== true) return false;
+    assistant.config.loading = true;
+    assistant.config.error = '';
+    renderAssistantBCard();
+    try {
+      const data = await apiRequest('/api/assistant/config');
+      if (!data || data.ok === false) {
+        throw new ApiError(
+          sanitiseAssistantBText(asRecord(data).message || asRecord(data).error) || 'AI 助手 B 配置读取失败。',
+          { data }
+        );
+      }
+      const normalized = normaliseAssistantBConfig(data, assistant.config);
+      assistant.config = {
+        ...assistant.config,
+        ...normalized,
+        status: 'ok',
+        loading: false,
+        error: ''
+      };
+      renderAssistantBCard();
+      if (assistant.configPanelOpen) populateAssistantBInstanceOptions();
+      if (options.open === true || assistant.openConfigRequested) {
+        assistant.openConfigRequested = false;
+        openAssistantBConfigPanel({ focus: true });
+      }
+      return true;
+    } catch (error) {
+      const errorData = error instanceof ApiError ? asRecord(error.data) : {};
+      const partial = Object.keys(errorData).length > 0
+        ? normaliseAssistantBConfig(errorData, assistant.config)
+        : null;
+      const unsupported = isMissingEndpointError(error)
+        || assistantBErrorMessageIsUnsupported(error instanceof ApiError ? error.message : '')
+        || Boolean(partial && assistantBErrorMessageIsUnsupported(`${partial.message} ${partial.error}`));
+      assistant.config = {
+        ...assistant.config,
+        ...(partial || {}),
+        status: unsupported ? 'unsupported' : 'error',
+        loading: false,
+        error: unsupported
+          ? '当前后端不支持 AI 助手 B 配置/启动。'
+          : formatError(error, 'AI 助手 B 配置读取失败。')
+      };
+      if (unsupported) assistant.openConfigRequested = false;
+      renderAssistantBCard();
+      return false;
+    }
+  }
+
+  async function handleAssistantBConfigureClick() {
+    const assistant = state.assistantB;
+    if (!assistant.installed || assistant.config.status === 'unsupported') return;
+    if (assistant.configPanelOpen) {
+      closeAssistantBConfigPanel();
+      return;
+    }
+    if (assistant.config.status === 'ok') {
+      openAssistantBConfigPanel({ focus: true });
+    } else {
+      await loadAssistantBConfig({ silent: false, open: true });
+    }
+  }
+
+  function scheduleAssistantBConfigRedirect() {
+    const target = '/console?assistant=configure';
+    window.setTimeout(() => {
+      try {
+        if (window.location && typeof window.location.assign === 'function') {
+          window.location.assign(target);
+        } else if (window.location) {
+          window.location.href = target;
+        }
+      } catch (error) {
+        // The card remains usable if a test or locked-down browser blocks navigation.
+      }
+    }, 800);
+  }
+
+  async function handleAssistantBConfigSubmit(event) {
+    event.preventDefault();
+    const assistant = state.assistantB;
+    if (!assistant.installed || assistant.config.saving) return;
+    clearAssistantBConfigErrors();
+    setAssistantBConfigStatus('', 'info');
+
+    const independentRadio = $('assistant-b-key-source-independent');
+    const instanceRadio = $('assistant-b-key-source-instance');
+    const source = instanceRadio && instanceRadio.checked ? 'instance' : 'independent';
+    const keyInput = $('assistant-b-api-key');
+    const instanceSelect = $('assistant-b-instance-select');
+    const portInput = $('assistant-b-port');
+    const apiKey = keyInput ? keyInput.value.trim() : '';
+    const instanceId = instanceSelect ? instanceSelect.value.trim() : '';
+    const existingIndependentKey = assistant.config.keyPresent && assistant.config.keySource === 'independent';
+    let valid = true;
+
+    if (source === 'independent') {
+      if (!apiKey && !existingIndependentKey) {
+        setAssistantBConfigFieldError(keyInput, $('assistant-b-key-error'), '请输入独立的 DeepSeek API Key。');
+        valid = false;
+      }
+    } else if (!instanceId || !state.instances.some((instance) => instance.id === instanceId)) {
+      setAssistantBConfigFieldError(instanceSelect, $('assistant-b-instance-error'), '请选择一个可用实例。');
+      valid = false;
+    }
+
+    const port = Number(portInput ? portInput.value : 0);
+    if (!Number.isInteger(port) || port < 5000 || port > 10000) {
+      setAssistantBConfigFieldError(portInput, $('assistant-b-port-error'), '端口必须是 5000–10000 之间的整数。');
+      valid = false;
+    }
+    if (!valid) {
+      const target = source === 'independent'
+        ? (apiKey || existingIndependentKey ? portInput : keyInput)
+        : (instanceId ? portInput : instanceSelect);
+      if (target) target.focus({ preventScroll: true });
+      return;
+    }
+
+    const body = {
+      key_source: source,
+      port,
+      host: '127.0.0.1'
+    };
+    if (source === 'independent' && apiKey) body.api_key = apiKey;
+    if (source === 'instance') body.instance_id = instanceId;
+
+    assistant.config.saving = true;
+    assistant.config.phase = 'saving';
+    assistant.actionError = '';
+    setAssistantBConfigStatus('正在保存配置…', 'info');
+    renderAssistantBCard();
+    try {
+      const configData = await apiRequest('/api/assistant/config', { method: 'POST', body });
+      if (!configData || configData.ok === false) {
+        throw new ApiError(
+          sanitiseAssistantBText(asRecord(configData).message || asRecord(configData).error) || 'AI 助手 B 配置保存失败。',
+          { data: configData }
+        );
+      }
+      const saved = normaliseAssistantBConfig(configData, assistant.config);
+      assistant.config = {
+        ...assistant.config,
+        ...saved,
+        status: 'ok',
+        configured: saved.hasConfiguredField ? saved.configured : true,
+        keyPresent: saved.hasKeyPresentField
+          ? saved.keyPresent
+          : (source === 'independent' ? Boolean(apiKey) || existingIndependentKey : true),
+        keySource: source,
+        instanceId: source === 'instance' ? instanceId : (saved.instanceId || ''),
+        port,
+        host: '127.0.0.1',
+        error: ''
+      };
+      if (keyInput) keyInput.value = '';
+      setAssistantBConfigStatus('配置已保存，正在启动 AI 助手 B…', 'info');
+      assistant.config.phase = 'starting';
+      renderAssistantBCard();
+
+      const startData = await apiRequest('/api/assistant/start', { method: 'POST', body: {} });
+      if (!startData || startData.ok === false) {
+        throw new ApiError(
+          sanitiseAssistantBText(asRecord(startData).message || asRecord(startData).error) || 'AI 助手 B 启动失败。',
+          { data: startData }
+        );
+      }
+      const started = normaliseAssistantBConfig(startData, assistant.config);
+      assistant.config = {
+        ...assistant.config,
+        ...started,
+        status: 'ok',
+        configured: true,
+        running: started.hasRunningField ? started.running : true,
+        keySource: source,
+        instanceId: source === 'instance' ? instanceId : assistant.config.instanceId,
+        port,
+        host: '127.0.0.1',
+        saving: false,
+        phase: '',
+        error: '',
+        message: started.message || 'AI 助手 B 已启动。'
+      };
+      assistant.message = assistant.config.message;
+      assistant.actionError = '';
+      assistant.configPanelOpen = false;
+      const panel = $('assistant-b-config-panel');
+      if (panel) panel.hidden = true;
+      const configureButton = $('assistant-b-configure');
+      if (configureButton) configureButton.setAttribute('aria-expanded', 'false');
+      renderAssistantBCard();
+    } catch (error) {
+      const errorData = error instanceof ApiError ? asRecord(error.data) : {};
+      const unsupported = isMissingEndpointError(error)
+        || assistantBErrorMessageIsUnsupported(error instanceof ApiError ? error.message : '');
+      const message = unsupported
+        ? '当前后端不支持 AI 助手 B 配置/启动。'
+        : formatError(error, 'AI 助手 B 配置或启动失败。');
+      assistant.config.error = message;
+      assistant.actionError = message;
+      if (unsupported) assistant.config.status = 'unsupported';
+      setAssistantBConfigError(message);
+      setAssistantBConfigStatus('', 'info');
+      renderAssistantBCard();
+    } finally {
+      assistant.config.saving = false;
+      assistant.config.phase = '';
+      renderAssistantBCard();
+    }
+  }
+
   function renderAssistantBCard() {
     const assistant = state.assistantB;
     const badge = $('assistant-b-badge');
@@ -2299,6 +2782,17 @@
     const updateButton = $('assistant-b-update');
     const updateLabel = $('assistant-b-update-label');
     const retryButton = $('assistant-b-retry');
+    const configureButton = $('assistant-b-configure');
+    const configureLabel = $('assistant-b-configure-label');
+    const openButton = $('assistant-b-open');
+    const runtime = $('assistant-b-runtime');
+    const urlElement = $('assistant-b-url');
+    const urlNote = $('assistant-b-url-note');
+    const configPanel = $('assistant-b-config-panel');
+    const configSaveButton = $('assistant-b-config-save');
+    const configSaveLabel = $('assistant-b-config-save-label');
+    const configCancelButton = $('assistant-b-config-cancel');
+    const config = assistant.config || {};
 
     if (!statusElement) return;
 
@@ -2308,6 +2802,8 @@
       setPill(badge, '后端不支持', 'warning');
     } else if (assistant.status === 'error') {
       setPill(badge, '状态异常', 'danger');
+    } else if (assistant.installed && config.running) {
+      setPill(badge, '运行中', 'success');
     } else if (assistant.installed) {
       setPill(badge, '已安装', 'success');
     } else {
@@ -2333,6 +2829,24 @@
     } else if (assistant.status === 'error') {
       statusText = assistant.error || 'AI 助手 B 状态读取失败。';
       statusTone = 'error';
+    } else if (assistant.installed && config.saving) {
+      statusText = config.phase === 'starting' ? '配置已保存，正在启动 AI 助手 B…' : '正在保存 AI 助手 B 配置…';
+      statusTone = 'info';
+    } else if (assistant.installed && config.status === 'unsupported') {
+      statusText = 'AI 助手 B 已安装；当前后端不支持配置/启动。';
+      statusTone = 'warning';
+    } else if (assistant.installed && config.status === 'error') {
+      statusText = `AI 助手 B 已安装；配置状态读取失败：${config.error || '未知错误'}`;
+      statusTone = 'error';
+    } else if (assistant.installed && config.loading) {
+      statusText = 'AI 助手 B 已安装，正在读取配置状态…';
+      statusTone = 'info';
+    } else if (assistant.installed && config.running) {
+      statusText = config.message || 'AI 助手 B 已配置并启动。';
+      statusTone = 'success';
+    } else if (assistant.installed && config.configured) {
+      statusText = config.message || 'AI 助手 B 已配置，但尚未启动。';
+      statusTone = 'info';
     } else if (assistant.installed) {
       statusText = assistant.message || 'AI 助手 B 已安装。';
       statusTone = 'success';
@@ -2377,7 +2891,17 @@
       } else if (assistant.status === 'error') {
         hint.textContent = '状态读取失败时可点击“重试状态”。不会自动安装或下载任何内容。';
       } else if (assistant.installed) {
-        hint.textContent = 'AI 助手 B 的 API Key 由其独立配置管理，本控制台不会读取或展示。A 离线助手仍默认可用。';
+        if (config.status === 'unsupported') {
+          hint.textContent = 'B 已安装，但当前后端不支持配置/启动；仍可查看状态或更新扩展。A 离线助手不受影响。';
+        } else if (config.status === 'error') {
+          hint.textContent = 'B 已安装，但配置状态读取失败；可点击“重试状态”。不会伪造启动地址。';
+        } else if (config.running) {
+          hint.textContent = 'AI 助手 B 已启动。若 URL 是 loopback，远程访问必须使用 SSH 隧道或在本机打开；不要把它当作公网直连地址。';
+        } else if (config.configured) {
+          hint.textContent = '配置已保存但尚未启动。点击“配置 / 启动”可重试启动；控制台不会读取或展示 API Key。';
+        } else {
+          hint.textContent = 'AI 助手 B 已安装。点击“配置 AI 助手 B”设置独立 Key 或复用实例 Key；API Key 不会保存到浏览器。';
+        }
       } else if (assistant.armed) {
         hint.textContent = '再次点击将联网 clone 官方仓库。不会自动执行；如不同意，请不要再次点击。';
       } else {
@@ -2387,6 +2911,10 @@
 
     const installVisible = assistant.status === 'ok' && !assistant.installed;
     const updateVisible = assistant.status === 'ok' && assistant.installed;
+    const configureVisible = assistant.status === 'ok'
+      && assistant.installed
+      && config.status === 'ok';
+    const running = assistant.installed && config.running === true;
     if (installButton) {
       installButton.hidden = !installVisible;
       installButton.disabled = assistant.loading || assistant.busy;
@@ -2407,7 +2935,83 @@
     if (updateLabel) {
       updateLabel.textContent = assistant.busy && assistant.action === 'update' ? '正在更新…' : '更新 AI 助手 B';
     }
-    if (retryButton) retryButton.hidden = assistant.status !== 'error';
+    if (configureButton) {
+      configureButton.hidden = !configureVisible;
+      configureButton.disabled = assistant.config.loading || assistant.config.saving;
+      configureButton.setAttribute('aria-expanded', assistant.configPanelOpen ? 'true' : 'false');
+    }
+    if (configureLabel) {
+      configureLabel.textContent = assistant.configPanelOpen
+        ? '收起配置'
+        : config.running
+          ? '修改配置'
+          : config.configured
+            ? '配置 / 启动'
+            : '配置 AI 助手 B';
+    }
+    if (openButton) {
+      openButton.hidden = !running;
+      const safeUrl = safeHttpUrl(config.url);
+      if (safeUrl) {
+        openButton.href = safeUrl;
+        openButton.target = '_blank';
+        openButton.rel = 'noopener noreferrer';
+        openButton.removeAttribute('aria-disabled');
+        openButton.removeAttribute('tabindex');
+        openButton.title = safeUrl;
+      } else {
+        openButton.removeAttribute('href');
+        openButton.removeAttribute('target');
+        openButton.setAttribute('aria-disabled', 'true');
+        openButton.title = '服务端尚未返回可打开的安全 URL';
+      }
+    }
+    if (runtime) runtime.hidden = !running;
+    if (urlElement) urlElement.textContent = config.url || '未提供';
+    if (urlNote) {
+      if (!running) {
+        urlNote.textContent = '';
+      } else if (!config.url) {
+        urlNote.textContent = '服务端表示已启动，但没有返回访问 URL；请查看 B 的配置和日志。';
+      } else if (isAssistantBLoopbackUrl(config.url)) {
+        const tunnel = config.sshTunnel ? ` ${config.sshTunnel}` : '';
+        const note = config.accessNote ? ` ${config.accessNote}` : '';
+        urlNote.textContent = `该地址是 loopback（仅本机回环）。从远程电脑访问必须使用 SSH 隧道，或直接在服务器本机浏览器打开；它不是公网直连地址。${note}${tunnel}`;
+      } else if (isAssistantBWildcardUrl(config.url)) {
+        urlNote.textContent = config.accessNote
+          || '0.0.0.0 是监听地址，不是可直接连接的公网地址；请使用服务器公网 IP/域名，并确认防火墙和安全组。';
+      } else {
+        urlNote.textContent = config.accessNote
+          || '请确认该地址可达且防火墙/安全组已按需配置；不要把无认证的服务直接暴露到公网。';
+      }
+    }
+    if (configPanel) {
+      const panelAllowed = assistant.installed && assistant.status === 'ok' && config.status === 'ok';
+      if (assistant.configPanelOpen && !panelAllowed) assistant.configPanelOpen = false;
+      configPanel.hidden = !(assistant.configPanelOpen && panelAllowed);
+    }
+    if (configSaveButton) configSaveButton.disabled = config.saving === true;
+    if (configSaveLabel) {
+      configSaveLabel.textContent = config.saving
+        ? (config.phase === 'starting' ? '正在启动…' : '正在保存…')
+        : '保存并启动';
+    }
+    if (configCancelButton) configCancelButton.disabled = config.saving === true;
+    for (const id of [
+      'assistant-b-key-source-independent',
+      'assistant-b-key-source-instance',
+      'assistant-b-api-key',
+      'assistant-b-instance-select',
+      'assistant-b-port',
+      'assistant-b-toggle-key'
+    ]) {
+      const control = $(id);
+      if (control) control.disabled = config.saving === true;
+    }
+    if (retryButton) {
+      retryButton.hidden = !(assistant.status === 'error'
+        || (assistant.installed && config.status === 'error'));
+    }
   }
 
   async function loadAssistantBStatus(options = {}) {
@@ -2442,6 +3046,10 @@
       if (!normalized.hasInstalledField) nextAssistant.installed = state.assistantB.installed;
       state.assistantB = nextAssistant;
       renderAssistantBCard();
+      if (state.assistantB.installed) {
+        const openRequested = state.assistantB.openConfigRequested;
+        void loadAssistantBConfig({ silent: !openRequested, open: openRequested });
+      }
       return true;
     } catch (error) {
       const errorData = error instanceof ApiError ? asRecord(error.data) : {};
@@ -2478,6 +3086,7 @@
     state.assistantB.actionError = '';
     renderAssistantBCard();
     let refreshAfter = false;
+    let redirectToConfig = false;
     try {
       const data = action === 'update'
         ? await requestWithFallback([
@@ -2508,7 +3117,11 @@
       state.assistantB.message = sanitiseAssistantBText(source.message)
         || (action === 'install' ? 'AI 助手 B 安装完成。' : 'AI 助手 B 已更新。');
       state.assistantB.updatedAt = Date.now();
-      refreshAfter = true;
+      if (action === 'install') {
+        redirectToConfig = true;
+      } else {
+        refreshAfter = true;
+      }
     } catch (error) {
       const unsupported = isMissingEndpointError(error)
         || assistantBErrorMessageIsUnsupported(error instanceof ApiError ? error.message : '');
@@ -2520,6 +3133,13 @@
       state.assistantB.busy = false;
       state.assistantB.action = '';
       renderAssistantBCard();
+    }
+    if (redirectToConfig) {
+      state.assistantB.openConfigRequested = true;
+      state.assistantB.message = 'AI 助手 B 安装完成，正在打开配置页面…';
+      renderAssistantBCard();
+      scheduleAssistantBConfigRedirect();
+      return;
     }
     if (refreshAfter) await loadAssistantBStatus({ silent: false });
   }
@@ -2547,15 +3167,80 @@
     void runAssistantBAction('update');
   }
 
+  function handleAssistantBKeySourceChange() {
+    clearAssistantBConfigErrors();
+    syncAssistantBConfigSourceFields();
+  }
+
+  function handleAssistantBKeyToggle() {
+    const input = $('assistant-b-api-key');
+    const toggle = $('assistant-b-toggle-key');
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    if (toggle) {
+      toggle.textContent = show ? '隐藏' : '显示';
+      toggle.setAttribute('aria-pressed', show ? 'true' : 'false');
+    }
+    input.focus({ preventScroll: true });
+  }
+
   function handleAssistantBRetryClick() {
     if (state.assistantB.loading || state.assistantB.busy) return;
     state.assistantB.status = 'idle';
     state.assistantB.error = '';
     state.assistantB.actionError = '';
+    state.assistantB.config.status = 'idle';
+    state.assistantB.config.error = '';
     renderAssistantBCard();
     void loadAssistantBStatus({ silent: false });
   }
   function bindEvents() {
+    const assistantBConfigure = $('assistant-b-configure');
+    if (assistantBConfigure) assistantBConfigure.addEventListener('click', () => void handleAssistantBConfigureClick());
+    const assistantBConfigForm = $('assistant-b-config-form');
+    if (assistantBConfigForm) assistantBConfigForm.addEventListener('submit', handleAssistantBConfigSubmit);
+    const assistantBConfigCancel = $('assistant-b-config-cancel');
+    if (assistantBConfigCancel) assistantBConfigCancel.addEventListener('click', () => closeAssistantBConfigPanel());
+    const assistantBKeyToggle = $('assistant-b-toggle-key');
+    if (assistantBKeyToggle) assistantBKeyToggle.addEventListener('click', handleAssistantBKeyToggle);
+    $$('input[name="assistant-b-key-source"]').forEach((radio) => {
+      radio.addEventListener('change', handleAssistantBKeySourceChange);
+    });
+    const assistantBApiKey = $('assistant-b-api-key');
+    if (assistantBApiKey) {
+      assistantBApiKey.addEventListener('input', () => {
+        assistantBApiKey.removeAttribute('aria-invalid');
+        const error = $('assistant-b-key-error');
+        if (error) {
+          error.hidden = true;
+          error.textContent = '';
+        }
+      });
+    }
+    const assistantBInstanceSelect = $('assistant-b-instance-select');
+    if (assistantBInstanceSelect) {
+      assistantBInstanceSelect.addEventListener('change', () => {
+        assistantBInstanceSelect.removeAttribute('aria-invalid');
+        const error = $('assistant-b-instance-error');
+        if (error) {
+          error.hidden = true;
+          error.textContent = '';
+        }
+      });
+    }
+    const assistantBPort = $('assistant-b-port');
+    if (assistantBPort) {
+      assistantBPort.addEventListener('input', () => {
+        assistantBPort.removeAttribute('aria-invalid');
+        const error = $('assistant-b-port-error');
+        if (error) {
+          error.hidden = true;
+          error.textContent = '';
+        }
+      });
+    }
+
     const assistantBInstall = $('assistant-b-install');
     if (assistantBInstall) assistantBInstall.addEventListener('click', handleAssistantBInstallClick);
     const assistantBUpdate = $('assistant-b-update');
@@ -2622,6 +3307,11 @@
   }
 
   async function init() {
+    try {
+      state.assistantB.openConfigRequested = new URLSearchParams(window.location.search).get('assistant') === 'configure';
+    } catch (error) {
+      state.assistantB.openConfigRequested = false;
+    }
     bindEvents();
     await loadConsole({ silent: true });
     scheduleNextSync();

@@ -876,3 +876,167 @@ cd "$AI_ASSISTANT_DIR"
 
 这些接口只新增能力，不修改 v2 现有 API 字段、旧实例目录或容器配置。旧后端没有
 `/api/assistant/*` 时，控制台应按 404/405 降级为“当前后端不支持扩展安装”，A 离线助手仍可用。
+
+---
+
+## 10. AI 助手 B：配置与启动
+
+这些接口只管理独立 AI 助手 B 的本机配置和进程，不改变 A 离线助手，也不自动启动 B。
+与第 9 节相同，全部需要 `X-QB-Token`；可选功能失败会返回 HTTP 200 + `ok:false`，
+不影响主控制台、实例或 A。
+
+B 的配置文件固定为：
+
+```text
+<QQBOT_STUDIO_DATA_DIR>/ai-assistant/config.json
+```
+
+文件在 Linux/POSIX 上以 0600 原子写入，目录优先 0700。服务端读取配置后只返回安全状态，
+**不会返回 `api_key`，也不会把 Key 写进日志或进程参数**。
+
+### 10.1 读取配置/运行状态
+
+```text
+GET /api/assistant/config
+```
+
+```json
+{
+  "ok": true,
+  "installed": true,
+  "configured": true,
+  "running": false,
+  "url": "http://127.0.0.1:8766/",
+  "configure_url": "/api/assistant/config",
+  "config_path": "/home/user/.local/share/qqbot-studio/ai-assistant/config.json",
+  "key_present": true,
+  "key_source": "independent",
+  "instance_id": "",
+  "port": 8766,
+  "host": "127.0.0.1",
+  "pid": null,
+  "log_path": "/home/user/.local/share/qqbot-studio/ai-assistant/assistant.log",
+  "pid_path": "/home/user/.local/share/qqbot-studio/ai-assistant/assistant.pid",
+  "access_note": "AI 助手 B 没有面向用户的访问认证，只允许监听本机回环地址……",
+  "ssh_tunnel": "ssh -N -L 8766:127.0.0.1:8766 <用户名>@<服务器地址>",
+  "message": "AI 助手 B 已配置但尚未启动。启动后仅可从本机或 SSH 隧道访问。",
+  "error": ""
+}
+```
+
+- 未安装扩展时 `installed=false`；未创建配置时 `configured=false`；两者都不返回 500。
+- `configured` 仅在检测到可用 Key 时为 true：
+  - `independent`：B 配置文件中存在非空 `api_key`；
+  - `instance`：引用的实例目录存在且其 AstrBot `cmd_config.json` 中存在 provider Key。
+- `key_present` 是布尔值，不暴露 Key 内容。
+- `running` 通过探测 `GET <url>/api/health` 判定；不会仅因 PID 文件存在就认为运行中。
+- `url` 可能是 `localhost` 或 `[::1]`，按配置 host 生成。
+- 当 host 为 loopback 时，`access_note` 和 `ssh_tunnel` 会说明远端用户应使用 SSH 隧道，
+  不要在云服务器安全组中直接开放 B 端口。
+
+### 10.2 保存配置
+
+```text
+POST /api/assistant/config
+Content-Type: application/json
+```
+
+独立 Key 模式：
+
+```json
+{
+  "key_source": "independent",
+  "api_key": "sk-用户本地Key",
+  "instance_id": "",
+  "port": 8766,
+  "host": "127.0.0.1"
+}
+```
+
+复用实例 Key 模式：
+
+```json
+{
+  "key_source": "instance",
+  "instance_id": "bot-1",
+  "port": 8767,
+  "host": "127.0.0.1"
+}
+```
+
+规则：
+
+- `key_source` 只能是 `independent` 或 `instance`。
+- `api_key` 是**只写字段**，成功响应、错误响应、GET 配置响应和白名单日志均不包含它。
+  独立模式下省略或发送空字符串会保留已有 Key，便于只修改端口/界面；切换到 `instance`
+  模式时会清空 B 配置中的 `api_key`，绝不把实例 Key 复制到 B 配置。
+- `instance_id` 仅用于 `instance` 模式，必填且只允许字母、数字、点、下划线和连字符；
+  不安全字符或路径穿越会被拒绝。实例不存在时仍允许保存，但 `configured/key_present`
+  会是 false，界面应提示先部署实例或补齐 Key。
+- `host` 默认 `127.0.0.1`，只接受 `127.0.0.1`、`localhost`、`::1`。
+  **不接受 `0.0.0.0`**：B 本身只支持回环绑定，且其 API 没有用户认证。远端访问应使用：
+  `ssh -N -L 8766:127.0.0.1:8766 <用户>@<服务器地址>`，然后在本地打开
+  `http://127.0.0.1:8766/`。
+- `port` 范围为 5000–10000（含边界）。服务端会避开管理服务监听端口和所有实例的
+  AstrBot/SnowLuma/noVNC 端口。未指定端口时优先 8766，再选择范围内可用端口。
+- 写入成功后返回与 GET 配置相同的安全字段，并带 `action:"configured"`。
+- 配置缺失、损坏、权限写入失败、端口冲突等返回 `ok:false` 和可操作中文错误。
+
+### 10.3 启动 B
+
+```text
+POST /api/assistant/start
+Content-Type: application/json
+body: {}   # 也接受空请求体
+```
+
+要求已安装扩展且配置文件存在。服务端：
+
+1. 先探测 `GET <url>/api/health`；若已在运行则幂等返回 `action:"already_running"`，不重复启动。
+2. 使用当前 Python 解释器执行：
+   `python3 <extensions/ai-assistant>/assistant.py --config <data>/ai-assistant/config.json`
+3. 独立进程、`start_new_session`/Windows 新进程组启动；stdout/stderr 追加到
+   `data_dir/ai-assistant/assistant.log`，PID 写入 `data_dir/ai-assistant/assistant.pid`（0600）。
+4. 启动时只注入 `QQBOT_STUDIO_HOME=<主数据目录>` 等非敏感环境变量，**不通过 argv/env 传 Key**。
+5. 轮询 B 的 `/api/health`；成功返回 running/url/pid，失败或提前退出会清理 PID、
+   终止残留子进程，并返回有限长度的脱敏日志摘要。
+
+成功响应包含与 GET 配置相同的字段，并增加：
+
+```json
+{
+  "ok": true,
+  "action": "started",
+  "running": true,
+  "pid": 12345,
+  "url": "http://127.0.0.1:8766/",
+  "message": "AI 助手 B 已启动：http://127.0.0.1:8766/。服务仅监听回环地址；远端访问请使用 SSH 隧道。",
+  "error": ""
+}
+```
+
+主项目要求已有可用 Key 才启动 B：`independent` 模式必须有已保存 Key，`instance` 模式必须能读取所选实例的 AstrBot Key；否则返回 `ok:false` 和中文配置提示。
+主项目不会自动启动 B，也不会调用 B 的聊天 API 或读取聊天内容。
+
+### 10.4 停止 B（可选能力，已实现）
+
+```text
+POST /api/assistant/stop
+Content-Type: application/json
+body: {}   # 也接受空请求体
+```
+
+- 未运行/只有过期 PID 文件时幂等返回 `running:false` 并清理过期 PID。
+- 仅在 B 健康响应正常且 PID 文件受本机保护时，才发送 `SIGTERM`；POSIX 下若 `/proc/<pid>/cmdline`
+  可用，会校验其中包含 `assistant.py`，避免误杀其他进程。
+- 超时仍运行、无 PID 或 PID 异常时返回 `ok:false`，不会盲目强杀。
+- 成功返回 `action:"stopped"`, `running:false`，不含 Key 或日志内容。
+
+### 10.5 安全与兼容边界
+
+- `configure_url` 固定为 `/api/assistant/config`，供前端识别配置入口。
+- B 服务自身**没有用户认证**，默认只允许回环 host；不要将其端口映射到公网。
+- `api_key` 只在写配置请求体中出现；服务端不打印请求体、不把 Key 放进程环境/命令行、
+  不在 GET 配置或错误信息中回显。错误只返回脱敏后的摘要。
+- 新接口只新增，不改变第 1–9 节已有 API 字段；旧实例目录不迁移、不删除。
+- 旧后端返回 404/405 时，前端应只把 B 卡片显示为“当前后端不支持 B 配置/启动”，A 仍默认可用。
