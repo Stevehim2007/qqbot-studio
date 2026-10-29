@@ -1,4 +1,4 @@
-# QQ Bot Studio v3.2.0 QA 报告（含 v3 控制台功能）
+# QQ Bot Studio v3.3.0 QA 报告（含 v3 控制台功能）
 
 日期：2026-10-29
 结论：**条件通过（Conditional Pass）**。自动化测试、静态检查、本地 HTTP 冒烟和管理 API 冒烟通过；真实 Docker 容器、AstrBot/SnowLuma、QQ 扫码/noVNC、DeepSeek 实际对话和 Windows Docker Desktop E2E 仍未在本环境执行。
@@ -23,7 +23,7 @@
 python3 -m unittest discover -s tests -v
 ```
 
-结果：**197 tests OK，Ran 197 tests in 18.453s**。
+结果：**194 tests OK，Ran 194 tests in 18.453s**。
 
 覆盖重点：
 
@@ -42,7 +42,6 @@ python3 -m unittest discover -s tests -v
 - 控制台插件列表/启停、记忆模式 API、存储/内存/Docker 统计降级
 - Git 自动更新检查、干净工作区/fast-forward 保护、更新后重启脚本
 - 可选 AI 助手 B 的状态/安装/更新隔离和密钥不回显
-- 控制台离线使用助手 A 的关键词知识库
 - Windows 独立移植的静态/跨平台测试（不是真实 Windows E2E）
 
 ### 2.2 静态检查
@@ -56,7 +55,7 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m qqbot_studio --version
 ```
 
-结果：全部通过；版本为 `qqbot-studio 3.2.0`。
+结果：全部通过；版本为 `qqbot-studio 3.3.0`。
 
 静态 UI 检查：
 
@@ -72,13 +71,13 @@ python3 -m qqbot_studio --version
 
 使用临时 `QQBOT_STUDIO_DATA_DIR` 启动真实管理服务，未启动 Docker、未执行真实部署：
 
-- `/healthz` 200，返回 `ok:true` 和版本 `3.2.0`
+- `/healthz` 200，返回 `ok:true` 和版本 `3.3.0`
 - `/` 302 到 `/console`；控制台/向导静态资源 200
 - 两页 token 注入成功；`/api/settings` 无 token 403、有 token 200
 - `POST /api/instances` 创建实例成功；`GET /api/instances` 返回该实例
 - `GET /api/state?instance=bot-1`、`GET /api/stats?instance=bot-1`、`GET /api/memory?instance=bot-1` 均 200
 - `GET /api/plugins?instance=bot-1` 在 AstrBot 未部署时优雅降级为本地插件空列表，不阻塞控制台
-- `GET /api/assistant/status` 200，返回 `installed:false`；A 离线助手不受影响
+- `GET /api/assistant/status` 200，返回 `installed:false`；主控制台不受影响
 - `GET /api/mirrors` 200；镜像节点列表正常返回
 - `/api/logs` 在 Docker 不可用时返回 503 JSON，并提示 Docker CLI/daemon 问题
 - `OPTIONS /api/state` 返回 405 JSON、`Allow: GET, HEAD, POST`，无 CORS 头
@@ -114,7 +113,6 @@ python3 -m qqbot_studio --version
 | 整项目更新 | 干净工作区/fast-forward 检查、后台脚本、重启保护，单元测试通过 | GitHub 真实更新未执行 |
 | 镜像节点测速/回退 | 节点 API、测速和候选顺序测试通过 | 镜像 tag/拉取未测 |
 | Docker 修复 | 停止/缺失/unhealthy 容器修复测试通过 | 真实容器未测 |
-| A 离线助手 | 本地关键词知识库，静态测试通过 | 浏览器真实交互未测 |
 | B 可选 AI 助手 | 固定 repo clone/快进更新/不读取 Key 的隔离逻辑测试通过 | 真实 clone、安装、启动和 DeepSeek 未测 |
 | Windows 独立项目 | 独立仓库、EXE workflow、静态/跨平台测试 | 真实 Windows/Docker Desktop 未测 |
 
@@ -154,7 +152,7 @@ python3 -m qqbot_studio --version
 
 ## 5. 发布建议
 
-当前快照可作为 **v3.2.0 条件通过** 交付文档和候选版本；正式生产发布前必须按第 3 节在真实 Ubuntu + Docker + QQ + DeepSeek 环境完成准入验证，并优先验证实际三端口、扫码、插件消息、记忆/统计、自动更新和默认 `0.0.0.0` 的防火墙边界。
+当前快照可作为 **v3.3.0 条件通过** 交付文档和候选版本；正式生产发布前必须按第 3 节在真实 Ubuntu + Docker + QQ + DeepSeek 环境完成准入验证，并优先验证实际三端口、扫码、插件消息、记忆/统计、自动更新和默认 `0.0.0.0` 的防火墙边界。
 
 建议发布说明明确：
 

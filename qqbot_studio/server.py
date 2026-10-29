@@ -76,6 +76,29 @@ class AppContext:
         self.console_css = _read_optional(static_dir / "console.css")
         self.console_script = _read_optional(static_dir / "console.js")
 
+        # Optional standalone assistant B page.  Its absence or a broken
+        # template must never prevent the management server from starting.
+        self.assistant_html: str | None = None
+        self.assistant_page_status = HTTPStatus.NOT_FOUND
+        self.assistant_page_error = "独立 AI 助手页面尚未安装。请更新前端文件后重试。"
+        assistant_path = static_dir / "assistant.html"
+        if assistant_path.exists():
+            try:
+                assistant_html = assistant_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                self.assistant_page_status = HTTPStatus.INTERNAL_SERVER_ERROR
+                self.assistant_page_error = f"无法读取独立 AI 助手页面：{exc}"
+            else:
+                if '"{{TOKEN}}"' in assistant_html:
+                    self.assistant_html = assistant_html
+                    self.assistant_page_status = HTTPStatus.OK
+                    self.assistant_page_error = ""
+                else:
+                    self.assistant_page_status = HTTPStatus.INTERNAL_SERVER_ERROR
+                    self.assistant_page_error = (
+                        "独立 AI 助手页面模板损坏：缺少 window.QB_TOKEN = \"{{TOKEN}}\"; 占位符。"
+                    )
+
     def instance_id(self, query: dict[str, list[str]], payload: dict[str, Any] | None = None) -> str:
         explicit = ""
         if query.get("instance"):
@@ -267,7 +290,7 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "branch": "",
             "dirty": None,
             "action": "",
-            "message": "可选 AI 助手 B 状态暂不可用。A 离线助手不受影响。",
+            "message": "可选 AI 助手 B 状态暂不可用。主控制台和其他实例不受影响。",
             "error": detail,
         }
 
@@ -302,6 +325,12 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         try:
             if path == "/":
                 self._redirect("/console")
+                return
+            if path in ("/assistant", "/assistant.html"):
+                if ctx.assistant_html is None:
+                    self._error(ctx.assistant_page_status, ctx.assistant_page_error)
+                    return
+                self._serve_html(ctx.assistant_html)
                 return
             if path in ("/console", "/console.html"):
                 self._serve_html(ctx.console_html)

@@ -1,0 +1,1188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#081a33">
+  <title>QQ Bot Studio · AI 助手</title>
+  <style>
+    :root {
+      --navy: #081a33;
+      --navy-2: #0b2b4a;
+      --ink: #10233b;
+      --muted: #5e7389;
+      --line: #dce5ee;
+      --surface: #ffffff;
+      --canvas: #eef4f9;
+      --mint: #20c997;
+      --mint-2: #73eaca;
+      --mint-soft: #dffaf2;
+      --amber: #d98a16;
+      --amber-soft: #fff5dc;
+      --red: #c43d4b;
+      --red-soft: #ffedf0;
+      --blue: #2f72d6;
+      --blue-soft: #e7f0ff;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --font: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      --radius: 20px;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { min-width: 320px; scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 88% 0, rgba(67, 221, 178, .15), transparent 30rem),
+        linear-gradient(145deg, var(--canvas), #e7eff7);
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -1;
+      opacity: .24;
+      background-image: radial-gradient(rgba(16, 35, 59, .12) .6px, transparent .6px);
+      background-size: 18px 18px;
+    }
+    h1, h2, h3, h4, p { margin: 0; }
+    h1, h2, h3, h4 { line-height: 1.3; }
+    button, input, select { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    code, pre { font-family: var(--mono); }
+    a { color: var(--blue); }
+    ::selection { color: var(--navy); background: var(--mint-2); }
+    .icon { width: 1.2em; height: 1.2em; display: inline-block; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; vertical-align: -.18em; }
+    .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+    .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .skip { position: fixed; top: 10px; left: 10px; z-index: 100; padding: 9px 13px; color: var(--navy); background: var(--mint-2); border-radius: 8px; transform: translateY(-150%); }
+    .skip:focus { transform: translateY(0); }
+    :focus-visible { outline: 3px solid rgba(32, 201, 151, .72); outline-offset: 3px; }
+    .page-header {
+      color: #f1fffb;
+      background:
+        radial-gradient(ellipse 80% 140% at 16% 0, rgba(67, 221, 178, .16), transparent 55%),
+        linear-gradient(120deg, #07182c, #0b3150);
+      border-bottom: 1px solid rgba(255, 255, 255, .08);
+      box-shadow: 0 12px 35px rgba(6, 20, 38, .18);
+    }
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: 14px clamp(12px, 2.5vw, 28px);
+    }
+    .brand { display: inline-flex; align-items: center; gap: 11px; color: inherit; text-decoration: none; }
+    .brand-logo { width: 44px; height: 44px; flex: 0 0 44px; filter: drop-shadow(0 8px 15px rgba(0, 0, 0, .24)); }
+    .brand strong { display: block; color: #f7fffd; font-size: 16px; }
+    .brand em { color: var(--mint-2); font-style: normal; font-weight: 650; }
+    .brand small { display: block; color: #8eabc2; font-size: 9.5px; letter-spacing: .08em; }
+    .header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .header-link, .header-button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      min-height: 35px; padding: 7px 11px; border-radius: 8px; font-size: 11px; font-weight: 720; text-decoration: none; cursor: pointer;
+    }
+    .header-link { color: #c7dfe4; background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .13); }
+    .header-link:hover { color: #fff; background: rgba(255, 255, 255, .1); }
+    .header-button { color: #03251e; background: linear-gradient(135deg, var(--mint-2), var(--mint)); border: 1px solid rgba(255, 255, 255, .18); }
+    .header-button:hover:not(:disabled) { transform: translateY(-1px); background: linear-gradient(135deg, #83efd3, #27d3a1); }
+    .header-button:disabled { cursor: wait; opacity: .6; }
+    .header-button.is-loading .icon { animation: spin 1s linear infinite; }
+    main { width: min(1180px, 100%); margin: 0 auto; padding: 30px clamp(12px, 2.5vw, 28px) 30px; }
+    .hero {
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      overflow: hidden;
+      padding: 28px 29px;
+      color: #ecfffb;
+      background:
+        radial-gradient(circle at 94% 8%, rgba(67, 221, 178, .2), transparent 17rem),
+        linear-gradient(130deg, #071b31, #0c3553);
+      border: 1px solid rgba(115, 234, 202, .18);
+      border-radius: var(--radius);
+      box-shadow: 0 22px 55px rgba(6, 20, 38, .2);
+    }
+    .hero::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .14;
+      background-image: linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px);
+      background-size: 32px 32px; mask-image: linear-gradient(90deg, transparent 25%, black 100%);
+    }
+    .hero-main { position: relative; z-index: 1; display: flex; align-items: flex-start; gap: 15px; min-width: 0; }
+    .hero-icon { display: grid; place-items: center; width: 54px; height: 54px; flex: 0 0 54px; color: #052a22; background: linear-gradient(135deg, var(--mint-2), var(--mint)); border-radius: 16px; font-size: 27px; box-shadow: 0 10px 24px rgba(8, 121, 91, .3); }
+    .kicker { display: inline-flex; align-items: center; gap: 5px; color: var(--mint-2); font-size: 9.5px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+    .hero h1 { margin-top: 5px; font-size: clamp(28px, 4vw, 42px); letter-spacing: -.04em; color: #f5fffd; }
+    .hero p { max-width: 720px; margin-top: 6px; color: #adc6d4; font-size: 12px; line-height: 1.75; }
+    .status-line { margin-top: 11px; padding: 8px 10px; color: #c6e8e5; background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.1); border-radius: 8px; font-size: 10.5px; line-height: 1.6; overflow-wrap: anywhere; }
+    .status-line.is-error { color: #ffd0d7; background: rgba(196,61,75,.16); border-color: rgba(243,174,185,.22); }
+    .status-line.is-warning { color: #ffe8b0; background: rgba(217,138,22,.12); border-color: rgba(239,207,143,.22); }
+    .status-line.is-success { color: #c8fff1; background: rgba(67,221,178,.1); border-color: rgba(115,234,202,.22); }
+    .hero-side { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: 0 0 auto; }
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 10px; font-weight: 760; white-space: nowrap; }
+    .badge.neutral { color: #d9e6eb; background: rgba(255,255,255,.1); }
+    .badge.ok { color: #c8fff1; background: rgba(67,221,178,.15); }
+    .badge.warn { color: #ffe8b0; background: rgba(217,138,22,.16); }
+    .badge.error { color: #ffd0d7; background: rgba(196,61,75,.18); }
+    .notice { display: flex; align-items: flex-start; gap: 9px; margin-top: 14px; padding: 11px 13px; border: 1px solid #f2cbd2; border-radius: 10px; color: #8f3340; background: var(--red-soft); font-size: 10.5px; line-height: 1.65; overflow-wrap: anywhere; }
+    .notice .icon { margin-top: 2px; color: var(--red); font-size: 16px; }
+    .card { min-width: 0; margin-top: 15px; padding: 23px 24px; background: var(--surface); border: 1px solid rgba(193, 208, 223, .9); border-radius: var(--radius); box-shadow: 0 12px 32px rgba(16,35,59,.08); }
+    .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+    .card-heading-main { display: flex; align-items: flex-start; gap: 11px; min-width: 0; }
+    .card-icon { display: grid; place-items: center; width: 37px; height: 37px; flex: 0 0 37px; color: var(--blue); background: var(--blue-soft); border-radius: 10px; font-size: 18px; }
+    h2 { font-size: 18px; letter-spacing: -.02em; }
+    h3 { font-size: 13px; }
+    .card-heading p { margin-top: 3px; color: var(--muted); font-size: 10.5px; line-height: 1.65; }
+    .muted { color: var(--muted); font-size: 10.5px; line-height: 1.65; }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 39px; padding: 8px 15px; color: var(--ink); background: #fff; border: 1px solid #cbd8e3; border-radius: 9px; font-size: 11.5px; font-weight: 730; cursor: pointer; text-decoration: none; transition: background .16s ease, border-color .16s ease, transform .16s ease; }
+    .button:hover:not(:disabled):not([aria-disabled="true"]) { background: #f7fbfd; border-color: #aec3d4; transform: translateY(-1px); }
+    .button:disabled, .button[aria-disabled="true"] { cursor: not-allowed; opacity: .48; pointer-events: none; }
+    .button.primary { color: #03251e; background: linear-gradient(135deg, var(--mint-2), var(--mint)); border-color: rgba(15,126,96,.18); box-shadow: 0 7px 17px rgba(20,166,125,.2); }
+    .button.primary:hover:not(:disabled) { background: linear-gradient(135deg, #83efd3, #27d3a1); }
+    .button.danger { color: var(--red); }
+    .button.small { min-height: 32px; padding: 6px 10px; font-size: 10.5px; }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .install-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 13px; padding: 12px; background: #f8fbfd; border: 1px solid #e5edf4; border-radius: 10px; }
+    .meta-item { min-width: 0; }
+    .meta-item span { display: block; color: var(--muted); font-size: 8.5px; }
+    .meta-item code { display: block; margin-top: 2px; color: #29435d; font-size: 9.5px; line-height: 1.5; overflow-wrap: anywhere; }
+    .hint { margin-top: 9px; color: var(--muted); font-size: 9.5px; line-height: 1.6; }
+    .runtime-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .runtime-metric { min-width: 0; padding: 10px; background: #f8fbfd; border: 1px solid #e5edf4; border-radius: 8px; }
+    .runtime-metric span { display: block; color: var(--muted); font-size: 8.5px; }
+    .runtime-metric strong { display: block; margin-top: 3px; color: #29435d; font-size: 10px; overflow-wrap: anywhere; }
+    .url-box { margin-top: 12px; padding: 11px 12px; background: #f2f8fc; border: 1px solid #d9e8f1; border-radius: 9px; }
+    .url-box code { display: block; color: #1f5773; font-size: 11px; overflow-wrap: anywhere; }
+    .url-box p { margin-top: 5px; color: var(--muted); font-size: 9.5px; line-height: 1.65; }
+    .url-box p.warning { color: #8a5a12; }
+    .form { display: grid; gap: 13px; margin-top: 4px; }
+    fieldset { min-width: 0; margin: 0; padding: 11px; border: 1px solid #e1eaf1; border-radius: 10px; }
+    legend { padding: 0 4px; color: #4e6780; font-size: 9.5px; font-weight: 760; }
+    .choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+    .choice { display: flex; align-items: flex-start; gap: 7px; min-width: 0; padding: 9px; background: #fbfdff; border: 1px solid #e4edf4; border-radius: 8px; cursor: pointer; }
+    .choice:has(input:checked) { background: var(--mint-soft); border-color: #a8e4d4; }
+    .choice input { flex: 0 0 14px; width: 14px; height: 14px; margin: 1px 0 0; accent-color: var(--mint); }
+    .choice span { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+    .choice strong { color: #314c65; font-size: 9.5px; line-height: 1.4; }
+    .choice small { color: var(--muted); font-size: 8px; line-height: 1.5; }
+    .field { display: grid; gap: 5px; min-width: 0; }
+    .field > label { color: #4b647b; font-size: 9.5px; font-weight: 720; }
+    input[type="text"], input[type="password"], input[type="number"], select {
+      width: 100%; max-width: 100%; min-height: 39px; padding: 9px 10px; color: var(--ink); background: #fff; border: 1px solid #cbd8e3; border-radius: 8px; outline: none; font-size: 11px;
+    }
+    input:focus, select:focus { border-color: var(--mint); box-shadow: 0 0 0 3px rgba(32,201,151,.13); }
+    input[aria-invalid="true"], select[aria-invalid="true"] { border-color: #e99aa5; box-shadow: 0 0 0 3px rgba(196,61,75,.08); }
+    .key-row { display: flex; gap: 6px; align-items: stretch; }
+    .key-row input { flex: 1; min-width: 0; }
+    .key-toggle { flex: 0 0 auto; min-width: 48px; padding: 0 9px; color: #4d6a81; background: #fff; border: 1px solid #cbd8e3; border-radius: 8px; font-size: 9.5px; font-weight: 700; cursor: pointer; }
+    .key-toggle:hover { background: #f2f8fb; }
+    .help { color: var(--muted); font-size: 8.5px; line-height: 1.55; }
+    .field-error { color: var(--red); font-size: 9.5px; line-height: 1.55; }
+    .port-row { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr); gap: 5px 12px; align-items: center; }
+    .port-row .help { align-self: center; }
+    .host-note { padding: 9px 10px; border: 1px solid #efdfb8; border-radius: 8px; color: #795a20; background: #fffaf0; font-size: 9px; line-height: 1.65; }
+    .host-note.risk { color: #91323e; background: #fff2f4; border-color: #f0c5cc; }
+    .form-status { padding: 8px 9px; border: 1px solid #d3eaf0; border-radius: 8px; color: #2b5d76; background: #eff9fc; font-size: 9.5px; line-height: 1.6; overflow-wrap: anywhere; }
+    .form-status.error { color: #90333f; background: var(--red-soft); border-color: #f2cbd2; }
+    .form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
+    .unsupported { border-color: #efdfb8; background: #fffaf0; }
+    .unsupported p { color: #765b25; font-size: 10.5px; line-height: 1.7; }
+    .safety { display: flex; gap: 11px; margin-top: 16px; padding: 18px 20px; background: #fbfcfe; border: 1px solid var(--line); border-radius: 16px; }
+    .safety > .icon { margin-top: 1px; color: var(--blue); font-size: 20px; }
+    .safety h2 { font-size: 13px; }
+    .safety p { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.75; }
+    footer { display: flex; justify-content: space-between; gap: 24px; margin-top: 25px; padding-top: 14px; color: #8b9cac; border-top: 1px solid rgba(163,180,198,.4); font-size: 9px; line-height: 1.6; }
+    .footer-brand { display: inline-flex; align-items: center; gap: 5px; color: #687f94; font-weight: 720; white-space: nowrap; }
+    .loading { opacity: .62; }
+    @media (max-width: 760px) {
+      .header-inner { align-items: flex-start; }
+      .brand small { display: none; }
+      .hero { flex-direction: column; padding: 22px 18px; }
+      .hero-side { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
+      .card { padding: 18px 16px; }
+      .card-heading { display: block; }
+      .card-heading .actions { margin-top: 10px; }
+      .install-meta, .runtime-grid, .choice-grid { grid-template-columns: 1fr; }
+      .port-row { grid-template-columns: 1fr; }
+      .port-row .help { grid-column: 1; }
+      footer { display: block; }
+      footer p { margin-top: 5px; }
+    }
+    @media (max-width: 480px) {
+      main { padding-left: 10px; padding-right: 10px; }
+      .header-inner { padding-left: 10px; padding-right: 10px; }
+      .hero-main { gap: 10px; }
+      .hero-icon { width: 44px; height: 44px; flex-basis: 44px; font-size: 22px; border-radius: 13px; }
+      .hero h1 { font-size: 29px; }
+      .actions .button { flex: 1 1 130px; }
+      .form-actions .button { flex: 1; }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">跳到主要内容</a>
+  <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="ai-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.7"/><path d="M20 4v7h-7"/></symbol>
+    <symbol id="ai-arrow-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/><path d="M9 12h11"/></symbol>
+    <symbol id="ai-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3Z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/><path d="m5 14 .6 1.4L7 16l-1.4.6L5 18l-.6-1.4L3 16l1.4-.6L5 14Z"/></symbol>
+    <symbol id="ai-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="ai-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="ai-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="ai-shield" viewBox="0 0 24 24"><path d="M12 2 20 6v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4Z"/><path d="m8.5 12 2.3 2.3 4.7-5"/></symbol>
+    <symbol id="ai-alert" viewBox="0 0 24 24"><path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="ai-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></symbol>
+  </svg>
+
+  <header class="page-header">
+    <div class="header-inner">
+      <a class="brand" href="/assistant" aria-label="AI 助手页面">
+        <svg class="brand-logo" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="2" y="2" width="44" height="44" rx="14" fill="#0e3458"/>
+          <path d="M14 14h20a5 5 0 0 1 5 5v11a5 5 0 0 1-5 5h-9l-8 5v-5h-3a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5Z" fill="none" stroke="#61e8c4" stroke-width="3"/>
+          <path d="M18 23h.01M24 23h.01M30 23h.01" stroke="#61e8c4" stroke-width="3.4" stroke-linecap="round"/>
+        </svg>
+        <span><strong>QQ Bot <em>Studio</em></strong><small>AI 助手 B · 独立管理页</small></span>
+      </a>
+      <div class="header-actions">
+        <a class="header-link" href="/console"><svg class="icon" aria-hidden="true"><use href="#ai-arrow-left"></use></svg>返回控制台</a>
+        <button id="refresh-status" class="header-button" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#ai-refresh"></use></svg>
+          <span id="refresh-label">刷新状态</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-main">
+        <span class="hero-icon" aria-hidden="true"><svg class="icon"><use href="#ai-sparkles"></use></svg></span>
+        <div>
+          <span class="kicker">可选扩展 · 独立进程</span>
+          <h1 id="page-title">AI 助手 B</h1>
+          <p>管理独立的生成式 AI 助手。安装、配置和启动均由你明确操作；页面不会自动下载或启动服务。</p>
+          <p id="main-status" class="status-line" role="status">正在读取 AI 助手状态…</p>
+        </div>
+      </div>
+      <div class="hero-side">
+        <span id="main-badge" class="badge neutral">检查中</span>
+      </div>
+    </section>
+
+    <div id="main-notice" class="notice" role="alert" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#ai-alert"></use></svg>
+      <span id="main-notice-text"></span>
+    </div>
+
+    <section id="install-card" class="card" aria-labelledby="install-title">
+      <div class="card-heading">
+        <div class="card-heading-main">
+          <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#ai-sparkles"></use></svg></span>
+          <div><h2 id="install-title">安装状态</h2><p>安装会从固定官方仓库联网 clone；主项目不会自动启动 B。</p></div>
+        </div>
+        <div class="actions">
+          <button id="install-button" class="button primary" type="button" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#ai-sparkles"></use></svg>
+            <span id="install-label">安装 AI 助手 B</span>
+          </button>
+          <button id="update-button" class="button" type="button" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#ai-refresh"></use></svg>
+            <span id="update-label">更新 AI 助手 B</span>
+          </button>
+        </div>
+      </div>
+      <div id="install-meta" class="install-meta" hidden>
+        <div class="meta-item"><span>版本 / Commit</span><code id="install-commit">未提供</code></div>
+        <div class="meta-item"><span>安装路径</span><code id="install-path">未提供</code></div>
+        <div class="meta-item"><span>入口</span><code id="install-entry">未提供</code></div>
+        <div class="meta-item"><span>README</span><code id="install-readme">未提供</code></div>
+      </div>
+      <p id="install-hint" class="hint">尚未读取安装状态。安装需要联网，并且必须由你点击确认两次。</p>
+    </section>
+
+    <section id="runtime-card" class="card" aria-labelledby="runtime-title" hidden>
+      <div class="card-heading">
+        <div class="card-heading-main">
+          <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#ai-server"></use></svg></span>
+          <div><h2 id="runtime-title">运行状态</h2><p>服务由独立进程管理；B 本身没有用户认证，请谨慎选择监听地址。</p></div>
+        </div>
+        <div class="actions">
+          <a id="open-button" class="button primary" href="#" target="_blank" rel="noopener noreferrer" hidden>打开 AI 助手 B<svg class="icon" aria-hidden="true"><use href="#ai-external"></use></svg></a>
+          <button id="start-button" class="button" type="button"><svg class="icon" aria-hidden="true"><use href="#ai-play"></use></svg>启动</button>
+          <button id="stop-button" class="button danger" type="button"><svg class="icon" aria-hidden="true"><use href="#ai-stop"></use></svg>停止</button>
+        </div>
+      </div>
+      <div class="runtime-grid">
+        <div class="runtime-metric"><span>配置</span><strong id="configured-state">未知</strong></div>
+        <div class="runtime-metric"><span>进程</span><strong id="running-state">未知</strong></div>
+        <div class="runtime-metric"><span>监听地址</span><strong id="host-state">未知</strong></div>
+        <div class="runtime-metric"><span>端口</span><strong id="port-state">未知</strong></div>
+      </div>
+      <div id="url-box" class="url-box" hidden>
+        <span class="help">访问地址</span>
+        <code id="runtime-url">未提供</code>
+        <p id="runtime-note"></p>
+      </div>
+      <p id="runtime-status" class="form-status" role="status" hidden></p>
+    </section>
+
+    <section id="config-card" class="card" aria-labelledby="config-title" hidden>
+      <div class="card-heading">
+        <div class="card-heading-main">
+          <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#ai-sparkles"></use></svg></span>
+          <div><h2 id="config-title">配置 AI 助手 B</h2><p>独立 Key 或复用实例 Key；密钥只提交给本机后端，不会在浏览器存储或回显。</p></div>
+        </div>
+      </div>
+      <form id="config-form" class="form" novalidate>
+        <fieldset>
+          <legend>DeepSeek Key 来源</legend>
+          <div class="choice-grid">
+            <label class="choice"><input id="key-source-independent" type="radio" name="key-source" value="independent" checked><span><strong>独立 DeepSeek API Key</strong><small>只写入本机 B 配置；不保存到浏览器。</small></span></label>
+            <label class="choice"><input id="key-source-instance" type="radio" name="key-source" value="instance"><span><strong>复用实例 Key</strong><small>仅提交实例 ID；不读取实例 Key。</small></span></label>
+          </div>
+        </fieldset>
+
+        <div id="independent-fields" class="field">
+          <label for="api-key">DeepSeek API Key</label>
+          <div class="key-row">
+            <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." aria-describedby="key-help key-error">
+            <button id="toggle-key" class="key-toggle" type="button" aria-pressed="false">显示</button>
+          </div>
+          <p id="key-help" class="help">只写入本机 B 配置目录。已保存的 Key 不会回显；留空可保持已有独立 Key。</p>
+          <p id="key-error" class="field-error" role="alert" hidden></p>
+        </div>
+
+        <div id="instance-fields" class="field" hidden>
+          <label for="instance-select">选择机器人实例</label>
+          <select id="instance-select" aria-describedby="instance-help instance-error">
+            <option value="">请选择实例</option>
+          </select>
+          <p id="instance-help" class="help">只提交实例 ID；匹配的 AstrBot Key 由后端读取，不会返回浏览器。</p>
+          <p id="instance-error" class="field-error" role="alert" hidden></p>
+        </div>
+
+        <div class="port-row">
+          <div class="field">
+            <label for="port">AI 助手 B 端口</label>
+            <input id="port" type="number" inputmode="numeric" min="5000" max="10000" step="1" value="8766" aria-describedby="port-help port-error">
+          </div>
+          <p id="port-help" class="help">默认 8766；端口由本机后端校验并避开管理服务和其他实例端口。</p>
+          <p id="port-error" class="field-error" role="alert" hidden style="grid-column:1/-1"></p>
+        </div>
+
+        <fieldset>
+          <legend>监听方式</legend>
+          <div class="choice-grid">
+            <label class="choice"><input id="host-local" type="radio" name="host-mode" value="127.0.0.1" checked><span><strong>仅本机（127.0.0.1，推荐）</strong><small>远端通过 SSH 隧道访问。</small></span></label>
+            <label class="choice"><input id="host-public" type="radio" name="host-mode" value="0.0.0.0"><span><strong>公网/所有网卡（0.0.0.0，高风险）</strong><small>B 无登录认证，必须限制来源。</small></span></label>
+          </div>
+        </fieldset>
+
+        <div id="public-host-fields" class="field" hidden>
+          <label for="public-host">公网 IP 或域名</label>
+          <input id="public-host" type="text" autocomplete="off" spellcheck="false" placeholder="例如：bot.example.com 或 203.0.113.10" aria-describedby="public-host-help public-host-error">
+          <p id="public-host-help" class="help">只用于生成访问 URL；不要填写协议、路径或端口。</p>
+          <p id="public-host-error" class="field-error" role="alert" hidden></p>
+        </div>
+
+        <p id="host-note" class="host-note">监听地址为 127.0.0.1（仅本机）；远程访问必须使用 SSH 隧道或在本机打开。</p>
+        <p id="form-error" class="form-status error" role="alert" hidden></p>
+        <p id="form-status" class="form-status" role="status" hidden></p>
+        <div class="form-actions">
+          <button id="save-button" class="button primary" type="submit"><span id="save-label">保存并启动</span></button>
+        </div>
+      </form>
+    </section>
+
+    <section id="unsupported-card" class="card unsupported" aria-labelledby="unsupported-title" hidden>
+      <h2 id="unsupported-title">当前后端不支持扩展管理</h2>
+      <p id="unsupported-text">此页面会继续可用；请升级主项目后再安装或配置 AI 助手 B。</p>
+    </section>
+
+    <section class="safety" aria-labelledby="safety-title">
+      <svg class="icon" aria-hidden="true"><use href="#ai-shield"></use></svg>
+      <div>
+        <h2 id="safety-title">安全边界</h2>
+        <p>AI 助手 B 没有登录认证，默认只应监听 127.0.0.1。选择公网/所有网卡必须配合云安全组、防火墙、VPN 或带认证的反向代理限制来源，不要让服务裸露在公网。控制台和本页面不会读取、保存或显示 DeepSeek API Key；页面刷新后需重新输入 Key。</p>
+      </div>
+    </section>
+
+    <footer>
+      <div class="footer-brand"><svg class="icon" aria-hidden="true"><use href="#ai-shield"></use></svg>AI 助手 B · 独立管理页</div>
+      <p>QQ Bot Studio 仅提供本地管理界面。AI 助手 B 的配置、密钥和运行风险由使用者自行管理。</p>
+    </footer>
+  </main>
+
+  <script>window.QB_TOKEN = "{{TOKEN}}";</script>
+  <script>
+  (() => {
+    'use strict';
+    const TOKEN_RAW = typeof window.QB_TOKEN === 'string' ? window.QB_TOKEN : '';
+    const TOKEN = TOKEN_RAW && TOKEN_RAW !== '{{TOKEN}}' ? TOKEN_RAW : '';
+    const state = {
+      loading: false,
+      installed: false,
+      status: 'idle',
+      error: '',
+      path: '',
+      repo: '',
+      commit: '',
+      version: '',
+      entry: '',
+      readme: '',
+      message: '',
+      busy: false,
+      installArmed: false,
+      instances: [],
+      config: {
+        status: 'idle',
+        loading: false,
+        saving: false,
+        configured: false,
+        running: false,
+        url: '',
+        keyPresent: false,
+        keySource: 'independent',
+        instanceId: '',
+        port: 8766,
+        host: '127.0.0.1',
+        publicHost: '',
+        configPath: '',
+        accessNote: '',
+        sshTunnel: '',
+        message: '',
+        error: ''
+      }
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+    class ApiError extends Error {
+      constructor(message, options = {}) {
+        super(message);
+        this.name = 'ApiError';
+        this.status = Number(options.status) || 0;
+        this.data = options.data || null;
+      }
+    }
+
+    function asRecord(value) {
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+    function textValue(value, fallback = '') {
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+      return fallback;
+    }
+    function boolOrUndefined(value) {
+      if (typeof value === 'boolean') return value;
+      if (value === 1 || value === 0) return value === 1;
+      if (typeof value === 'string') {
+        const v = value.trim().toLowerCase();
+        if (['true', '1', 'yes', 'on', 'running', 'installed', 'configured', 'enabled'].includes(v)) return true;
+        if (['false', '0', 'no', 'off', 'stopped', 'not_installed', 'disabled'].includes(v)) return false;
+      }
+      return undefined;
+    }
+    function numberOrUndefined(value) {
+      if (value === null || value === undefined || value === '') return undefined;
+      const n = Number(value);
+      return Number.isFinite(n) && n >= 0 ? n : undefined;
+    }
+    function sanitise(value) {
+      return textValue(value, '').replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, 'sk-***');
+    }
+    function formatError(error, fallback = '操作失败，请稍后重试。') {
+      if (error instanceof ApiError) {
+        if (error.status === 401 || error.status === 403) return '访问令牌无效或已过期，请回到启动器重新打开本页面。';
+        if (error.status === 404) return error.message || '本地服务未找到对应接口。';
+        if (error.status >= 500) return error.message || '本地服务处理请求失败。';
+        return error.message || fallback;
+      }
+      if (error instanceof TypeError) return '无法连接本地服务，请确认本地启动器仍在运行。';
+      return error && error.message ? error.message : fallback;
+    }
+    function isMissingEndpoint(error) {
+      return error instanceof ApiError && (error.status === 404 || error.status === 405);
+    }
+    function isUnsupportedMessage(message) {
+      return /未提供.*(?:接口|扩展|安装|管理|配置|启停)|不支持.*(?:扩展|功能|安装|配置)|unsupported/i.test(textValue(message, ''));
+    }
+    async function apiRequest(path, options = {}) {
+      const method = String(options.method || 'GET').toUpperCase();
+      const headers = { Accept: 'application/json', 'X-QB-Token': TOKEN || '', ...(options.headers || {}) };
+      const fetchOptions = { method, headers, cache: 'no-store', credentials: 'same-origin' };
+      if (options.body !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        fetchOptions.body = JSON.stringify(options.body);
+      }
+      let response;
+      try { response = await fetch(path, fetchOptions); }
+      catch (error) { throw new ApiError('无法连接本地服务，请确认启动器仍在运行。', { status: 0 }); }
+      const raw = await response.text();
+      let data = {};
+      if (raw) {
+        try { data = JSON.parse(raw); }
+        catch (error) { if (response.ok) throw new ApiError('本地服务返回了无法识别的数据。', { status: response.status }); }
+      }
+      if (!response.ok) {
+        const record = asRecord(data);
+        throw new ApiError(textValue(record.message || record.error, `本地服务返回 HTTP ${response.status}。`), { status: response.status, data });
+      }
+      return data;
+    }
+    async function requestWithFallback(paths, options = {}) {
+      let last = null;
+      for (const path of paths) {
+        try { return await apiRequest(path, options); }
+        catch (error) {
+          last = error;
+          if (!isMissingEndpoint(error)) throw error;
+        }
+      }
+      throw last || new ApiError('本地服务未提供该功能。', { status: 404 });
+    }
+
+    function makeElement(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      if (text !== undefined) element.textContent = text;
+      return element;
+    }
+    function setBadge(element, text, tone) {
+      if (!element) return;
+      element.textContent = text;
+      element.className = `badge ${tone}`;
+    }
+    function setStatusLine(element, message, tone = '') {
+      if (!element) return;
+      element.textContent = message || '';
+      element.className = `status-line${tone ? ` is-${tone}` : ''}`;
+    }
+    function setFormStatus(element, message, isError = false) {
+      if (!element) return;
+      element.textContent = message || '';
+      element.className = `form-status${isError ? ' error' : ''}`;
+      element.hidden = !message;
+    }
+    function setFieldError(input, errorElement, message) {
+      if (input) input.setAttribute('aria-invalid', 'true');
+      if (errorElement) { errorElement.textContent = message; errorElement.hidden = false; }
+    }
+    function clearFieldError(input, errorElement) {
+      if (input) input.removeAttribute('aria-invalid');
+      if (errorElement) { errorElement.textContent = ''; errorElement.hidden = true; }
+    }
+    function clearFormErrors() {
+      clearFieldError($('api-key'), $('key-error'));
+      clearFieldError($('instance-select'), $('instance-error'));
+      clearFieldError($('port'), $('port-error'));
+      clearFieldError($('public-host'), $('public-host-error'));
+      const formError = $('form-error');
+      if (formError) { formError.hidden = true; formError.textContent = ''; }
+    }
+    function showMainError(message) {
+      const notice = $('main-notice');
+      if (!notice) return;
+      notice.hidden = !message;
+      $('main-notice-text').textContent = message || '';
+    }
+    function safeUrl(value) {
+      const raw = textValue(value, '').trim();
+      if (!raw) return '';
+      try {
+        const url = new URL(raw);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+      } catch (error) { return ''; }
+    }
+    function isLoopback(url) {
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+      } catch (error) { return false; }
+    }
+    function normaliseStatus(raw) {
+      const root = asRecord(raw);
+      const source = { ...root, ...asRecord(root.assistant), ...asRecord(root.status) };
+      const installedValue = boolOrUndefined(source.installed);
+      const installed = installedValue === true;
+      const message = sanitise(source.message);
+      return {
+        ok: source.ok !== false,
+        installed,
+        hasInstalled: installedValue !== undefined,
+        path: textValue(source.path, ''),
+        repo: textValue(source.repo, ''),
+        commit: textValue(source.commit, ''),
+        version: textValue(source.version, ''),
+        entry: textValue(source.entry, ''),
+        readme: textValue(source.readme, ''),
+        message,
+        error: sanitise(source.error || (source.ok === false ? message : ''))
+      };
+    }
+    function normaliseConfig(raw, previous = {}) {
+      const root = asRecord(raw);
+      const source = { ...root, ...asRecord(root.config), ...asRecord(root.assistant) };
+      const prev = asRecord(previous);
+      const configuredValue = boolOrUndefined(source.configured);
+      const runningValue = boolOrUndefined(source.running);
+      const keyPresentValue = boolOrUndefined(source.key_present);
+      const sourceKey = textValue(source.key_source, '').trim().toLowerCase();
+      const keySource = sourceKey === 'instance' || sourceKey === 'independent' ? sourceKey : (prev.keySource || 'independent');
+      const portValue = numberOrUndefined(source.port);
+      return {
+        status: source.ok === false ? 'error' : 'ok',
+        configured: configuredValue === undefined ? Boolean(prev.configured) : configuredValue,
+        hasConfigured: configuredValue !== undefined,
+        running: runningValue === undefined ? Boolean(prev.running) : runningValue,
+        hasRunning: runningValue !== undefined,
+        url: textValue(source.url, prev.url || ''),
+        configureUrl: textValue(source.configure_url, prev.configureUrl || ''),
+        configPath: textValue(source.config_path, prev.configPath || ''),
+        accessNote: sanitise(source.access_note || prev.accessNote || ''),
+        sshTunnel: sanitise(source.ssh_tunnel || prev.sshTunnel || ''),
+        keyPresent: keyPresentValue === undefined ? Boolean(prev.keyPresent) : keyPresentValue,
+        hasKeyPresent: keyPresentValue !== undefined,
+        keySource,
+        instanceId: textValue(source.instance_id, prev.instanceId || ''),
+        port: portValue === undefined ? (numberOrUndefined(prev.port) !== undefined ? Math.round(numberOrUndefined(prev.port)) : 8766) : Math.round(portValue),
+        host: textValue(source.host, prev.host || '127.0.0.1'),
+        publicHost: textValue(source.public_host, prev.publicHost || ''),
+        message: sanitise(source.message),
+        error: sanitise(source.error || (source.ok === false ? source.message : ''))
+      };
+    }
+
+    function populateInstances() {
+      const select = $('instance-select');
+      if (!select) return;
+      const desired = select.value || state.config.instanceId || '';
+      select.replaceChildren();
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = state.instances.length ? '请选择实例' : '暂无可用实例，请改用独立 Key';
+      select.appendChild(placeholder);
+      state.instances.forEach((instance) => {
+        const option = document.createElement('option');
+        option.value = instance.id;
+        const qq = instance.qq_account ? ` · QQ ${instance.qq_account}` : '';
+        option.textContent = `${instance.name} · ${instance.id}${qq}`;
+        select.appendChild(option);
+      });
+      if (desired && !state.instances.some((instance) => instance.id === desired)) {
+        const option = document.createElement('option');
+        option.value = desired;
+        option.textContent = `配置中的实例 · ${desired}`;
+        select.appendChild(option);
+      }
+      select.value = desired;
+    }
+
+    function syncKeySourceFields() {
+      const instanceRadio = $('key-source-instance');
+      const useInstance = Boolean(instanceRadio && instanceRadio.checked);
+      $('independent-fields').hidden = useInstance;
+      $('instance-fields').hidden = !useInstance;
+    }
+    function syncHostFields() {
+      const publicRadio = $('host-public');
+      const publicMode = Boolean(publicRadio && publicRadio.checked);
+      $('public-host-fields').hidden = !publicMode;
+      const note = $('host-note');
+      note.classList.toggle('risk', publicMode);
+      note.textContent = publicMode
+        ? '高风险：绑定 0.0.0.0（所有网卡）。B 没有登录认证，必须用安全组、防火墙、VPN 或带认证的反向代理限制来源，不要裸露公网。'
+        : '监听地址为 127.0.0.1（仅本机）；远程访问必须使用 SSH 隧道或在本机打开。';
+    }
+    function fillForm() {
+      const config = state.config;
+      const keySource = config.keySource === 'instance' ? 'instance' : 'independent';
+      $('key-source-independent').checked = keySource === 'independent';
+      $('key-source-instance').checked = keySource === 'instance';
+      populateInstances();
+      $('instance-select').value = config.instanceId || '';
+      $('port').value = String(config.port || 8766);
+      const publicMode = config.host === '0.0.0.0';
+      $('host-local').checked = !publicMode;
+      $('host-public').checked = publicMode;
+      $('public-host').value = config.publicHost || '';
+      $('api-key').value = '';
+      $('api-key').type = 'password';
+      $('toggle-key').textContent = '显示';
+      $('toggle-key').setAttribute('aria-pressed', 'false');
+      clearFormErrors();
+      syncKeySourceFields();
+      syncHostFields();
+      if (config.keyPresent && config.keySource === 'independent') {
+        $('key-help').textContent = '本机已保存独立 Key；留空保持原值，输入新 Key 可覆盖。Key 不会回显。';
+      } else {
+        $('key-help').textContent = '只写入本机 B 配置目录；不保存到浏览器，也不会回显。';
+      }
+    }
+
+    function setButtonBusy(button, busy, label, textElement) {
+      if (button) {
+        button.disabled = busy;
+        button.classList.toggle('is-loading', busy);
+      }
+      if (textElement) textElement.textContent = label;
+    }
+
+    function render() {
+      const installed = state.installed;
+      const config = state.config;
+      setBadge($('main-badge'), state.loading ? '检查中' : state.status === 'unsupported' ? '后端不支持' : state.status === 'error' ? '状态异常' : installed ? (config.running ? '运行中' : '已安装') : '未安装', state.loading ? 'neutral' : state.status === 'unsupported' ? 'warn' : state.status === 'error' ? 'error' : installed ? 'ok' : 'neutral');
+      setStatusLine(
+        $('main-status'),
+        state.loading ? '正在读取 AI 助手状态…'
+          : state.status === 'unsupported' ? '当前后端不支持 AI 助手 B 管理。'
+            : state.status === 'error' ? state.error || 'AI 助手状态读取失败。'
+              : installed ? (state.message || 'AI 助手 B 已安装。')
+                : (state.message || 'AI 助手 B 尚未安装。'),
+        state.status === 'unsupported' ? 'warning' : state.status === 'error' ? 'error' : installed ? 'success' : ''
+      );
+      $('install-meta').hidden = !installed;
+      if (installed) {
+        const versionParts = [];
+        if (state.version) versionParts.push(`版本 ${state.version}`);
+        if (state.commit) versionParts.push(`commit ${state.commit}`);
+        $('install-commit').textContent = versionParts.join(' · ') || '未提供';
+        $('install-path').textContent = state.path || '未提供';
+        $('install-entry').textContent = state.entry || '未提供';
+        $('install-readme').textContent = state.readme || '未提供';
+      }
+      const installVisible = state.status === 'ok' && !installed;
+      const updateVisible = state.status === 'ok' && installed;
+      $('install-button').hidden = !installVisible;
+      $('update-button').hidden = !updateVisible;
+      $('install-label').textContent = state.busy && state.action === 'install' ? '正在安装…' : state.installArmed ? '再次点击确认安装' : '安装 AI 助手 B';
+      $('update-label').textContent = state.busy && state.action === 'update' ? '正在更新…' : '更新 AI 助手 B';
+      $('install-hint').textContent = installed
+        ? '已安装。可在下方配置并启动；API Key 不会在本页面回显或保存到浏览器。'
+        : state.installArmed
+          ? '再次点击将联网 clone 固定官方仓库；不会自动执行。'
+          : '尚未安装。安装需要联网，必须由你点击两次确认。';
+      $('install-button').disabled = state.loading || state.busy;
+      $('update-button').disabled = state.loading || state.busy;
+      $('refresh-status').disabled = state.loading || state.busy;
+      $('refresh-label').textContent = state.loading ? '刷新中…' : '刷新状态';
+
+      const configSupported = state.status === 'ok' && installed && config.status === 'ok';
+      const statusUnsupported = state.status === 'unsupported';
+      const configUnsupported = installed && config.status === 'unsupported';
+      $('config-card').hidden = !configSupported;
+      $('runtime-card').hidden = !configSupported;
+      $('unsupported-card').hidden = !(statusUnsupported || configUnsupported);
+      if (configUnsupported && !statusUnsupported) {
+        $('unsupported-title').textContent = '当前后端不支持配置/启停 AI 助手 B';
+        $('unsupported-text').textContent = 'AI 助手 B 已安装，但当前后端没有配置/启停接口。你仍可查看安装状态或更新扩展；页面不会自动启动 B。';
+      } else if (statusUnsupported) {
+        $('unsupported-title').textContent = '当前后端不支持扩展管理';
+        $('unsupported-text').textContent = '页面仍可返回控制台；请升级主项目后再安装或配置 AI 助手 B。';
+      }
+      if (!configSupported) return;
+
+      $('configured-state').textContent = config.configured ? '已配置' : '未配置';
+      $('running-state').textContent = config.running ? '运行中' : '已停止';
+      $('host-state').textContent = config.host === '0.0.0.0' ? `公网/所有网卡${config.publicHost ? ` · ${config.publicHost}` : ''}` : (config.host || '未提供');
+      $('port-state').textContent = String(config.port || 8766);
+      const hasUrl = Boolean(config.url);
+      const safe = safeUrl(config.url);
+      $('url-box').hidden = !config.running;
+      $('runtime-url').textContent = config.url || '未提供';
+      $('open-button').hidden = !config.running;
+      if (safe) {
+        $('open-button').href = safe;
+        $('open-button').removeAttribute('aria-disabled');
+        $('open-button').title = safe;
+      } else {
+        $('open-button').removeAttribute('href');
+        $('open-button').setAttribute('aria-disabled', 'true');
+        $('open-button').title = '服务端尚未返回可打开的安全 URL';
+      }
+      const note = $('runtime-note');
+      if (!config.running) {
+        note.textContent = '';
+      } else if (!hasUrl) {
+        note.textContent = config.host === '0.0.0.0'
+          ? '公网模式已启用，但服务端没有返回 URL；请确认 public_host 并检查 B 日志。'
+          : '服务端表示已启动，但没有返回访问 URL；请检查 B 配置和日志。';
+      } else if (config.host === '0.0.0.0') {
+        note.textContent = `B 没有登录认证，当前为公网模式。必须用云安全组、主机防火墙、VPN 或带认证的反向代理限制来源，不要裸露公网。${config.accessNote ? ` ${config.accessNote}` : ''}`;
+        note.className = 'warning';
+      } else if (isLoopback(config.url)) {
+        note.textContent = `该地址是 loopback（仅本机回环）。从远程电脑访问必须使用 SSH 隧道，或在本机打开。${config.accessNote ? ` ${config.accessNote}` : ''}${config.sshTunnel ? ` ${config.sshTunnel}` : ''}`;
+      } else {
+        note.textContent = config.accessNote || '请确认地址可达；不要把无认证服务直接暴露公网。';
+      }
+      $('start-button').disabled = state.busy || config.running || !config.configured;
+      $('stop-button').disabled = state.busy || !config.running;
+      $('save-button').disabled = config.saving;
+      $('save-label').textContent = config.saving ? '处理中…' : '保存并启动';
+      setFormStatus($('runtime-status'), config.message || '', false);
+      fillFormIfClosed();
+    }
+
+    let formReady = false;
+    function fillFormIfClosed() {
+      if (!formReady) {
+        fillForm();
+        formReady = true;
+      }
+    }
+
+    function setConfigStatus(cardText) {
+      setFormStatus($('form-status'), cardText || '', false);
+    }
+
+    async function loadInstances() {
+      try {
+        const data = asRecord(await apiRequest('/api/instances'));
+        if (data.ok === false) return;
+        const raw = Array.isArray(data.instances) ? data.instances : [];
+        state.instances = raw.map((item) => {
+          const record = asRecord(item);
+          return { id: textValue(record.id, ''), name: textValue(record.name, '') || '未命名实例', qq_account: textValue(record.qq_account, '') };
+        }).filter((item) => item.id);
+        populateInstances();
+      } catch (error) {
+        // Instance list is optional for independent-key mode; keep the form usable.
+      }
+    }
+
+    async function loadConfig(options = {}) {
+      if (!state.installed || state.config.loading) return false;
+      if (state.config.status === 'unsupported' && options.silent !== false) return false;
+      state.config.loading = true;
+      render();
+      try {
+        const data = await apiRequest('/api/assistant/config');
+        if (!data || data.ok === false) {
+          throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手配置读取失败。', { data });
+        }
+        const previous = state.config;
+        const next = normaliseConfig(data, previous);
+        state.config = { ...previous, ...next, status: 'ok', loading: false, error: '' };
+        formReady = false;
+        showMainError('');
+        render();
+        return true;
+      } catch (error) {
+        const data = error instanceof ApiError ? asRecord(error.data) : {};
+        const partial = Object.keys(data).length ? normaliseConfig(data, state.config) : null;
+        const unsupported = isMissingEndpoint(error) || isUnsupportedMessage(error instanceof ApiError ? error.message : '');
+        state.config = {
+          ...state.config,
+          ...(partial || {}),
+          status: unsupported ? 'unsupported' : 'error',
+          loading: false,
+          error: unsupported ? '当前后端不支持 AI 助手 B 配置/启停。' : formatError(error, 'AI 助手配置读取失败。')
+        };
+        if (!unsupported) showMainError(state.config.error);
+        render();
+        return false;
+      }
+    }
+
+    async function loadStatus(options = {}) {
+      if (state.loading) return false;
+      state.loading = true;
+      state.installArmed = false;
+      render();
+      showMainError('');
+      try {
+        const data = await apiRequest('/api/assistant/status');
+        if (!data || data.ok === false) {
+          throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手状态读取失败。', { data });
+        }
+        const previous = state;
+        const next = normaliseStatus(data);
+        state.installed = next.hasInstalled ? next.installed : previous.installed;
+        state.status = next.ok ? 'ok' : 'error';
+        state.message = next.message;
+        state.error = next.error;
+        for (const field of ['path', 'repo', 'commit', 'version', 'entry', 'readme']) {
+          if (next[field]) state[field] = next[field];
+        }
+        state.loading = false;
+        showMainError('');
+        render();
+        if (state.installed) await loadConfig({ silent: false });
+        return true;
+      } catch (error) {
+        const data = error instanceof ApiError ? asRecord(error.data) : {};
+        const unsupported = isMissingEndpoint(error) || isUnsupportedMessage(error instanceof ApiError ? error.message : '');
+        state.loading = false;
+        state.status = unsupported ? 'unsupported' : 'error';
+        state.error = unsupported ? '当前后端不支持 AI 助手 B 管理。' : formatError(error, 'AI 助手状态读取失败。');
+        const partial = Object.keys(data).length ? normaliseStatus(data) : null;
+        if (partial && partial.hasInstalled) state.installed = partial.installed;
+        render();
+        return false;
+      }
+    }
+
+    async function installAssistant() {
+      if (state.busy || state.loading || state.installed) return;
+      if (!state.installArmed) {
+        state.installArmed = true;
+        render();
+        window.setTimeout(() => {
+          if (state.installArmed && !state.busy) { state.installArmed = false; render(); }
+        }, 8000);
+        return;
+      }
+      state.installArmed = false;
+      state.busy = true;
+      state.action = 'install';
+      render();
+      try {
+        const data = await apiRequest('/api/assistant/install', { method: 'POST', body: {} });
+        if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手安装失败。', { data });
+        state.message = sanitise(asRecord(data).message) || 'AI 助手 B 安装完成。';
+        await loadStatus({ silent: false });
+        setConfigStatus('安装完成，请配置 DeepSeek Key 后启动 AI 助手 B。');
+      } catch (error) {
+        showMainError(formatError(error, 'AI 助手安装失败。'));
+      } finally {
+        state.busy = false;
+        state.action = '';
+        render();
+      }
+    }
+
+    async function updateAssistant() {
+      if (state.busy || state.loading || !state.installed) return;
+      state.busy = true;
+      state.action = 'update';
+      render();
+      try {
+        const data = await requestWithFallback(['/api/assistant/update', '/api/assistant/install'], { method: 'POST', body: {} });
+        if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手更新失败。', { data });
+        state.message = sanitise(asRecord(data).message) || 'AI 助手 B 已更新。';
+        await loadStatus({ silent: false });
+      } catch (error) {
+        showMainError(formatError(error, 'AI 助手更新失败。'));
+      } finally {
+        state.busy = false;
+        state.action = '';
+        render();
+      }
+    }
+
+    function setConfigFieldErrors() {
+      clearFormErrors();
+      const instanceRadio = $('key-source-instance');
+      const key = $('api-key').value.trim();
+      const instanceId = $('instance-select').value.trim();
+      const port = Number($('port').value);
+      const publicMode = $('host-public').checked;
+      const publicHost = $('public-host').value.trim();
+      const existingKey = state.config.keyPresent && state.config.keySource === 'independent';
+      let invalid = null;
+      if (instanceRadio.checked) {
+        if (!instanceId || !state.instances.some((item) => item.id === instanceId)) {
+          setFieldError($('instance-select'), $('instance-error'), '请选择一个可用实例。');
+          invalid = $('instance-select');
+        }
+      } else if (!key && !existingKey) {
+        setFieldError($('api-key'), $('key-error'), '请输入独立的 DeepSeek API Key。');
+        invalid = $('api-key');
+      }
+      if (!Number.isInteger(port) || port < 5000 || port > 10000) {
+        setFieldError($('port'), $('port-error'), '端口必须是 5000–10000 之间的整数。');
+        invalid = invalid || $('port');
+      }
+      if (publicMode) {
+        if (!publicHost) {
+          setFieldError($('public-host'), $('public-host-error'), '公网模式必须填写公网 IP 或域名。');
+          invalid = invalid || $('public-host');
+        } else if (/\s/.test(publicHost) || publicHost.includes('://') || /[\/?#]/.test(publicHost)) {
+          setFieldError($('public-host'), $('public-host-error'), '不能包含空白、协议、路径或查询参数。');
+          invalid = invalid || $('public-host');
+        }
+      }
+      if (invalid) { invalid.focus({ preventScroll: true }); return null; }
+      return {
+        key_source: instanceRadio.checked ? 'instance' : 'independent',
+        api_key: instanceRadio.checked ? undefined : (key || undefined),
+        instance_id: instanceRadio.checked ? instanceId : undefined,
+        port,
+        host: publicMode ? '0.0.0.0' : '127.0.0.1',
+        public_host: publicMode ? publicHost : undefined
+      };
+    }
+
+    async function saveAndStart(event) {
+      event.preventDefault();
+      if (state.config.saving) return;
+      const payload = setConfigFieldErrors();
+      if (!payload) return;
+      state.config.saving = true;
+      state.config.error = '';
+      setFormStatus($('form-status'), '正在保存配置…', false);
+      setFormStatus($('form-error'), '', true);
+      render();
+      try {
+        const data = await apiRequest('/api/assistant/config', { method: 'POST', body: payload });
+        if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || '配置保存失败。', { data });
+        const saved = normaliseConfig(data, state.config);
+        state.config = {
+          ...state.config,
+          ...saved,
+          status: 'ok',
+          configured: saved.hasConfigured ? saved.configured : true,
+          keyPresent: saved.hasKeyPresent ? saved.keyPresent : Boolean(payload.api_key) || state.config.keyPresent,
+          keySource: payload.key_source,
+          instanceId: payload.instance_id || '',
+          port: payload.port,
+          host: payload.host,
+          publicHost: payload.public_host || '',
+          error: ''
+        };
+        $('api-key').value = '';
+        if (state.config.running) {
+          setFormStatus($('form-status'), '配置已保存；正在重启以应用新配置…', false);
+          await requestWithFallback(['/api/assistant/stop'], { method: 'POST', body: {} });
+        }
+        setFormStatus($('form-status'), '配置已保存，正在启动…', false);
+        const started = await apiRequest('/api/assistant/start', { method: 'POST', body: {} });
+        if (!started || started.ok === false) throw new ApiError(sanitise(asRecord(started).message || asRecord(started).error) || 'AI 助手启动失败。', { data: started });
+        const startInfo = normaliseConfig(started, state.config);
+        state.config = {
+          ...state.config,
+          ...startInfo,
+          status: 'ok',
+          configured: true,
+          running: startInfo.hasRunning ? startInfo.running : true,
+          error: ''
+        };
+        state.message = state.config.message || 'AI 助手 B 已启动。';
+        formReady = false;
+        showMainError('');
+        setFormStatus($('form-status'), state.config.message || 'AI 助手 B 已启动。', false);
+      } catch (error) {
+        const unsupported = isMissingEndpoint(error) || isUnsupportedMessage(error instanceof ApiError ? error.message : '');
+        if (unsupported) state.config.status = 'unsupported';
+        const message = unsupported ? '当前后端不支持 AI 助手 B 配置/启停。' : formatError(error, 'AI 助手配置或启动失败。');
+        state.config.error = message;
+        setFormStatus($('form-error'), message, true);
+        showMainError(message);
+      } finally {
+        state.config.saving = false;
+        render();
+      }
+    }
+
+    async function startAssistant() {
+      if (state.busy || state.config.saving || !state.config.configured || state.config.running) return;
+      state.busy = true;
+      render();
+      try {
+        const data = await apiRequest('/api/assistant/start', { method: 'POST', body: {} });
+        if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手启动失败。', { data });
+        const info = normaliseConfig(data, state.config);
+        state.config = { ...state.config, ...info, running: true, configured: true, error: '' };
+        state.message = state.config.message || 'AI 助手 B 已启动。';
+        formReady = false;
+        showMainError('');
+        render();
+      } catch (error) {
+        const message = formatError(error, 'AI 助手启动失败。');
+        state.config.error = message;
+        showMainError(message);
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    async function stopAssistant() {
+      if (state.busy || state.config.saving || !state.config.running) return;
+      state.busy = true;
+      render();
+      try {
+        const data = await apiRequest('/api/assistant/stop', { method: 'POST', body: {} });
+        if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手停止失败。', { data });
+        const info = normaliseConfig(data, state.config);
+        state.config = { ...state.config, ...info, running: false, error: '' };
+        state.message = state.config.message || 'AI 助手 B 已停止。';
+        formReady = false;
+        showMainError('');
+        render();
+      } catch (error) {
+        const message = formatError(error, 'AI 助手停止失败。');
+        state.config.error = message;
+        showMainError(message);
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    async function refreshAll() {
+      await Promise.all([loadStatus({ silent: false }), loadInstances()]);
+    }
+
+    function bindEvents() {
+      $('refresh-status').addEventListener('click', () => void refreshAll());
+      $('install-button').addEventListener('click', () => void installAssistant());
+      $('update-button').addEventListener('click', () => void updateAssistant());
+      $('start-button').addEventListener('click', () => void startAssistant());
+      $('stop-button').addEventListener('click', () => void stopAssistant());
+      $('config-form').addEventListener('submit', saveAndStart);
+      $$('input[name="key-source"]').forEach((radio) => radio.addEventListener('change', () => { clearFormErrors(); syncKeySourceFields(); }));
+      $$('input[name="host-mode"]').forEach((radio) => radio.addEventListener('change', () => { clearFormErrors(); syncHostFields(); }));
+      $('toggle-key').addEventListener('click', () => {
+        const input = $('api-key');
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        $('toggle-key').textContent = show ? '隐藏' : '显示';
+        $('toggle-key').setAttribute('aria-pressed', show ? 'true' : 'false');
+        input.focus({ preventScroll: true });
+      });
+      for (const [inputId, errorId] of [['api-key', 'key-error'], ['instance-select', 'instance-error'], ['port', 'port-error'], ['public-host', 'public-host-error']]) {
+        const input = $(inputId);
+        if (input) input.addEventListener('input', () => clearFieldError(input, $(errorId)));
+      }
+    }
+
+    async function init() {
+      bindEvents();
+      await Promise.all([loadStatus({ silent: true }), loadInstances()]);
+      render();
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      init().catch((error) => {
+        const message = formatError(error, 'AI 助手页面初始化失败，请刷新重试。');
+        state.status = 'error';
+        state.loading = false;
+        state.error = message;
+        render();
+        showMainError(message);
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

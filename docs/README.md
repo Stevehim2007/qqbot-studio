@@ -21,7 +21,7 @@
 
 ## 3. QA 与版本记录
 
-- [`qa-report-v2.md`](qa-report-v2.md)：当前 v3.2.0 条件验收报告、真实 E2E 待测清单和已知限制。
+- [`qa-report-v2.md`](qa-report-v2.md)：当前 v3.3.0 条件验收报告、真实 E2E 待测清单和已知限制。
 - [`qa-report.md`](qa-report.md)：旧版单实例 v1 时代的 QA 快照，仅作历史记录；接口和端口不要按它配置。
 - [`ui-api-contract.md`](ui-api-contract.md)：旧版单实例 API 契约，仅作历史兼容参考；新开发请使用 [`ui-api-contract-v2.md`](ui-api-contract-v2.md)。
 
@@ -33,7 +33,7 @@
 | [QQ Bot Studio Windows](https://github.com/Stevehim2007/qqbot-studio-windows) | Windows 10/11 独立发行项目，Docker Desktop + WSL2，不是 Ubuntu 主项目的同一发行包 |
 | [Windows EXE 构建 workflow](https://github.com/Stevehim2007/qqbot-studio-windows/actions/workflows/windows-build.yml) | 从最新成功的 `windows-build` artifact 下载 `QQBotStudioWindows.exe`；当前未提供正式 Release EXE 资产 |
 | [Windows Releases](https://github.com/Stevehim2007/qqbot-studio-windows/releases) | 后续正式 EXE 发布页；当前 Releases 为空时请使用 Actions artifact |
-| [QQ Bot Studio AI Assistant B](https://github.com/Stevehim2007/qqbot-studio-ai-assistant) | 可选、独立的生成式 AI 使用助手 B；A 离线助手仍默认保留 |
+| [QQ Bot Studio AI Assistant B](https://github.com/Stevehim2007/qqbot-studio-ai-assistant) | 可选、独立的生成式 AI 使用助手 B；主控制台通过独立 /assistant 页面管理 |
 | [AstrBot](https://github.com/AstrBotDevs/AstrBot) | 上游聊天机器人框架 |
 | [SnowLuma](https://github.com/SnowLuma/SnowLuma) | 上游 OneBot v11/QQ 协议端 |
 | [OneBot v11](https://github.com/botuniverse/onebot-11) | 上游协议标准 |

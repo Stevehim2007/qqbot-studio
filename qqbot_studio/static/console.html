@@ -27,16 +27,11 @@
     <symbol id="c-i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
     <symbol id="c-i-edit" viewBox="0 0 24 24"><path d="m4 20 4.5-1 11-11a2.1 2.1 0 0 0-3-3l-11 11L4 20Z"/><path d="m14 7 3 3"/></symbol>
     <symbol id="c-i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7h.01"/></symbol>
-    <symbol id="c-i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.1a2.5 2.5 0 0 1 4.9.8c0 1.8-2.5 2-2.5 3.6"/><path d="M12 17h.01"/></symbol>
-    <symbol id="c-i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
-    <symbol id="c-i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/></symbol>
-    <symbol id="c-i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17H6.5A2.5 2.5 0 0 0 4 22.5v-17Z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20"/><path d="M8 7h8M8 11h6"/></symbol>
     <symbol id="c-i-puzzle" viewBox="0 0 24 24"><path d="M9 3h6v4a2 2 0 1 0 4 0h2v6h-4a2 2 0 1 0 0 4h4v4h-6v-3a2 2 0 1 0-4 0v3H3v-6h4a2 2 0 1 0 0-4H3V5h6V3Z"/></symbol>
     <symbol id="c-i-memory" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/><path d="M9 9h6v6H9z"/></symbol>
     <symbol id="c-i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
     <symbol id="c-i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="c-i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3Z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/><path d="m5 14 .6 1.4L7 16l-1.4.6L5 18l-.6-1.4L3 16l1.4-.6L5 14Z"/></symbol>
-    <symbol id="c-i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
   </svg>
 
   <header class="console-header">
@@ -66,10 +61,10 @@
           <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
           <span id="console-refresh-label">手动刷新</span>
         </button>
-        <button id="assistant-open" class="console-assistant-button" type="button" aria-expanded="false" aria-controls="assistant-panel">
-          <svg class="icon" aria-hidden="true"><use href="#c-i-help"></use></svg>
-          使用助手
-        </button>
+        <a class="console-header-btn console-assistant-link" href="/assistant">
+          <svg class="icon" aria-hidden="true"><use href="#c-i-sparkles"></use></svg>
+          AI 助手
+        </a>
         <button class="console-create-button" type="button" data-open-create>
           <svg class="icon" aria-hidden="true"><use href="#c-i-plus"></use></svg>
           新建机器人
@@ -102,148 +97,6 @@
       </div>
       <button id="console-error-retry" class="btn btn-small btn-quiet" type="button">重试连接</button>
     </div>
-
-    <section id="assistant-b-card" class="assistant-b-card" aria-labelledby="assistant-b-title">
-      <div class="assistant-b-main">
-        <span class="assistant-b-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-sparkles"></use></svg></span>
-        <div class="assistant-b-copy">
-          <div class="assistant-b-title-row">
-            <h2 id="assistant-b-title">AI 助手 B <span>可选扩展</span></h2>
-            <span id="assistant-b-badge" class="pill pill--neutral">检查中</span>
-          </div>
-          <p class="assistant-b-description">独立的生成式 AI 使用助手，可选安装。A 离线使用助手仍默认保留，不安装 B 也能继续使用控制台。</p>
-          <p id="assistant-b-status" class="assistant-b-status is-info" role="status">正在检查 AI 助手 B 状态…</p>
-          <div id="assistant-b-meta" class="assistant-b-meta" hidden>
-            <div class="assistant-b-meta-item">
-              <span>版本 / Commit</span>
-              <code id="assistant-b-commit">未提供</code>
-            </div>
-            <div class="assistant-b-meta-item">
-              <span>安装路径</span>
-              <code id="assistant-b-path">未提供</code>
-            </div>
-            <div class="assistant-b-meta-item">
-              <span>入口</span>
-              <code id="assistant-b-entry">未提供</code>
-            </div>
-            <div class="assistant-b-meta-item">
-              <span>README</span>
-              <code id="assistant-b-readme">未提供</code>
-            </div>
-          </div>
-          <p id="assistant-b-hint" class="assistant-b-hint">安装会联网下载独立仓库；主项目 A 离线助手仍可继续使用。控制台不会读取或展示 B 的 API Key。</p>
-          <div class="assistant-b-offline">
-            <span class="pill pill--success">A · 离线使用助手</span>
-            <span>默认可用，无需安装 B。</span>
-          </div>
-          <div id="assistant-b-runtime" class="assistant-b-runtime" hidden>
-            <span class="assistant-b-runtime-label">AI 助手 B 地址</span>
-            <code id="assistant-b-url">未提供</code>
-            <p id="assistant-b-url-note" class="assistant-b-url-note"></p>
-          </div>
-        </div>
-      </div>
-      <div class="assistant-b-actions">
-        <button id="assistant-b-install" class="btn btn-primary btn-small" type="button" hidden>
-          <svg class="icon" aria-hidden="true"><use href="#c-i-sparkles"></use></svg>
-          <span id="assistant-b-install-label">安装 AI 助手 B</span>
-        </button>
-        <button id="assistant-b-update" class="btn btn-secondary btn-small" type="button" hidden>
-          <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
-          <span id="assistant-b-update-label">更新 AI 助手 B</span>
-        </button>
-        <button id="assistant-b-configure" class="btn btn-secondary btn-small" type="button" hidden>
-          <svg class="icon" aria-hidden="true"><use href="#c-i-settings"></use></svg>
-          <span id="assistant-b-configure-label">配置 AI 助手 B</span>
-        </button>
-        <a id="assistant-b-open" class="btn btn-primary btn-small" href="#" target="_blank" rel="noopener noreferrer" hidden>
-          <svg class="icon" aria-hidden="true"><use href="#c-i-external"></use></svg>
-          打开 AI 助手 B
-        </a>
-        <button id="assistant-b-retry" class="btn btn-quiet btn-small" type="button" hidden>
-          <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
-          重试状态
-        </button>
-      </div>
-
-      <section id="assistant-b-config-panel" class="assistant-b-config-panel" aria-labelledby="assistant-b-config-title" hidden>
-        <div class="assistant-b-config-heading">
-          <span class="assistant-b-config-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-settings"></use></svg></span>
-          <div>
-            <h3 id="assistant-b-config-title">配置 AI 助手 B</h3>
-            <p>配置只写入本机 B 配置目录；API Key 不会保存到浏览器，也不会在状态接口中回显。</p>
-          </div>
-        </div>
-        <form id="assistant-b-config-form" class="assistant-b-config-form" novalidate>
-          <fieldset class="assistant-b-source-group">
-            <legend>DeepSeek Key 来源</legend>
-            <label class="assistant-b-source-option">
-              <input id="assistant-b-key-source-independent" type="radio" name="assistant-b-key-source" value="independent" checked>
-              <span><strong>独立 DeepSeek API Key</strong><small>只写入本机 B 配置；不持久化到浏览器。</small></span>
-            </label>
-            <label class="assistant-b-source-option">
-              <input id="assistant-b-key-source-instance" type="radio" name="assistant-b-key-source" value="instance">
-              <span><strong>复用实例 Key</strong><small>只提交实例 ID，浏览器不会读取实例 Key。</small></span>
-            </label>
-          </fieldset>
-
-          <div id="assistant-b-independent-fields" class="assistant-b-config-fields">
-            <label for="assistant-b-api-key">DeepSeek API Key</label>
-            <div class="assistant-b-key-row">
-              <input id="assistant-b-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." aria-describedby="assistant-b-config-key-hint assistant-b-key-error">
-              <button id="assistant-b-toggle-key" class="assistant-b-toggle-key" type="button" aria-pressed="false">显示</button>
-            </div>
-            <p id="assistant-b-config-key-hint" class="assistant-b-config-help">已保存的 Key 不会回显；如已有 Key，可留空保持原值。</p>
-            <p id="assistant-b-key-error" class="field-error" role="alert" hidden></p>
-          </div>
-
-          <div id="assistant-b-instance-fields" class="assistant-b-config-fields" hidden>
-            <label for="assistant-b-instance-select">选择机器人实例</label>
-            <select id="assistant-b-instance-select" aria-describedby="assistant-b-instance-help assistant-b-instance-error">
-              <option value="">请选择实例</option>
-            </select>
-            <p id="assistant-b-instance-help" class="assistant-b-config-help">只提交实例 ID；实例真实 DeepSeek Key 不会返回浏览器。</p>
-            <p id="assistant-b-instance-error" class="field-error" role="alert" hidden></p>
-          </div>
-
-          <div class="assistant-b-port-field">
-            <label for="assistant-b-port">AI 助手 B 端口</label>
-            <input id="assistant-b-port" type="number" inputmode="numeric" min="5000" max="10000" step="1" value="8766" aria-describedby="assistant-b-port-help assistant-b-port-error">
-            <p id="assistant-b-port-help" class="assistant-b-config-help">默认 8766；端口由本地服务校验，避免和管理服务或实例端口冲突。</p>
-            <p id="assistant-b-port-error" class="field-error" role="alert" hidden></p>
-          </div>
-
-          <fieldset class="assistant-b-host-group">
-            <legend>AI 助手 B 监听方式</legend>
-            <label class="assistant-b-source-option">
-              <input id="assistant-b-host-local" type="radio" name="assistant-b-host-mode" value="127.0.0.1" checked>
-              <span><strong>仅本机（127.0.0.1，推荐）</strong><small>默认安全模式；远端使用 SSH 隧道访问。</small></span>
-            </label>
-            <label class="assistant-b-source-option">
-              <input id="assistant-b-host-public" type="radio" name="assistant-b-host-mode" value="0.0.0.0">
-              <span><strong>公网/所有网卡（0.0.0.0，高风险）</strong><small>B 无登录认证，可能直接暴露给网络访问者。</small></span>
-            </label>
-          </fieldset>
-
-          <div id="assistant-b-public-host-fields" class="assistant-b-config-fields" hidden>
-            <label for="assistant-b-public-host">公网 IP 或域名</label>
-            <input id="assistant-b-public-host" type="text" autocomplete="off" spellcheck="false" placeholder="例如：bot.example.com 或 203.0.113.10" aria-describedby="assistant-b-public-host-help assistant-b-public-host-error">
-            <p id="assistant-b-public-host-help" class="assistant-b-config-help">只用于生成可打开的 URL，不要填写 http://、路径或端口；端口使用上方值。</p>
-            <p id="assistant-b-public-host-error" class="field-error" role="alert" hidden></p>
-          </div>
-
-          <p id="assistant-b-host-note" class="assistant-b-host-note">监听地址为 <code>127.0.0.1</code>（仅本机）。如果控制台部署在远程服务器，需要通过 SSH 隧道访问。</p>
-          <p id="assistant-b-config-error" class="assistant-b-config-error" role="alert" hidden></p>
-          <p id="assistant-b-config-status" class="assistant-b-config-status" role="status" hidden></p>
-          <div class="assistant-b-config-actions">
-            <button id="assistant-b-config-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
-            <button id="assistant-b-config-save" class="btn btn-primary btn-small" type="submit">
-              <span id="assistant-b-config-save-label">保存并启动</span>
-            </button>
-          </div>
-        </form>
-      </section>
-    </section>
 
     <section id="console-resource-summary" class="console-resource-summary" aria-labelledby="console-resource-title">
       <div class="console-resource-heading">
@@ -338,64 +191,6 @@
       <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek、AstrBot 与 SnowLuma 均为其各自权利人的产品或项目。</p>
     </footer>
   </main>
-
-  <!-- 离线使用助手：纯本地关键词匹配，不联网、不执行命令、不保存问题。 -->
-  <aside id="assistant-panel" class="assistant-panel" role="dialog" aria-modal="false" aria-labelledby="assistant-title" hidden>
-    <header class="assistant-header">
-      <span class="assistant-header-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-help"></use></svg></span>
-      <div class="assistant-header-copy">
-        <h2 id="assistant-title">使用助手</h2>
-        <p>离线教程 · 本地关键词匹配 · 不联网</p>
-      </div>
-      <button id="assistant-close" class="assistant-close" type="button" aria-label="关闭使用助手" title="关闭使用助手">
-        <svg class="icon" aria-hidden="true"><use href="#c-i-close"></use></svg>
-      </button>
-    </header>
-
-    <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions" aria-label="使用助手对话记录">
-      <div class="assistant-message assistant-message--bot">
-        <span class="assistant-avatar" aria-hidden="true"><svg class="icon"><use href="#c-i-help"></use></svg></span>
-        <div class="assistant-bubble">
-          <p>你好！我是完全离线的使用助手，可以帮你快速查安装、端口、脚本、扫码、SnowLuma 密码、插件配置、Docker、更新和 Windows 说明。</p>
-          <p>先从下面的快捷问题开始，或直接输入你的问题。这里只查阅本机内置教程，不会上传内容，也不会执行命令。</p>
-          <p class="assistant-safety-inline">请勿输入 QQ 密码、API Key、访问令牌、短信验证码或其他敏感信息。</p>
-        </div>
-      </div>
-    </div>
-
-    <section class="assistant-quick" aria-labelledby="assistant-quick-title">
-      <h3 id="assistant-quick-title">快捷问题</h3>
-      <div class="assistant-quick-list">
-        <button type="button" data-assistant-question="如何安装、更新和检查依赖？">安装、更新与依赖</button>
-        <button type="button" data-assistant-question="自动更新失败、工作区不干净怎么办？">自动更新失败</button>
-        <button type="button" data-assistant-question="腾讯云安全组、防火墙和端口怎么开通？">腾讯云端口 / 防火墙</button>
-        <button type="button" data-assistant-question="start.sh 和 console.sh 有什么区别？">start.sh vs console.sh</button>
-        <button type="button" data-assistant-question="每个新实例都要扫码吗？重启后还要吗？">首次扫码 / 登录态</button>
-        <button type="button" data-assistant-question="SnowLuma 用户名 admin 密码错误怎么重置？">SnowLuma 密码重置</button>
-        <button type="button" data-assistant-question="reply_probability、冷却、memory_mode 和 token 怎么设置？">概率、记忆与 token</button>
-        <button type="button" data-assistant-question="部署中断、查看日志和 Docker 检查怎么做？">部署中断 / 日志 / Docker</button>
-        <button type="button" data-assistant-question="有 Windows 版吗？">Windows 版说明</button>
-      </div>
-    </section>
-
-    <form id="assistant-form" class="assistant-form" novalidate>
-      <label class="sr-only" for="assistant-input">输入要咨询的问题</label>
-      <div class="assistant-input-row">
-        <input id="assistant-input" name="question" type="text" maxlength="500" autocomplete="off" placeholder="例如：怎么省 token？" aria-describedby="assistant-hint assistant-error" required>
-        <button id="assistant-send" class="assistant-send" type="submit" aria-label="发送问题" title="发送问题">
-          <svg class="icon" aria-hidden="true"><use href="#c-i-send"></use></svg>
-          <span class="sr-only">发送</span>
-        </button>
-      </div>
-      <p id="assistant-error" class="field-error" role="alert" hidden></p>
-      <p id="assistant-hint" class="assistant-hint">离线关键词匹配，不会上传问题，也不会执行命令。请勿输入密码、API Key 或验证码。</p>
-    </form>
-
-    <footer class="assistant-footer">
-      <svg class="icon" aria-hidden="true"><use href="#c-i-book"></use></svg>
-      <span>教程参考：README.md · docs/server-troubleshooting.md</span>
-    </footer>
-  </aside>
 
   <!-- 服务端会将 {{TOKEN}} 替换为本次本地会话的一次性访问令牌。 -->
   <script>window.QB_TOKEN = "{{TOKEN}}";</script>

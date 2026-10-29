@@ -267,7 +267,7 @@ class FakeStudio:
             "commit": "",
             "entry": "/tmp/qqbot-studio/extensions/ai-assistant/assistant.py",
             "readme": "/tmp/qqbot-studio/extensions/ai-assistant/README.md",
-            "message": "AI 助手 B 尚未安装。A 离线助手不受影响。",
+            "message": "AI 助手 B 尚未安装。主控制台和其他实例不受影响。",
             "error": "",
         }
 
@@ -805,6 +805,99 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self._get("/api/job/missing?instance=bot-1")
         self.assertEqual(ctx.exception.code, 404)
+
+
+class AssistantPageRouteTests(unittest.TestCase):
+    def _start_static_server(self, assistant_content=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        static_dir = Path(tmp.name)
+        (static_dir / "index.html").write_text(
+            '<!doctype html><script>window.QB_TOKEN = "{{TOKEN}}";</script>'
+            "<p>wizard</p>",
+            encoding="utf-8",
+        )
+        if assistant_content is not None:
+            (static_dir / "assistant.html").write_text(
+                assistant_content,
+                encoding="utf-8",
+            )
+        server = create_server(
+            FakeStudio(),
+            static_dir=static_dir,
+            host="127.0.0.1",
+            port=0,
+            token="assistant-page-token-123",
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 3)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        host, port = server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def _get(self, base, path):
+        request = urllib.request.Request(base + path)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(request, timeout=5) as response:
+                return response.status, response.read().decode("utf-8"), response.headers
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8"), exc.headers
+
+    def test_assistant_page_routes_inject_token(self):
+        assistant_html = (
+            "<!doctype html><html><body><p id='assistant-page'>AI 助手 B</p>"
+            '<script>window.QB_TOKEN = "{{TOKEN}}";</script></body></html>'
+        )
+        base = self._start_static_server(assistant_html)
+        for path in ("/assistant", "/assistant.html"):
+            status, body, headers = self._get(base, path)
+            self.assertEqual(status, 200, body)
+            self.assertIn("text/html", headers.get("Content-Type", ""))
+            self.assertIn("assistant-page-token-123", body)
+            self.assertNotIn("{{TOKEN}}", body)
+            self.assertIn("AI 助手 B", body)
+
+        # Existing standalone pages keep working in the same context.
+        status, body, _ = self._get(base, "/console")
+        self.assertEqual(status, 200)
+        self.assertIn("assistant-page-token-123", body)
+        status, body, _ = self._get(base, "/wizard")
+        self.assertEqual(status, 200)
+        self.assertIn("assistant-page-token-123", body)
+
+    def test_missing_assistant_page_returns_safe_404_without_breaking_server(self):
+        base = self._start_static_server(assistant_content=None)
+        for path in ("/assistant", "/assistant.html"):
+            status, body, headers = self._get(base, path)
+            self.assertEqual(status, 404, body)
+            self.assertIn("application/json", headers.get("Content-Type", ""))
+            payload = json.loads(body)
+            self.assertFalse(payload["ok"])
+            self.assertIn("尚未安装", payload["message"])
+
+        # Missing optional assistant page must not break existing routes.
+        status, body, _ = self._get(base, "/console")
+        self.assertEqual(status, 200)
+        status, body, _ = self._get(base, "/wizard")
+        self.assertEqual(status, 200)
+        self.assertIn("assistant-page-token-123", body)
+
+    def test_assistant_page_without_placeholder_degrades_safely(self):
+        base = self._start_static_server("<html><body>broken template</body></html>")
+        status, body, headers = self._get(base, "/assistant")
+        self.assertEqual(status, 500, body)
+        self.assertIn("application/json", headers.get("Content-Type", ""))
+        payload = json.loads(body)
+        self.assertFalse(payload["ok"])
+        self.assertIn("占位符", payload["message"])
+        # Context construction succeeded and unrelated routes still work.
+        status, body, _ = self._get(base, "/console")
+        self.assertEqual(status, 200)
+        status, body, _ = self._get(base, "/wizard")
+        self.assertEqual(status, 200)
 
 
 if __name__ == "__main__":

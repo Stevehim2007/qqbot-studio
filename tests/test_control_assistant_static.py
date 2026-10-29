@@ -1,7 +1,7 @@
-"""Static regression checks for the offline console assistant.
+"""Static regression checks for the console and the standalone AI assistant page.
 
-These tests intentionally do not start the server or a browser. They only verify
-the static HTML/CSS/JS contract, wording coverage, and browser-safety rules.
+These tests do not start a browser. They verify the static routes, DOM contracts,
+API hooks, self-contained assets, responsive CSS, and browser-safety boundaries.
 """
 
 from __future__ import annotations
@@ -9,15 +9,17 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "qqbot_studio" / "static"
-HTML_PATH = STATIC / "console.html"
-CSS_PATH = STATIC / "console.css"
-JS_PATH = STATIC / "console.js"
+CONSOLE_HTML = STATIC / "console.html"
+CONSOLE_CSS = STATIC / "console.css"
+CONSOLE_JS = STATIC / "console.js"
+ASSISTANT_HTML = STATIC / "assistant.html"
 
 VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
@@ -25,11 +27,13 @@ VOID_TAGS = {
 }
 
 
-class _ConsoleHTMLParser(HTMLParser):
+class _StaticHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.ids: list[str] = []
         self.external_assets: list[str] = []
+        self.script_sources: list[str] = []
+        self.stylesheet_links: list[str] = []
         self._stack: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -42,11 +46,17 @@ class _ConsoleHTMLParser(HTMLParser):
             value = str(values.get(key) or "")
             if value.startswith(("http://", "https://", "//")):
                 self.external_assets.append(value)
+        if tag == "script" and values.get("src"):
+            self.script_sources.append(str(values["src"]))
+        if tag == "link" and "stylesheet" in str(values.get("rel") or "").lower():
+            self.stylesheet_links.append(str(values.get("href") or ""))
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
         if values.get("id"):
             self.ids.append(str(values["id"]))
+        if tag == "link" and "stylesheet" in str(values.get("rel") or "").lower():
+            self.stylesheet_links.append(str(values.get("href") or ""))
 
     def handle_endtag(self, tag: str) -> None:
         if tag in VOID_TAGS:
@@ -56,408 +66,193 @@ class _ConsoleHTMLParser(HTMLParser):
         self._stack.pop()
 
 
+def _parse_html(text: str) -> _StaticHTMLParser:
+    parser = _StaticHTMLParser()
+    parser.feed(text)
+    if parser._stack:
+        raise AssertionError(f"unclosed HTML tags: {parser._stack[-5:]}")
+    return parser
+
+
+def _inline_scripts(text: str) -> list[str]:
+    return re.findall(r"<script(?:\s[^>]*)?>([\s\S]*?)</script>", text, flags=re.IGNORECASE)
+
+
+def _inline_styles(text: str) -> list[str]:
+    return re.findall(r"<style(?:\s[^>]*)?>([\s\S]*?)</style>", text, flags=re.IGNORECASE)
+
+
+def _assert_css_structurally_clean(testcase: unittest.TestCase, css: str, label: str) -> None:
+    clean = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    stack: list[str] = []
+    pairs = {")": "(", "]": "[", "}": "{"}
+    for index, char in enumerate(clean):
+        if char in "({[":
+            stack.append(char)
+        elif char in ")}]":
+            testcase.assertTrue(stack, f"{label}: unexpected {char} at {index}")
+            testcase.assertEqual(stack.pop(), pairs[char], f"{label}: mismatched {char} at {index}")
+    testcase.assertFalse(stack, f"{label}: unclosed CSS delimiters {stack[-5:]}")
+    testcase.assertNotRegex(clean, r"url\s*\(")
+    testcase.assertNotRegex(clean, r"@import\b")
+
+
 class ControlAssistantStaticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.html = HTML_PATH.read_text(encoding="utf-8")
-        cls.css = CSS_PATH.read_text(encoding="utf-8")
-        cls.js = JS_PATH.read_text(encoding="utf-8")
-        parser = _ConsoleHTMLParser()
-        parser.feed(cls.html)
-        if parser._stack:
-            raise AssertionError(f"unclosed HTML tags: {parser._stack[-5:]}")
-        cls.ids = parser.ids
-        cls.external_assets = parser.external_assets
+        cls.console_html = CONSOLE_HTML.read_text(encoding="utf-8")
+        cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
+        cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.assistant_html = ASSISTANT_HTML.read_text(encoding="utf-8")
+        cls.console_parser = _parse_html(cls.console_html)
+        cls.assistant_parser = _parse_html(cls.assistant_html)
+        cls.assistant_scripts = _inline_scripts(cls.assistant_html)
+        cls.assistant_css = "\n".join(_inline_styles(cls.assistant_html))
+        cls.assistant_js = cls.assistant_scripts[-1] if cls.assistant_scripts else ""
 
-    def test_console_ids_are_unique_and_js_references_exist(self) -> None:
-        duplicates = sorted({item for item in self.ids if self.ids.count(item) > 1})
-        self.assertEqual(duplicates, [])
-        refs = set(re.findall(r"(?<!\$)\$\('([^']+)'\)", self.js))
+    def test_console_ids_unique_and_js_id_references_exist(self) -> None:
+        ids = self.console_parser.ids
+        self.assertEqual(sorted({item for item in ids if ids.count(item) > 1}), [])
+        refs = set(re.findall(r"(?<!\$)\$\('([^']+)'\)", self.console_js))
         self.assertTrue(refs)
-        self.assertEqual(sorted(refs - set(self.ids)), [])
+        self.assertEqual(sorted(refs - set(ids)), [])
 
-    def test_assistant_ui_is_present_and_accessible(self) -> None:
-        required_ids = {
-            "assistant-open",
-            "assistant-panel",
-            "assistant-close",
-            "assistant-messages",
-            "assistant-quick-title",
-            "assistant-form",
-            "assistant-input",
-            "assistant-send",
-            "assistant-error",
-            "assistant-hint",
-        }
-        self.assertTrue(required_ids.issubset(set(self.ids)))
-        self.assertIn('role="dialog"', self.html)
-        self.assertIn('aria-labelledby="assistant-title"', self.html)
-        self.assertIn('aria-controls="assistant-panel"', self.html)
-        self.assertIn('aria-expanded="false"', self.html)
-        self.assertIn('role="log"', self.html)
-        self.assertIn('aria-live="polite"', self.html)
-        self.assertIn("使用助手", self.html)
-
-    def test_quick_questions_cover_required_topics(self) -> None:
-        questions = re.findall(r'data-assistant-question="([^"]+)"', self.html)
-        self.assertGreaterEqual(len(questions), 6)
-        self.assertLessEqual(len(questions), 10)
-        joined = "\n".join(questions)
-        for phrase in (
-            "安装",
-            "更新",
-            "腾讯云",
-            "端口",
-            "start.sh",
-            "console.sh",
-            "扫码",
-            "SnowLuma",
-            "reply_probability",
-            "memory_mode",
-            "token",
-            "部署中断",
-            "日志",
-            "Docker",
-            "Windows",
+    def test_console_removed_offline_assistant_and_b_card(self) -> None:
+        all_console = self.console_html + self.console_js + self.console_css
+        for old_id in (
+            "assistant-open", "assistant-panel", "assistant-close", "assistant-form",
+            "assistant-b-card", "assistant-b-config-panel", "assistant-b-install",
         ):
-            self.assertIn(phrase, joined)
+            self.assertNotIn(old_id, all_console)
+        for old_js in ("ASSISTANT_KB", "assistantPanelOpen", "loadAssistantBStatus", "handleAssistantBConfigSubmit"):
+            self.assertNotIn(old_js, self.console_js)
+        for old_css in (".assistant-panel", ".assistant-quick", ".assistant-message", ".assistant-b-"):
+            self.assertNotIn(old_css, self.console_css)
+        self.assertNotIn("assistant-b-", all_console)
+        self.assertNotIn("使用助手", all_console)
+        self.assertNotIn("AI 助手 B", self.console_html)
 
-    def test_answer_knowledge_coverage(self) -> None:
-        required_terms = (
-            "install.sh",
-            "腾讯云",
-            "安全组",
-            "防火墙",
-            "8765",
-            "start.sh",
-            "console.sh",
-            "每个新实例",
-            "登录态",
-            "noVNC",
-            "设备验证",
-            "短信验证",
-            "滑块",
-            "SnowLuma",
-            "admin",
-            "重置密码",
-            "webui.json",
-            "reply_probability",
-            "group_cooldown_seconds",
-            "user_cooldown_seconds",
-            "memory_mode",
-            "astrbot",
-            "token",
-            "自动更新",
-            "更新失败",
-            "部署中断",
-            "查看日志",
-            "docker info",
-            "Docker",
-            "Windows",
-            "未完成真实 Windows",
-            "README.md",
-            "docs/server-troubleshooting.md",
+    def test_console_header_links_to_standalone_assistant_page(self) -> None:
+        self.assertRegex(
+            self.console_html,
+            r'<a[^>]+href="/assistant"[^>]*>[\s\S]{0,260}?AI 助手',
         )
-        for term in required_terms:
-            self.assertIn(term, self.js, term)
+        self.assertNotIn("/assistant.html", self.console_html)
 
-    def test_fallback_guides_to_readme_and_troubleshooting(self) -> None:
-        fallback_start = self.js.index("const ASSISTANT_FALLBACK =")
-        fallback = self.js[fallback_start:]
-        self.assertIn("README.md", fallback)
-        self.assertIn("docs/server-troubleshooting.md", fallback)
-        self.assertIn("没有匹配到内置答案", fallback)
+    def test_console_preserves_instances_v3_and_thirty_minute_refresh(self) -> None:
+        required = {
+            "console-refresh", "console-update", "console-error-retry", "create-instance-form",
+            "instances-grid", "console-resource-summary",
+        }
+        self.assertTrue(required.issubset(set(self.console_parser.ids)))
+        self.assertIn("AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000", self.console_js)
+        self.assertIn("function scheduleNextSync(delay = AUTO_REFRESH_INTERVAL_MS)", self.console_js)
+        self.assertIn("async function manualRefresh()", self.console_js)
+        self.assertIn("自动刷新：每 30 分钟", self.console_js)
+        self.assertIn("手动刷新", self.console_html)
+        for token in ("/api/instances", "/api/update/check", "/api/update/apply", "memory_mode", "plugin"):
+            self.assertIn(token, self.console_js)
+        self.assertIn(".instance-card { padding: 26px; }", self.console_css)
+        self.assertIn("@media (max-width: 760px)", self.console_css)
+        self.assertIn(".console-assistant-link", self.console_css)
 
-    def test_assistant_uses_dom_text_and_no_browser_storage(self) -> None:
+    def test_console_browser_safety_and_css_cleanliness(self) -> None:
         for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
-            self.assertNotIn(forbidden, self.js)
-            self.assertNotIn(forbidden, self.html)
-        self.assertNotRegex(self.js, r"\balert\s*\(|\bconfirm\s*\(")
-        self.assertIn("assistant-code-block", self.js)
-        self.assertIn("textContent", self.js)
-        self.assertIn("data-assistant-question", self.html)
-        self.assertIn("assistantOpen.addEventListener('click'", self.js)
-        self.assertIn("assistantClose.addEventListener('click'", self.js)
-        self.assertIn("assistantForm.addEventListener('submit'", self.js)
-        self.assertIn("event.key === 'Escape'", self.js)
+            self.assertNotIn(forbidden, self.console_js)
+        self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
+        self.assertFalse(self.console_parser.external_assets)
+        self.assertEqual(self.console_parser.script_sources, ["console.js"])
+        _assert_css_structurally_clean(self, self.console_css, "console.css")
 
-    def test_assistant_knowledge_and_matching_are_offline(self) -> None:
-        start = self.js.index("const ASSISTANT_KB =")
-        end = self.js.index("function sanitiseAssistantBText")
-        assistant_block = self.js[start:end]
-        for forbidden in ("fetch(", "apiRequest(", "eval(", "new Function"):
-            self.assertNotIn(forbidden, assistant_block)
-        self.assertIn("findAssistantAnswer", assistant_block)
-        self.assertIn("assistantEntryScore", assistant_block)
-        self.assertIn("ASSISTANT_FALLBACK", assistant_block)
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_javascript_syntax_for_console_and_assistant_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            console_path = Path(temp_dir) / "console.js"
+            console_path.write_text(self.console_js, encoding="utf-8")
+            subprocess.run(["node", "--check", str(console_path)], check=True)
+            for index, script in enumerate(self.assistant_scripts):
+                script_path = Path(temp_dir) / f"assistant-inline-{index}.js"
+                script_path.write_text(script, encoding="utf-8")
+                subprocess.run(["node", "--check", str(script_path)], check=True)
 
-    def test_no_external_cdn_or_css_assets(self) -> None:
-        self.assertEqual(self.external_assets, [])
-        self.assertNotRegex(self.css, r"url\s*\(|@import")
-        self.assertNotRegex(self.html, r"<(?:script|link)[^>]+(?:src|href)=[\"'](?:https?:)?//")
+    def test_assistant_page_self_contained_and_token_placeholder(self) -> None:
+        self.assertEqual(self.assistant_parser.external_assets, [])
+        self.assertEqual(self.assistant_parser.script_sources, [])
+        self.assertEqual(self.assistant_parser.stylesheet_links, [])
+        self.assertGreaterEqual(len(self.assistant_scripts), 2)
+        self.assertIn('window.QB_TOKEN = "{{TOKEN}}";', self.assistant_html)
+        self.assertIn('aria-label="AI 助手页面"', self.assistant_html)
+        self.assertIn('href="/console"', self.assistant_html)
+        self.assertIn("X-QB-Token", self.assistant_js)
+        self.assertNotIn("console.js", self.assistant_html)
+        self.assertNotIn("使用助手", self.assistant_html)
 
-    def test_v3_operations_ui_and_api_hooks(self) -> None:
-        required_ids = {
-            "console-resource-summary",
-            "console-resource-note",
-            "global-data-size",
-            "global-host-memory",
-            "global-host-memory-detail",
-            "global-disk-free",
-            "global-disk-detail",
+    def test_assistant_page_required_management_controls(self) -> None:
+        required = {
+            "main-status", "main-badge", "main-notice", "install-card", "install-button",
+            "install-label", "update-button", "install-meta", "runtime-card", "configured-state",
+            "running-state", "host-state", "port-state", "runtime-url", "runtime-note",
+            "open-button", "start-button", "stop-button", "config-card", "config-form",
+            "key-source-independent", "key-source-instance", "api-key", "toggle-key",
+            "instance-select", "port", "host-local", "host-public", "public-host",
+            "public-host-fields", "public-host-error", "form-error", "form-status",
+            "save-button", "unsupported-card", "refresh-status",
         }
-        self.assertTrue(required_ids.issubset(set(self.ids)))
-        for term in (
-            "插件管理",
-            "记忆模式",
-            "direct",
-            "astrbot",
-            "instance-v3-panel",
-            "plugin-switch",
-            "memory-mode-option",
-            "instance-resource-grid",
-            "data_dir_size_bytes",
-            "memory_usage_bytes",
-            "cpu_percent",
-            "host_memory",
-            "containerMemoryUsageBytes",
-        ):
-            self.assertIn(term, self.js)
-        for endpoint in (
-            "/plugins",
-            "/plugins/toggle",
-            "/memory",
-            "/api/stats",
-            "/stats",
-        ):
-            self.assertIn(endpoint, self.js)
-        for style in (
-            ".console-resource-summary",
-            ".instance-v3-panel",
-            ".plugin-switch",
-            ".memory-mode-option",
-            ".instance-resource-grid",
-        ):
-            self.assertIn(style, self.css)
-        self.assertIn("当前后端未提供插件管理接口", self.js)
-        self.assertIn("当前后端未提供记忆模式接口", self.js)
-        self.assertIn("当前后端未提供资源统计接口", self.js)
+        ids = self.assistant_parser.ids
+        self.assertTrue(required.issubset(set(ids)))
+        self.assertEqual(sorted({item for item in ids if ids.count(item) > 1}), [])
+        refs = set(re.findall(r"(?<!\$)\$\('([^']+)'\)", self.assistant_js))
+        self.assertTrue(refs)
+        self.assertEqual(sorted(refs - set(ids)), [])
+        self.assertIn('id="api-key" type="password"', self.assistant_html)
+        self.assertIn('autocomplete="off"', self.assistant_html)
+        self.assertIn('min="5000"', self.assistant_html)
+        self.assertIn('max="10000"', self.assistant_html)
+        self.assertIn('value="8766"', self.assistant_html)
 
-    def test_v3_errors_are_card_local(self) -> None:
-        plugin_start = self.js.index("async function handlePluginToggle")
-        plugin_end = self.js.index("function buildMemorySection")
-        plugin_handler = self.js[plugin_start:plugin_end]
-        self.assertNotIn("showToast", plugin_handler)
-        self.assertIn("setV3Status", plugin_handler)
-        memory_start = self.js.index("async function handleMemoryModeChange")
-        memory_end = self.js.index("function containerMemoryText")
-        memory_handler = self.js[memory_start:memory_end]
-        self.assertNotIn("showToast", memory_handler)
-        self.assertIn("setV3Status", memory_handler)
-
-    def test_optional_assistant_b_ui_and_api_hooks(self) -> None:
-        required_ids = {
-            "assistant-b-card",
-            "assistant-b-badge",
-            "assistant-b-status",
-            "assistant-b-meta",
-            "assistant-b-commit",
-            "assistant-b-path",
-            "assistant-b-entry",
-            "assistant-b-readme",
-            "assistant-b-install",
-            "assistant-b-install-label",
-            "assistant-b-update",
-            "assistant-b-update-label",
-            "assistant-b-retry",
-        }
-        self.assertTrue(required_ids.issubset(set(self.ids)))
-        for term in (
-            "AI 助手 B",
-            "可选扩展",
-            "A · 离线使用助手",
-            "安装 AI 助手 B",
-            "再次点击确认安装",
-            "更新 AI 助手 B",
-            "会联网",
-            "API Key",
-            "当前后端不支持扩展安装",
-        ):
-            self.assertIn(term, self.html + self.js)
+    def test_assistant_page_install_update_config_start_stop_contract(self) -> None:
         for endpoint in (
             "/api/assistant/status",
             "/api/assistant/install",
             "/api/assistant/update",
-        ):
-            self.assertIn(endpoint, self.js)
-        for style in (".assistant-b-card", ".assistant-b-meta", ".assistant-b-actions"):
-            self.assertIn(style, self.css)
-
-    def test_optional_assistant_b_is_confirm_first_and_card_local(self) -> None:
-        start = self.js.index("function sanitiseAssistantBText")
-        end = self.js.index("function bindEvents()")
-        block = self.js[start:end]
-        self.assertIn("assistant.armed", block)
-        self.assertIn("再次点击确认安装", block)
-        self.assertIn("runAssistantBAction('install')", block)
-        self.assertIn("status === 'unsupported'", block)
-        self.assertIn("当前后端不支持扩展安装", block)
-        self.assertIn("data.ok === false", block)
-        self.assertIn("hasInstalledField", block)
-        self.assertIn("sanitiseAssistantBText", block)
-        self.assertIn("entry", block)
-        self.assertIn("readme", block)
-        # The B helper may submit a key from the form, but must not persist or display it.
-        self.assertIn("body.api_key = apiKey", block)
-        self.assertIn("keyInput.value = ''", block)
-        for forbidden in ("localStorage", "sessionStorage", "innerHTML", "state.assistantB.apiKey"):
-            self.assertNotIn(forbidden, block)
-        for forbidden in ("showToast", "setConsoleError"):
-            self.assertNotIn(forbidden, block)
-
-    def test_optional_assistant_b_config_ui_and_api_hooks(self) -> None:
-        required_ids = {
-            "assistant-b-runtime",
-            "assistant-b-url",
-            "assistant-b-url-note",
-            "assistant-b-configure",
-            "assistant-b-configure-label",
-            "assistant-b-open",
-            "assistant-b-config-panel",
-            "assistant-b-config-form",
-            "assistant-b-key-source-independent",
-            "assistant-b-key-source-instance",
-            "assistant-b-independent-fields",
-            "assistant-b-instance-fields",
-            "assistant-b-api-key",
-            "assistant-b-instance-select",
-            "assistant-b-port",
-            "assistant-b-host-local",
-            "assistant-b-host-public",
-            "assistant-b-public-host-fields",
-            "assistant-b-public-host",
-            "assistant-b-public-host-error",
-            "assistant-b-host-note",
-            "assistant-b-config-error",
-            "assistant-b-config-status",
-            "assistant-b-config-cancel",
-            "assistant-b-config-save",
-            "assistant-b-config-save-label",
-        }
-        self.assertTrue(required_ids.issubset(set(self.ids)))
-        self.assertIn('id="assistant-b-api-key" type="password"', self.html)
-        for term in (
-            "配置 AI 助手 B",
-            "复用实例 Key",
-            "DeepSeek API Key",
-            "保存并启动",
-            "loopback",
-            "SSH 隧道",
-            "默认 8766",
-            "仅本机（127.0.0.1，推荐）",
-            "公网/所有网卡（0.0.0.0，高风险）",
-            "公网 IP 或域名",
-            "0.0.0.0",
-            "当前后端不支持 AI 助手 B 配置/启动",
-        ):
-            self.assertIn(term, self.html + self.js)
-        for token in (
             "/api/assistant/config",
             "/api/assistant/start",
-            "key_source",
-            "instance_id",
-            "api_key",
-            "public_host",
-            "access_note",
-            "ssh_tunnel",
-            "configure_url",
-            "?assistant=configure",
+            "/api/assistant/stop",
+            "/api/instances",
         ):
-            self.assertIn(token, self.js)
-        for style in (
-            ".assistant-b-runtime",
-            ".assistant-b-config-panel",
-            ".assistant-b-source-group",
-            ".assistant-b-host-group",
-            ".assistant-b-port-field",
-            ".assistant-b-host-note.is-high-risk",
-        ):
-            self.assertIn(style, self.css)
+            self.assertIn(endpoint, self.assistant_js)
+        self.assertIn("installArmed", self.assistant_js)
+        self.assertIn("再次点击确认安装", self.assistant_js)
+        self.assertIn("state.installArmed = true", self.assistant_js)
+        self.assertIn("method: 'POST', body: {}", self.assistant_js)
+        self.assertIn("key_source", self.assistant_js)
+        self.assertIn("instance_id", self.assistant_js)
+        self.assertIn("public_host", self.assistant_js)
+        self.assertIn("host: publicMode ? '0.0.0.0' : '127.0.0.1'", self.assistant_js)
+        self.assertIn("public_host: publicMode ? publicHost : undefined", self.assistant_js)
+        self.assertIn("ssh_tunnel", self.assistant_js)
+        self.assertIn("access_note", self.assistant_js)
+        self.assertIn("B 没有登录认证", self.assistant_html + self.assistant_js)
+        for term in ("SSH", "安全组", "防火墙", "VPN", "不要", "公网"):
+            self.assertIn(term, self.assistant_html + self.assistant_js)
 
-    def test_assistant_b_install_redirects_and_query_opens_config(self) -> None:
-        self.assertIn("scheduleAssistantBConfigRedirect", self.js)
-        self.assertIn("const target = '/console?assistant=configure'", self.js)
-        self.assertIn("URLSearchParams(window.location.search).get('assistant') === 'configure'", self.js)
-        start = self.js.index("async function runAssistantBAction")
-        end = self.js.index("function handleAssistantBInstallClick")
-        action_block = self.js[start:end]
-        self.assertIn("redirectToConfig = true", action_block)
-        self.assertIn("scheduleAssistantBConfigRedirect()", action_block)
-        self.assertIn("openConfigRequested = true", action_block)
-        # Key must be read only from the form and not persisted to browser storage.
-        form_start = self.js.index("async function handleAssistantBConfigSubmit")
-        form_end = self.js.index("function renderAssistantBCard")
-        form_block = self.js[form_start:form_end]
-        self.assertIn("apiKey = keyInput ? keyInput.value.trim() : ''", form_block)
-        self.assertIn("body.api_key = apiKey", form_block)
-        self.assertIn("if (keyInput) keyInput.value = ''", form_block)
-        for forbidden in ("localStorage", "sessionStorage", "innerHTML"):
-            self.assertNotIn(forbidden, form_block)
+    def test_assistant_page_key_never_persisted_or_rendered(self) -> None:
+        self.assertIn("api_key", self.assistant_js)
+        self.assertNotRegex(self.assistant_html + self.assistant_js, r"sk-[A-Za-z0-9_-]{8,}")
+        for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
+            self.assertNotIn(forbidden, self.assistant_js)
+        self.assertNotRegex(self.assistant_js, r"\balert\s*\(|\bconfirm\s*\(")
+        self.assertNotIn("state.config.apiKey", self.assistant_js)
+        self.assertNotIn("state.config.api_key", self.assistant_js)
+        self.assertIn("$('api-key').value = ''", self.assistant_js)
+        self.assertIn("type=\"password\"", self.assistant_html)
 
-    def test_console_auto_refresh_is_thirty_minutes_and_manual_refresh(self) -> None:
-        self.assertIn("AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000", self.js)
-        self.assertIn("function scheduleNextSync(delay = AUTO_REFRESH_INTERVAL_MS)", self.js)
-        self.assertNotIn("delay = 8000", self.js)
-        self.assertNotIn("scheduleNextSync(8000", self.js)
-        self.assertIn("async function manualRefresh()", self.js)
-        self.assertIn("await loadConsole({ silent: false })", self.js)
-        self.assertIn("scheduleNextSync(AUTO_REFRESH_INTERVAL_MS)", self.js)
-        self.assertIn("refresh.addEventListener('click', () => void manualRefresh())", self.js)
-        self.assertIn("if (document.hidden)", self.js)
-        self.assertIn("scheduleNextSync();", self.js)
-        self.assertIn("自动刷新：每 30 分钟", self.js)
-        self.assertIn("手动刷新", self.html)
-        self.assertIn("自动刷新每 30 分钟", self.html)
-
-    def test_assistant_b_public_host_contract_and_card_layout(self) -> None:
-        for token in (
-            "assistant-b-host-public",
-            "assistant-b-host-local",
-            "assistant-b-public-host",
-            "body.public_host = publicHost",
-            "host: publicMode ? '0.0.0.0' : '127.0.0.1'",
-            "公网模式必须填写公网 IP 或域名",
-            "B 没有登录认证",
-            "安全组",
-            "防火墙",
-            "VPN",
-        ):
-            self.assertIn(token, self.js)
-        self.assertIn("assistant-b-public-host-fields", self.html)
-        self.assertIn("public_host", self.js)
-        for selector in (
-            ".console-header-inner",
-            ".console-main",
-            ".instance-card { padding: 26px; }",
-            ".instance-v3-section { padding: 14px; }",
-            ".assistant-b-card { padding: 26px 27px; }",
-            ".assistant-b-host-group",
-        ):
-            self.assertIn(selector, self.css)
-        self.assertIn("padding-left: clamp(10px, 2vw, 24px)", self.css)
-        self.assertIn("@media (max-width: 760px)", self.css)
-
-    @unittest.skipUnless(shutil.which("node"), "node is not installed")
-    def test_console_javascript_syntax(self) -> None:
-        result = subprocess.run(
-            ["node", "--check", str(JS_PATH)],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=20,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_assistant_page_css_is_balanced_and_responsive(self) -> None:
+        self.assertTrue(self.assistant_css)
+        _assert_css_structurally_clean(self, self.assistant_css, "assistant inline CSS")
+        self.assertIn("@media (max-width: 760px)", self.assistant_css)
+        self.assertIn("@media (max-width: 480px)", self.assistant_css)
+        self.assertIn("[hidden] { display: none !important; }", self.assistant_css)
 
 
 if __name__ == "__main__":

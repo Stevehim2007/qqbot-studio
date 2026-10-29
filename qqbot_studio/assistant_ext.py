@@ -181,7 +181,7 @@ class AssistantExtensionManager:
             "branch": "",
             "dirty": None,
             "action": "",
-            "message": "AI 助手 B 尚未安装。A 离线助手不受影响。",
+            "message": "AI 助手 B 尚未安装。主控制台和其他实例不受影响。",
             "error": "",
         }
 
@@ -367,7 +367,7 @@ class AssistantExtensionManager:
                 self._remove_temp(temp_path)
                 detail = self._tail_output(clone) or f"Git clone 退出码 {clone.returncode}"
                 return self._failure(
-                    "下载 AI 助手 B 失败；主项目和助手 A 不受影响。可检查网络后重试。",
+                    "下载 AI 助手 B 失败；主控制台和其他实例不受影响。可检查网络后重试。",
                     detail=detail,
                     status=self.status(),
                 )
@@ -1057,7 +1057,7 @@ class AssistantExtensionManager:
                 payload["ssh_tunnel"] = self._ssh_tunnel(suggested_port)
                 payload["message"] = (
                     "AI 助手 B 尚未配置。安装后请设置独立 API Key 或复用已有实例，"
-                    "再启动 B。A 离线助手不受影响。"
+                    "再启动 B。主控制台和其他实例不受影响。"
                 )
                 return payload
 
@@ -1406,7 +1406,7 @@ class AssistantExtensionManager:
             if log_tail:
                 detail += " 最近日志：" + log_tail
             return self._service_failure(
-                "AI 助手 B 启动失败或未就绪；主项目和 A 离线助手不受影响。",
+                "AI 助手 B 启动失败或未就绪；主项目和 主控制台和其他实例不受影响。",
                 installed=True,
                 detail=detail,
                 state=state,
@@ -1487,7 +1487,7 @@ class AssistantExtensionManager:
             final["running"] = False
             final["pid"] = None
             final["action"] = "stopped"
-            final["message"] = "AI 助手 B 已停止；主项目和 A 离线助手不受影响。"
+            final["message"] = "AI 助手 B 已停止；主项目和 主控制台和其他实例不受影响。"
             final["error"] = ""
             return final
 
