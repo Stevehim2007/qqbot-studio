@@ -468,6 +468,24 @@ class DeployerTests(unittest.TestCase):
         }
         self.store.save_config(config)
 
+    def _install_plugin_schema(self, extra: dict | None = None) -> Path:
+        schema_source = (
+            Path(__file__).resolve().parent.parent
+            / "plugins"
+            / "qqbot_enhancer"
+            / "_conf_schema.json"
+        )
+        schema = json.loads(schema_source.read_text(encoding="utf-8"))
+        if extra:
+            schema.update(extra)
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "_conf_schema.json").write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return plugin_dir
+
     def test_memory_mode_preserves_user_values_and_migrates_group_session(self):
         self._mark_deployed()
         plugin_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
@@ -636,6 +654,185 @@ class DeployerTests(unittest.TestCase):
         self.assertIs(plugin["enabled"], False)
         self.assertEqual(plugin["enabled_source"], "shared_preferences")
         self.assertEqual(plugin["name"], "QQ Bot 增强回复")
+
+    def test_plugin_config_get_live_merge_and_safe_save(self):
+        self._mark_deployed()
+        self._install_plugin_schema()
+        config_path = (
+            Path(self.tmp.name)
+            / "data"
+            / "astrbot"
+            / "config"
+            / "qqbot_enhancer_config.json"
+        )
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        local_config = {
+            "reply_probability": 0.2,
+            "custom_user_value": "keep-local-unknown",
+        }
+        config_path.write_text(json.dumps(local_config), encoding="utf-8")
+
+        fake_api = FakePluginApi()
+        fake_api.plugin_config = {
+            "reply_probability": 0.18,
+            "memory_mode": "direct",
+            "live_only_value": "keep-live-unknown",
+            "api_key": "sk-plugin-internal-secret",
+        }
+        self.manager._api_client_factory = lambda base, user, password: fake_api
+
+        result = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(result["api_available"])
+        self.assertEqual(result["source"], "astrbot")
+        self.assertIn("reply_probability", result["schema"])
+        self.assertEqual(result["schema"]["reply_probability"]["type"], "float")
+        self.assertEqual(result["values"]["reply_probability"], 0.18)
+        self.assertEqual(result["values"]["image_search_timeout_seconds"], 12)
+        self.assertNotIn("api_key", result["schema"])
+        self.assertNotIn("api_key", result["values"])
+        self.assertNotIn("sk-plugin-internal-secret", json.dumps(result, ensure_ascii=False))
+
+        saved = self.manager.set_plugin_config(
+            "qqbot_enhancer", {"reply_probability": 0.5}
+        )
+        self.assertTrue(saved["ok"], saved.get("error"))
+        self.assertTrue(saved["api_available"])
+        self.assertFalse(saved["restart_required"])
+        self.assertEqual(saved["values"]["reply_probability"], 0.5)
+        self.assertNotIn("api_key", saved["values"])
+        self.assertNotIn("sk-plugin-internal-secret", json.dumps(saved, ensure_ascii=False))
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+
+        stored = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored["reply_probability"], 0.5)
+        self.assertEqual(stored["custom_user_value"], "keep-local-unknown")
+        self.assertIn("live_only_value", fake_api.updated_configs[-1])
+        self.assertEqual(fake_api.updated_configs[-1]["reply_probability"], 0.5)
+
+    def test_plugin_config_schema_defaults_without_local_or_api(self):
+        self._install_plugin_schema()
+        result = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertFalse(result["api_available"])
+        self.assertEqual(result["source"], "schema")
+        self.assertEqual(result["values"]["reply_probability"], 0.12)
+        self.assertEqual(result["values"]["memory_mode"], "direct")
+        self.assertFalse(self.manager.get_plugin_config("missing_plugin")["ok"])
+
+    def test_plugin_config_offline_save_and_type_validation(self):
+        config = self.store.load_config()
+        config["deployed"] = True
+        config["ports"] = {
+            "astrbot_webui": 16185,
+            "snowluma_webui": 15099,
+            "novnc": 16081,
+        }
+        self.store.save_config(config)
+        self._install_plugin_schema(
+            extra={
+                "api_key": {
+                    "description": "应被过滤的敏感字段",
+                    "type": "string",
+                    "default": "sk-schema-default-secret",
+                }
+            }
+        )
+        config_path = (
+            Path(self.tmp.name)
+            / "data"
+            / "astrbot"
+            / "config"
+            / "qqbot_enhancer_config.json"
+        )
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps(
+                {
+                    "reply_probability": 0.2,
+                    "api_key": "sk-local-config-secret",
+                    "custom_user_value": "preserve-me",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class OfflineApi(FakeApi):
+            def wait_until_ready(self, timeout=180):
+                raise RuntimeError("AstrBot 不可达")
+
+        self.manager._api_client_factory = lambda base, user, password: OfflineApi()
+        loaded = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertFalse(loaded["api_available"])
+        self.assertEqual(loaded["source"], "local")
+        self.assertNotIn("api_key", loaded["schema"])
+        self.assertNotIn("api_key", loaded["values"])
+        self.assertNotIn("sk-local-config-secret", json.dumps(loaded, ensure_ascii=False))
+        self.assertNotIn("sk-schema-default-secret", json.dumps(loaded, ensure_ascii=False))
+
+        saved = self.manager.set_plugin_config(
+            "qqbot_enhancer", {"reply_probability": 0.5}
+        )
+        self.assertTrue(saved["ok"], saved.get("error"))
+        self.assertFalse(saved["api_available"])
+        self.assertTrue(saved["restart_required"])
+        stored = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored["reply_probability"], 0.5)
+        self.assertEqual(stored["custom_user_value"], "preserve-me")
+        self.assertEqual(stored["api_key"], "sk-local-config-secret")
+        self.assertNotIn("sk-local-config-secret", json.dumps(saved, ensure_ascii=False))
+
+        typed = self.manager.set_plugin_config(
+            "qqbot_enhancer",
+            {
+                "image_search_enabled": False,
+                "image_search_timeout_seconds": 12,
+                "reply_probability": 0.5,
+                "image_search_safe_search": "moderate",
+                "image_search_success_prefix": "找到啦：",
+                "ignore_command_prefixes": ["/", "!"],
+            },
+        )
+        self.assertTrue(typed["ok"], typed.get("error"))
+        self.assertFalse(typed["values"]["image_search_enabled"])
+        self.assertEqual(typed["values"]["image_search_timeout_seconds"], 12)
+        self.assertEqual(typed["values"]["reply_probability"], 0.5)
+        self.assertEqual(typed["values"]["image_search_safe_search"], "moderate")
+        self.assertEqual(typed["values"]["ignore_command_prefixes"], ["/", "!"])
+
+        invalid_cases = [
+            ("reply_probability", "0.5", "数字"),
+            ("reply_probability", 1.5, "不能大于"),
+            ("reply_probability", -0.1, "不能小于"),
+            ("image_search_enabled", 1, "布尔"),
+            ("image_search_timeout_seconds", "12", "整数"),
+            ("image_search_timeout_seconds", 2, "不能小于"),
+            ("image_search_safe_search", "unsafe", "允许选项"),
+            ("image_search_success_prefix", 123, "字符串"),
+            ("ignore_command_prefixes", "not-a-list", "数组"),
+            ("ignore_command_prefixes", ["/", 123], "字符串"),
+            ("does_not_exist", True, "不在插件 schema"),
+            ("api_key", "sk-attempted-secret", "敏感字段"),
+        ]
+        before = config_path.read_text(encoding="utf-8")
+        for field, value, expected in invalid_cases:
+            rejected = self.manager.set_plugin_config(
+                "qqbot_enhancer", {field: value}
+            )
+            self.assertFalse(rejected["ok"], (field, value, rejected))
+            self.assertIn(expected, rejected["error"])
+            self.assertNotIn("sk-attempted-secret", json.dumps(rejected, ensure_ascii=False))
+        self.assertEqual(config_path.read_text(encoding="utf-8"), before)
+
+        unsafe = self.manager.get_plugin_config("../other-plugin")
+        self.assertFalse(unsafe["ok"])
+        self.assertIn("plugin_id", unsafe["error"])
+        unsafe_set = self.manager.set_plugin_config("../other-plugin", {"x": 1})
+        self.assertFalse(unsafe_set["ok"])
+        missing = self.manager.get_plugin_config("missing_plugin")
+        self.assertFalse(missing["ok"])
+        self.assertIn("schema", missing["error"])
 
     def test_snowluma_password_parser(self):
         secrets_data = self.store.load_secrets()

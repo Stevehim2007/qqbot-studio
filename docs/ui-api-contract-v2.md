@@ -1074,3 +1074,131 @@ body: {}   # 也接受空请求体
   不在 GET 配置或错误信息中回显。错误只返回脱敏后的摘要。
 - 新接口只新增，不改变第 1–9 节已有 API 字段；旧实例目录不迁移、不删除。
 - 旧后端返回 404/405 时，前端应只把 B 卡片显示为“当前后端不支持 B 配置/启动”，主控制台仍可用。
+
+---
+
+## 11. 插件参数读取与编辑
+
+这些接口让控制台读取/编辑某个实例的单个插件参数，重点是 `qqbot_enhancer` 的
+`reply_probability`。服务端以插件目录中的 `_conf_schema.json` 为字段白名单，不修改 schema，
+也不会读取/返回其它插件的配置。
+
+### 11.1 读取插件参数
+
+```text
+GET /api/instances/<instance_id>/plugins/<plugin_id>/config
+```
+
+兼容 query 别名：
+
+```text
+GET /api/plugins/config?instance=<instance_id>&plugin_id=<plugin_id>
+GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
+```
+
+需要 `X-QB-Token`。成功响应：
+
+```json
+{
+  "ok": true,
+  "plugin_id": "qqbot_enhancer",
+  "schema": {
+    "reply_probability": {
+      "description": "群聊非 @ 消息的回复概率",
+      "type": "float",
+      "default": 0.12,
+      "slider": {"min": 0, "max": 1, "step": 0.01}
+    },
+    "image_search_enabled": {
+      "description": "启用图片搜索",
+      "type": "bool",
+      "default": true
+    }
+  },
+  "values": {
+    "reply_probability": 0.12,
+    "image_search_enabled": true
+  },
+  "config_path": "/home/user/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_enhancer_config.json",
+  "source": "astrbot",
+  "api_available": true,
+  "restart_required": false,
+  "message": "已从 AstrBot 在线接口读取插件配置，并合并本地值。",
+  "error": ""
+}
+```
+
+读取规则：
+
+- 先读取 `<astrbot_data>/plugins/<plugin_id>/_conf_schema.json` 的默认值；
+- 合并本地 `<astrbot_data>/config/<plugin_id>_config.json`；
+- AstrBot 在线时再以真实 `GET /api/v1/plugins/config` 返回的当前配置为准；
+- AstrBot 离线时仍返回 HTTP 200 + `ok:true`，`api_available:false`、`source:"local"` 或
+  `source:"schema"`，不返回 500、不阻塞控制台；
+- `source` 为 `astrbot` / `local` / `schema`；
+- `schema` 和 `values` 会过滤掉字段名或 schema 标记中带 `api_key`、`token`、`password`、
+  `secret`、`credential` 等敏感语义的 Key 类字段。
+
+### 11.2 保存插件参数
+
+```text
+POST /api/instances/<instance_id>/plugins/<plugin_id>/config
+Content-Type: application/json
+```
+
+```json
+{
+  "values": {
+    "reply_probability": 0.5,
+    "image_search_enabled": false,
+    "image_search_timeout_seconds": 12
+  },
+  "restart": false
+}
+```
+
+键 `values` 必须是 JSON object；`restart` 为可选布尔值。服务端只更新请求中出现的字段，
+其它已保存字段、未知用户字段和其它插件配置保持不变。
+
+成功时响应与 GET 相同的安全结构，并反映保存后的值。`source/api_available/restart_required`：
+
+- AstrBot 在线且真实保存/热重载成功：
+  `ok:true, api_available:true, source:"astrbot", restart_required:false`；
+- AstrBot 不在线或在线接口不可用：配置先安全写入本地 0600 文件，
+  返回 `ok:true, api_available:false, source:"local", restart_required:true`，
+  信息中说明需重启 AstrBot；不会返回 500；
+- 校验失败：HTTP 200 + `ok:false`，`error` 给出中文原因，不写入任何字段。
+
+字段校验（以 schema 为准）：
+
+- 支持类型：`bool`、`int`、`float`（兼容 `number`）、`string`、`text`、`list`。
+- `bool` 必须为 JSON true/false，不能用 0/1 代替。
+- `int` 必须为 JSON 整数，bool 不算整数；`float` 接受 JSON 数字。
+- `string` / `text` 必须为字符串，受 schema `max_length` 或服务端上限限制。
+- `list` 必须为数组；若 schema 提供 `items`，逐项校验类型/选项，最多 256 项。
+- schema 有 `options` 时，值必须属于允许选项。
+- schema 有 `slider.min` / `slider.max`（或直接 min/max）时严格执行范围。
+- schema 中不存在、或属于敏感 Key 类的字段会被拒绝；请求体 values 最大约 512 KiB，
+  服务端整体 JSON 请求体另有 2 MiB 上限。
+- `plugin_id` 只允许字母、数字、点、下划线和连字符，防止路径穿越；一次只操作指定插件。
+
+所有错误响应均为 HTTP 200 JSON（缺少本地访问令牌、JSON 语法错误等传输层鉴权/解析错误除外），
+形如：
+
+```json
+{
+  "ok": false,
+  "plugin_id": "qqbot_enhancer",
+  "schema": {},
+  "values": {},
+  "config_path": "…/qqbot_enhancer_config.json",
+  "source": "none",
+  "api_available": false,
+  "restart_required": false,
+  "message": "插件配置校验失败，未写入任何修改。",
+  "error": "字段 reply_probability 不能大于 1。"
+}
+```
+
+安全边界：API Key、token、password、secret 类字段不会出现在 `schema`、`values`、消息或错误中；
+服务端不记录配置请求体。旧后端缺少这些端点时，前端应只降级该插件的参数编辑面板。

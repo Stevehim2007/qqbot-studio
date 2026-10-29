@@ -20,6 +20,11 @@ class FakeManager:
         self.memory_mode = "direct"
         self.toggled_plugins = []
         self.assistant_saved_config = None
+        self.plugin_config_values = {
+            "reply_probability": 0.12,
+            "memory_mode": "direct",
+        }
+        self.plugin_config_set_calls = []
 
     def get_plugins(self):
         return {
@@ -59,6 +64,55 @@ class FakeManager:
             },
             "restart_required": False,
             "message": "插件状态已保存。",
+            "error": "",
+        }
+
+    def get_plugin_config(self, plugin_id):
+        return {
+            "ok": True,
+            "plugin_id": plugin_id,
+            "schema": {
+                "reply_probability": {
+                    "type": "float",
+                    "default": 0.12,
+                    "slider": {"min": 0, "max": 1, "step": 0.01},
+                },
+                "memory_mode": {
+                    "type": "string",
+                    "default": "direct",
+                    "options": ["direct", "astrbot"],
+                },
+            },
+            "values": dict(self.plugin_config_values),
+            "config_path": "/tmp/qqbot-studio/qqbot_enhancer_config.json",
+            "source": "local",
+            "api_available": False,
+            "restart_required": False,
+            "message": "插件配置已读取。",
+            "error": "",
+        }
+
+    def set_plugin_config(self, plugin_id, values, restart=False):
+        self.plugin_config_set_calls.append((plugin_id, dict(values or {}), bool(restart)))
+        self.plugin_config_values.update(values or {})
+        safe_values = {
+            key: value
+            for key, value in self.plugin_config_values.items()
+            if "key" not in str(key).lower()
+            and "token" not in str(key).lower()
+            and "password" not in str(key).lower()
+            and "secret" not in str(key).lower()
+        }
+        return {
+            "ok": True,
+            "plugin_id": plugin_id,
+            "schema": self.get_plugin_config(plugin_id)["schema"],
+            "values": safe_values,
+            "config_path": "/tmp/qqbot-studio/qqbot_enhancer_config.json",
+            "source": "local",
+            "api_available": False,
+            "restart_required": True,
+            "message": "插件配置已保存到本地。",
             "error": "",
         }
 
@@ -625,6 +679,69 @@ class ServerTests(unittest.TestCase):
         status, body = self._post("/api/assistant/start", {}, token=False)
         self.assertEqual(status, 403)
         request = urllib.request.Request(self.base + "/api/assistant/config")
+        try:
+            with self.opener.open(request, timeout=5) as response:
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+        self.assertEqual(status, 403)
+
+    def test_instance_plugin_config_get_and_set_contract(self):
+        status, body = self._get(
+            "/api/instances/bot-1/plugins/qqbot_enhancer/config"
+        )
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        for field in (
+            "ok", "plugin_id", "schema", "values", "config_path", "source",
+            "api_available", "restart_required", "message", "error",
+        ):
+            self.assertIn(field, payload)
+        self.assertIn("reply_probability", payload["schema"])
+        self.assertEqual(payload["values"]["reply_probability"], 0.12)
+
+        secret = "sk-plugin-config-request-secret"
+        status, body = self._post(
+            "/api/instances/bot-1/plugins/qqbot_enhancer/config",
+            {
+                "values": {"reply_probability": 0.5},
+                "api_key": secret,
+            },
+        )
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["values"]["reply_probability"], 0.5)
+        self.assertTrue(result["restart_required"])
+        self.assertNotIn("api_key", body.lower())
+        self.assertNotIn(secret, body)
+        self.assertEqual(
+            self.studio.manager.plugin_config_set_calls,
+            [("qqbot_enhancer", {"reply_probability": 0.5}, False)],
+        )
+
+    def test_plugin_config_query_alias_and_token_protection(self):
+        status, body = self._get(
+            "/api/plugins/config?instance=bot-1&plugin_id=qqbot_enhancer"
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        status, body = self._post(
+            "/api/plugins/config?instance=bot-1",
+            {"plugin_id": "qqbot_enhancer", "values": {"reply_probability": 0.4}},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["values"]["reply_probability"], 0.4)
+
+        status, body = self._post(
+            "/api/instances/bot-1/plugins/qqbot_enhancer/config",
+            {"values": {"reply_probability": 0.3}},
+            token=False,
+        )
+        self.assertEqual(status, 403)
+        request = urllib.request.Request(
+            self.base + "/api/instances/bot-1/plugins/qqbot_enhancer/config"
+        )
         try:
             with self.opener.open(request, timeout=5) as response:
                 status = response.status

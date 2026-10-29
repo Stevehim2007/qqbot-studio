@@ -254,6 +254,45 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertIn("@media (max-width: 480px)", self.assistant_css)
         self.assertIn("[hidden] { display: none !important; }", self.assistant_css)
 
+    def test_console_plugin_parameter_editor_contract(self) -> None:
+        required = {
+            "plugin-config-overlay", "plugin-config-panel", "plugin-config-title",
+            "plugin-config-subtitle", "plugin-config-search", "plugin-config-filter-count",
+            "plugin-config-body", "plugin-config-loading", "plugin-config-fields",
+            "plugin-config-empty", "plugin-config-error", "plugin-config-status",
+            "plugin-config-source", "plugin-config-close", "plugin-config-cancel",
+            "plugin-config-save", "plugin-config-save-label",
+        }
+        self.assertTrue(required.issubset(set(self.console_parser.ids)))
+        self.assertIn('role="dialog"', self.console_html)
+        self.assertIn('aria-modal="true"', self.console_html)
+        for token in (
+            "plugin-edit-button", "编辑参数", "openPluginConfigPanel", "savePluginConfig",
+            "updatePluginConfigFilter", "dataset.searchText", "dataset.fieldKey",
+            "reply_probability", "群聊非 @ 消息的回复概率",
+            "plugin-config-search", "input.setAttribute('type', 'checkbox')",
+            "input.setAttribute('type', 'number')", "range.setAttribute('type', 'range')",
+            "document.createElement('textarea')", "document.createElement('select')",
+            "type === 'list'", "body: { values }", "api_available", "restart_required",
+            "AstrBot 已热重载", "AstrBot 需要重启后生效",
+            "当前后端不支持参数编辑。", "isSensitivePluginField",
+            "const canEditConfig = Boolean(plugin.id) && plugin.configAvailable !== false;",
+            "sliderDefinition.min", "sliderDefinition.max", "sliderDefinition.step",
+        ):
+            self.assertIn(token, self.console_js)
+        self.assertIn("/plugins/${encodeURIComponent(plugin.id)}/config", self.console_js)
+        self.assertIn("/plugins/${encodeURIComponent(config.pluginId)}/config", self.console_js)
+        for style in (
+            ".plugin-edit-button", ".plugin-config-overlay", ".plugin-config-panel",
+            ".plugin-config-body", ".plugin-config-field.is-highlight",
+        ):
+            self.assertIn(style, self.console_css)
+        self.assertIn("overflow-y: auto", self.console_css)
+        self.assertIn("@media (max-width: 640px)", self.console_css)
+        for forbidden in ("localStorage", "sessionStorage", "innerHTML"):
+            self.assertNotIn(forbidden, self.console_js)
+        self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
+
 
 if __name__ == "__main__":
     unittest.main()

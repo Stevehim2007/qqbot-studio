@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import glob
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -41,6 +43,11 @@ QQ_ACCOUNT_RE = re.compile(r"^\d{5,12}$")
 PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
 MAX_PROMPT_LENGTH = 12_000
+PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PLUGIN_CONFIG_MAX_FIELDS = 256
+PLUGIN_CONFIG_MAX_REQUEST_BYTES = 512 * 1024
+PLUGIN_CONFIG_MAX_STRING_LENGTH = 100_000
+PLUGIN_CONFIG_MAX_LIST_ITEMS = 256
 
 
 class DeploymentError(RuntimeError):
@@ -71,6 +78,73 @@ class Job:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
+def _plugin_field_is_sensitive(field_name: Any, schema_item: Any = None) -> bool:
+    """Return True for key/token/password/secret-shaped config fields."""
+
+    if isinstance(schema_item, dict):
+        if bool(schema_item.get("secret")) or bool(schema_item.get("sensitive")):
+            return True
+        item_type = str(schema_item.get("type") or "").strip().lower()
+        if item_type in {"password", "secret", "token", "api_key", "apikey"}:
+            return True
+    compact = re.sub(r"[^a-z0-9]", "", str(field_name or "").lower())
+    if compact in {"key", "token", "password", "secret", "apikey", "accesstoken"}:
+        return True
+    return any(
+        token in compact
+        for token in (
+            "apikey",
+            "accesstoken",
+            "authtoken",
+            "password",
+            "passwd",
+            "secret",
+            "credential",
+            "privatekey",
+            "jwtsecret",
+        )
+    )
+
+
+def _strip_sensitive_plugin_value(value: Any) -> Any:
+    """Recursively copy a value while removing key/token/password fields."""
+
+    if isinstance(value, dict):
+        return {
+            str(key): _strip_sensitive_plugin_value(item)
+            for key, item in value.items()
+            if not _plugin_field_is_sensitive(key, item if isinstance(item, dict) else None)
+        }
+    if isinstance(value, list):
+        return [_strip_sensitive_plugin_value(item) for item in value]
+    return copy.deepcopy(value)
+
+
+def _public_plugin_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    public: dict[str, Any] = {}
+    for key, item in schema.items():
+        if not isinstance(item, dict) or _plugin_field_is_sensitive(key, item):
+            continue
+        definition = _strip_sensitive_plugin_value(item)
+        # Keep the raw nested slider object for API compatibility while also
+        # exposing common flat fields consumed by generic dashboard clients.
+        slider = item.get("slider")
+        if isinstance(slider, dict):
+            for name in ("min", "max", "step"):
+                if name in slider and name not in definition:
+                    definition[name] = copy.deepcopy(slider[name])
+        public[str(key)] = definition
+    return public
+
+
+def _public_plugin_values(values: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): _strip_sensitive_plugin_value(values[key])
+        for key, item in schema.items()
+        if key in values and isinstance(item, dict) and not _plugin_field_is_sensitive(key, item)
+    }
 
 
 def secrets_token_fragment(length: int = 6) -> str:
@@ -1723,6 +1797,431 @@ class DeployManager:
             "message": message or ("插件已启用。" if enabled else "插件已禁用。"),
             "error": "",
         }
+
+    # ------------------------------------------------------------------
+    # Plugin parameter get/set
+    # ------------------------------------------------------------------
+    def _plugin_schema_path(self, plugin_id: str) -> Path:
+        return self.astrbot_data_dir / "plugins" / plugin_id / "_conf_schema.json"
+
+    def _plugin_config_path(self, plugin_id: str) -> Path:
+        return self.astrbot_data_dir / "config" / f"{plugin_id}_config.json"
+
+    @staticmethod
+    def _plugin_config_failure(
+        plugin_id: str,
+        message: str,
+        *,
+        detail: str = "",
+        schema: dict[str, Any] | None = None,
+        values: dict[str, Any] | None = None,
+        config_path: str = "",
+        source: str = "none",
+        api_available: bool = False,
+        restart_required: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "plugin_id": str(plugin_id or ""),
+            "schema": schema or {},
+            "values": values or {},
+            "config_path": config_path,
+            "source": source,
+            "api_available": bool(api_available),
+            "restart_required": bool(restart_required),
+            "message": str(message or "插件配置操作失败。"),
+            "error": str(detail or message or "插件配置操作失败。"),
+        }
+
+    def _load_plugin_schema(self, plugin_id: str) -> tuple[dict[str, Any], str]:
+        """Load a plugin's local _conf_schema.json without third-party YAML."""
+
+        if not PLUGIN_ID_RE.fullmatch(str(plugin_id or "")):
+            return {}, "plugin_id 无效，只允许字母、数字、点、下划线和连字符。"
+        plugin_dir = self.astrbot_data_dir / "plugins" / plugin_id
+        if plugin_dir.is_symlink():
+            return {}, "插件目录不能是符号链接。"
+        schema_path = self._plugin_schema_path(plugin_id)
+        try:
+            parsed = json.loads(schema_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}, f"找不到插件 {plugin_id} 的 _conf_schema.json。"
+        except OSError as exc:
+            return {}, f"无法读取插件 {plugin_id} 的配置 schema：{exc}"
+        except ValueError as exc:
+            return {}, f"插件 {plugin_id} 的配置 schema 不是有效 JSON：{exc}"
+        if not isinstance(parsed, dict) or not parsed:
+            return {}, f"插件 {plugin_id} 的配置 schema 必须是非空 JSON object。"
+        schema = {
+            str(key): dict(item)
+            for key, item in parsed.items()
+            if isinstance(item, dict)
+        }
+        if not schema:
+            return {}, f"插件 {plugin_id} 的配置 schema 没有可用字段。"
+        return schema, ""
+
+    def _read_local_plugin_config(self, plugin_id: str) -> tuple[dict[str, Any], str, bool]:
+        path = self._plugin_config_path(plugin_id)
+        if not path.exists():
+            return {}, "", False
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            return {}, f"无法读取本地插件配置：{exc}", True
+        except ValueError as exc:
+            return {}, f"本地插件配置不是有效 JSON：{exc}", True
+        if not isinstance(raw, dict):
+            return {}, "本地插件配置顶层必须是 JSON object。", True
+        return raw, "", True
+
+    @staticmethod
+    def _plugin_defaults(schema: dict[str, Any]) -> dict[str, Any]:
+        defaults: dict[str, Any] = {}
+        for key, item in schema.items():
+            if isinstance(item, dict) and "default" in item:
+                defaults[str(key)] = copy.deepcopy(item["default"])
+        return defaults
+
+    @staticmethod
+    def _plugin_numeric_limits(item: dict[str, Any]) -> tuple[float | None, float | None]:
+        slider = item.get("slider")
+        minimum: Any = None
+        maximum: Any = None
+        if isinstance(slider, dict):
+            minimum = slider.get("min", slider.get("minimum"))
+            maximum = slider.get("max", slider.get("maximum"))
+        if minimum is None:
+            minimum = item.get("min", item.get("minimum"))
+        if maximum is None:
+            maximum = item.get("max", item.get("maximum"))
+        try:
+            min_value = float(minimum) if minimum is not None else None
+        except (TypeError, ValueError):
+            min_value = None
+        try:
+            max_value = float(maximum) if maximum is not None else None
+        except (TypeError, ValueError):
+            max_value = None
+        return min_value, max_value
+
+    def _validate_plugin_config_value(
+        self,
+        field: str,
+        value: Any,
+        item: dict[str, Any],
+    ) -> Any:
+        """Validate one value against the AstrBot plugin schema subset."""
+
+        if _plugin_field_is_sensitive(field, item):
+            raise ValueError("请求包含 Key/token/password/secret 类敏感字段，已拒绝处理。")
+        item_type = str(item.get("type") or "").strip().lower()
+        if not item_type and item.get("options"):
+            item_type = "string"
+        normalized = value
+
+        if item_type == "bool":
+            if not isinstance(value, bool):
+                raise ValueError(f"字段 {field} 必须是布尔值 true/false。")
+        elif item_type == "int":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"字段 {field} 必须是整数。")
+        elif item_type in {"float", "number"}:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"字段 {field} 必须是数字。")
+            normalized = float(value)
+            if not math.isfinite(normalized):
+                raise ValueError(f"字段 {field} 必须是有限数字。")
+        elif item_type in {"string", "text"}:
+            if not isinstance(value, str):
+                raise ValueError(f"字段 {field} 必须是字符串。")
+            max_length = item.get("max_length", PLUGIN_CONFIG_MAX_STRING_LENGTH)
+            try:
+                max_length = int(max_length)
+            except (TypeError, ValueError):
+                max_length = PLUGIN_CONFIG_MAX_STRING_LENGTH
+            if len(value) > max_length:
+                raise ValueError(f"字段 {field} 超过最大长度 {max_length}。")
+        elif item_type == "list":
+            if not isinstance(value, list):
+                raise ValueError(f"字段 {field} 必须是数组。")
+            if len(value) > PLUGIN_CONFIG_MAX_LIST_ITEMS:
+                raise ValueError(f"字段 {field} 数组最多 {PLUGIN_CONFIG_MAX_LIST_ITEMS} 项。")
+            item_schema = item.get("items")
+            if isinstance(item_schema, dict):
+                validated_items = [
+                    self._validate_plugin_config_value(f"{field}[{index}]", entry, item_schema)
+                    for index, entry in enumerate(value)
+                ]
+                normalized = validated_items
+        else:
+            raise ValueError(f"字段 {field} 的 schema 类型不受支持：{item_type or 'unknown'}。")
+
+        options = item.get("options")
+        if isinstance(options, list) and options:
+            if normalized not in options:
+                allowed = "、".join(str(option) for option in options)
+                raise ValueError(f"字段 {field} 的值不在允许选项中：{allowed}。")
+
+        if item_type in {"int", "float", "number"}:
+            minimum, maximum = self._plugin_numeric_limits(item)
+            numeric = float(normalized)
+            if minimum is not None and numeric < minimum:
+                raise ValueError(f"字段 {field} 不能小于 {minimum:g}。")
+            if maximum is not None and numeric > maximum:
+                raise ValueError(f"字段 {field} 不能大于 {maximum:g}。")
+        return normalized
+
+    def _live_plugin_config(self, plugin_id: str) -> tuple[dict[str, Any] | None, str, bool]:
+        """Try the real AstrBot config endpoint, returning a safe warning."""
+
+        config = self.store.load_config()
+        if not config.get("deployed"):
+            return None, "", False
+        try:
+            client = self._memory_api_client(timeout=6, wait_for_ready=False)
+            if client is None:
+                return None, "", False
+            live = self._get_plugin_config_via_api(client, plugin_id)
+            if not isinstance(live, dict):
+                raise RuntimeError("AstrBot 插件配置返回格式异常")
+            return live, "", True
+        except Exception as exc:  # noqa: BLE001 - local fallback is intentional
+            return None, self.redact_sensitive_text(str(exc) or exc.__class__.__name__), False
+
+    def get_plugin_config(self, plugin_id: str) -> dict[str, Any]:
+        """Read one plugin's schema and effective values safely."""
+
+        requested_id = str(plugin_id or "").strip()
+        with self._lock:
+            try:
+                schema, schema_error = self._load_plugin_schema(requested_id)
+                if schema_error:
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "无法读取插件配置 schema。",
+                        detail=schema_error,
+                    )
+                config_path = str(self._plugin_config_path(requested_id))
+                local_config, local_error, local_exists = self._read_local_plugin_config(requested_id)
+                if local_error:
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "本地插件配置损坏，已停止读取以避免覆盖。",
+                        detail=local_error,
+                        schema=_public_plugin_schema(schema),
+                        config_path=config_path,
+                    )
+
+                merged = self._plugin_defaults(schema)
+                merged.update(local_config)
+                live_config, api_error, api_available = self._live_plugin_config(requested_id)
+                if live_config is not None:
+                    merged.update(live_config)
+                public_schema = _public_plugin_schema(schema)
+                public_values = _public_plugin_values(merged, schema)
+                source = "astrbot" if api_available else ("local" if local_exists else "schema")
+                message = (
+                    "已从 AstrBot 在线接口读取插件配置，并合并本地值。"
+                    if api_available
+                    else "AstrBot 不在线；显示本地插件配置和 schema 默认值。"
+                )
+                return {
+                    "ok": True,
+                    "plugin_id": requested_id,
+                    "schema": public_schema,
+                    "values": public_values,
+                    "config_path": config_path,
+                    "source": source,
+                    "api_available": bool(api_available),
+                    "restart_required": False,
+                    "message": message,
+                    "error": "",
+                    "api_error": api_error,
+                }
+            except Exception as exc:  # noqa: BLE001 - optional endpoint isolation
+                detail = self.redact_sensitive_text(str(exc) or exc.__class__.__name__)
+                return self._plugin_config_failure(
+                    requested_id,
+                    "读取插件配置失败；主项目和其它插件不受影响。",
+                    detail=detail,
+                )
+
+    def set_plugin_config(
+        self,
+        plugin_id: str,
+        values: Any,
+        restart: bool = False,
+    ) -> dict[str, Any]:
+        """Validate and persist plugin values, preserving unknown user fields."""
+
+        requested_id = str(plugin_id or "").strip()
+        with self._lock:
+            try:
+                schema, schema_error = self._load_plugin_schema(requested_id)
+                config_path_obj = self._plugin_config_path(requested_id)
+                config_path = str(config_path_obj)
+                public_schema = _public_plugin_schema(schema)
+                if schema_error:
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "无法读取插件配置 schema。",
+                        detail=schema_error,
+                    )
+                if not isinstance(values, dict):
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "values 必须是 JSON object。",
+                        detail="请求体 values 必须是 JSON object。",
+                        schema=public_schema,
+                        config_path=config_path,
+                    )
+                if len(values) > PLUGIN_CONFIG_MAX_FIELDS:
+                    return self._plugin_config_failure(
+                        requested_id,
+                        f"一次最多保存 {PLUGIN_CONFIG_MAX_FIELDS} 个插件字段。",
+                        schema=public_schema,
+                        config_path=config_path,
+                    )
+                try:
+                    encoded_size = len(
+                        json.dumps(values, ensure_ascii=False).encode("utf-8")
+                    )
+                except (TypeError, ValueError):
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "values 包含无法序列化的值。",
+                        schema=public_schema,
+                        config_path=config_path,
+                    )
+                if encoded_size > PLUGIN_CONFIG_MAX_REQUEST_BYTES:
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "插件配置请求体过大，请减少保存的字段或文本长度。",
+                        schema=public_schema,
+                        config_path=config_path,
+                    )
+
+                validated_values: dict[str, Any] = {}
+                for field, value in values.items():
+                    field_name = str(field)
+                    item = schema.get(field_name)
+                    if _plugin_field_is_sensitive(field_name, item if isinstance(item, dict) else None):
+                        return self._plugin_config_failure(
+                            requested_id,
+                            "请求包含 Key/token/password/secret 类敏感字段，已拒绝保存。",
+                            detail="敏感字段不允许通过插件参数接口读写。",
+                            schema=public_schema,
+                            config_path=config_path,
+                        )
+                    if not isinstance(item, dict):
+                        return self._plugin_config_failure(
+                            requested_id,
+                            f"字段 {field_name} 不在插件 schema 中，拒绝保存。",
+                            schema=public_schema,
+                            config_path=config_path,
+                        )
+                    try:
+                        validated_values[field_name] = self._validate_plugin_config_value(
+                            field_name, value, item
+                        )
+                    except ValueError as exc:
+                        return self._plugin_config_failure(
+                            requested_id,
+                            "插件配置校验失败，未写入任何修改。",
+                            detail=self.redact_sensitive_text(str(exc)),
+                            schema=public_schema,
+                            config_path=config_path,
+                        )
+
+                local_config, local_error, _local_exists = self._read_local_plugin_config(requested_id)
+                if local_error:
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "本地插件配置损坏，已拒绝写入以避免覆盖。",
+                        detail=local_error,
+                        schema=public_schema,
+                        config_path=config_path,
+                    )
+                # Keep unknown user fields from the existing local config.
+                local_merged = self._plugin_defaults(schema)
+                local_merged.update(local_config)
+                local_merged.update(validated_values)
+                try:
+                    self._write_private_json(config_path_obj, local_merged)
+                except OSError as exc:
+                    return self._plugin_config_failure(
+                        requested_id,
+                        "无法安全写入本地插件配置。",
+                        detail=self.redact_sensitive_text(str(exc)),
+                        schema=public_schema,
+                        config_path=config_path,
+                    )
+
+                api_available = False
+                api_error = ""
+                api_message = ""
+                final_config = local_merged
+                if self.store.load_config().get("deployed"):
+                    try:
+                        client = self._memory_api_client(timeout=8, wait_for_ready=False)
+                        if client is not None:
+                            live = self._get_plugin_config_via_api(client, requested_id)
+                            if not isinstance(live, dict):
+                                raise RuntimeError("AstrBot 插件配置返回格式异常")
+                            api_merged = self._plugin_defaults(schema)
+                            api_merged.update(local_config)
+                            api_merged.update(live)
+                            api_merged.update(validated_values)
+                            save_result = self._save_plugin_config_via_api(
+                                client, requested_id, api_merged
+                            )
+                            api_available = True
+                            final_config = api_merged
+                            if isinstance(save_result, dict):
+                                api_message = str(save_result.get("message") or "")
+                    except Exception as exc:  # noqa: BLE001 - local save already succeeded
+                        api_error = self.redact_sensitive_text(
+                            str(exc) or exc.__class__.__name__
+                        )
+
+                public_values = _public_plugin_values(final_config, schema)
+                restart_required = bool(not api_available or restart)
+                source = "astrbot" if api_available else "local"
+                if api_available:
+                    message = (
+                        api_message
+                        or "插件配置已通过 AstrBot 真实接口保存并热重载，无需重启。"
+                    )
+                    if restart:
+                        message += " 已请求保存后重启提示。"
+                else:
+                    message = (
+                        "插件配置已保存到本地（0600）。AstrBot 当前不在线，"
+                        "需重启 AstrBot 后生效。"
+                    )
+                    if api_error:
+                        message += " 在线接口警告：" + api_error
+                return {
+                    "ok": True,
+                    "plugin_id": requested_id,
+                    "schema": public_schema,
+                    "values": public_values,
+                    "config_path": config_path,
+                    "source": source,
+                    "api_available": bool(api_available),
+                    "restart_required": restart_required,
+                    "message": message,
+                    "error": "",
+                    "api_error": api_error,
+                }
+            except Exception as exc:  # noqa: BLE001 - optional endpoint isolation
+                detail = self.redact_sensitive_text(str(exc) or exc.__class__.__name__)
+                return self._plugin_config_failure(
+                    requested_id,
+                    "保存插件配置失败；主项目和其它插件不受影响。",
+                    detail=detail,
+                )
 
     def get_status(self) -> dict[str, Any]:
         config = self.store.load_config()

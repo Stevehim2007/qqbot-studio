@@ -39,6 +39,20 @@
       stats: null
     },
     expandedV3: new Set(),
+    pluginConfig: {
+      open: false,
+      loading: false,
+      saving: false,
+      instanceId: '',
+      instanceName: '',
+      pluginId: '',
+      pluginName: '',
+      source: '',
+      restartRequired: false,
+      apiAvailable: true,
+      requestSeq: 0,
+      entries: []
+    },
     globalResourceStats: null,
     globalResourceStatus: 'unknown',
     globalResourceError: '',
@@ -648,6 +662,7 @@
       description: textValue(plugin.description, ''),
       source: textValue(plugin.source, ''),
       restartRequired: boolOrUndefined(plugin.restart_required) === true,
+      configAvailable: boolOrUndefined(plugin.config_available ?? plugin.config_api_available ?? plugin.supports_config),
       error: textValue(plugin.error, '')
     };
   }
@@ -945,6 +960,607 @@
     return '状态未知';
   }
 
+  let pluginConfigReturnFocus = null;
+
+  function pluginNumberValue(value) {
+    if (value === null || value === undefined || value === '') return undefined;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
+  }
+
+  function sanitisePluginText(value) {
+    return textValue(value, '').replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, 'sk-***');
+  }
+
+  function pluginConfigUnsupportedMessage(message) {
+    return /未提供.*(?:接口|参数|插件)|不支持.*(?:参数|编辑|插件)|插件配置接口.*暂不可用|参数.*暂不可用|接口.*不存在|不存在.*接口|未实现|not\s*(?:supported|found)/i.test(textValue(message, ''));
+  }
+
+  function isSensitivePluginField(key, definition) {
+    const def = asRecord(definition);
+    if (boolOrUndefined(def.sensitive) === true || boolOrUndefined(def.secret) === true) return true;
+    if (['password', 'secret', 'token', 'api_key', 'apikey'].includes(textValue(def.type, '').trim().toLowerCase())) return true;
+    return /(?:api[\s_-]*key|access[\s_-]*token|auth[\s_-]*token|secret[\s_-]*key|client[\s_-]*secret|password|authorization|credential|private[\s_-]*key)/i.test(`${key} ${textValue(def.label || def.title, '')}`);
+  }
+
+  function pluginFieldType(definition) {
+    const raw = textValue(asRecord(definition).type, 'string').trim().toLowerCase();
+    if (['bool', 'boolean', 'checkbox', 'switch'].includes(raw)) return 'bool';
+    if (['int', 'integer', 'number_int'].includes(raw)) return 'int';
+    if (['float', 'number', 'double', 'decimal'].includes(raw)) return 'float';
+    if (['text', 'textarea', 'multiline'].includes(raw)) return 'text';
+    if (['list', 'array', 'string_list', 'string-array'].includes(raw)) return 'list';
+    return 'string';
+  }
+
+  function normalisePluginOptions(rawOptions, rawLabels) {
+    const labels = Array.isArray(rawLabels) ? rawLabels : [];
+    let entries = [];
+    if (Array.isArray(rawOptions)) {
+      entries = rawOptions.map((item, index) => {
+        const record = asRecord(item);
+        if (Object.keys(record).length > 0 && Object.prototype.hasOwnProperty.call(record, 'value')) {
+          return { value: textValue(record.value, ''), label: sanitisePluginText(record.label || record.title || record.value) || textValue(record.value, '') };
+        }
+        const value = textValue(item, '');
+        return { value, label: sanitisePluginText(labels[index]) || value };
+      });
+    } else if (rawOptions && typeof rawOptions === 'object') {
+      entries = Object.entries(rawOptions).map(([value, label]) => ({
+        value,
+        label: sanitisePluginText(label) || value
+      }));
+    }
+    return entries.filter((entry, index, all) => entry.value !== '' && all.findIndex((item) => item.value === entry.value) === index);
+  }
+
+  function parsePluginSchemaValue(raw) {
+    if (typeof raw !== 'string') return raw;
+    const trimmed = raw.trim();
+    if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return raw;
+    try { return JSON.parse(trimmed); } catch (error) { return raw; }
+  }
+
+  function extractPluginSchemaDefinitions(rawSchema) {
+    const parsed = parsePluginSchemaValue(rawSchema);
+    const schema = asRecord(parsed);
+    let candidates = [];
+    if (Array.isArray(parsed)) {
+      candidates = parsed.map((item, index) => {
+        const definition = asRecord(item);
+        return { key: textValue(definition.key || definition.name || definition.id, `field_${index}`), definition };
+      });
+    } else if (Array.isArray(schema.fields)) {
+      candidates = schema.fields.map((item, index) => {
+        const definition = asRecord(item);
+        return { key: textValue(definition.key || definition.name || definition.id, `field_${index}`), definition };
+      });
+    } else if (schema.fields && typeof schema.fields === 'object') {
+      candidates = Object.entries(schema.fields).map(([key, definition]) => ({ key, definition: asRecord(definition) }));
+    } else if (schema.properties && typeof schema.properties === 'object') {
+      candidates = Object.entries(schema.properties).map(([key, definition]) => ({ key, definition: asRecord(definition) }));
+    } else if (schema.schema) {
+      return extractPluginSchemaDefinitions(schema.schema);
+    } else if (parsed && typeof parsed === 'object') {
+      candidates = Object.entries(schema).map(([key, definition]) => ({ key, definition: asRecord(definition) }));
+    }
+
+    return candidates.map(({ key, definition }) => {
+      const def = asRecord(definition);
+      if (isSensitivePluginField(key, def)) return null;
+      const type = pluginFieldType(def);
+      const sliderRaw = def.slider ?? def.range;
+      const sliderDefinition = asRecord(sliderRaw);
+      const min = pluginNumberValue(def.min ?? def.minimum ?? sliderDefinition.min ?? sliderDefinition.minimum);
+      const max = pluginNumberValue(def.max ?? def.maximum ?? sliderDefinition.max ?? sliderDefinition.maximum);
+      const step = pluginNumberValue(def.step ?? sliderDefinition.step);
+      const options = normalisePluginOptions(def.options || def.choices || def.items, def.labels);
+      const slider = sliderRaw === true || (sliderRaw !== null && typeof sliderRaw === 'object');
+      return {
+        key,
+        type,
+        label: sanitisePluginText(def.label || def.title) || key,
+        description: sanitisePluginText(def.description || def.desc),
+        hint: sanitisePluginText(def.hint),
+        default: Object.prototype.hasOwnProperty.call(def, 'default') ? def.default : undefined,
+        hasDefault: Object.prototype.hasOwnProperty.call(def, 'default'),
+        min,
+        max,
+        step,
+        options,
+        slider,
+        sensitive: false
+      };
+    }).filter(Boolean);
+  }
+
+  function pluginValueLookup(values, field) {
+    const record = asRecord(values);
+    if (Object.prototype.hasOwnProperty.call(record, field.key)) return record[field.key];
+    const def = asRecord(field);
+    return field.hasDefault ? field.default : undefined;
+  }
+
+  function pluginListText(value) {
+    if (Array.isArray(value)) return value.map((item) => textValue(item, '')).join('\n');
+    return textValue(value, '');
+  }
+
+  function pluginInputText(value) {
+    if (value === null || value === undefined) return '';
+    if (Array.isArray(value)) return pluginListText(value);
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'object') {
+      try { return JSON.stringify(value); } catch (error) { return ''; }
+    }
+    return textValue(value, '');
+  }
+
+  function pluginDefaultText(value) {
+    if (value === null) return 'null';
+    if (value === undefined) return '';
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (Array.isArray(value)) return value.map((item) => textValue(item, '')).join(', ');
+    if (typeof value === 'object') {
+      try { return JSON.stringify(value); } catch (error) { return ''; }
+    }
+    return textValue(value, '');
+  }
+
+  function pluginSchemaSnapshot(data) {
+    const root = asRecord(data);
+    const source = asRecord(root.config);
+    const schemaRaw = root.schema !== undefined ? root.schema : (source.schema !== undefined ? source.schema : root.fields);
+    const valuesRaw = root.values !== undefined ? root.values : (source.values !== undefined ? source.values : (source.config !== undefined ? source.config : {}));
+    const schema = extractPluginSchemaDefinitions(schemaRaw);
+    const allValues = asRecord(valuesRaw);
+    const values = {};
+    for (const field of schema) {
+      if (Object.prototype.hasOwnProperty.call(allValues, field.key)) values[field.key] = allValues[field.key];
+    }
+    return {
+      schema,
+      values,
+      source: sanitisePluginText(root.source || source.source),
+      apiAvailable: boolOrUndefined(root.api_available) !== false,
+      restartRequired: boolOrUndefined(root.restart_required) === true,
+      message: sanitisePluginText(root.message),
+      error: sanitisePluginText(root.error || (root.ok === false ? root.message : ''))
+    };
+  }
+
+  function updatePluginConfigFilter() {
+    const search = $('plugin-config-search');
+    const query = search ? search.value.trim().toLowerCase() : '';
+    const entries = state.pluginConfig.entries || [];
+    let visible = 0;
+    for (const entry of entries) {
+      const matches = !query || entry.element.dataset.searchText.includes(query);
+      entry.element.hidden = !matches;
+      if (matches) visible += 1;
+    }
+    const count = $('plugin-config-filter-count');
+    if (count) count.textContent = entries.length ? `显示 ${visible}/${entries.length} 个参数` : '';
+    const empty = $('plugin-config-empty');
+    if (empty) {
+      if (entries.length === 0) {
+        empty.textContent = '没有可编辑的参数。';
+        empty.hidden = false;
+      } else if (visible === 0) {
+        empty.textContent = '没有匹配的参数。';
+        empty.hidden = false;
+      } else {
+        empty.hidden = true;
+      }
+    }
+  }
+
+  function clearPluginConfigFieldError(entry) {
+    if (!entry || !entry.input) return;
+    entry.input.removeAttribute('aria-invalid');
+    if (entry.errorElement) {
+      entry.errorElement.textContent = '';
+      entry.errorElement.hidden = true;
+    }
+  }
+
+  function clearAllPluginConfigFeedback() {
+    for (const entry of state.pluginConfig.entries || []) clearPluginConfigFieldError(entry);
+    const error = $('plugin-config-error');
+    const status = $('plugin-config-status');
+    if (error) { error.textContent = ''; error.hidden = true; }
+    if (status) { status.textContent = ''; status.hidden = true; status.className = 'plugin-config-status'; }
+  }
+
+  function clearPluginConfigFeedbackOnly() {
+    const error = $('plugin-config-error');
+    const status = $('plugin-config-status');
+    if (error) { error.textContent = ''; error.hidden = true; }
+    if (status) { status.textContent = ''; status.hidden = true; status.className = 'plugin-config-status'; }
+  }
+
+  function setPluginConfigError(message) {
+    const element = $('plugin-config-error');
+    if (element) { element.textContent = sanitisePluginText(message); element.hidden = !message; }
+  }
+
+  function setPluginConfigStatus(message, warning = false) {
+    const element = $('plugin-config-status');
+    if (!element) return;
+    element.textContent = sanitisePluginText(message);
+    element.className = `plugin-config-status${warning ? ' is-warning' : ''}`;
+    element.hidden = !message;
+  }
+
+  function showPluginConfigFieldError(entry, message) {
+    if (!entry || !entry.input) return;
+    entry.input.setAttribute('aria-invalid', 'true');
+    if (entry.errorElement) {
+      entry.errorElement.textContent = message;
+      entry.errorElement.hidden = false;
+    }
+    entry.input.focus({ preventScroll: true });
+  }
+
+  function syncPluginConfigSaveState() {
+    const button = $('plugin-config-save');
+    const label = $('plugin-config-save-label');
+    const config = state.pluginConfig;
+    if (button) button.disabled = config.loading || config.saving || !config.entries.length;
+    if (label) label.textContent = config.saving ? '保存中…' : '保存参数';
+  }
+
+  function makePluginFieldEntry(field, value) {
+    const isReplyProbability = field.key === 'reply_probability';
+    const fieldElement = makeElement('div', `plugin-config-field${isReplyProbability ? ' is-highlight' : ''}`);
+    const head = makeElement('div', 'plugin-field-head');
+    const titleWrap = makeElement('div', '');
+    const labelText = isReplyProbability ? '群聊非 @ 消息的回复概率' : field.label;
+    titleWrap.appendChild(makeElement('span', 'plugin-field-title', labelText));
+    titleWrap.appendChild(makeElement('span', 'plugin-field-key', field.key));
+    head.appendChild(titleWrap);
+    if (field.hasDefault) head.appendChild(makeElement('span', 'plugin-field-default', `默认：${pluginDefaultText(field.default)}`));
+    fieldElement.appendChild(head);
+    if (field.description) fieldElement.appendChild(makeElement('p', 'plugin-field-description', field.description));
+    const control = makeElement('div', 'plugin-field-control');
+    const errorElement = makeElement('p', 'plugin-field-error', '');
+    errorElement.hidden = true;
+    let input = null;
+    let readValue = null;
+    let numericMin;
+    let numericMax;
+
+    if (field.type === 'bool') {
+      const row = makeElement('label', 'plugin-bool-row');
+      input = document.createElement('input');
+      input.setAttribute('type', 'checkbox');
+      const current = boolOrUndefined(value);
+      input.checked = current === undefined ? field.hasDefault && field.default === true : current;
+      row.appendChild(input);
+      const boolState = makeElement('span', '', input.checked ? '已启用' : '未启用');
+      row.appendChild(boolState);
+      input.addEventListener('change', () => { boolState.textContent = input.checked ? '已启用' : '未启用'; });
+      control.appendChild(row);
+      readValue = () => ({ ok: true, value: input.checked });
+    } else if (field.type === 'int' || field.type === 'float') {
+      input = document.createElement('input');
+      input.setAttribute('type', 'number');
+      input.setAttribute('inputmode', field.type === 'int' ? 'numeric' : 'decimal');
+      numericMin = isReplyProbability ? 0 : field.min;
+      numericMax = isReplyProbability ? 1 : field.max;
+      const step = isReplyProbability ? 0.01 : (field.step !== undefined ? field.step : (field.type === 'int' ? 1 : 0.01));
+      if (numericMin !== undefined) input.setAttribute('min', String(numericMin));
+      if (numericMax !== undefined) input.setAttribute('max', String(numericMax));
+      input.setAttribute('step', String(step));
+      input.value = pluginInputText(value);
+      const useSlider = isReplyProbability || field.slider;
+      if (useSlider) {
+        const row = makeElement('div', 'plugin-number-row');
+        const range = document.createElement('input');
+        range.setAttribute('type', 'range');
+        range.setAttribute('min', String(numericMin !== undefined ? numericMin : 0));
+        range.setAttribute('max', String(numericMax !== undefined ? numericMax : (isReplyProbability ? 1 : 100)));
+        range.setAttribute('step', String(step));
+        range.value = pluginInputText(value) || String(numericMin !== undefined ? numericMin : 0);
+        range.addEventListener('input', () => { input.value = range.value; });
+        input.addEventListener('input', () => {
+          const number = Number(input.value);
+          if (Number.isFinite(number)) range.value = String(number);
+        });
+        row.appendChild(input);
+        row.appendChild(range);
+        control.appendChild(row);
+      } else {
+        control.appendChild(input);
+      }
+      if (isReplyProbability) {
+        control.appendChild(makeElement('p', 'plugin-probability', '0 = 不主动回复；1 = 每条非 @ 群聊消息都考虑回复。可直接输入 0–1。'));
+      }
+      readValue = () => {
+        const raw = input.value.trim();
+        if (raw === '') return { ok: false, message: '请输入数值。' };
+        const number = Number(raw);
+        if (!Number.isFinite(number)) return { ok: false, message: '请输入有效数字。' };
+        if (field.type === 'int' && !Number.isInteger(number)) return { ok: false, message: '请输入整数。' };
+        if (numericMin !== undefined && number < numericMin) return { ok: false, message: `不能小于 ${numericMin}。` };
+        if (numericMax !== undefined && number > numericMax) return { ok: false, message: `不能大于 ${numericMax}。` };
+        return { ok: true, value: number };
+      };
+    } else if (field.type === 'string' && field.options.length > 0) {
+      input = document.createElement('select');
+      for (const option of field.options) {
+        const optionElement = document.createElement('option');
+        optionElement.value = option.value;
+        optionElement.textContent = sanitisePluginText(option.label);
+        input.appendChild(optionElement);
+      }
+      const current = pluginInputText(value);
+      if (current && !field.options.some((option) => option.value === current)) {
+        const optionElement = document.createElement('option');
+        optionElement.value = current;
+        optionElement.textContent = `当前值：${current}`;
+        input.appendChild(optionElement);
+      }
+      input.value = current || (field.options[0] ? field.options[0].value : '');
+      control.appendChild(input);
+      readValue = () => ({ ok: true, value: input.value });
+    } else if (field.type === 'text' || field.type === 'list') {
+      input = document.createElement('textarea');
+      input.setAttribute('rows', field.type === 'list' ? '4' : '3');
+      input.setAttribute('spellcheck', 'false');
+      input.value = field.type === 'list' ? pluginListText(value) : pluginInputText(value);
+      if (field.type === 'list') input.placeholder = '每行一项';
+      control.appendChild(input);
+      readValue = () => field.type === 'list'
+        ? { ok: true, value: input.value.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '') }
+        : { ok: true, value: input.value };
+    } else {
+      input = document.createElement('input');
+      input.setAttribute('type', 'text');
+      input.setAttribute('autocomplete', 'off');
+      input.value = pluginInputText(value);
+      control.appendChild(input);
+      readValue = () => ({ ok: true, value: input.value });
+    }
+
+    input.addEventListener('input', () => clearPluginConfigFieldError({ input, errorElement }));
+    if (input.tagName === 'SELECT') input.addEventListener('change', () => clearPluginConfigFieldError({ input, errorElement }));
+    fieldElement.appendChild(control);
+    if (field.hint) fieldElement.appendChild(makeElement('p', 'plugin-field-hint', field.hint));
+    fieldElement.appendChild(errorElement);
+    const entry = { key: field.key, type: field.type, element: fieldElement, input, errorElement, readValue };
+    fieldElement.dataset.fieldKey = field.key;
+    fieldElement.dataset.searchText = `${field.key} ${field.label} ${field.description || ''} ${field.hint || ''} ${field.type}`.toLowerCase();
+    if (isReplyProbability) fieldElement.dataset.replyProbability = 'true';
+    return entry;
+  }
+
+  function renderPluginConfigFields() {
+    const fields = $('plugin-config-fields');
+    if (!fields) return;
+    fields.replaceChildren();
+    state.pluginConfig.entries = [];
+    const config = state.pluginConfig;
+    const snapshot = config.snapshot || { schema: [], values: {} };
+    for (const field of snapshot.schema) {
+      const entry = makePluginFieldEntry(field, pluginValueLookup(snapshot.values, field));
+      state.pluginConfig.entries.push(entry);
+      fields.appendChild(entry.element);
+    }
+    const loading = $('plugin-config-loading');
+    if (loading) loading.hidden = true;
+    syncPluginConfigSaveState();
+    updatePluginConfigFilter();
+  }
+
+  function resetPluginConfigPanel() {
+    state.pluginConfig.requestSeq += 1;
+    state.pluginConfig.open = false;
+    state.pluginConfig.loading = false;
+    state.pluginConfig.saving = false;
+    state.pluginConfig.entries = [];
+    state.pluginConfig.snapshot = null;
+    const overlay = $('plugin-config-overlay');
+    if (overlay) overlay.hidden = true;
+    document.body.classList.remove('console-modal-open');
+    const fields = $('plugin-config-fields');
+    if (fields) fields.replaceChildren();
+    const search = $('plugin-config-search');
+    if (search) { search.value = ''; search.disabled = false; }
+    const count = $('plugin-config-filter-count');
+    if (count) count.textContent = '';
+    const title = $('plugin-config-title');
+    if (title) title.textContent = '编辑插件参数';
+    const subtitle = $('plugin-config-subtitle');
+    if (subtitle) subtitle.textContent = '';
+    const source = $('plugin-config-source');
+    if (source) source.textContent = '';
+    const empty = $('plugin-config-empty');
+    if (empty) empty.hidden = true;
+    const loading = $('plugin-config-loading');
+    if (loading) loading.hidden = true;
+    const save = $('plugin-config-save');
+    if (save) save.disabled = true;
+    clearAllPluginConfigFeedback();
+  }
+
+  function closePluginConfigPanel(options = {}) {
+    const wasOpen = state.pluginConfig.open;
+    resetPluginConfigPanel();
+    if (options.restoreFocus !== false && wasOpen && pluginConfigReturnFocus && pluginConfigReturnFocus.isConnected) {
+      pluginConfigReturnFocus.focus({ preventScroll: true });
+    }
+    pluginConfigReturnFocus = null;
+  }
+
+  async function loadPluginConfig(instance, plugin) {
+    const config = state.pluginConfig;
+    const seq = ++config.requestSeq;
+    const url = `/api/instances/${encodeURIComponent(instance.id)}/plugins/${encodeURIComponent(plugin.id)}/config`;
+    const fields = $('plugin-config-fields');
+    if (fields) fields.replaceChildren();
+    const loading = $('plugin-config-loading');
+    if (loading) { loading.textContent = '正在读取插件参数…'; loading.hidden = false; }
+    const empty = $('plugin-config-empty');
+    if (empty) empty.hidden = true;
+    const save = $('plugin-config-save');
+    if (save) save.disabled = true;
+    clearAllPluginConfigFeedback();
+    config.loading = true;
+    try {
+      const data = await apiRequest(url);
+      if (!config.open || seq !== config.requestSeq) return;
+      if (!data || data.ok === false) {
+        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '插件参数读取失败。', { data });
+      }
+      const snapshot = pluginSchemaSnapshot(data);
+      config.snapshot = snapshot;
+      config.loading = false;
+      config.apiAvailable = snapshot.apiAvailable;
+      config.restartRequired = snapshot.restartRequired;
+      config.source = snapshot.source;
+      const source = $('plugin-config-source');
+      if (source) source.textContent = snapshot.source ? `配置来源：${snapshot.source}` : '';
+      if (!snapshot.apiAvailable || snapshot.schema.length === 0) {
+        if (loading) loading.hidden = true;
+        if (empty) {
+          empty.textContent = !snapshot.apiAvailable ? '当前插件未提供参数 schema，暂不支持参数编辑。' : '没有可编辑的参数。';
+          empty.hidden = false;
+        }
+        setPluginConfigError(snapshot.error || (!snapshot.apiAvailable ? '当前插件未提供参数 schema，暂不支持参数编辑。' : ''));
+        if (snapshot.message) setPluginConfigStatus(snapshot.message, snapshot.restartRequired);
+        syncPluginConfigSaveState();
+        return;
+      }
+      renderPluginConfigFields();
+      if (snapshot.message) setPluginConfigStatus(snapshot.message, snapshot.restartRequired);
+      if (snapshot.error) setPluginConfigError(snapshot.error);
+    } catch (error) {
+      if (!config.open || seq !== config.requestSeq) return;
+      config.loading = false;
+      const errorRecord = error instanceof ApiError ? asRecord(error.data) : {};
+      const message = formatError(error, '插件参数读取失败。');
+      const unsupported = isMissingEndpointError(error)
+        || pluginConfigUnsupportedMessage(message)
+        || pluginConfigUnsupportedMessage(errorRecord.message)
+        || pluginConfigUnsupportedMessage(errorRecord.error);
+      if (loading) loading.hidden = true;
+      if (save) save.disabled = true;
+      if (empty) {
+        empty.textContent = unsupported ? '当前后端不支持参数编辑。' : '插件参数暂不可用。';
+        empty.hidden = false;
+      }
+      setPluginConfigError(unsupported ? '当前后端不支持参数编辑。' : message);
+      syncPluginConfigSaveState();
+    } finally {
+      if (config.open && seq === config.requestSeq) {
+        config.loading = false;
+        syncPluginConfigSaveState();
+      }
+    }
+  }
+
+  async function openPluginConfigPanel(instance, plugin, trigger) {
+    if (!instance || !plugin || !plugin.id) return;
+    resetPluginConfigPanel();
+    const config = state.pluginConfig;
+    config.open = true;
+    config.loading = true;
+    config.saving = false;
+    config.instanceId = instance.id;
+    config.instanceName = instance.name || instance.id;
+    config.pluginId = plugin.id;
+    config.pluginName = plugin.name || plugin.id;
+    config.source = '';
+    config.restartRequired = false;
+    config.apiAvailable = true;
+    pluginConfigReturnFocus = trigger || null;
+    const overlay = $('plugin-config-overlay');
+    if (overlay) overlay.hidden = false;
+    document.body.classList.add('console-modal-open');
+    const title = $('plugin-config-title');
+    if (title) title.textContent = plugin.name || plugin.id;
+    const subtitle = $('plugin-config-subtitle');
+    if (subtitle) subtitle.textContent = `实例：${instance.name || instance.id} · ${instance.id} · 插件：${plugin.id}`;
+    const search = $('plugin-config-search');
+    if (search) { search.value = ''; search.disabled = true; }
+    const panel = $('plugin-config-panel');
+    if (panel) panel.focus({ preventScroll: true });
+    await loadPluginConfig(instance, plugin);
+    if (search && config.open) search.disabled = false;
+  }
+
+  async function savePluginConfig() {
+    const config = state.pluginConfig;
+    if (!config.open || config.loading || config.saving || !config.entries.length) return;
+    clearPluginConfigFeedbackOnly();
+    if ($('plugin-config-error')) $('plugin-config-error').hidden = true;
+    if ($('plugin-config-status')) $('plugin-config-status').hidden = true;
+    const values = {};
+    let firstInvalid = null;
+    for (const entry of config.entries) {
+      clearPluginConfigFieldError(entry);
+      const result = entry.readValue ? entry.readValue() : { ok: false, message: '无法读取该参数。' };
+      if (!result.ok) {
+        showPluginConfigFieldError(entry, result.message || '参数值无效。');
+        firstInvalid = firstInvalid || entry;
+      } else {
+        values[entry.key] = result.value;
+      }
+    }
+    if (firstInvalid) {
+      setPluginConfigError('请先修正标红的参数。');
+      return;
+    }
+    config.saving = true;
+    syncPluginConfigSaveState();
+    setPluginConfigError('');
+    setPluginConfigStatus('正在保存参数…', false);
+    try {
+      const url = `/api/instances/${encodeURIComponent(config.instanceId)}/plugins/${encodeURIComponent(config.pluginId)}/config`;
+      const data = await apiRequest(url, { method: 'POST', body: { values } });
+      if (!config.open) return;
+      if (!data || data.ok === false) {
+        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '插件参数保存失败。', { data });
+      }
+      const response = asRecord(data);
+      const restart = boolOrUndefined(response.restart_required) === true
+        || boolOrUndefined(asRecord(response.plugin).restart_required) === true;
+      const apiAvailable = boolOrUndefined(response.api_available) !== false;
+      const detail = sanitisePluginText(response.message || response.error);
+      const outcome = restart
+        ? '已保存；AstrBot 需要重启后生效。'
+        : apiAvailable
+          ? '已保存；AstrBot 已热重载。'
+          : '已保存；AstrBot 热重载不可用，请重启后生效。';
+      setPluginConfigStatus(detail ? `${outcome} ${detail}` : outcome, restart || !apiAvailable);
+      config.restartRequired = restart;
+      config.apiAvailable = apiAvailable;
+      const pluginState = instancePluginStatus(config.instanceId, config.pluginId);
+      if (pluginState) {
+        pluginState.status.message = outcome;
+        pluginState.status.restartRequired = restart;
+        updateV3Summary(pluginState.instance);
+      }
+    } catch (error) {
+      if (!config.open) return;
+      const message = formatError(error, '插件参数保存失败。');
+      const unsupported = isMissingEndpointError(error) || pluginConfigUnsupportedMessage(message);
+      setPluginConfigError(unsupported ? '当前后端不支持参数编辑。' : message);
+      setPluginConfigStatus('', false);
+    } finally {
+      config.saving = false;
+      syncPluginConfigSaveState();
+    }
+  }
+
+  function instancePluginStatus(instanceId, pluginId) {
+    const instance = state.instances.find((item) => item.id === instanceId);
+    const status = instance && instance.v3 && instance.v3.plugins ? instance.v3.plugins : null;
+    const plugin = status && Array.isArray(status.items) ? status.items.find((item) => item.id === pluginId) : null;
+    return plugin ? { instance, plugin, status } : null;
+  }
+
   function buildPluginSection(instance) {
     const plugins = (instance.v3 && instance.v3.plugins) || emptyPluginState();
     const section = makeElement('section', 'instance-v3-section');
@@ -987,6 +1603,14 @@
         if (plugin.error) info.appendChild(makeElement('p', 'plugin-error', plugin.error));
 
         const control = makeElement('div', 'plugin-control');
+        const canEditConfig = Boolean(plugin.id) && plugin.configAvailable !== false;
+        if (canEditConfig) {
+          const editButton = makeElement('button', 'plugin-edit-button', '编辑参数');
+          editButton.setAttribute('type', 'button');
+          editButton.setAttribute('aria-label', `编辑插件 ${plugin.name} 的参数`);
+          editButton.addEventListener('click', () => void openPluginConfigPanel(instance, plugin, editButton));
+          control.appendChild(editButton);
+        }
         const stateText = makeElement('span', 'plugin-state-text', pluginStateText(plugin.enabled));
         const switchLabel = makeElement('label', 'plugin-switch');
         const checkbox = document.createElement('input');
@@ -1729,6 +2353,27 @@
     if (updateButton) updateButton.addEventListener('click', () => void handleUpdateClick());
     const retry = $('console-error-retry');
     if (retry) retry.addEventListener('click', () => void loadConsole());
+
+    const pluginConfigOverlay = $('plugin-config-overlay');
+    if (pluginConfigOverlay) {
+      pluginConfigOverlay.addEventListener('click', (event) => {
+        if (event.target === pluginConfigOverlay) closePluginConfigPanel();
+      });
+    }
+    const pluginConfigClose = $('plugin-config-close');
+    if (pluginConfigClose) pluginConfigClose.addEventListener('click', () => closePluginConfigPanel());
+    const pluginConfigCancel = $('plugin-config-cancel');
+    if (pluginConfigCancel) pluginConfigCancel.addEventListener('click', () => closePluginConfigPanel());
+    const pluginConfigSave = $('plugin-config-save');
+    if (pluginConfigSave) pluginConfigSave.addEventListener('click', () => void savePluginConfig());
+    const pluginConfigSearch = $('plugin-config-search');
+    if (pluginConfigSearch) pluginConfigSearch.addEventListener('input', updatePluginConfigFilter);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && state.pluginConfig.open) {
+        event.preventDefault();
+        closePluginConfigPanel();
+      }
+    });
 
     $$('[data-open-create]').forEach((button) => {
       button.setAttribute('aria-expanded', 'false');

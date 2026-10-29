@@ -294,6 +294,21 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "error": detail,
         }
 
+    @staticmethod
+    def _plugin_config_unavailable(plugin_id: str, detail: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "plugin_id": str(plugin_id or ""),
+            "schema": {},
+            "values": {},
+            "config_path": "",
+            "source": "none",
+            "api_available": False,
+            "restart_required": False,
+            "message": "插件配置接口暂不可用；主控制台和其它插件不受影响。",
+            "error": detail,
+        }
+
     # ------------------------------------------------------------------
     # HTML/static routes
     # ------------------------------------------------------------------
@@ -454,6 +469,37 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                plugin_config_parts = subroute.split("/")
+                if (
+                    len(plugin_config_parts) == 3
+                    and plugin_config_parts[0] == "plugins"
+                    and plugin_config_parts[1]
+                    and plugin_config_parts[2] == "config"
+                ):
+                    plugin_id = plugin_config_parts[1]
+                    getter = getattr(manager, "get_plugin_config", None)
+                    if not callable(getter):
+                        self._json(
+                            HTTPStatus.OK,
+                            self._plugin_config_unavailable(
+                                plugin_id,
+                                "当前后端未提供插件参数读取接口。",
+                            ),
+                        )
+                        return
+                    try:
+                        result = getter(plugin_id)
+                    except Exception:  # noqa: BLE001 - optional endpoint isolation
+                        traceback.print_exc()
+                        result = self._plugin_config_unavailable(
+                            plugin_id, "读取插件参数失败。"
+                        )
+                    if not isinstance(result, dict):
+                        result = self._plugin_config_unavailable(
+                            plugin_id, "插件参数返回格式异常。"
+                        )
+                    self._json(HTTPStatus.OK, result)
+                    return
                 if subroute in {"plugins", "plugins/list"}:
                     getter = getattr(manager, "get_plugins", None)
                     if not callable(getter):
@@ -494,6 +540,38 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件列表接口。")
                     return
                 self._json(HTTPStatus.OK, getter())
+                return
+            if path in {"/api/plugins/config", "/api/plugin-config"}:
+                instance_id = ctx.instance_id(query)
+                manager = ctx.studio.get_manager(instance_id)
+                plugin_id = str((query.get("plugin_id") or [""])[0]).strip()
+                if not plugin_id:
+                    self._json(
+                        HTTPStatus.OK,
+                        self._plugin_config_unavailable("", "缺少 plugin_id 查询参数。"),
+                    )
+                    return
+                getter = getattr(manager, "get_plugin_config", None)
+                if not callable(getter):
+                    self._json(
+                        HTTPStatus.OK,
+                        self._plugin_config_unavailable(
+                            plugin_id, "当前后端未提供插件参数读取接口。"
+                        ),
+                    )
+                    return
+                try:
+                    result = getter(plugin_id)
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+                    result = self._plugin_config_unavailable(
+                        plugin_id, "读取插件参数失败。"
+                    )
+                if not isinstance(result, dict):
+                    result = self._plugin_config_unavailable(
+                        plugin_id, "插件参数返回格式异常。"
+                    )
+                self._json(HTTPStatus.OK, result)
                 return
             if path == "/api/stats":
                 getter = getattr(ctx.studio, "get_stats", None)
@@ -721,6 +799,44 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                plugin_config_parts = subroute.split("/")
+                if (
+                    len(plugin_config_parts) == 3
+                    and plugin_config_parts[0] == "plugins"
+                    and plugin_config_parts[1]
+                    and plugin_config_parts[2] == "config"
+                ):
+                    plugin_id = plugin_config_parts[1]
+                    setter = getattr(manager, "set_plugin_config", None)
+                    if not callable(setter):
+                        self._json(
+                            HTTPStatus.OK,
+                            self._plugin_config_unavailable(
+                                plugin_id,
+                                "当前后端未提供插件参数保存接口。",
+                            ),
+                        )
+                        return
+                    restart_value = payload.get("restart", False)
+                    if not isinstance(restart_value, bool):
+                        restart_value = False
+                    try:
+                        result = setter(
+                            plugin_id,
+                            payload.get("values"),
+                            restart=restart_value,
+                        )
+                    except Exception:  # noqa: BLE001 - optional endpoint isolation
+                        traceback.print_exc()
+                        result = self._plugin_config_unavailable(
+                            plugin_id, "保存插件参数失败。"
+                        )
+                    if not isinstance(result, dict):
+                        result = self._plugin_config_unavailable(
+                            plugin_id, "插件参数返回格式异常。"
+                        )
+                    self._json(HTTPStatus.OK, result)
+                    return
                 if subroute in {"plugins", "plugins/toggle"}:
                     plugin_id = str(payload.get("plugin_id") or payload.get("id") or "").strip()
                     if not plugin_id:
@@ -749,6 +865,43 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
 
             instance_id = ctx.instance_id(query, payload)
             manager = ctx.studio.get_manager(instance_id)
+            if path in {"/api/plugins/config", "/api/plugin-config"}:
+                plugin_id = str(payload.get("plugin_id") or (query.get("plugin_id") or [""])[0]).strip()
+                if not plugin_id:
+                    self._json(
+                        HTTPStatus.OK,
+                        self._plugin_config_unavailable("", "缺少 plugin_id。"),
+                    )
+                    return
+                setter = getattr(manager, "set_plugin_config", None)
+                if not callable(setter):
+                    self._json(
+                        HTTPStatus.OK,
+                        self._plugin_config_unavailable(
+                            plugin_id, "当前后端未提供插件参数保存接口。"
+                        ),
+                    )
+                    return
+                restart_value = payload.get("restart", False)
+                if not isinstance(restart_value, bool):
+                    restart_value = False
+                try:
+                    result = setter(
+                        plugin_id,
+                        payload.get("values"),
+                        restart=restart_value,
+                    )
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+                    result = self._plugin_config_unavailable(
+                        plugin_id, "保存插件参数失败。"
+                    )
+                if not isinstance(result, dict):
+                    result = self._plugin_config_unavailable(
+                        plugin_id, "插件参数返回格式异常。"
+                    )
+                self._json(HTTPStatus.OK, result)
+                return
             if path == "/api/memory":
                 mode = str(payload.get("mode") or payload.get("memory_mode") or "").strip()
                 setter = getattr(manager, "set_memory_mode", None)

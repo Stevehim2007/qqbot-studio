@@ -192,6 +192,43 @@
     </footer>
   </main>
 
+  <div id="plugin-config-overlay" class="plugin-config-overlay" hidden>
+    <section id="plugin-config-panel" class="plugin-config-panel" role="dialog" aria-modal="true" aria-labelledby="plugin-config-title" tabindex="-1">
+      <header class="plugin-config-header">
+        <div class="plugin-config-heading">
+          <span class="plugin-config-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-puzzle"></use></svg></span>
+          <div>
+            <span class="plugin-config-kicker">插件参数</span>
+            <h2 id="plugin-config-title">编辑插件参数</h2>
+            <p id="plugin-config-subtitle">加载中…</p>
+          </div>
+        </div>
+        <button id="plugin-config-close" class="plugin-config-close" type="button">关闭</button>
+      </header>
+      <div class="plugin-config-toolbar">
+        <label for="plugin-config-search">搜索参数</label>
+        <input id="plugin-config-search" type="search" autocomplete="off" placeholder="按名称或说明过滤字段">
+        <span id="plugin-config-filter-count" class="plugin-config-filter-count" role="status"></span>
+      </div>
+      <div id="plugin-config-body" class="plugin-config-body">
+        <p id="plugin-config-loading" class="plugin-config-loading" role="status">正在读取参数…</p>
+        <div id="plugin-config-fields" class="plugin-config-fields"></div>
+        <p id="plugin-config-empty" class="plugin-config-empty" hidden>没有可编辑的参数。</p>
+        <p id="plugin-config-error" class="plugin-config-error" role="alert" hidden></p>
+        <p id="plugin-config-status" class="plugin-config-status" role="status" hidden></p>
+      </div>
+      <footer class="plugin-config-footer">
+        <span id="plugin-config-source" class="plugin-config-source"></span>
+        <div class="plugin-config-footer-actions">
+          <button id="plugin-config-cancel" class="btn btn-small btn-quiet" type="button">取消</button>
+          <button id="plugin-config-save" class="btn btn-small btn-primary" type="button">
+            <span id="plugin-config-save-label">保存参数</span>
+          </button>
+        </div>
+      </footer>
+    </section>
+  </div>
+
   <!-- 服务端会将 {{TOKEN}} 替换为本次本地会话的一次性访问令牌。 -->
   <script>window.QB_TOKEN = "{{TOKEN}}";</script>
   <script src="console.js"></script>

@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**3.3.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**3.4.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
 
@@ -167,6 +167,24 @@ B 是独立子项目，代码、配置和 API Key 都独立于主项目：
 - 配置文件：`<QQBOT_STUDIO_DATA_DIR>/ai-assistant/config.json`
 - 主控制台只管理配置和启动，不读取或展示 Key。
 
+如果公网 URL 显示“拒绝连接”，依次检查：
+
+```bash
+# 1. 服务是否真的在监听 0.0.0.0:8766
+ss -ltnp | grep 8766
+
+# 2. 服务器本机健康检查
+curl -sS http://127.0.0.1:8766/api/health
+
+# 3. 查看 B 日志
+tail -n 100 "$HOME/.local/share/qqbot-studio/ai-assistant/assistant.log"
+```
+
+- 只显示 `127.0.0.1:8766`：在 `/assistant` 页面改为“公网/所有网卡”，保存后停止再启动 B；
+- 本机 `curl` 失败：先点“更新 AI 助手 B”，旧版 B 可能不支持 `0.0.0.0`；
+- 本机正常但外网拒绝：在腾讯云安全组/轻量应用服务器防火墙放行 TCP `8766`，并检查 `ufw`/`firewalld`；
+- 公网模式没有认证，必须限制来源 IP，建议 VPN 或带认证的反向代理。
+
 ---
 
 <a id="part-2"></a>
@@ -253,7 +271,15 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 | 本地点歌/唱歌 | `/唱歌`、`/唱歌 关键词`、`/点歌 关键词` | 读取 `songs/` 本地授权音频；不调用 LLM/TTS；默认上限 20 MB |
 | 插件用法 | `/option`、`/插件用法`、`/用法` | 显示本插件用法和已加载插件元数据 |
 
-配置入口：
+配置入口（推荐）：
+
+```text
+QQ Bot Studio 控制台 → 实例 → 插件、记忆与资源 → QQ Bot 增强回复 → 编辑参数
+```
+
+在参数面板里搜索 `reply_probability`，修改数字或拖动滑杆后保存。AstrBot 在线时会尽量热重载；提示需要重启时，重启该实例的 AstrBot 容器后生效。
+
+也可以从 AstrBot WebUI 修改：
 
 ```text
 AstrBot WebUI → 插件 → QQ Bot 增强回复 → 配置
