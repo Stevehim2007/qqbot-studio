@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import concurrent.futures
+import copy
+import ctypes
 import json
 import os
 import re
@@ -16,11 +18,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .assistant_ext import AssistantExtensionManager
 from .configgen import allocate_instance_port_block
 from .dockerctl import DockerController, DockerError
 from .store import Store, chmod_best_effort, default_data_dir, utc_now
 
-STUDIO_SCHEMA_VERSION = 1
+STUDIO_SCHEMA_VERSION = 2
 INSTANCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 DEFAULT_BIND_HOST = "0.0.0.0"
 DEFAULT_BIND_PORT = 8765
@@ -51,6 +54,213 @@ DEFAULT_MIRROR_NODES: list[dict[str, Any]] = [
         "custom": False,
     },
 ]
+
+
+def _directory_usage(path: Path | str) -> tuple[int, int, list[str]]:
+    """Return (bytes, files, errors) for a directory tree without following links."""
+
+    root = Path(path)
+    total = 0
+    files = 0
+    errors: list[str] = []
+    if not root.exists():
+        return 0, 0, errors
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError as exc:
+            errors.append(f"无法读取 {current}：{exc}")
+            continue
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    total += int(entry.stat(follow_symlinks=False).st_size)
+                    files += 1
+            except OSError as exc:
+                errors.append(f"无法统计 {entry.path}：{exc}")
+    return total, files, errors[:20]
+
+
+def _disk_usage(path: Path | str) -> dict[str, Any]:
+    """Return filesystem capacity with a Windows/Linux-safe fallback."""
+
+    try:
+        usage = shutil.disk_usage(str(path))
+        used_percent = round((usage.used / usage.total) * 100, 2) if usage.total else None
+        return {
+            "total_bytes": int(usage.total),
+            "used_bytes": int(usage.used),
+            "free_bytes": int(usage.free),
+            "used_percent": used_percent,
+            "error": "",
+        }
+    except (OSError, AttributeError) as exc:
+        # os.statvfs exists on Unix-like systems and does not require third-party
+        # packages.  On Windows it is expected to be absent.
+        try:
+            stat = os.statvfs(str(path))
+            total = int(stat.f_frsize * stat.f_blocks)
+            free = int(stat.f_frsize * stat.f_bavail)
+            used = max(0, total - free)
+            return {
+                "total_bytes": total,
+                "used_bytes": used,
+                "free_bytes": free,
+                "used_percent": round((used / total) * 100, 2) if total else None,
+                "error": "",
+            }
+        except (AttributeError, OSError):
+            return {
+                "total_bytes": None,
+                "used_bytes": None,
+                "free_bytes": None,
+                "used_percent": None,
+                "error": f"磁盘容量读取失败：{exc}",
+            }
+
+
+def _host_memory_info() -> dict[str, Any]:
+    """Read physical host memory using only the standard library."""
+
+    result: dict[str, Any] = {
+        "total_bytes": None,
+        "available_bytes": None,
+        "used_bytes": None,
+        "used_percent": None,
+        "source": "",
+        "error": "",
+    }
+    if os.name == "nt":
+        try:
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                total = int(status.ullTotalPhys)
+                available = int(status.ullAvailPhys)
+                used = max(0, total - available)
+                result.update(
+                    {
+                        "total_bytes": total,
+                        "available_bytes": available,
+                        "used_bytes": used,
+                        "used_percent": round((used / total) * 100, 2) if total else None,
+                        "source": "GlobalMemoryStatusEx",
+                    }
+                )
+                return result
+            result["error"] = "Windows GlobalMemoryStatusEx 读取失败。"
+        except (AttributeError, OSError, ValueError) as exc:
+            result["error"] = f"Windows 内存读取失败：{exc}"
+        return result
+
+    try:
+        values: dict[str, int] = {}
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                key, _, rest = line.partition(":")
+                parts = rest.strip().split()
+                if parts and parts[0].isdigit():
+                    values[key] = int(parts[0]) * 1024
+        total = int(values.get("MemTotal", 0))
+        if total > 0:
+            available = int(
+                values.get("MemAvailable", 0)
+                or values.get("MemFree", 0)
+                + values.get("Buffers", 0)
+                + values.get("Cached", 0)
+            )
+            available = max(0, min(total, available))
+            used = total - available
+            result.update(
+                {
+                    "total_bytes": total,
+                    "available_bytes": available,
+                    "used_bytes": used,
+                    "used_percent": round((used / total) * 100, 2),
+                    "source": "/proc/meminfo",
+                }
+            )
+            return result
+    except (OSError, ValueError) as exc:
+        result["error"] = f"/proc/meminfo 读取失败：{exc}"
+
+    # Best-effort Unix fallback (macOS/BSD or unusual proc mounts).
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        total_pages = int(os.sysconf("SC_PHYS_PAGES"))
+        available_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+        total = page_size * total_pages
+        available = page_size * available_pages
+        used = max(0, total - available)
+        result.update(
+            {
+                "total_bytes": total,
+                "available_bytes": available,
+                "used_bytes": used,
+                "used_percent": round((used / total) * 100, 2) if total else None,
+                "source": "os.sysconf",
+            }
+        )
+        if total <= 0:
+            result["error"] = "宿主机内存总量为 0 或不可用。"
+    except (AttributeError, OSError, ValueError) as exc:
+        result["error"] = result["error"] or f"宿主机内存读取失败：{exc}"
+    return result
+
+
+def _parse_size_bytes(value: Any) -> int | None:
+    """Parse Docker's human-readable memory values (for example 123.4MiB)."""
+
+    text = str(value or "").strip().replace(" ", "")
+    if not text or text.lower() in {"n/a", "0b"}:
+        return 0 if text.lower() == "0b" else None
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([A-Za-z]+)", text)
+    if not match:
+        return None
+    number = float(match.group(1))
+    unit = match.group(2).lower()
+    factors = {
+        "b": 1,
+        "kb": 1000,
+        "kib": 1024,
+        "mb": 1000**2,
+        "mib": 1024**2,
+        "gb": 1000**3,
+        "gib": 1024**3,
+        "tb": 1000**4,
+        "tib": 1024**4,
+    }
+    factor = factors.get(unit)
+    return int(number * factor) if factor is not None else None
+
+
+def _parse_percent(value: Any) -> float | None:
+    text = str(value or "").strip().rstrip("%")
+    if not text or text.lower() in {"n/a", "--"}:
+        return None
+    try:
+        return round(float(text), 2)
+    except ValueError:
+        return None
 
 
 def default_studio_settings() -> dict[str, Any]:
@@ -119,9 +329,22 @@ class StudioManager:
         chmod_best_effort(self.instances_dir, 0o700)
         self.settings_path = self.root / "studio.json"
         self.server_pid_path = self.root / "server.pid"
+        # Optional assistant B is an independent extension.  Constructing this
+        # manager performs no network access and never starts the assistant.
+        self.assistant_extension = AssistantExtensionManager(self.root)
         self._mirror_cache: dict[str, dict[str, Any]] = {}
         self._manager_cache: dict[str, Any] = {}
         self._lock = __import__("threading").RLock()
+        self._stats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._migration_notes: list[str] = []
+        try:
+            self._migrate_legacy_root_instance()
+        except (OSError, ValueError) as exc:
+            self._migration_notes.append(f"旧实例迁移未完成：{exc}")
+        try:
+            self.migrate_studio_settings()
+        except (OSError, ValueError) as exc:
+            self._migration_notes.append(f"控制台设置迁移未完成：{exc}")
 
     # ------------------------------------------------------------------
     # Global settings
@@ -150,6 +373,12 @@ class StudioManager:
         settings["mirror_nodes"] = list(by_id.values())
         if not any(node.get("id") == settings.get("selected_mirror_id") for node in settings["mirror_nodes"]):
             settings["selected_mirror_id"] = settings["mirror_nodes"][0]["id"]
+        try:
+            schema_version = int(settings.get("schema_version") or 0)
+        except (TypeError, ValueError):
+            schema_version = 0
+        if schema_version < STUDIO_SCHEMA_VERSION:
+            settings["schema_version"] = STUDIO_SCHEMA_VERSION
         return settings
 
     def save_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -354,6 +583,145 @@ class StudioManager:
     # ------------------------------------------------------------------
     # Instances
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Legacy/v1 and v2 compatibility migrations
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _infer_compose_meta(instance_dir: Path, instance_id: str) -> dict[str, Any]:
+        """Infer instance metadata from an old compose file and config.json."""
+
+        compose_path = instance_dir / "compose.yml"
+        compose_text = ""
+        try:
+            compose_text = compose_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+        containers: dict[str, str] = {}
+        for service in ("astrbot", "snowluma"):
+            match = re.search(
+                rf"(?ms)^  {service}:\s*\n(.*?)(?=^  [A-Za-z0-9_.-]+:\s*$|^networks:\s*$|\Z)",
+                compose_text,
+            )
+            if match:
+                name_match = re.search(r"(?m)^\s+container_name:\s*[\"']?([A-Za-z0-9_.-]+)", match.group(1))
+                if name_match:
+                    containers[service] = name_match.group(1)
+        legacy_names = (
+            containers.get("astrbot") == "qqbot-astrbot"
+            or containers.get("snowluma") == "qqbot-snowluma"
+        )
+        project_name = "qqbot-studio" if legacy_names else f"qqbot-studio-{instance_id}"
+        network_name = "qqbot-studio-net" if legacy_names else f"qqbot-studio-{instance_id}-net"
+        network_match = re.search(
+            r"(?ms)^networks:\s*\n(?:.*?^\s+name:\s*[\"']?([A-Za-z0-9_.-]+)[\"']?\s*$)",
+            compose_text,
+        )
+        if network_match:
+            network_name = network_match.group(1)
+        created_at = utc_now()
+        try:
+            config = json.loads((instance_dir / "config.json").read_text(encoding="utf-8"))
+            if isinstance(config, dict) and config.get("deployed_at"):
+                created_at = str(config["deployed_at"])
+        except (OSError, ValueError):
+            pass
+        return {
+            "id": instance_id,
+            "name": "旧版 QQ 机器人",
+            "created_at": created_at,
+            "project_name": project_name,
+            "astrbot_container": containers.get("astrbot") or f"qqbot-{instance_id}-astrbot",
+            "snowluma_container": containers.get("snowluma") or f"qqbot-{instance_id}-snowluma",
+            "network_name": network_name,
+            "legacy": True,
+        }
+
+    def _infer_instance_meta(self, path: Path, instance_id: str) -> dict[str, Any] | None:
+        """Recover an instance directory whose metadata file is missing."""
+
+        if not (path / "config.json").exists() and not (path / "compose.yml").exists():
+            return None
+        return self._infer_compose_meta(path, instance_id)
+
+    def _migrate_legacy_root_instance(self) -> None:
+        """Import the v1 single-instance layout into ``instances/bot-1``.
+
+        v1 kept ``config.json``, ``secrets.json``, ``compose.yml``, ``.env``,
+        ``jobs/`` and ``data/`` directly in the application data directory.
+        The move is same-filesystem and atomic per item.  Existing v2/v3
+        instances always take precedence and are never touched.
+        """
+
+        if any(self.instances_dir.iterdir()):
+            return
+        if not (self.root / "config.json").exists():
+            return
+        target = self._instance_path("bot-1")
+        if target.exists():
+            return
+        target.mkdir(parents=True, exist_ok=False)
+        chmod_best_effort(target, 0o700)
+        moved: list[str] = []
+        try:
+            for name in (
+                "config.json",
+                "secrets.json",
+                "deploy-state.json",
+                "compose.yml",
+                ".env",
+                "jobs",
+                "data",
+            ):
+                source = self.root / name
+                if not source.exists():
+                    continue
+                destination = target / name
+                try:
+                    os.replace(source, destination)
+                except OSError:
+                    shutil.move(str(source), str(destination))
+                moved.append(name)
+            meta = self._infer_compose_meta(target, "bot-1")
+            self._write_instance_meta(target, meta)
+            store = Store(target)
+            store.migrate_config()
+            settings = self.load_settings()
+            settings["schema_version"] = STUDIO_SCHEMA_VERSION
+            try:
+                settings["next_instance_seq"] = max(2, int(settings.get("next_instance_seq") or 1))
+            except (TypeError, ValueError):
+                settings["next_instance_seq"] = 2
+            self.save_settings(settings)
+            self._migration_notes.append(
+                "已将旧版单实例数据迁移到 instances/bot-1；原 compose/.env/cmd_config 保持不变。"
+            )
+        except OSError as exc:
+            # Do not delete or rewrite moved data.  Keep the remaining root
+            # files so the user can recover manually.
+            raise ValueError(f"迁移旧实例数据时失败：{exc}；已迁移文件位于 {target}") from exc
+
+    def migrate_studio_settings(self) -> bool:
+        """Persist additive Studio-level defaults for older installations."""
+
+        try:
+            raw = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(raw, dict):
+            return False
+        settings = {**default_studio_settings(), **raw}
+        changed = False
+        try:
+            version = int(settings.get("schema_version") or 0)
+        except (TypeError, ValueError):
+            version = 0
+        if version < STUDIO_SCHEMA_VERSION:
+            settings["schema_version"] = STUDIO_SCHEMA_VERSION
+            changed = True
+        if changed:
+            self.save_settings(settings)
+        return changed
+
     def _instance_path(self, instance_id: str) -> Path:
         if not INSTANCE_ID_RE.fullmatch(str(instance_id)):
             raise ValueError("无效的实例 ID")
@@ -501,11 +869,27 @@ class StudioManager:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
-            raise ValueError(f"实例不存在：{instance_id}") from exc
+            inferred = self._infer_instance_meta(path, instance_id)
+            if inferred is None:
+                raise ValueError(f"实例不存在：{instance_id}") from exc
+            # Old v2 directories could have compose/config but no metadata.
+            # Write a canonical copy so subsequent requests do not re-infer.
+            try:
+                self._write_instance_meta(path, inferred)
+            except OSError:
+                pass
+            meta = inferred
         except (OSError, ValueError) as exc:
             raise ValueError(f"实例配置损坏：{instance_id}：{exc}") from exc
         if not isinstance(meta, dict) or meta.get("id") != instance_id:
             raise ValueError(f"实例配置无效：{instance_id}")
+        # Additive defaults for pre-v2 metadata.  Existing values always win.
+        meta.setdefault("name", instance_id)
+        meta.setdefault("created_at", utc_now())
+        meta.setdefault("project_name", f"qqbot-studio-{instance_id}")
+        meta.setdefault("astrbot_container", f"qqbot-{instance_id}-astrbot")
+        meta.setdefault("snowluma_container", f"qqbot-{instance_id}-snowluma")
+        meta.setdefault("network_name", f"qqbot-studio-{instance_id}-net")
         return meta
 
     def list_instance_metas(self) -> list[dict[str, Any]]:
@@ -571,6 +955,7 @@ class StudioManager:
             "urls": deployment.get("urls") or {},
             "active_job_id": deployment.get("active_job_id") or "",
             "active_job_status": deployment.get("active_job_status"),
+            "memory_mode": deployment.get("memory_mode") or status.get("memory_mode") or "",
             "notice": status.get("notice") or "",
         }
 
@@ -591,6 +976,7 @@ class StudioManager:
                         "urls": {},
                         "active_job_id": "",
                         "active_job_status": None,
+                        "memory_mode": "",
                         "state_error": str(exc),
                         "notice": f"状态读取失败：{exc}",
                     }
@@ -617,6 +1003,316 @@ class StudioManager:
                     }
                 )
         return results
+
+    # ------------------------------------------------------------------
+    # Storage, host memory and Docker container statistics
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _docker_stats_records(
+        metas: list[dict[str, Any]],
+        managers: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Collect docker stats for all requested containers.
+
+        Every failure is represented as a per-container record with the
+        standard fields set to null.  This endpoint never lets an absent Docker
+        daemon make the whole management console fail.
+        """
+
+        expected: list[dict[str, str]] = []
+        for meta in metas:
+            instance_id = str(meta.get("id") or "")
+            expected.append(
+                {
+                    "instance_id": instance_id,
+                    "container": str(meta.get("astrbot_container") or ""),
+                    "service": "astrbot",
+                }
+            )
+            expected.append(
+                {
+                    "instance_id": instance_id,
+                    "container": str(meta.get("snowluma_container") or ""),
+                    "service": "snowluma",
+                }
+            )
+        if not expected:
+            return []
+
+        base: list[dict[str, Any]] = [
+            {
+                "instance_id": item["instance_id"],
+                "container": item["container"],
+                "service": item["service"],
+                "status": "unknown",
+                "cpu_percent": None,
+                "memory_usage_bytes": None,
+                "memory_limit_bytes": None,
+                "memory_percent": None,
+                "error": "",
+            }
+            for item in expected
+        ]
+        names = [item["container"] for item in expected if item["container"]]
+        if not names:
+            for record in base:
+                record["error"] = "实例元数据缺少容器名。"
+            return base
+
+        manager = next(iter(managers.values()), None)
+        if manager is None:
+            for record in base:
+                record["error"] = "实例管理器不可用，无法读取 Docker 统计。"
+            return base
+        docker = getattr(manager, "docker", None)
+        if docker is None:
+            for record in base:
+                record["error"] = "Docker 控制器不可用。"
+            return base
+        try:
+            status = docker.detect()
+        except Exception as exc:  # noqa: BLE001 - degrade per container
+            status = None
+            detail = f"Docker 状态检测失败：{exc}"
+        else:
+            detail = ""
+            if not getattr(status, "ready", False):
+                detail = getattr(status, "detail", "") or "Docker 或 Compose 当前不可用。"
+        if detail:
+            for record in base:
+                record["error"] = detail
+            return base
+
+        runner = getattr(docker, "_docker", None)
+        if not callable(runner):
+            for record in base:
+                record["error"] = "Docker 控制器不支持统计命令。"
+            return base
+        try:
+            result = runner(
+                ["stats", "--no-stream", "--format", "{{json .}}", *names],
+                timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001
+            for record in base:
+                record["error"] = f"Docker 容器统计读取失败：{exc}"
+            return base
+        if not getattr(result, "ok", False):
+            output = getattr(result, "output", "") or getattr(result, "stderr", "") or "Docker stats 命令失败"
+            for record in base:
+                record["error"] = str(output).strip()[:500]
+            return base
+
+        parsed: dict[str, dict[str, Any]] = {}
+        for line in str(getattr(result, "stdout", "") or "").splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            record: dict[str, Any] = {}
+            if text.startswith("{"):
+                try:
+                    raw = json.loads(text)
+                    if isinstance(raw, dict):
+                        record = raw
+                except ValueError:
+                    continue
+            else:
+                parts = text.split("\t")
+                if len(parts) >= 4:
+                    record = {
+                        "Name": parts[0],
+                        "CPUPerc": parts[1],
+                        "MemUsage": parts[2],
+                        "MemPerc": parts[3],
+                    }
+            name = str(record.get("Name") or record.get("name") or "").strip().lstrip("/")
+            if not name:
+                continue
+            memory_usage = record.get("MemUsage") or record.get("mem_usage") or ""
+            usage_bytes: int | None = None
+            limit_bytes: int | None = None
+            pieces = str(memory_usage).split("/", 1)
+            if pieces:
+                usage_bytes = _parse_size_bytes(pieces[0])
+            if len(pieces) > 1:
+                limit_bytes = _parse_size_bytes(pieces[1])
+            parsed[name] = {
+                "cpu_percent": _parse_percent(record.get("CPUPerc") or record.get("cpu_perc")),
+                "memory_usage_bytes": usage_bytes,
+                "memory_limit_bytes": limit_bytes,
+                "memory_percent": _parse_percent(record.get("MemPerc") or record.get("mem_perc")),
+            }
+
+        for record in base:
+            stats = parsed.get(record["container"])
+            if stats is None:
+                record["error"] = "Docker stats 未返回该容器的数据（容器可能未运行）。"
+                continue
+            record.update(stats)
+            record["status"] = "available"
+        return base
+
+    def get_stats(
+        self,
+        instance_id: str | None = None,
+        *,
+        force_refresh: bool = False,
+        cache_ttl_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        """Return host, disk, per-instance and Docker resource statistics.
+
+        The return value is intentionally partial-data friendly: ``ok`` remains
+        true when Docker or a platform-specific metric is unavailable, while
+        ``errors`` and per-record ``error`` fields explain what could not be
+        read.  This keeps the console usable on Windows without Docker.
+        """
+
+        wanted = str(instance_id or "").strip() or None
+        cache_key = wanted or "global"
+        now = time.monotonic()
+        with self._lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached and not force_refresh and now - cached[0] <= max(0.0, cache_ttl_seconds):
+                response = copy.deepcopy(cached[1])
+                response["cached"] = True
+                return response
+
+        if wanted:
+            meta = self.get_instance_meta(wanted)
+            metas = [meta]
+        else:
+            metas = self.list_instance_metas()
+
+        managers: dict[str, Any] = {}
+        instance_entries: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for meta in metas:
+            current_id = str(meta.get("id") or "")
+            instance_dir = self._instance_path(current_id)
+            size_bytes, file_count, read_errors = _directory_usage(instance_dir)
+            rollup: list[dict[str, Any]] = []
+            if instance_dir.is_dir():
+                try:
+                    children = sorted(instance_dir.iterdir(), key=lambda item: item.name.lower())
+                except OSError as exc:
+                    children = []
+                    read_errors.append(f"无法读取实例目录：{exc}")
+                for child in children:
+                    if child.is_symlink():
+                        continue
+                    if child.is_dir():
+                        child_bytes, child_files, child_errors = _directory_usage(child)
+                    elif child.is_file():
+                        child_errors = []
+                        try:
+                            child_bytes = int(child.stat().st_size)
+                            child_files = 1
+                        except OSError as exc:
+                            child_bytes = 0
+                            child_files = 0
+                            child_errors = [f"无法读取 {child}：{exc}"]
+                    else:
+                        continue
+                    rollup.append(
+                        {
+                            "path": child.name,
+                            "bytes": child_bytes,
+                            "file_count": child_files,
+                            "errors": list(dict.fromkeys(child_errors))[:5],
+                        }
+                    )
+                    for item in child_errors:
+                        if item not in read_errors:
+                            read_errors.append(item)
+            for item in read_errors:
+                errors.append(f"{current_id}: {item}")
+            instance_entries.append(
+                {
+                    "instance_id": current_id,
+                    "id": current_id,
+                    "name": str(meta.get("name") or current_id),
+                    "directory": str(instance_dir),
+                    "data_dir_size_bytes": int(size_bytes),
+                    "data_size_bytes": int(size_bytes),
+                    "file_count": int(file_count),
+                    "rollup": rollup,
+                    "errors": list(dict.fromkeys(read_errors))[:20],
+                }
+            )
+            try:
+                managers[current_id] = self.get_manager(current_id)
+            except Exception as exc:  # noqa: BLE001 - keep other instances readable
+                managers[current_id] = None
+                errors.append(f"{current_id}: 无法创建实例管理器：{exc}")
+
+        host_memory = _host_memory_info()
+        if host_memory.get("error"):
+            errors.append(str(host_memory["error"]))
+
+        docker_records = self._docker_stats_records(
+            metas,
+            {key: value for key, value in managers.items() if value is not None},
+        )
+        for record in docker_records:
+            if record.get("error"):
+                label = record.get("container") or record.get("instance_id") or "容器"
+                errors.append(f"{label}: {record['error']}")
+
+        global_bytes, global_files, global_read_errors = _directory_usage(self.root)
+        for item in global_read_errors:
+            if item not in errors:
+                errors.append(item)
+        global_disk = _disk_usage(self.root)
+        if global_disk.get("error"):
+            errors.append(str(global_disk["error"]))
+        instances_total = sum(int(item.get("data_dir_size_bytes") or 0) for item in instance_entries)
+
+        response: dict[str, Any] = {
+            "ok": True,
+            "scope": "instance" if wanted else "global",
+            "instance_id": wanted or "",
+            "generated_at": utc_now(),
+            "cached": False,
+            "host_memory": host_memory,
+            "instances": instance_entries,
+            "items": instance_entries,
+            "docker": docker_records,
+            "global": {
+                "data_dir": str(self.root),
+                "data_dir_size_bytes": int(global_bytes),
+                "file_count": int(global_files),
+                "instances_total_bytes": int(instances_total),
+                "disk": global_disk,
+            },
+            "errors": list(dict.fromkeys(errors)),
+            "error": "",
+            "message": "资源统计已更新。",
+        }
+        if wanted:
+            response["instance"] = instance_entries[0]
+            response["data_dir_size_bytes"] = int(instance_entries[0]["data_dir_size_bytes"])
+            response["file_count"] = int(instance_entries[0]["file_count"])
+        with self._lock:
+            self._stats_cache[cache_key] = (now, copy.deepcopy(response))
+        return response
+
+    # ------------------------------------------------------------------
+    # Optional AI assistant B extension
+    # ------------------------------------------------------------------
+    def assistant_status(self) -> dict[str, Any]:
+        """Return assistant B status without reading its config or API key."""
+
+        return self.assistant_extension.status()
+
+    def install_assistant(self) -> dict[str, Any]:
+        """Clone or update the optional assistant B extension when asked."""
+
+        return self.assistant_extension.install()
+
+    def update_assistant(self) -> dict[str, Any]:
+        """Fast-forward the optional assistant B extension when possible."""
+
+        return self.assistant_extension.update()
 
     def has_active_deployments(self) -> bool:
         """Return True when any cached instance is currently deploying."""

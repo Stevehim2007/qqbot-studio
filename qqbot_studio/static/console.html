@@ -31,6 +31,11 @@
     <symbol id="c-i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="c-i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/></symbol>
     <symbol id="c-i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17H6.5A2.5 2.5 0 0 0 4 22.5v-17Z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20"/><path d="M8 7h8M8 11h6"/></symbol>
+    <symbol id="c-i-puzzle" viewBox="0 0 24 24"><path d="M9 3h6v4a2 2 0 1 0 4 0h2v6h-4a2 2 0 1 0 0 4h4v4h-6v-3a2 2 0 1 0-4 0v3H3v-6h4a2 2 0 1 0 0-4H3V5h6V3Z"/></symbol>
+    <symbol id="c-i-memory" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/><path d="M9 9h6v6H9z"/></symbol>
+    <symbol id="c-i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+    <symbol id="c-i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="c-i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3Z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/><path d="m5 14 .6 1.4L7 16l-1.4.6L5 18l-.6-1.4L3 16l1.4-.6L5 14Z"/></symbol>
   </svg>
 
   <header class="console-header">
@@ -96,6 +101,83 @@
       </div>
       <button id="console-error-retry" class="btn btn-small btn-quiet" type="button">重试连接</button>
     </div>
+
+    <section id="assistant-b-card" class="assistant-b-card" aria-labelledby="assistant-b-title">
+      <div class="assistant-b-main">
+        <span class="assistant-b-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-sparkles"></use></svg></span>
+        <div class="assistant-b-copy">
+          <div class="assistant-b-title-row">
+            <h2 id="assistant-b-title">AI 助手 B <span>可选扩展</span></h2>
+            <span id="assistant-b-badge" class="pill pill--neutral">检查中</span>
+          </div>
+          <p class="assistant-b-description">独立的生成式 AI 使用助手，可选安装。A 离线使用助手仍默认保留，不安装 B 也能继续使用控制台。</p>
+          <p id="assistant-b-status" class="assistant-b-status is-info" role="status">正在检查 AI 助手 B 状态…</p>
+          <div id="assistant-b-meta" class="assistant-b-meta" hidden>
+            <div class="assistant-b-meta-item">
+              <span>版本 / Commit</span>
+              <code id="assistant-b-commit">未提供</code>
+            </div>
+            <div class="assistant-b-meta-item">
+              <span>安装路径</span>
+              <code id="assistant-b-path">未提供</code>
+            </div>
+            <div class="assistant-b-meta-item">
+              <span>入口</span>
+              <code id="assistant-b-entry">未提供</code>
+            </div>
+            <div class="assistant-b-meta-item">
+              <span>README</span>
+              <code id="assistant-b-readme">未提供</code>
+            </div>
+          </div>
+          <p id="assistant-b-hint" class="assistant-b-hint">安装会联网下载独立仓库；主项目 A 离线助手仍可继续使用。控制台不会读取或展示 B 的 API Key。</p>
+          <div class="assistant-b-offline">
+            <span class="pill pill--success">A · 离线使用助手</span>
+            <span>默认可用，无需安装 B。</span>
+          </div>
+        </div>
+      </div>
+      <div class="assistant-b-actions">
+        <button id="assistant-b-install" class="btn btn-primary btn-small" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#c-i-sparkles"></use></svg>
+          <span id="assistant-b-install-label">安装 AI 助手 B</span>
+        </button>
+        <button id="assistant-b-update" class="btn btn-secondary btn-small" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
+          <span id="assistant-b-update-label">更新 AI 助手 B</span>
+        </button>
+        <button id="assistant-b-retry" class="btn btn-quiet btn-small" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#c-i-refresh"></use></svg>
+          重试状态
+        </button>
+      </div>
+    </section>
+
+    <section id="console-resource-summary" class="console-resource-summary" aria-labelledby="console-resource-title">
+      <div class="console-resource-heading">
+        <span class="console-resource-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-database"></use></svg></span>
+        <div>
+          <h2 id="console-resource-title">存储与内存</h2>
+          <p id="console-resource-note" role="status">正在读取资源统计…</p>
+        </div>
+      </div>
+      <div class="console-resource-grid">
+        <div class="console-resource-item">
+          <span class="console-resource-label">数据目录总占用</span>
+          <strong id="global-data-size">未知</strong>
+        </div>
+        <div class="console-resource-item">
+          <span class="console-resource-label">宿主机内存</span>
+          <strong id="global-host-memory">未知</strong>
+          <small id="global-host-memory-detail">数值不可用时显示未知</small>
+        </div>
+        <div class="console-resource-item">
+          <span class="console-resource-label">磁盘可用空间</span>
+          <strong id="global-disk-free">未知</strong>
+          <small id="global-disk-detail">数值不可用时显示未知</small>
+        </div>
+      </div>
+    </section>
 
     <section id="create-instance-panel" class="create-instance-panel" aria-labelledby="create-instance-heading" hidden>
       <div class="create-instance-copy">

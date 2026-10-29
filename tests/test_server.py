@@ -17,6 +17,76 @@ class FakeManager:
         self.logs_raise = False
         self.status_raise = False
         self.last_deploy = None
+        self.memory_mode = "direct"
+        self.toggled_plugins = []
+
+    def get_plugins(self):
+        return {
+            "ok": True,
+            "plugins": [
+                {
+                    "id": "qqbot_enhancer",
+                    "name": "QQ Bot 增强回复",
+                    "enabled": True,
+                    "version": "1.4.1",
+                    "description": "测试插件",
+                    "source": "installed",
+                    "restart_required": False,
+                    "error": "",
+                }
+            ],
+            "api_available": True,
+            "cached": False,
+            "restart_required": False,
+            "message": "已读取插件列表。",
+            "error": "",
+        }
+
+    def set_plugin_enabled(self, plugin_id, enabled):
+        self.toggled_plugins.append((plugin_id, bool(enabled)))
+        return {
+            "ok": True,
+            "plugin": {
+                "id": plugin_id,
+                "name": "QQ Bot 增强回复",
+                "enabled": bool(enabled),
+                "version": "1.4.1",
+                "description": "测试插件",
+                "source": "installed",
+                "restart_required": False,
+                "error": "",
+            },
+            "restart_required": False,
+            "message": "插件状态已保存。",
+            "error": "",
+        }
+
+    def get_memory_mode(self):
+        return {
+            "ok": True,
+            "mode": self.memory_mode,
+            "memory_mode": self.memory_mode,
+            "options": ["direct", "astrbot"],
+            "memory_scope": "session" if self.memory_mode == "astrbot" else "none",
+            "restart_required": False,
+            "message": "当前记忆模式。",
+            "error": "",
+        }
+
+    def set_memory_mode(self, mode):
+        if mode not in {"direct", "astrbot"}:
+            raise ValueError("记忆模式只能是 direct 或 astrbot")
+        self.memory_mode = mode
+        return {
+            "ok": True,
+            "mode": mode,
+            "memory_mode": mode,
+            "options": ["direct", "astrbot"],
+            "memory_scope": "session" if mode == "astrbot" else "none",
+            "restart_required": True,
+            "message": "记忆模式已保存。",
+            "error": "",
+        }
 
     def get_status(self):
         if self.status_raise:
@@ -156,6 +226,70 @@ class FakeStudio:
     def has_active_deployments(self):
         return False
 
+    def get_stats(self, instance_id=None, *, force_refresh=False):
+        return {
+            "ok": True,
+            "scope": "instance" if instance_id else "global",
+            "instance_id": instance_id or "",
+            "host_memory": {"total_bytes": 1024, "available_bytes": 512, "used_bytes": 512, "used_percent": 50.0},
+            "instances": [
+                {
+                    "instance_id": instance_id or "bot-1",
+                    "data_dir_size_bytes": 1234,
+                    "file_count": 3,
+                    "errors": [],
+                }
+            ],
+            "docker": [
+                {
+                    "instance_id": instance_id or "bot-1",
+                    "service": "astrbot",
+                    "cpu_percent": 1.5,
+                    "memory_usage_bytes": 100,
+                    "memory_limit_bytes": 1000,
+                    "memory_percent": 10.0,
+                    "error": "",
+                }
+            ],
+            "global": {"data_dir_size_bytes": 5000, "instances_total_bytes": 1234, "disk": {"free_bytes": 9000}},
+            "errors": [],
+            "error": "",
+        }
+
+    def assistant_status(self):
+        return {
+            "ok": True,
+            "installed": False,
+            "path": "/tmp/qqbot-studio/extensions/ai-assistant",
+            "repo": "https://github.com/Stevehim2007/qqbot-studio-ai-assistant.git",
+            "commit": "",
+            "entry": "/tmp/qqbot-studio/extensions/ai-assistant/assistant.py",
+            "readme": "/tmp/qqbot-studio/extensions/ai-assistant/README.md",
+            "message": "AI 助手 B 尚未安装。A 离线助手不受影响。",
+            "error": "",
+        }
+
+    def install_assistant(self):
+        return {
+            **self.assistant_status(),
+            "ok": True,
+            "installed": True,
+            "commit": "c15fb5b",
+            "action": "installed",
+            "message": "AI 助手 B 已安装。",
+        }
+
+    def update_assistant(self):
+        return {
+            **self.assistant_status(),
+            "ok": True,
+            "installed": True,
+            "commit": "newcommit",
+            "action": "updated",
+            "updated": True,
+            "message": "AI 助手 B 已更新。",
+        }
+
     def delete_instance(self, instance_id):
         if instance_id != "bot-1":
             raise ValueError("实例不存在")
@@ -268,6 +402,114 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self._get("/api/state?instance=bot-1", token=False)
         self.assertEqual(ctx.exception.code, 403)
+
+    def test_assistant_status_install_and_update_contract(self):
+        status, body = self._get("/api/assistant/status")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertFalse(payload["installed"])
+        for field in ("ok", "installed", "path", "repo", "commit", "entry", "readme", "message", "error"):
+            self.assertIn(field, payload)
+
+        status, body = self._post("/api/assistant/install", {})
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["installed"])
+        self.assertEqual(payload["action"], "installed")
+        self.assertEqual(payload["commit"], "c15fb5b")
+
+        status, body = self._post("/api/assistant/update", {})
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["updated"])
+        self.assertEqual(payload["action"], "updated")
+        self.assertNotIn("sk-", body)
+        self.assertNotIn("api_key", body.lower())
+
+    def test_assistant_install_accepts_empty_json_post_body(self):
+        request = urllib.request.Request(
+            self.base + "/api/assistant/install",
+            data=b"",
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-QB-Token": "test-token-123",
+                "Content-Length": "0",
+            },
+        )
+        with self.opener.open(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            payload = json.loads(response.read().decode("utf-8"))
+        self.assertTrue(payload["installed"])
+
+    def test_assistant_status_requires_token(self):
+        request = urllib.request.Request(self.base + "/api/assistant/status")
+        try:
+            with self.opener.open(request, timeout=5) as response:
+                status = response.status
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            body = exc.read().decode("utf-8")
+        self.assertEqual(status, 403)
+        self.assertFalse(json.loads(body)["ok"])
+        status, body = self._post("/api/assistant/install", {}, token=False)
+        self.assertEqual(status, 403)
+
+    def test_v3_plugin_memory_and_stats_routes(self):
+        status, body = self._get("/api/instances/bot-1/plugins")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["plugins"][0]["id"], "qqbot_enhancer")
+
+        status, body = self._post(
+            "/api/instances/bot-1/plugins",
+            {"plugin_id": "qqbot_enhancer", "enabled": False},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["plugin"]["enabled"], False)
+        self.assertEqual(self.studio.manager.toggled_plugins, [("qqbot_enhancer", False)])
+
+        status, body = self._get("/api/instances/bot-1/memory")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["mode"], "direct")
+        status, body = self._post("/api/instances/bot-1/memory", {"mode": "astrbot"})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["restart_required"])
+        self.assertEqual(self.studio.manager.memory_mode, "astrbot")
+
+        status, body = self._get("/api/stats?instance=bot-1")
+        self.assertEqual(status, 200)
+        stats = json.loads(body)
+        self.assertEqual(stats["host_memory"]["used_percent"], 50.0)
+        self.assertEqual(stats["instances"][0]["data_dir_size_bytes"], 1234)
+
+        status, body = self._get("/api/instances/bot-1/stats")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["docker"][0]["cpu_percent"], 1.5)
+
+    def test_v3_memory_and_plugin_legacy_query_aliases(self):
+        status, body = self._get("/api/memory?instance=bot-1")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["mode"], "direct")
+        status, body = self._post("/api/memory?instance=bot-1", {"mode": "astrbot"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["mode"], "astrbot")
+        status, body = self._post(
+            "/api/plugins?instance=bot-1",
+            {"plugin_id": "qqbot_enhancer", "enabled": True},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["plugin"]["enabled"])
+
+    def test_v3_plugin_toggle_rejects_non_boolean_enabled(self):
+        status, body = self._post(
+            "/api/instances/bot-1/plugins",
+            {"plugin_id": "qqbot_enhancer", "enabled": "false"},
+        )
+        self.assertEqual(status, 400)
+        self.assertFalse(json.loads(body)["ok"])
 
     def test_post_deploy_and_job_contract(self):
         status, body = self._post("/api/test-key?instance=bot-1", {"deepseek_api_key": "sk-test"})

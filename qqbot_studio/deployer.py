@@ -9,10 +9,12 @@ import os
 import platform
 import re
 import shutil
+import sqlite3
 import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote as urlquote
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +25,9 @@ from .astrbot_api import AstrBotAPIError, AstrBotClient
 from .configgen import generate_artifacts, image_names_for_prefix, mirror_prefixes, set_image_names
 from .dockerctl import DockerController, DockerError
 from .store import (
+    DEFAULT_MEMORY_MODE,
     DEFAULT_PROMPT,
+    MEMORY_MODES,
     MODEL_NAME,
     Store,
     chmod_best_effort,
@@ -35,6 +39,7 @@ from .store import (
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 QQ_ACCOUNT_RE = re.compile(r"^\d{5,12}$")
 PERSONA_ID = "qqbot-assistant"
+ENHANCER_PLUGIN_ID = "qqbot_enhancer"
 MAX_PROMPT_LENGTH = 12_000
 
 
@@ -93,7 +98,17 @@ class DeployManager:
         network_name: str = "qqbot-studio-net",
     ) -> None:
         self.store = store or Store(data_dir or default_data_dir())
+        # Additive migration: old config.json files gain optional fields while
+        # existing values (especially memory_mode) are never overwritten.
+        try:
+            self.store.migrate_config()
+        except (OSError, ValueError):
+            pass
         self.data_dir = self.store.data_dir
+        try:
+            self._migrate_enhancer_config_defaults()
+        except (OSError, ValueError):
+            pass
         self.public_host = str(public_host or "").strip()
         self.bind_address = str(bind_address or "127.0.0.1").strip()
         self.instance_id = str(instance_id or "").strip()
@@ -549,6 +564,11 @@ class DeployManager:
         )
         self.store.save_config(config)
         self._install_bundled_plugin(Path(artifacts["astrbot_data"]), prompt, add_log)
+        _, unique_default_error = self._ensure_unique_session_default()
+        if unique_default_error:
+            add_log("警告：" + unique_default_error)
+        else:
+            add_log("AstrBot 群聊会话将按 event.unified_msg_origin 共享（已确保 unique_session 默认关闭）。")
         add_log("本地配置已生成，包含随机 OneBot token 与 AstrBot 登录凭据。")
         candidate_prefixes = list(mirror_candidates) or [""]
         if mirror_candidates:
@@ -879,52 +899,830 @@ class DeployManager:
             log(f"安装 QQ 增强插件失败：{exc}")
 
     @staticmethod
-    def _write_enhancer_config(astrbot_data: Path, prompt: str) -> None:
-        """Write/update the plugin config without resetting user-tuned options."""
+    def _enhancer_schema_defaults() -> dict[str, Any]:
+        """Read the bundled plugin schema defaults without third-party YAML."""
 
-        config_dir = astrbot_data / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        target = config_dir / "qqbot_enhancer_config.json"
-        config: dict[str, Any] = {}
-        if target.exists():
-            try:
-                loaded = json.loads(target.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    config = loaded
-            except (OSError, ValueError):
-                config = {}
-        if not config:
-            schema_path = (
-                Path(__file__).resolve().parent.parent
-                / "plugins"
-                / "qqbot_enhancer"
-                / "_conf_schema.json"
-            )
-            try:
-                schema = json.loads(schema_path.read_text(encoding="utf-8"))
-                if isinstance(schema, dict):
-                    for key, item in schema.items():
-                        if isinstance(item, dict) and "default" in item:
-                            config[str(key)] = item["default"]
-            except (OSError, ValueError):
-                pass
-        config["system_prompt"] = str(prompt or "").strip()
-        payload = json.dumps(config, ensure_ascii=False, indent=2) + "\n"
-        tmp = target.with_name(f".{target.name}.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        schema_path = (
+            Path(__file__).resolve().parent.parent
+            / "plugins"
+            / ENHANCER_PLUGIN_ID
+            / "_conf_schema.json"
+        )
+        try:
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            schema = {}
+        if not isinstance(schema, dict):
+            return {}
+        defaults: dict[str, Any] = {}
+        for key, item in schema.items():
+            if isinstance(item, dict) and "default" in item:
+                defaults[str(key)] = item["default"]
+        return defaults
+
+    @staticmethod
+    def _read_json_object(path: Path) -> dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+        """Atomically write a private JSON file (AstrBot may run as root)."""
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            chmod_best_effort(path.parent, 0o700)
+        except OSError:
+            pass
+        payload = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+        tmp = path.with_name(f".{path.name}.{secrets_token_fragment()}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp, target)
-            chmod_best_effort(target, 0o600)
+            os.replace(tmp, path)
+            chmod_best_effort(path, 0o600)
         finally:
             if tmp.exists():
                 try:
                     tmp.unlink()
                 except OSError:
                     pass
+
+    @classmethod
+    def _merged_enhancer_config(cls, loaded: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return schema defaults plus user values, preserving every user key."""
+
+        merged = cls._enhancer_schema_defaults()
+        if isinstance(loaded, dict):
+            merged.update(loaded)
+        # The schema default is authoritative only when the setting is absent.
+        merged.setdefault("memory_mode", DEFAULT_MEMORY_MODE)
+        return merged
+
+    @staticmethod
+    def _write_enhancer_config(astrbot_data: Path, prompt: str) -> None:
+        """Write/update the plugin config without resetting user-tuned options."""
+
+        config_dir = astrbot_data / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        target = config_dir / f"{ENHANCER_PLUGIN_ID}_config.json"
+        loaded = DeployManager._read_json_object(target)
+        config = DeployManager._merged_enhancer_config(loaded)
+        config["system_prompt"] = str(prompt or "").strip()
+        DeployManager._write_private_json(target, config)
+
+    # ------------------------------------------------------------------
+    # Memory mode and plugin selection
+    # ------------------------------------------------------------------
+    @property
+    def astrbot_data_dir(self) -> Path:
+        return self.data_dir / "data" / "astrbot"
+
+    @property
+    def enhancer_config_path(self) -> Path:
+        return self.astrbot_data_dir / "config" / f"{ENHANCER_PLUGIN_ID}_config.json"
+
+    @property
+    def astrbot_cmd_config_path(self) -> Path:
+        return self.astrbot_data_dir / "cmd_config.json"
+
+    @staticmethod
+    def _normalise_memory_mode(value: Any) -> str:
+        mode = str(value or "").strip().lower()
+        return mode if mode in MEMORY_MODES else DEFAULT_MEMORY_MODE
+
+    def _migrate_enhancer_config_defaults(self) -> bool:
+        """Create/fill enhancer config defaults without replacing user values.
+
+        This runs when an old instance is first managed after an update.  The
+        config is only created when the plugin is actually installed, avoiding
+        stray files for instances that never used qqbot_enhancer.
+        """
+
+        plugin_dir = self.astrbot_data_dir / "plugins" / ENHANCER_PLUGIN_ID
+        config_path = self.enhancer_config_path
+        if not plugin_dir.is_dir() and not config_path.exists():
+            return False
+        loaded = self._read_json_object(config_path)
+        merged = self._merged_enhancer_config(loaded)
+        if not loaded:
+            prompt = str(self.store.load_config().get("prompt") or "").strip()
+            if prompt:
+                merged["system_prompt"] = prompt
+        if loaded != merged:
+            self._write_private_json(config_path, merged)
+            return True
+        return False
+
+    def _read_enhancer_config(self) -> dict[str, Any]:
+        return self._merged_enhancer_config(self._read_json_object(self.enhancer_config_path))
+
+    def _effective_memory_mode(self) -> tuple[str, str]:
+        """Return (mode, error). The plugin config wins over the Studio mirror."""
+
+        config = self._read_enhancer_config()
+        raw = config.get("memory_mode")
+        error = ""
+        if raw is None:
+            raw = self.store.load_config().get("memory_mode", DEFAULT_MEMORY_MODE)
+        normalised = self._normalise_memory_mode(raw)
+        if str(raw or "").strip().lower() not in MEMORY_MODES:
+            error = f"memory_mode 值无效：{raw!r}；已按 direct 显示，不会自动覆盖原值。"
+        return normalised, error
+
+    def _unique_session_state(self) -> tuple[bool | None, str]:
+        """Return AstrBot platform_settings.unique_session and a read error.
+
+        AstrBot treats a missing value as ``False`` (one conversation per
+        unified message origin).  Returning False for a missing config file is
+        therefore the effective default, not a fabricated UI value.
+        """
+
+        data = self._read_json_object(self.astrbot_cmd_config_path)
+        if not data:
+            return False, ""
+        platform_settings = data.get("platform_settings")
+        if not isinstance(platform_settings, dict):
+            return False, ""
+        value = platform_settings.get("unique_session")
+        if value is None:
+            return False, ""
+        if isinstance(value, bool):
+            return value, ""
+        return None, f"cmd_config.json 中 platform_settings.unique_session 不是布尔值：{value!r}"
+
+    def _ensure_unique_session_default(self) -> tuple[bool, str]:
+        """Add the v4.29 group-session default without changing an existing value."""
+
+        path = self.astrbot_cmd_config_path
+        if not path.exists():
+            return False, ""
+        data = self._read_json_object(path)
+        if not data:
+            return False, f"AstrBot 配置无法解析：{path}"
+        platform_settings = data.get("platform_settings")
+        if not isinstance(platform_settings, dict):
+            platform_settings = {}
+            data["platform_settings"] = platform_settings
+        if "unique_session" in platform_settings:
+            return False, ""
+        platform_settings["unique_session"] = False
+        try:
+            self._write_private_json(path, data)
+        except OSError as exc:
+            return False, f"无法写入 AstrBot 共享会话默认配置：{exc}"
+        return True, ""
+
+    def _migrate_unique_session_for_shared_memory(self) -> tuple[bool, str]:
+        """Persist unique_session=false for group-wide AstrBot memory.
+
+        AstrBot v4.29 uses ``unique_session`` to split group context per
+        member.  The memory mode requested by this product is one conversation
+        per ``event.unified_msg_origin``: groups share one conversation and
+        private chats remain per-user because their UMO differs.  Other
+        platform settings are preserved byte-for-byte at the JSON value level.
+        """
+
+        path = self.astrbot_cmd_config_path
+        if not path.exists():
+            # Not an error before the first deployment: the generated
+            # cmd_config will add unique_session=false at deploy time.
+            return False, ""
+        data = self._read_json_object(path)
+        if not data:
+            return False, f"AstrBot 配置无法解析：{path}"
+        platform_settings = data.get("platform_settings")
+        if not isinstance(platform_settings, dict):
+            platform_settings = {}
+            data["platform_settings"] = platform_settings
+        if platform_settings.get("unique_session") is False:
+            return False, ""
+        platform_settings["unique_session"] = False
+        try:
+            self._write_private_json(path, data)
+        except OSError as exc:
+            return False, f"无法写入 AstrBot 共享会话配置：{exc}"
+        return True, ""
+
+    def _memory_api_client(
+        self,
+        *,
+        timeout: float = 8.0,
+        wait_for_ready: bool = True,
+    ) -> AstrBotClient | None:
+        config = self.store.load_config()
+        if not config.get("deployed"):
+            return None
+        ports = config.get("ports") or {}
+        if not isinstance(ports, dict) or not ports.get("astrbot_webui"):
+            return None
+        secrets_data = self.store.ensure_secrets()
+        client = self._api_client_factory(
+            f"http://127.0.0.1:{int(ports['astrbot_webui'])}",
+            str(secrets_data.get("astrbot_username") or ""),
+            str(secrets_data.get("astrbot_password") or ""),
+        )
+        if wait_for_ready:
+            waiter = getattr(client, "wait_until_ready", None)
+            if callable(waiter):
+                waiter(timeout=timeout)
+        return client
+
+    @staticmethod
+    def _api_request(
+        client: AstrBotClient,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        timeout: float = 20.0,
+    ) -> dict[str, Any]:
+        """Call a verified AstrBot v4.29 dashboard route through its client.
+
+        ``AstrBotClient`` intentionally exposes only the persona helper
+        methods, so plugin operations are implemented here using the same
+        authenticated request primitive.  No fake/private AstrBot Python API
+        is invoked: these are the documented dashboard HTTP routes.
+        """
+
+        login = getattr(client, "login", None)
+        request = getattr(client, "_request", None)
+        if not callable(login) or not callable(request):
+            raise RuntimeError("当前 AstrBot 客户端不支持认证请求")
+        token = login()
+        response = request(method, path, payload=payload, token=token, timeout=timeout)
+        if not isinstance(response, dict):
+            raise RuntimeError("AstrBot 返回格式异常")
+        return response
+
+    @staticmethod
+    def _api_response_data(response: dict[str, Any]) -> Any:
+        return response.get("data", response)
+
+    def _list_plugins_via_api(self, client: AstrBotClient) -> dict[str, Any]:
+        """Call the real v4.29 plugin list route, with legacy fallback."""
+
+        last_error: Exception | None = None
+        for path in ("/api/v1/plugins", "/api/plugin/get"):
+            try:
+                response = self._api_request(client, "GET", path, timeout=20)
+            except Exception as exc:  # noqa: BLE001 - route/version fallback
+                last_error = exc
+                if int(getattr(exc, "status_code", 0) or 0) in (401, 403):
+                    break
+                continue
+            data = self._api_response_data(response)
+            failed: Any = response.get("message") or ""
+            if isinstance(data, list):
+                records = data
+            elif isinstance(data, dict):
+                candidate = data.get("plugins", data.get("items"))
+                if isinstance(candidate, list):
+                    records = candidate
+                elif candidate is None:
+                    records = []
+                    for plugin_id, value in data.items():
+                        if isinstance(value, dict):
+                            records.append({"name": plugin_id, **value})
+                        elif isinstance(value, bool):
+                            records.append({"name": plugin_id, "activated": value})
+                else:
+                    records = []
+                if not failed:
+                    failed = data.get("failed_plugins") or data.get("failed") or ""
+            else:
+                records = []
+            return {
+                "plugins": [dict(item) for item in records if isinstance(item, dict)],
+                "failed": failed,
+                "route": path,
+                "message": str(response.get("message") or ""),
+            }
+        if last_error is not None:
+            raise RuntimeError(f"AstrBot 插件列表读取失败：{last_error}") from last_error
+        raise RuntimeError("AstrBot 插件列表读取失败：没有可用的插件接口")
+
+    def _get_plugin_config_via_api(self, client: AstrBotClient, plugin_id: str) -> dict[str, Any]:
+        """Read a plugin's complete effective config from AstrBot's API."""
+
+        quoted = urlquote(plugin_id, safe="")
+        last_error: Exception | None = None
+        for path in (
+            f"/api/v1/plugins/config?plugin_id={quoted}",
+            f"/api/v1/plugins/{quoted}/config/schema",
+        ):
+            try:
+                response = self._api_request(client, "GET", path, timeout=20)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if int(getattr(exc, "status_code", 0) or 0) in (401, 403):
+                    break
+                continue
+            data = self._api_response_data(response)
+            if isinstance(data, dict):
+                config = data.get("config")
+                if isinstance(config, dict):
+                    return dict(config)
+                if data and not {"metadata", "plugin_name", "log_level", "i18n"}.intersection(data):
+                    return dict(data)
+            last_error = RuntimeError("AstrBot 返回中没有可用的插件配置")
+        if last_error is not None:
+            raise RuntimeError(f"AstrBot 插件配置读取失败：{last_error}") from last_error
+        raise RuntimeError("AstrBot 插件配置读取失败")
+
+    def _save_plugin_config_via_api(
+        self,
+        client: AstrBotClient,
+        plugin_id: str,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Save plugin config using AstrBot's hot-reload endpoint."""
+
+        quoted = urlquote(plugin_id, safe="")
+        attempts = (
+            (
+                "/api/v1/plugins/config",
+                {"plugin_id": plugin_id, "config": config},
+            ),
+            (
+                f"/api/v1/plugins/{quoted}/config",
+                {"config": config},
+            ),
+        )
+        last_error: Exception | None = None
+        for path, payload in attempts:
+            try:
+                response = self._api_request(
+                    client,
+                    "PUT",
+                    path,
+                    payload=payload,
+                    timeout=30,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if int(getattr(exc, "status_code", 0) or 0) in (401, 403):
+                    break
+                continue
+            return {
+                "plugin_id": plugin_id,
+                "message": str(
+                    response.get("message")
+                    or "插件配置已保存，AstrBot 正在热重载插件。"
+                ),
+                "route": path,
+            }
+        if last_error is not None:
+            raise RuntimeError(f"AstrBot 插件配置保存失败：{last_error}") from last_error
+        raise RuntimeError("AstrBot 插件配置保存失败：没有可用的接口")
+
+    def _set_plugin_enabled_via_api(
+        self,
+        client: AstrBotClient,
+        plugin_id: str,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        """Toggle a plugin using v4.29 PATCH or legacy on/off routes."""
+
+        desired = bool(enabled)
+        attempts = (
+            (
+                "PATCH",
+                "/api/v1/plugins/enabled",
+                {"plugin_id": plugin_id, "enabled": desired},
+            ),
+            (
+                "POST",
+                "/api/plugin/on" if desired else "/api/plugin/off",
+                {"name": plugin_id},
+            ),
+        )
+        last_error: Exception | None = None
+        for method, path, payload in attempts:
+            try:
+                response = self._api_request(
+                    client,
+                    method,
+                    path,
+                    payload=payload,
+                    timeout=30,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if int(getattr(exc, "status_code", 0) or 0) in (401, 403):
+                    break
+                # A 400/409 is an operation error from the real endpoint.
+                if int(getattr(exc, "status_code", 0) or 0) not in (404, 405, 0):
+                    break
+                continue
+            return {
+                "plugin_id": plugin_id,
+                "enabled": desired,
+                "message": str(
+                    response.get("message")
+                    or ("启用成功。" if desired else "停用成功。")
+                ),
+                "data": response.get("data", {}),
+                "route": path,
+            }
+        if last_error is not None:
+            raise RuntimeError(
+                f"AstrBot 插件{'启用' if desired else '禁用'}失败：{last_error}"
+            ) from last_error
+        raise RuntimeError("AstrBot 插件状态修改失败：没有可用的插件接口")
+
+    def get_memory_mode(self) -> dict[str, Any]:
+        """Return the effective per-instance memory mode and its boundaries."""
+
+        mode, read_error = self._effective_memory_mode()
+        unique_session, unique_error = self._unique_session_state()
+        scope = "session" if mode == "astrbot" else "none"
+        if mode == "astrbot":
+            message = (
+                "astrbot 模式使用 AstrBot 当前会话：同一群共享一条会话记忆，"
+                "私聊按用户会话隔离；/reset 清空当前会话历史，/new 切换到新会话。"
+            )
+        else:
+            message = (
+                "direct 模式不携带跨轮会话历史；/reset 与 /new 不会改变 direct 的单轮行为。"
+            )
+        if mode == "astrbot" and unique_session is True:
+            message += " 注意：AstrBot 当前启用了 unique_session，群成员记忆仍会按成员隔离；保存一次 astrbot 模式会迁移为群共享。"
+        errors = [item for item in (read_error, unique_error) if item]
+        return {
+            "ok": True,
+            "mode": mode,
+            "memory_mode": mode,
+            "options": list(MEMORY_MODES),
+            "memory_scope": scope,
+            "group_session_key": "event.unified_msg_origin" if mode == "astrbot" else "",
+            "private_session_key": "event.unified_msg_origin" if mode == "astrbot" else "",
+            "unique_session": unique_session,
+            "group_memory_shared": (unique_session is False) if mode == "astrbot" else None,
+            "restart_required": False,
+            "config_path": str(self.enhancer_config_path),
+            "astrbot_config_path": str(self.astrbot_cmd_config_path),
+            "behavior": {
+                "direct": "只发送系统提示词和当前消息，不读取 AstrBot 历史。",
+                "astrbot": "交给 AstrBot 默认 Agent，使用当前统一消息来源的会话历史、人格和 Agent 能力。",
+                "group": "同一群的消息共享 event.unified_msg_origin 对应的会话。",
+                "private": "私聊按用户各自的 event.unified_msg_origin 会话保存。",
+                "reset": "/reset 清空当前会话历史，保留会话与人格。",
+                "new": "/new 切换到一个新会话，旧历史仍保存在 AstrBot 数据库中。",
+                "persistence": "AstrBot 历史存储在其本机 SQLite 数据卷中，跨 AstrBot 重启保留；它不是跨群共享的永久知识库。",
+            },
+            "message": message,
+            "error": "；".join(errors),
+        }
+
+    def set_memory_mode(self, mode: str) -> dict[str, Any]:
+        """Persist and (when possible) hot-reload the enhancer memory mode."""
+
+        value = str(mode or "").strip().lower()
+        if value not in MEMORY_MODES:
+            raise DeploymentError("记忆模式只能是 direct 或 astrbot。")
+
+        loaded = self._read_json_object(self.enhancer_config_path)
+        merged = self._merged_enhancer_config(loaded)
+        # Preserve every user-tuned value.  The explicit mode selected here is
+        # the only field intentionally overwritten.
+        merged["memory_mode"] = value
+
+        applied_live = False
+        api_error = ""
+        api_message = ""
+        if self.store.load_config().get("deployed"):
+            try:
+                client = self._memory_api_client(timeout=8)
+                if client is not None:
+                    live_config = self._get_plugin_config_via_api(
+                        client, ENHANCER_PLUGIN_ID
+                    )
+                    if isinstance(live_config, dict):
+                        # AstrBot's live config is authoritative while it is
+                        # running; merge it without dropping local defaults.
+                        merged = {**merged, **live_config}
+                    merged["memory_mode"] = value
+                    result = self._save_plugin_config_via_api(
+                        client, ENHANCER_PLUGIN_ID, merged
+                    )
+                    applied_live = True
+                    if isinstance(result, dict):
+                        api_message = str(result.get("message") or "")
+            except Exception as exc:  # noqa: BLE001 - degrade to offline write
+                api_error = self.redact_sensitive_text(str(exc))
+
+        try:
+            self._write_private_json(self.enhancer_config_path, merged)
+        except OSError as exc:
+            raise DeploymentError(f"无法保存 QQ 增强插件配置：{exc}") from exc
+
+        config = self.store.load_config()
+        # Additive migration for existing instance configs: only this mirror is
+        # updated, and other values are retained.
+        config["memory_mode"] = value
+        config["memory_mode_updated_at"] = utc_now()
+        self.store.save_config(config)
+
+        unique_changed = False
+        unique_error = ""
+        if value == "astrbot":
+            unique_changed, unique_error = self._migrate_unique_session_for_shared_memory()
+
+        restart_required = bool(unique_changed or not applied_live)
+        messages: list[str] = []
+        if applied_live:
+            messages.append(api_message or "AstrBot 已热重载插件，记忆模式立即生效。")
+        else:
+            messages.append("记忆模式已保存到本地配置；AstrBot 运行后会自动使用，建议重启 AstrBot 使其立即生效。")
+        if unique_changed:
+            messages.append("已关闭 AstrBot 的 unique_session，使同一群共享会话；重启 AstrBot 后生效。")
+        if value == "astrbot" and not self.astrbot_cmd_config_path.exists():
+            messages.append("尚未生成 AstrBot cmd_config.json；部署时会补上共享会话默认配置。")
+        if api_error:
+            messages.append(f"AstrBot 在线配置接口暂不可用：{api_error}")
+        if unique_error:
+            messages.append(unique_error)
+        errors = [item for item in (api_error, unique_error) if item]
+        # If we could not ensure the required group-session migration, report a
+        # non-fatal API error so the console can display the security boundary
+        # without hiding the fact that the mode file itself was saved.
+        ok = not bool(unique_error)
+        return {
+            "ok": ok,
+            "mode": value,
+            "memory_mode": value,
+            "options": list(MEMORY_MODES),
+            "memory_scope": "session" if value == "astrbot" else "none",
+            "unique_session": self._unique_session_state()[0],
+            "group_memory_shared": (self._unique_session_state()[0] is False)
+            if value == "astrbot"
+            else None,
+            "applied_live": applied_live,
+            "restart_required": restart_required,
+            "config_path": str(self.enhancer_config_path),
+            "astrbot_config_path": str(self.astrbot_cmd_config_path),
+            "behavior": self.get_memory_mode().get("behavior", {}),
+            "message": " ".join(item for item in messages if item),
+            "error": "；".join(errors),
+        }
+
+    @staticmethod
+    def _parse_metadata_yaml(text: str) -> dict[str, str]:
+        """Parse the tiny scalar subset used by AstrBot metadata.yaml."""
+
+        result: dict[str, str] = {}
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or line.startswith("-") or ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value:
+                result[key] = value
+        return result
+
+    def _inactivated_plugin_paths(self) -> tuple[set[str], str]:
+        """Read AstrBot's persisted disabled-plugin list without its library."""
+
+        db_path = self.astrbot_data_dir / "data_v4.db"
+        if not db_path.exists():
+            return set(), ""
+        try:
+            connection = sqlite3.connect(str(db_path), timeout=3)
+            try:
+                row = connection.execute(
+                    "SELECT value FROM preferences WHERE scope = ? AND scope_id = ? AND key = ?",
+                    ("global", "global", "inactivated_plugins"),
+                ).fetchone()
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error) as exc:
+            return set(), f"无法读取 AstrBot 插件禁用状态：{exc}"
+        if not row:
+            return set(), ""
+        raw = row[0]
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        try:
+            value = json.loads(raw) if isinstance(raw, str) else raw
+        except ValueError:
+            return set(), "AstrBot 插件禁用状态不是有效 JSON"
+        if isinstance(value, dict):
+            value = value.get("val", [])
+        if not isinstance(value, list):
+            return set(), ""
+        return {str(item) for item in value if item}, ""
+
+    def _list_local_plugins(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """Filesystem fallback when AstrBot is stopped or unreachable."""
+
+        plugin_root = self.astrbot_data_dir / "plugins"
+        inactive, inactive_error = self._inactivated_plugin_paths()
+        errors = [inactive_error] if inactive_error else []
+        plugins: list[dict[str, Any]] = []
+        if not plugin_root.is_dir():
+            return plugins, errors
+        try:
+            entries = sorted(plugin_root.iterdir(), key=lambda item: item.name.lower())
+        except OSError as exc:
+            return plugins, [*errors, f"无法读取插件目录：{exc}"]
+        for path in entries:
+            if not path.is_dir():
+                continue
+            try:
+                metadata_text = ""
+                for filename in ("metadata.yaml", "metadata.yml"):
+                    candidate = path / filename
+                    if candidate.exists():
+                        metadata_text = candidate.read_text(encoding="utf-8", errors="replace")
+                        break
+                metadata = self._parse_metadata_yaml(metadata_text)
+            except OSError as exc:
+                plugins.append(
+                    {
+                        "id": path.name,
+                        "name": path.name,
+                        "enabled": None,
+                        "version": "",
+                        "description": "",
+                        "source": "installed",
+                        "restart_required": False,
+                        "error": f"读取插件元数据失败：{exc}",
+                    }
+                )
+                continue
+            module_prefix = f"data.plugins.{path.name}."
+            enabled: bool | None = None
+            enabled_source = "unknown"
+            if not inactive_error and (plugin_root.parent / "data_v4.db").exists():
+                enabled = not any(item.startswith(module_prefix) for item in inactive)
+                enabled_source = "shared_preferences"
+            plugins.append(
+                {
+                    "id": str(metadata.get("name") or path.name),
+                    "name": str(metadata.get("display_name") or metadata.get("name") or path.name),
+                    "enabled": enabled,
+                    "version": str(metadata.get("version") or ""),
+                    "description": str(metadata.get("desc") or metadata.get("description") or ""),
+                    "source": "installed",
+                    "reserved": False,
+                    "root_dir_name": path.name,
+                    "restart_required": False,
+                    "enabled_source": enabled_source,
+                    "error": "",
+                }
+            )
+        return plugins, errors
+
+    @staticmethod
+    def _normalise_plugin_record(record: dict[str, Any]) -> dict[str, Any]:
+        plugin_id = str(record.get("id") or record.get("plugin_id") or record.get("name") or "").strip()
+        display_name = str(record.get("display_name") or record.get("name") or plugin_id).strip()
+        if "activated" in record:
+            enabled = bool(record.get("activated"))
+        elif "enabled" in record:
+            enabled = bool(record.get("enabled"))
+        else:
+            enabled = None
+        reserved = bool(record.get("reserved"))
+        return {
+            "id": plugin_id,
+            "plugin_id": plugin_id,
+            "name": display_name or plugin_id,
+            "enabled": enabled,
+            "version": str(record.get("version") or ""),
+            "description": str(record.get("desc") or record.get("description") or ""),
+            "source": "builtin" if reserved else "installed",
+            "reserved": reserved,
+            "root_dir_name": str(record.get("root_dir_name") or ""),
+            "restart_required": False,
+            "error": str(record.get("error") or ""),
+        }
+
+    def get_plugins(self) -> dict[str, Any]:
+        """List plugins using AstrBot's API, with a safe filesystem fallback."""
+
+        local_plugins, local_errors = self._list_local_plugins()
+        config = self.store.load_config()
+        if not config.get("deployed"):
+            return {
+                "ok": False,
+                "plugins": local_plugins,
+                "items": local_plugins,
+                "api_available": False,
+                "cached": False,
+                "restart_required": False,
+                "message": "实例尚未部署，仅显示本地插件目录；AstrBot 在线启停暂不可用。",
+                "error": "；".join(local_errors),
+            }
+        api_error = ""
+        failed: Any = ""
+        route = ""
+        try:
+            client = self._memory_api_client(timeout=8, wait_for_ready=False)
+            if client is None:
+                raise RuntimeError("AstrBot 尚未启动")
+            payload = self._list_plugins_via_api(client)
+            if not isinstance(payload, dict):
+                raise RuntimeError("AstrBot 插件列表返回格式异常")
+            raw_plugins = payload.get("plugins")
+            if not isinstance(raw_plugins, list):
+                raise RuntimeError("AstrBot 插件列表缺少 plugins 数组")
+            plugins = [
+                self._normalise_plugin_record(item)
+                for item in raw_plugins
+                if isinstance(item, dict)
+            ]
+            failed = payload.get("failed") or ""
+            route = str(payload.get("route") or "")
+            api_message = str(payload.get("message") or "")
+            message = "已从 AstrBot v4.29 插件接口读取插件状态。"
+            if api_message and str(failed).strip() and str(failed) != api_message:
+                message += " " + api_message
+            return {
+                "ok": True,
+                "plugins": plugins,
+                "items": plugins,
+                "failed": failed,
+                "api_available": True,
+                "route": route,
+                "cached": False,
+                "restart_required": False,
+                "message": message,
+                "error": "",
+            }
+        except Exception as exc:  # noqa: BLE001 - still return useful local data
+            api_error = self.redact_sensitive_text(str(exc) or exc.__class__.__name__)
+
+        errors = [*local_errors]
+        if api_error:
+            errors.append(f"AstrBot 插件接口不可用：{api_error}")
+        return {
+            "ok": False,
+            "plugins": local_plugins,
+            "items": local_plugins,
+            "failed": failed,
+            "api_available": False,
+            "route": route,
+            "cached": False,
+            "restart_required": False,
+            "message": "无法连接 AstrBot，已降级显示本地插件目录；启动实例后可实时启停插件。",
+            "error": "；".join(errors),
+        }
+
+    # Conventional alias for callers that prefer the noun.
+    list_installed_plugins = get_plugins
+
+    def set_plugin_enabled(self, plugin_id: str, enabled: bool) -> dict[str, Any]:
+        """Enable or disable one plugin via AstrBot's real runtime API."""
+
+        value = str(plugin_id or "").strip()
+        if not value:
+            raise DeploymentError("插件 ID 不能为空。")
+        config = self.store.load_config()
+        if not config.get("deployed"):
+            raise DeploymentError("实例尚未部署，不能启停插件。")
+        try:
+            client = self._memory_api_client(timeout=10)
+            if client is None:
+                raise DeploymentError("AstrBot WebUI 端口尚未配置，不能启停插件。")
+            result = self._set_plugin_enabled_via_api(client, value, bool(enabled))
+        except DeploymentError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - translate to an actionable error
+            detail = self.redact_sensitive_text(str(exc) or exc.__class__.__name__)
+            raise DeploymentError(
+                f"插件{'启用' if enabled else '禁用'}失败：{detail}。请确认 AstrBot 正在运行，"
+                "并在其 WebUI 插件页检查插件是否加载成功。"
+            ) from exc
+        plugin = self._normalise_plugin_record(
+            {
+                "id": value,
+                "enabled": bool(enabled),
+                "activated": bool(enabled),
+            }
+        )
+        message = ""
+        if isinstance(result, dict):
+            message = str(result.get("message") or "")
+            # No disk cache exists; the authoritative state was changed live.
+        return {
+            "ok": True,
+            "plugin": plugin,
+            "plugins": [plugin],
+            "api_available": True,
+            "restart_required": False,
+            "message": message or ("插件已启用。" if enabled else "插件已禁用。"),
+            "error": "",
+        }
 
     def get_status(self) -> dict[str, Any]:
         config = self.store.load_config()
@@ -982,6 +1780,10 @@ class DeployManager:
             snowluma_password = self._capture_snowluma_password(secrets_data)
         onebot_connected = self._detect_onebot_connection() if deployed and running else None
         qq_logged_in = self._detect_qq_login(str(config.get("qq_account") or "")) if deployed else False
+        try:
+            memory_mode = self._effective_memory_mode()[0]
+        except Exception:
+            memory_mode = str(config.get("memory_mode") or DEFAULT_MEMORY_MODE)
 
         if not docker_status.installed:
             notice = "未检测到可用的 Docker CLI。请先运行 ./install.sh 安装 Docker，或手动安装后重试。"
@@ -1025,7 +1827,9 @@ class DeployManager:
                 "qq_logged_in": qq_logged_in,
                 "active_job_id": active_job_id,
                 "active_job_status": active_job_status,
+                "memory_mode": memory_mode,
             },
+            "memory_mode": memory_mode,
             "notice": notice,
         }
 

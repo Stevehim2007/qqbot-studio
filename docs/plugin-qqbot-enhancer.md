@@ -9,7 +9,10 @@
 - 非 `@` 群消息默认按 12% 概率回复，受每群冷却、每用户冷却、最小长度、纯图片/纯表情/空消息过滤限制。
 - 支持 `direct` / `astrbot` 两种 `memory_mode`：前者省 Token 直连模型，后者交给 AstrBot 默认 Agent 使用长期会话历史。
 - 图片消息优先尝试当前会话 provider 的原生多模态能力；失败后回退到插件配置的视觉 provider，或 AstrBot 的全局图片转述 provider。
-- `/找图 关键词`（别名 `/搜图`）通过免 API Key 的 Bing Images HTML 页面搜索网络图片并发送；带超时、安全搜索、结果数、群/用户冷却、响应大小限制和中文失败降级。
+- `/找图 关键词`（别名 `/搜图`）通过免 API Key 的 Bing Images HTML + 百度图片 JSON 双搜索源找图；服务端下载并校验图片后使用本地 `Comp.Image.fromFileSystem` 发送，下载全失败时保留远程 URL 兜底。带超时、安全搜索、结果数、群/用户冷却、大小限制和中文失败降级。
+- @/私聊支持保守的自然语言找图意图，例如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，避免误伤普通聊天。
+- `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的本地授权音频，用 `Comp.Record.fromFileSystem` 发送；不调用 LLM/TTS/音乐生成，不消耗 token。
+- `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式和配置入口；通过公开 `Context.get_all_stars()` 列出可可靠读取的已加载插件元数据，不暴露配置值/API Key，不枚举不稳定的内部 handler 命令。
 - 从插件的 `stickers/` 目录发送本地表情包；支持关键词、情绪和随机选择，并带会话冷却、防连续重复、文件缺失降级。
 - 指令前缀消息不参与概率回复，避免抢占 AstrBot 指令。
 - 回复成功后阻止 AstrBot 默认 LLM 再回复一次，避免重复。
@@ -22,6 +25,8 @@ plugins/qqbot_enhancer/
 ├── metadata.yaml           # v4.29 插件元数据
 ├── _conf_schema.json       # AstrBot WebUI 配置 Schema
 ├── README.md
+├── songs/                  # 用户自行放置授权音频；仓库不附带版权歌曲
+│   └── README.md
 └── stickers/               # 8 张自绘 96x96 PNG，无外部版权素材
     ├── sticker_rules.json
     ├── happy.png
@@ -122,14 +127,19 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | 配置 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `memory_mode` | string | `direct` | `direct`=省 Token 直连；`astrbot`=使用 AstrBot 默认 Agent 的会话历史 |
-| `image_search_enabled` | bool | `true` | 启用 `/找图`、`/搜图` |
-| `image_search_timeout_seconds` | int | `12` | Bing HTML 搜索页单次 HTTP 超时 |
+| `image_search_enabled` | bool | `true` | 启用 `/找图`、`/搜图` 及自然语言找图 |
+| `image_search_natural_language_enabled` | bool | `true` | 允许 @/私聊自然语言找图；非 @ 群消息不触发 |
+| `image_search_timeout_seconds` | int | `12` | Bing HTML / 百度 JSON 搜索页单次 HTTP 超时 |
 | `image_search_result_count` | int | `1` | 每次命令最多发送的图片数（1–5） |
 | `image_search_safe_search` | string | `strict` | Bing `adlt` 安全搜索：`strict`/`moderate`/`off` |
 | `image_search_group_cooldown_seconds` | int | `15` | 图片搜索每群冷却 |
 | `image_search_user_cooldown_seconds` | int | `10` | 图片搜索每用户冷却 |
 | `image_search_max_response_bytes` | int | `2000000` | 搜索结果 HTML 最大字节数 |
 | `image_search_max_keyword_chars` | int | `100` | 搜索关键词最大长度 |
+| `image_search_second_source_enabled` | bool | `true` | Bing 结果不足时启用百度图片 JSON 第二源 |
+| `image_search_download_timeout_seconds` | int | `20` | 单张候选图片下载超时 |
+| `image_search_download_max_bytes` | int | `8000000` | 单张候选图片最大下载字节数 |
+| `image_search_download_attempts` | int | `8` | 每次命令最多尝试下载的候选数 |
 | `image_search_success_prefix` | text | `为你找到这些图片：` | 成功发送图片前的文字 |
 | `image_search_usage_reply` | text | 内置用法提示 | 缺少关键词提示 |
 | `image_search_disabled_reply` | text | 内置提示 | 功能关闭提示 |
@@ -137,6 +147,20 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `image_search_error_reply` | text | 内置提示 | 网络/解析失败提示 |
 | `image_search_timeout_reply` | text | 内置提示 | 超时提示 |
 | `image_search_cooldown_reply` | text | `图片搜索冷却中，请约 {seconds} 秒后再试。` | 冷却提示模板 |
+| `song_enabled` | bool | `true` | 启用 `/唱歌`、`/点歌` 本地点歌 |
+| `song_group_cooldown_seconds` | int | `15` | 本地点歌每群冷却 |
+| `song_user_cooldown_seconds` | int | `10` | 本地点歌每用户冷却 |
+| `song_max_file_bytes` | int | `20000000` | 本地单曲最大字节数 |
+| `song_success_prefix` | text | `🎵 本地歌曲：{name}` | 发送音频前的文字，支持 `{name}` |
+| `song_disabled_reply` | text | 内置提示 | 点歌关闭提示 |
+| `song_empty_reply` | text | 内置提示 | `songs/` 内无可用音频提示 |
+| `song_not_found_reply` | text | 内置提示 | 关键词无匹配提示 |
+| `song_too_large_reply` | text | 内置提示 | 音频超大小限制提示 |
+| `song_error_reply` | text | 内置提示 | 本地音频组件构造失败提示 |
+| `song_cooldown_reply` | text | `点歌冷却中，请约 {seconds} 秒后再试。` | 冷却提示模板 |
+| `option_include_other_plugins` | bool | `true` | `/option` 是否列已加载插件元数据 |
+| `option_max_plugins` | int | `20` | `/option` 最多显示插件数 |
+| `option_max_chars` | int | `1800` | `/option` 输出最大字符数 |
 | `reply_probability` | float | `0.12` | 非 @ 群消息回复概率 |
 | `group_cooldown_seconds` | int | `30` | 每群概率回复冷却 |
 | `user_cooldown_seconds` | int | `90` | 每用户概率回复冷却 |
@@ -184,7 +208,7 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 记忆模式的 token 成本会随历史变长而增加。可以用 `/reset` 清空当前会话上下文，
 用 `/new` 开启新会话；也可以降低 `reply_probability`、增大冷却或缩短保留的历史轮数。
 
-### 4.5 `/找图` 网络图片搜索
+### 4.5 `/找图` 网络图片搜索与自然语言找图
 
 命令形式：
 
@@ -193,28 +217,95 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 /搜图 风景 山
 ```
 
-命令由独立的 AstrBot `@filter.command("找图", alias={"搜图"}, priority=110)` 处理器负责，优先级高于普通 ALL 监听器（100），因此不会被概率回复逻辑吞掉。命令本身完成后 `should_call_llm(True)` + `stop_event()`，不会让默认 LLM 再解释一遍。`alias` 参数和 `priority` 均在 v4.29 `CommandFilter`/handler 注册器源码中；发送使用 `Comp.Image.fromURL`：
+@ 机器人或私聊时，也支持保守的自然语言意图：
+
+```text
+你去找几张大树的图
+帮我搜两张千早爱音图片
+给我来一张猫猫壁纸
+```
+
+自然语言识别约束：
+
+- **仅对 @ 机器人和私聊生效**。非 @ 群消息即使命中概率回复，也不会转成找图，避免把普通聊天批量变成搜索请求。
+- 触发表达式需要同时具备“找/搜/搜索/查找/发/来/整/搞/要”等动作词、图片名词（图/图片/照片/壁纸/头像等），以及可提取的关键词。
+- 从“帮我/给我/你/去/一些/关于/的图片”等礼貌或量词中提取关键词；例如“帮我搜两张千早爱音图片” → `千早爱音`。
+- 数量词会映射结果数：一/两/三/四/五、几张、一些；最终仍限制在 1–5 张，并沿用 `image_search_result_count` 的默认值。
+- 保守拒绝普通聊天和否定表达，例如 `我找不到图片了`、`我没找到大树图片`、`这张图真好看`、`发几张图`、`不要发图片`。无法确定时不拦截，继续走原聊天流程。
+- 命中后复用与 `/找图` 完全相同的搜索、下载、校验、临时文件与远程 URL 兜底流程；`memory_mode=astrbot` 时也直接执行搜索并 `should_call_llm(True)` + `stop_event()`，避免默认 Agent 再生成一条重复回复。
+- 自然语言找图与命令共用 `image_search_group_cooldown_seconds` / `image_search_user_cooldown_seconds`。
+
+命令由独立的 AstrBot `@filter.command("找图", alias={"搜图"}, priority=110)` 处理器负责，优先级高于普通 ALL 监听器（100），因此不会被概率回复逻辑吞掉。命令本身完成后 `should_call_llm(True)` + `stop_event()`，不会让默认 LLM 再解释一遍。`alias` 参数和 `priority` 均在 v4.29 `CommandFilter`/handler 注册器源码中；下载成功后使用 `Comp.Image.fromFileSystem`，全失败时使用 `Comp.Image.fromURL` 兜底：
 
 - <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/astrbot/core/star/filter/command.py>
 - <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/guides/listen-message-event.md>
 - <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/astrbot/core/message/components.py>
 
-搜索实现约束：
+搜索与下载实现约束：
 
-- 固定请求 Bing Images HTML 页面：`https://www.bing.com/images/search`，使用 `urllib`，不需要 API Key；不提供任意 URL 配置，避免把搜索请求引向内部地址。
-- 只发起**一次**搜索结果页 GET，不下载原图、不递归抓取站外页面。`/找图` 不是一个通用爬虫。
-- 请求在线程中执行（`asyncio.to_thread`），不会阻塞 AstrBot 事件循环；搜索超时可配置。
-- 响应最多读取 `image_search_max_response_bytes + 1` 字节，一旦超过配置上限立即失败；还检查 `Content-Length`、`Content-Type` 和最终重定向 URL。
-- 解析 Bing `a.iusc[m]` 中的 JSON `murl`，并对缺少该包装的响应做有限的 `"murl":"..."` / 图片扩展名 URL 兜底解析。每页最多检查 200 个候选。
-- 只接受公网 `http://` / `https://` URL；拒绝 `file://`、`javascript:`、带 userinfo 的 URL、localhost/`.local`/`.internal` 等内部域名，以及私有/回环/链路本地/保留 IP。图片路径必须有图片扩展名（`.jpg/.jpeg/.png/.gif/.webp/.bmp/.avif`）。
-- 发送使用官方 `Comp.Image.fromURL(url)`；默认发送 1 张，可配置到 5 张。结果页中重复 URL 会去重。
-- 群冷却和用户冷却在网络请求前占用，防止并发刷屏；命令缺少关键词、关闭搜索、无结果、超时、网络错误均有独立中文提示配置。
+- 默认搜索 Bing Images HTML（`https://www.bing.com/images/search`）；当 Bing 候选不足或失败时，使用百度图片 JSON（`https://image.baidu.com/search/acjson`）作为第二源，均不需要 API Key。`image_search_safe_search=strict` 会映射为 Bing 的 `adlt` 参数；百度 JSON 没有等价可控参数，第二源内容安全由百度自身策略决定。
+- 不递归抓站、不提供任意搜索 endpoint 配置；搜索结果请求与图片下载请求都在 `asyncio.to_thread` 中执行，不阻塞 AstrBot 事件循环。
+- 搜索页/JSON 最多读取 `image_search_max_response_bytes + 1` 字节，检查 `Content-Length`、`Content-Type`；单张图片最多读取 `image_search_download_max_bytes + 1` 字节。
+- Bing 解析 `a.iusc[m]` JSON 的 `murl`，并做有限的 `"murl":"..."` / 图片扩展名 URL 兜底；百度解析 `data[].middleURL/thumbURL/hoverURL/replaceUrl`。每页最多检查 200 个候选。
+- 搜索与下载 URL 都必须通过公网 HTTP(S) 过滤：拒绝 `file://`、`javascript:`、带 userinfo URL、localhost/`.local`/`.internal` 等内部域名，以及私有/回环/链路本地/保留 IP；重定向链最多 3 次，最终 URL 再校验一次。百度图片代理可无扩展名，最终由下载 Content-Type + magic 校验。
+- 单张图片下载必须同时通过：Content-Type 是图片（或 octet-stream 且 magic 有效）、JPEG/PNG/GIF/WebP/BMP/AVIF magic、文件大小上限。下载请求带浏览器 User-Agent 和对应搜索源的 Referer。
+- 成功时写入 `tempfile` 并登记 `event.track_temporary_local_file(...)`，用 `Comp.Image.fromFileSystem(...)` 发送本地文件；单张失败会自动尝试下一个候选。只有全部下载失败时才用远程 `Comp.Image.fromURL(...)` 兜底。
+- 默认发送 1 张，可配置到 5 张；下载尝试次数可配。群/用户冷却在网络请求前占用；缺少关键词、无结果、超时、网络错误均有独立中文提示配置。
 
-**限制：** Bing Images 是 HTML 页面而不是稳定 API；页面结构变化、地区/语言差异、反爬验证、网络不可达时都可能解析不到结果。插件不会下载图片校验真实内容，因此一个结构合法但已失效的图片 URL 可能交给 QQ 协议端后在平台侧加载失败；插件无法收到该平台侧加载结果。为减少风险，解析结果必须来自 Bing 页面、使用 HTTP(S)，并带图片扩展名。
+**限制：** Bing/Baidu 页面或 JSON 都不是稳定官方 API，页面改版、地区/语言差异、反爬验证、网络不可达时可能解析不到结果。插件不下载原图到插件目录，临时文件由 AstrBot 事件清理；图片 URL 结构合法但下载失败时会尝试远程 URL 兜底，是否需要登录/防盗链由 QQ 协议端决定。若最终平台仍无法加载，插件收不到平台侧渲染结果。
 
 ### 4.6 图片搜索的可选 LLM tool
 
-v4.29 确实提供 `@filter.llm_tool(...)` 官方装饰器，但本版本**没有**注册 `search_images` LLM tool。原因是默认 Agent 的 tool 结果更适合返回文本/结构化数据，而本需求的可靠交付方式是“命令直接发送图片”；在 tool 内发送图片还会涉及 Agent 后续总结和潜在重复回复。当前实现明确优先保证 `/找图` 命令可用、可 mock 测试。若后续需要“astrbot 记忆模式下自然语言找图”，可基于官方 `filter.llm_tool` 单独设计 tool 的返回协议。
+v4.29 确实提供 `@filter.llm_tool(...)` 官方装饰器，但本版本**没有**注册 `search_images` LLM tool。原因是默认 Agent 的 tool 结果更适合返回文本/结构化数据，而本需求的可靠交付方式是“命令/显式意图直接发送图片”；在 tool 内发送图片还会涉及 Agent 后续总结和潜在重复回复。
+
+自然不会因此失去找图能力：插件在 @/私聊的 `on_qq_message` 中做保守的正则意图识别，命中后直接复用命令的搜索下载流程，并且即使 `memory_mode=astrbot` 也不会把该条交给默认 Agent。若未来需要让 Agent 自主决定调用图片搜索，可基于官方 `filter.llm_tool` 单独设计 tool 返回协议。
+
+### 4.7 本地唱歌 / 点歌（不消耗 LLM token）
+
+命令：
+
+```text
+/唱歌
+/唱歌 文件名关键词
+/点歌
+/点歌 文件名关键词
+```
+
+- 从插件目录 `songs/` 读取直属音频文件，不递归、不跟随符号链接，拒绝 `../` 路径穿越。
+- 支持 `.mp3`、`.wav`、`.ogg`、`.flac`、`.m4a`、`.aac`；单文件大小受 `song_max_file_bytes` 限制，空文件和超限文件跳过。
+- 发送使用 AstrBot 官方 `Comp.Record.fromFileSystem(...)`；处理函数直接回复并阻断默认 LLM，不调用 `Context.llm_generate()`、TTS 或音乐生成服务，因此不产生模型 token。
+- 群/用户冷却沿用 `song_group_cooldown_seconds` / `song_user_cooldown_seconds`；没有可用音频、关键词无匹配、文件超限、组件构造失败均有中文降级提示。
+- 仓库只提供 `songs/README.md`，**不附带任何版权歌曲**。管理员需自行确认音频授权和平台格式支持；部分 AstrBot/QQ 适配器可能只可靠播放 WAV。
+
+### 4.8 `/option` 插件用法与配置入口
+
+```text
+/option
+/插件用法
+/用法
+```
+
+命令由 `@filter.command("option", alias={"插件用法", "用法"}, priority=110)` 注册，使用 `should_call_llm(True)` + `yield` + `finally stop_event()`，避免默认 LLM 再回复一遍。输出为中文纯文本，至少包含：
+
+- 本插件展示名与版本；
+- `/找图`、`/搜图`、`/唱歌`、`/点歌`、`/option` 命令；
+- 当前 `memory_mode`、@/私聊必回、非 @ 概率、群/用户冷却和自然语言找图开关；
+- 配置入口：AstrBot WebUI → 插件 → QQ Bot 增强回复 → 配置。
+
+已加载插件枚举使用 AstrBot v4.29 **公开 Context API**：
+
+```python
+stars = self.context.get_all_stars()  # list[StarMetadata]
+```
+
+依据：
+
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/astrbot/core/star/context.py>
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/astrbot/core/star/star.py>
+
+`StarMetadata` 的公开字段包括 `name`、`display_name`、`version`、`desc`、`activated`、`root_dir_name` 等。`/option` 只使用这些元数据字段，并受 `option_include_other_plugins`、`option_max_plugins`、`option_max_chars` 限制。
+
+**覆盖范围限制：** AstrBot v4.29 没有稳定的公开 API 能把 handler 全名映射为用户命令名；本插件不访问内部 `star_handlers_registry`，也不会为其他插件猜测或伪造 `/命令`。因此其他插件只列可利用公开 `get_all_stars()` 可靠取得的名称/版本/描述/激活状态，不列 handler/子命令。如果 `get_all_stars()` 不可用，输出明确说明“仅列本插件”。输出不读取插件配置值，不暴露 API Key。
 
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
@@ -360,11 +451,15 @@ yield event.chain_result(chain)
 6. **冷却/防重复状态只在内存中，重启清空，且只在单实例内有效。** 多进程/多机器人实例不会共享冷却。
 7. **高优先级 handler 成功回复后会 `stop_event()`。** 这会阻止后续插件再处理同一条消息，属于有意的去重策略；若部署中还有其他必须同时响应普通消息的插件，需要评估顺序和冲突。
 8. **纯图片/纯表情过滤只针对非 @ 群消息。** @ 机器人和私聊消息即使只有图片/表情也会处理，这是“必回”的设计取舍。
-9. **Bing Images HTML 不是官方 API。** 搜索依赖 Bing 当前页面结构；Bing 改版、地区差异、反爬验证或网络限制会导致无结果/失败。真实 Bing 请求与解析未在本环境做在线联调，单测使用本地 HTML fixture。
-10. **图片 URL 未由插件下载校验。** 为防止带宽/SSRF/无限抓取，本插件不读取原图，只解析并发送 HTTP(S) 图片直链；URL 结构合法但已经失效时，QQ 协议端可能加载失败，插件无法从平台侧确认。
-11. **没有实现可选 LLM tool。** 当前只提供命令 `/找图`、`/搜图`。AstrBot v4.29 的 `filter.llm_tool` 是真实 API，但本版本没有注册 `search_images` tool；`memory_mode=astrbot` 时自然语言找图不会自动调用本插件命令。
-12. **URL 公网过滤不做 DNS 解析。** 插件拒绝明显的私有 IP、回环、内部域名和非 HTTP(S) 地址，但公网域名仍可能解析到内网地址。当前插件只把 URL 交给 QQ 协议端，不主动 fetch 该图片 URL；若后续增加服务端下载，必须补充 DNS/IP 解析后的二次 SSRF 校验。
-13. **搜索关键词会发送给 Bing。** 与所有第三方搜索一样，不应在关键词中提交密码、Token 或其他敏感信息。
+9. **Bing Images HTML 和百度图片 JSON 都不是官方稳定 API。** 搜索依赖第三方当前页面/JSON 结构；改版、地区差异、反爬验证或网络限制会导致无结果/失败。单测使用本地 fixture，不访问真实网络。
+10. **搜索图片已在服务端下载并校验 magic/Content-Type/大小，但平台侧是否真正显示仍未验证。** 下载成功后会发送本地文件；远程 URL 只作为全部下载失败时兜底。QQ/协议端或本地文件回调服务仍可能在真实部署中失败，插件无法看到平台侧渲染/播放结果。
+11. **没有实现可选 LLM tool。** 当前只提供 `/找图`、`/搜图` 命令和 @/私聊自然语言意图识别。AstrBot v4.29 的 `filter.llm_tool` 是真实 API，但本版本没有注册 `search_images` tool。
+12. **URL 公网过滤不做 DNS 解析后的二次 IP 校验。** 下载前会拒绝明显的私有 IP、回环、内部域名和非 HTTP(S) 地址，但公网域名仍可能解析到内网地址（DNS rebinding/CNAME）。本插件确实会通过 urllib 下载图片，因此生产环境若威胁模型要求严格 SSRF 防护，应再加 DNS 解析后 IP 校验和网络出口策略。
+13. **搜索关键词会发送给 Bing/百度。** 与所有第三方搜索一样，不应在关键词中提交密码、Token 或其他敏感信息。
+14. **自然语言找图采用保守正则，不调用小模型做意图分类。** 复杂句式、方言、否定/反问、错别字可能漏识别或故意不触发；无法确定时交给普通聊天。当前只对 @/私聊生效，非 @ 群消息不转成搜索。
+15. **本地点歌未内置任何歌曲，也不生成音乐/TTS。** 必须由管理员把有授权的本地音频放入 `songs/`。真实 QQ/协议端对 mp3/wav 等格式的播放支持未验证，部分适配器可能只可靠支持 WAV；本地文件是否能被容器/协议端读取也取决于部署路径。
+16. **点歌只做名字关键词匹配，不解析标签/歌手/歌词。** 文件缺失、空文件、超限、符号链接和路径穿越会被跳过或提示，不会从网络下载歌曲。
+17. **`/option` 不能可靠枚举其他插件的具体命令。** AstrBot v4.29 的 `Context.get_all_stars()` 能返回插件元数据，但没有稳定的公开 API 把 handler 返回为用户命令；因此 `/option` 只列其他插件的名称/版本/描述/激活状态，不读取内部 handler registry、不猜测命令，也不展示任何插件配置值或 API Key。
 
 ## 9. 校验记录
 
@@ -376,12 +471,16 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-mock 测试覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、非 HTTP(S)/内网 URL 过滤、成功发送、无结果/网络失败降级、搜索结果数、响应大小上限和搜索冷却。单测本身**不访问真实网络**。
+当前增强插件测试为 **60 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、百度 JSON 解析、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级。单测本身**不访问真实网络**。
 
-另做了一次非单测的在线冒烟检查（仅验证搜索页可访问和解析，不代表 AstrBot/QQ 联调）：
+非单测在线冒烟（不代表 AstrBot/QQ 端到端）：
 
-- 用带浏览器 UA 的 `urllib`/curl 请求 Bing Images HTML，返回约 245 KB；
-- 从页面解析出 34 个 `m` JSON 项，插件安全过滤后成功得到图片直链；
-- 实际 `plugin._search_image_urls("橘猫")` 在线返回 3 个可通过校验的图片 URL。
+- Bing Images HTML 对 `千早爱音` 返回候选，`plugin._search_image_candidates("千早爱音")` 得到 6 个候选；
+- 实际下载首个候选成功，内容为 51,430 字节 JPEG，magic 为 `ffd8ff...`；其余候选部分失败后自动跳过；
+- 百度 JSON 第二源对 `千早爱音` 返回约 39 KB JSON，解析出 3 个百度图片代理 URL；下载首个 URL 成功，实际内容为 WebP（14,484 字节，`RIFF...WEBP`），通过 magic 校验；
+- `/找图 千早爱音` 命令真实网络冒烟：经同一搜索/下载管线得到 1 个本地 JPEG（51,430 字节），回复链为文字 + `Comp.Image.fromFileSystem` 本地图片，事件 `call_llm=True` 且 `stop_event()`；
+- 私聊自然语言路径 `帮我搜两张千早爱音图片` 真实网络冒烟：下载到 2 个本地 JPEG 临时文件（51,430 / 20,410 字节），回复链包含 2 个本地 `Image` 组件，未进入默认 LLM；
+- 下载失败原因实测：部分 `cdn.mfuns.net` 候选即使带 Referer/UA 仍返回 HTTP 403 Forbidden，插件按设计跳过并尝试下一候选；`picx.zhimg.com` / `pic1.zhimg.com` 候选成功通过 Content-Type + JPEG magic 校验；
+- 以上临时文件已在冒烟后删除，未发送到真实 QQ。
 
-Bing 页面结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
+第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。

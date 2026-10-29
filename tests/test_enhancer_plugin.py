@@ -9,12 +9,15 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import inspect
+import json as json_module
 import sys
+import tempfile
 import types
 import unittest
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_PATH = ROOT / "plugins" / "qqbot_enhancer" / "main.py"
@@ -32,6 +35,8 @@ class FakeLogger:
 
 
 class FakeFilter:
+    command_registrations = []
+
     class EventMessageType:
         GROUP_MESSAGE = "GroupMessage"
         PRIVATE_MESSAGE = "FriendMessage"
@@ -57,6 +62,7 @@ class FakeFilter:
 
     @staticmethod
     def command(*args, **kwargs):
+        FakeFilter.command_registrations.append((args, kwargs))
         return lambda func: func
 
 
@@ -100,6 +106,17 @@ class Face:
         self.id = id
 
 
+class Record:
+    def __init__(self, file=None, url=None, path=None, **kwargs):
+        self.file = file
+        self.url = url
+        self.path = path
+
+    @staticmethod
+    def fromFileSystem(path, **kwargs):
+        return Record(file=f"file://{path}", path=str(path), **kwargs)
+
+
 class Image:
     def __init__(self, file=None, url=None, path=None, **kwargs):
         self.file = file
@@ -137,7 +154,7 @@ def _install_astrbot_stubs():
     star.Context = FakeContext
     components = types.ModuleType("astrbot.api.message_components")
     components.__path__ = []
-    for cls in (Plain, At, AtAll, Face, Image):
+    for cls in (Plain, At, AtAll, Face, Image, Record):
         setattr(components, cls.__name__, cls)
 
     astrbot.api = api
@@ -217,6 +234,7 @@ class FakeEvent:
         self.is_at_or_wake_command = private
         self._extras = {}
         self.result = None
+        self.tracked_temporary_local_files = []
 
     def get_messages(self):
         return self.message_obj.message
@@ -263,6 +281,9 @@ class FakeEvent:
     def get_result(self):
         return self.result
 
+    def track_temporary_local_file(self, path):
+        self.tracked_temporary_local_files.append(str(path))
+
     def plain_result(self, text):
         return FakeResult([Plain(text)])
 
@@ -287,6 +308,7 @@ class FakeContext:
         extra_providers=None,
         responder=None,
         global_provider_settings=None,
+        stars=None,
     ):
         self.provider_id = provider_id
         self.providers = {}
@@ -296,6 +318,7 @@ class FakeContext:
             self.providers[pid] = FakeProvider(pid, pmodalities)
         self.responder = responder
         self.calls = []
+        self.stars = [] if stars is None else stars
         self.global_config = {
             "wake_prefix": ["/"],
             "provider_settings": {
@@ -319,6 +342,11 @@ class FakeContext:
 
     def get_config(self, umo=None):
         return self.global_config
+
+    def get_all_stars(self):
+        if isinstance(self.stars, BaseException):
+            raise self.stars
+        return self.stars
 
     async def llm_generate(self, **kwargs):
         self.calls.append(dict(kwargs))
@@ -345,8 +373,15 @@ class FakeClock:
 
 
 class FakeHttpResponse:
-    def __init__(self, data, content_type="text/html; charset=utf-8", content_length=None):
+    def __init__(
+        self,
+        data,
+        content_type="text/html; charset=utf-8",
+        content_length=None,
+        url="https://cdn.example.com/image.png",
+    ):
         self._data = data
+        self.url = url
         self.headers = {"Content-Type": content_type}
         if content_length is not None:
             self.headers["Content-Length"] = str(content_length)
@@ -355,6 +390,15 @@ class FakeHttpResponse:
         if size is None or size < 0:
             return self._data
         return self._data[:size]
+
+    def geturl(self):
+        return self.url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 class FixedRng:
@@ -398,6 +442,20 @@ async def run_handler(plugin, event):
 async def run_image_search_command(plugin, event):
     results = []
     async for result in plugin.find_image_command(event):
+        results.append(result)
+    return results
+
+
+async def run_song_command(plugin, event):
+    results = []
+    async for result in plugin.local_song_command(event):
+        results.append(result)
+    return results
+
+
+async def run_option_command(plugin, event):
+    results = []
+    async for result in plugin.option_command(event):
         results.append(result)
     return results
 
@@ -638,6 +696,32 @@ BING_HTML_FIXTURE = """
 """
 
 
+BAIDU_JSON_FIXTURE = json_module.dumps(
+    {
+        "data": [
+            {
+                "middleURL": (
+                    "https://img1.baidu.com/it/u=1,2&fm=253&fmt=auto&f=JPEG?w=500&h=500"
+                ),
+                "thumbURL": "https://img1.baidu.com/thumb-one.jpg",
+                "replaceUrl": [
+                    {"ObjURL": "https://example.com/original-one.jpg"}
+                ],
+            },
+            {
+                "middleURL": "http://127.0.0.1/private.jpg",
+                "thumbURL": "https://img0.baidu.com/thumb-two.png",
+            },
+            {"middleURL": "file:///etc/passwd"},
+        ]
+    },
+    ensure_ascii=False,
+)
+
+
+PNG_MAGIC_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
 class TestImageSearch(unittest.IsolatedAsyncioTestCase):
     def test_extract_keyword_and_alias(self):
         context = FakeContext()
@@ -651,15 +735,22 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
         event = FakeEvent([Plain("/找图")], message_str="/找图", private=True)
         self.assertEqual(plugin._extract_image_search_keyword(event), "")
 
-    def test_build_search_url_encodes_query_and_safe_search(self):
+    def test_build_search_urls_encode_query_and_safe_search(self):
         context = FakeContext()
         plugin = make_plugin(context, image_search_safe_search="strict")
-        url = plugin._build_bing_image_search_url("橘猫 & 猫")
-        parsed = urllib.parse.urlsplit(url)
+        bing_url = plugin._build_bing_image_search_url("橘猫 & 猫")
+        parsed = urllib.parse.urlsplit(bing_url)
         params = urllib.parse.parse_qs(parsed.query)
         self.assertEqual(parsed.netloc, "www.bing.com")
         self.assertEqual(params["q"], ["橘猫 & 猫"])
         self.assertEqual(params["adlt"], ["strict"])
+
+        baidu_url = plugin._build_baidu_image_search_url("千早爱音")
+        parsed = urllib.parse.urlsplit(baidu_url)
+        params = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(parsed.netloc, "image.baidu.com")
+        self.assertEqual(params["word"], ["千早爱音"])
+        self.assertEqual(params["queryWord"], ["千早爱音"])
 
     def test_parse_bing_html_filters_unsafe_and_non_image_urls(self):
         context = FakeContext()
@@ -677,7 +768,81 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("http://127.0.0.1/private.jpg", urls)
         self.assertNotIn("https://example.com/not-an-image.html", urls)
 
-    async def test_command_success_sends_images_and_stops(self):
+    def test_parse_baidu_json_filters_unsafe_and_extracts_proxy_urls(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        urls = plugin._parse_baidu_image_urls(BAIDU_JSON_FIXTURE, limit=5)
+        self.assertGreaterEqual(len(urls), 2)
+        self.assertIn(
+            "https://img1.baidu.com/it/u=1,2&fm=253&fmt=auto&f=JPEG?w=500&h=500",
+            urls,
+        )
+        self.assertNotIn("http://127.0.0.1/private.jpg", urls)
+        self.assertNotIn("file:///etc/passwd", urls)
+
+    def test_download_validates_magic_content_type_and_headers(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_download_max_bytes=1024,
+        )
+        response = FakeHttpResponse(
+            PNG_MAGIC_BYTES,
+            content_type="image/png",
+            content_length=len(PNG_MAGIC_BYTES),
+        )
+        captured_requests = []
+
+        def fake_open(request, timeout):
+            captured_requests.append((request, timeout))
+            return response
+
+        plugin._open_bounded_http = fake_open
+        path = plugin._download_image_sync(
+            "https://cdn.example.com/picture-without-extension",
+            "https://www.bing.com/images/search",
+        )
+        self.assertTrue(Path(path).is_file())
+        self.assertTrue(path.endswith(".png"))
+        self.assertEqual(Path(path).read_bytes(), PNG_MAGIC_BYTES)
+        headers = {key.lower(): value for key, value in captured_requests[0][0].headers.items()}
+        self.assertIn("mozilla", headers["user-agent"].lower())
+        self.assertEqual(headers["referer"], "https://www.bing.com/images/search")
+        Path(path).unlink(missing_ok=True)
+
+    def test_download_rejects_non_image_magic(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        response = FakeHttpResponse(
+            b"<html>not an image</html>",
+            content_type="image/png",
+        )
+        plugin._open_bounded_http = lambda request, timeout: response
+        with self.assertRaises(MODULE.ImageSearchError):
+            plugin._download_image_sync(
+                "https://cdn.example.com/fake.png",
+                "https://www.bing.com/images/search",
+            )
+
+    def test_download_rejects_oversized_image(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_download_max_bytes=1024,
+        )
+        response = FakeHttpResponse(
+            PNG_MAGIC_BYTES * 100,
+            content_type="image/png",
+            content_length=1025,
+        )
+        plugin._open_bounded_http = lambda request, timeout: response
+        with self.assertRaises(MODULE.ImageSearchError):
+            plugin._download_image_sync(
+                "https://cdn.example.com/large.png",
+                "https://www.bing.com/images/search",
+            )
+
+    async def test_command_downloads_local_images_and_tracks_temp_files(self):
         context = FakeContext()
         plugin = make_plugin(
             context,
@@ -687,27 +852,147 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
             image_search_success_prefix="结果如下：",
         )
         plugin._fetch_image_search_html_sync = lambda url: BING_HTML_FIXTURE
+        download_calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_one = Path(temp_dir) / "one.png"
+            local_two = Path(temp_dir) / "two.png"
+            local_one.write_bytes(PNG_MAGIC_BYTES)
+            local_two.write_bytes(PNG_MAGIC_BYTES)
+
+            async def fake_download(image_url, *, referer):
+                download_calls.append((image_url, referer))
+                return str(local_one if len(download_calls) == 1 else local_two)
+
+            plugin._download_image = fake_download
+            event = FakeEvent(
+                [Plain("/找图 千早爱音")],
+                message_str="/找图 千早爱音",
+                private=True,
+            )
+            results = await run_image_search_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            chain = results[0].chain
+            self.assertEqual(chain[0].text, "结果如下：")
+            self.assertEqual(len(chain), 3)
+            self.assertIsInstance(chain[1], Image)
+            self.assertEqual(chain[1].path, str(local_one))
+            self.assertEqual(chain[2].path, str(local_two))
+            self.assertEqual(len(download_calls), 2)
+            self.assertEqual(
+                download_calls[0][1],
+                "https://www.bing.com/images/search",
+            )
+            self.assertIn(str(local_one), event.tracked_temporary_local_files)
+            self.assertIn(str(local_two), event.tracked_temporary_local_files)
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_command_tries_next_candidate_when_download_fails(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_result_count=1,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+        )
+        plugin._fetch_image_search_html_sync = lambda url: BING_HTML_FIXTURE
+        attempted = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_file = Path(temp_dir) / "fallback.png"
+            local_file.write_bytes(PNG_MAGIC_BYTES)
+
+            async def flaky_download(image_url, *, referer):
+                attempted.append(image_url)
+                if len(attempted) == 1:
+                    raise OSError("first URL failed")
+                return str(local_file)
+
+            plugin._download_image = flaky_download
+            event = FakeEvent(
+                [Plain("/找图 猫")],
+                message_str="/找图 猫",
+                private=True,
+            )
+            results = await run_image_search_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(attempted), 2)
+            self.assertEqual(results[0].chain[1].path, str(local_file))
+
+    async def test_command_remote_url_fallback_when_all_downloads_fail(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_result_count=1,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+        )
+        plugin._fetch_image_search_html_sync = lambda url: BING_HTML_FIXTURE
+
+        async def fail_download(image_url, *, referer):
+            raise OSError("download failed")
+
+        plugin._download_image = fail_download
         event = FakeEvent(
-            [Plain("/找图 橘猫")],
-            message_str="/找图 橘猫",
+            [Plain("/找图 猫")],
+            message_str="/找图 猫",
             private=True,
         )
         results = await run_image_search_command(plugin, event)
         self.assertEqual(len(results), 1)
         chain = results[0].chain
-        self.assertEqual(chain[0].text, "结果如下：")
-        self.assertEqual(len(chain), 3)
         self.assertIsInstance(chain[1], Image)
         self.assertEqual(chain[1].url, "https://cdn.example.com/cat-one.jpg")
-        self.assertEqual(chain[2].url, "https://cdn.example.com/cat-two.png?w=640&h=480")
-        self.assertEqual(context.calls, [])
-        self.assertTrue(event.call_llm)
-        self.assertTrue(event.stopped)
+
+    async def test_command_uses_baidu_when_bing_has_no_results(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_result_count=1,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+            image_search_second_source_enabled=True,
+        )
+        bing_urls = []
+        baidu_urls = []
+
+        def fake_bing(url):
+            bing_urls.append(url)
+            return "<html>no bing results</html>"
+
+        def fake_baidu(url):
+            baidu_urls.append(url)
+            return BAIDU_JSON_FIXTURE
+
+        plugin._fetch_image_search_html_sync = fake_bing
+        plugin._fetch_baidu_image_json_sync = fake_baidu
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_file = Path(temp_dir) / "baidu.png"
+            local_file.write_bytes(PNG_MAGIC_BYTES)
+
+            async def fake_download(image_url, *, referer):
+                self.assertIn("baidu.com", image_url)
+                self.assertEqual(referer, "https://image.baidu.com/")
+                return str(local_file)
+
+            plugin._download_image = fake_download
+            event = FakeEvent(
+                [Plain("/找图 千早爱音")],
+                message_str="/找图 千早爱音",
+                private=True,
+            )
+            results = await run_image_search_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(bing_urls), 1)
+            self.assertEqual(len(baidu_urls), 1)
+            self.assertIn("baidu.com", baidu_urls[0])
+            self.assertEqual(results[0].chain[1].path, str(local_file))
 
     async def test_command_no_results_returns_graceful_reply(self):
         context = FakeContext()
         plugin = make_plugin(
             context,
+            image_search_second_source_enabled=False,
             image_search_group_cooldown_seconds=0,
             image_search_user_cooldown_seconds=0,
             image_search_empty_reply="没有搜到，换一个词。",
@@ -728,6 +1013,7 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
         context = FakeContext()
         plugin = make_plugin(
             context,
+            image_search_second_source_enabled=False,
             image_search_group_cooldown_seconds=0,
             image_search_user_cooldown_seconds=0,
             image_search_error_reply="搜索网络出错了。",
@@ -764,6 +1050,11 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
             image_search_user_cooldown_seconds=60,
         )
         plugin._fetch_image_search_html_sync = fake_fetch
+
+        async def fake_download(image_url, *, referer):
+            return "/tmp/fake-qqbot-search-image.png"
+
+        plugin._download_image = fake_download
         first = FakeEvent(
             [Plain("/找图 猫")],
             message_str="/找图 猫",
@@ -800,7 +1091,7 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0].text, "用法提示")
         self.assertTrue(event.stopped)
 
-    async def test_response_size_limit_is_enforced(self):
+    def test_response_size_limit_is_enforced(self):
         context = FakeContext()
         plugin = make_plugin(context, image_search_max_response_bytes=2048)
         response = FakeHttpResponse(b"x" * 2049, content_length=2049)
@@ -819,6 +1110,196 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
         results = await run_image_search_command(plugin, event)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].text, "搜索已关闭。")
+        self.assertTrue(event.stopped)
+
+
+class TestNaturalLanguageImageSearch(unittest.IsolatedAsyncioTestCase):
+    def test_detects_conservative_search_intents(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        cases = {
+            "你去找几张大树的图": ("大树", 2),
+            "帮我搜两张千早爱音图片": ("千早爱音", 2),
+            "帮我找几张关于大树的图片": ("大树", 2),
+            "给我来两张猫的照片": ("猫", 2),
+            "搜索 千早爱音 图片": ("千早爱音", 1),
+            "我找不到图片了，帮我找几张猫图": ("猫", 2),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                intent = plugin._detect_natural_language_image_search(text)
+                self.assertIsNotNone(intent)
+                self.assertEqual(intent["keyword"], expected[0])
+                self.assertEqual(intent["result_count"], expected[1])
+
+    def test_ignores_negation_and_ordinary_chat(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        for text in (
+            "我找不到图片了",
+            "这张图真好看",
+            "我没找到大树图片",
+            "发几张图",
+            "不要发图片",
+            "我想找图片",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(
+                    plugin._detect_natural_language_image_search(text)
+                )
+
+    async def test_private_natural_language_search_sends_and_blocks_llm(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            image_search_result_count=1,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+        )
+        plugin._fetch_image_search_html_sync = lambda url: BING_HTML_FIXTURE
+        download_calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_file = Path(temp_dir) / "nl-search.png"
+            local_file.write_bytes(PNG_MAGIC_BYTES)
+
+            async def fake_download(image_url, *, referer):
+                download_calls.append(image_url)
+                return str(local_file)
+
+            plugin._download_image = fake_download
+            event = FakeEvent(
+                [Plain("帮我搜两张千早爱音图片")],
+                message_str="帮我搜两张千早爱音图片",
+                private=True,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(download_calls), 2)  # 数量词“两”覆盖默认结果数
+            image_components = [
+                comp for comp in results[0].chain if isinstance(comp, Image)
+            ]
+            self.assertEqual(len(image_components), 2)
+            self.assertEqual(context.calls, [])
+            self.assertTrue(event.call_llm)
+            self.assertTrue(event.stopped)
+
+    async def test_natural_language_search_reuses_image_search_cooldown(self):
+        clock = FakeClock(100.0)
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            clock=clock,
+            image_search_group_cooldown_seconds=60,
+            image_search_user_cooldown_seconds=60,
+        )
+        fetch_calls = []
+
+        def fake_fetch(url):
+            fetch_calls.append(url)
+            return BING_HTML_FIXTURE
+
+        plugin._fetch_image_search_html_sync = fake_fetch
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_file = Path(temp_dir) / "cooldown.png"
+            local_file.write_bytes(PNG_MAGIC_BYTES)
+
+            async def fake_download(image_url, *, referer):
+                return str(local_file)
+
+            plugin._download_image = fake_download
+            first = FakeEvent(
+                [Plain("帮我搜两张千早爱音图片")],
+                message_str="帮我搜两张千早爱音图片",
+                private=True,
+                session_id="nl-cooldown-session",
+            )
+            first_results = await run_handler(plugin, first)
+            self.assertEqual(len(first_results), 1)
+            self.assertEqual(len(fetch_calls), 1)
+
+            clock.value = 110.0
+            second = FakeEvent(
+                [Plain("帮你找几张千早爱音图片")],
+                message_str="帮你找几张千早爱音图片",
+                private=True,
+                session_id="nl-cooldown-session",
+            )
+            second_results = await run_handler(plugin, second)
+            self.assertEqual(len(second_results), 1)
+            self.assertIn("50", second_results[0].text)
+            self.assertEqual(len(fetch_calls), 1)
+            self.assertTrue(second.stopped)
+
+    async def test_group_at_nl_search_runs_directly_even_in_astrbot_memory_mode(self):
+        context = FakeContext(responder=lambda kwargs: "不应交给默认 Agent")
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            image_search_result_count=1,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+        )
+        plugin._fetch_image_search_html_sync = lambda url: BING_HTML_FIXTURE
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_file = Path(temp_dir) / "at-search.png"
+            local_file.write_bytes(PNG_MAGIC_BYTES)
+
+            async def fake_download(image_url, *, referer):
+                return str(local_file)
+
+            plugin._download_image = fake_download
+            event = FakeEvent(
+                [At("10001"), Plain("你去找几张大树的图")],
+                message_str="你去找几张大树的图",
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertTrue(any(isinstance(comp, Image) for comp in results[0].chain))
+            self.assertEqual(context.calls, [])
+            self.assertTrue(event.call_llm)
+            self.assertTrue(event.stopped)
+            self.assertFalse(event.get_extra("qqbot_enhancer_memory_reply", False))
+
+    async def test_non_at_group_message_does_not_trigger_nl_search(self):
+        context = FakeContext(responder=lambda kwargs: "普通聊天回复")
+        plugin = make_plugin(context, reply_probability=1.0)
+        search_calls = []
+
+        def fake_fetch(url):
+            search_calls.append(url)
+            return BING_HTML_FIXTURE
+
+        plugin._fetch_image_search_html_sync = fake_fetch
+        event = FakeEvent(
+            [Plain("帮我搜两张千早爱音图片")],
+            message_str="帮我搜两张千早爱音图片",
+            private=False,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "普通聊天回复")
+        self.assertEqual(search_calls, [])
+
+    async def test_unrelated_private_message_goes_to_normal_chat(self):
+        context = FakeContext(responder=lambda kwargs: "确实很好看")
+        plugin = make_plugin(context)
+        search_calls = []
+
+        def fake_fetch(url):
+            search_calls.append(url)
+            return BING_HTML_FIXTURE
+
+        plugin._fetch_image_search_html_sync = fake_fetch
+        event = FakeEvent(
+            [Plain("这张图真好看")],
+            message_str="这张图真好看",
+            private=True,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "确实很好看")
+        self.assertEqual(search_calls, [])
+        self.assertEqual(len(context.calls), 1)
         self.assertTrue(event.stopped)
 
 
@@ -1052,6 +1533,222 @@ class TestStickerHandling(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(len(results[0].chain), 1)
         self.assertEqual(results[0].text, "纯文本也行")
+
+
+class TestLocalSong(unittest.IsolatedAsyncioTestCase):
+    async def test_song_command_sends_local_record_without_llm(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            song_path = Path(temp_dir) / "authorized.wav"
+            song_path.write_bytes(b"RIFF" + b"\x00" * 64)
+            plugin = make_plugin(
+                context,
+                song_group_cooldown_seconds=0,
+                song_user_cooldown_seconds=0,
+                song_success_prefix="播放：{name}",
+            )
+            plugin._song_dir = Path(temp_dir)
+            event = FakeEvent(
+                [Plain("/唱歌")],
+                message_str="/唱歌",
+                private=True,
+            )
+            results = await run_song_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].chain[0].text, "播放：authorized")
+            self.assertIsInstance(results[0].chain[1], Record)
+            self.assertEqual(Path(results[0].chain[1].path).name, "authorized.wav")
+            self.assertEqual(context.calls, [])
+            self.assertTrue(event.call_llm)
+            self.assertTrue(event.stopped)
+
+    async def test_song_keyword_match_and_alias(self):
+        context = FakeContext()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            (Path(temp_dir) / "alpha.wav").write_bytes(b"alpha")
+            (Path(temp_dir) / "beta.mp3").write_bytes(b"beta")
+            plugin = make_plugin(
+                context,
+                song_group_cooldown_seconds=0,
+                song_user_cooldown_seconds=0,
+            )
+            plugin._song_dir = Path(temp_dir)
+            event = FakeEvent(
+                [Plain("/点歌 beta")],
+                message_str="/点歌 beta",
+                private=True,
+            )
+            results = await run_song_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(Path(results[0].chain[1].path).name, "beta.mp3")
+
+    async def test_song_missing_directory_returns_graceful_reply(self):
+        context = FakeContext()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin = make_plugin(
+                context,
+                song_empty_reply="请把授权音频放进 songs/。",
+            )
+            plugin._song_dir = Path(temp_dir)
+            event = FakeEvent([Plain("/唱歌")], message_str="/唱歌", private=True)
+            results = await run_song_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].text, "请把授权音频放进 songs/。")
+            self.assertEqual(context.calls, [])
+            self.assertTrue(event.stopped)
+
+    async def test_song_cooldown_blocks_second_send(self):
+        clock = FakeClock(100.0)
+        context = FakeContext()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            (Path(temp_dir) / "song.wav").write_bytes(b"song")
+            plugin = make_plugin(
+                context,
+                clock=clock,
+                song_group_cooldown_seconds=60,
+                song_user_cooldown_seconds=60,
+            )
+            plugin._song_dir = Path(temp_dir)
+            first = FakeEvent(
+                [Plain("/唱歌")],
+                message_str="/唱歌",
+                private=True,
+                session_id="song-session",
+            )
+            first_results = await run_song_command(plugin, first)
+            self.assertEqual(len(first_results), 1)
+            self.assertIsInstance(first_results[0].chain[1], Record)
+
+            clock.value = 110.0
+            second = FakeEvent(
+                [Plain("/唱歌")],
+                message_str="/唱歌",
+                private=True,
+                session_id="song-session",
+            )
+            second_results = await run_song_command(plugin, second)
+            self.assertEqual(len(second_results), 1)
+            self.assertIn("50", second_results[0].text)
+            self.assertTrue(second.stopped)
+
+    async def test_song_oversized_file_is_rejected(self):
+        context = FakeContext()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            (Path(temp_dir) / "huge.wav").write_bytes(b"x" * 32)
+            plugin = make_plugin(
+                context,
+                song_max_file_bytes=10,
+                song_too_large_reply="这首歌文件太大了。",
+            )
+            plugin._song_dir = Path(temp_dir)
+            event = FakeEvent([Plain("/唱歌")], message_str="/唱歌", private=True)
+            results = await run_song_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].text, "这首歌文件太大了。")
+
+    def test_song_path_traversal_and_indirect_files_rejected(self):
+        context = FakeContext()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            plugin = make_plugin(context)
+            plugin._song_dir = base
+            outside = base.parent / "outside-song.wav"
+            outside.write_bytes(b"outside")
+            try:
+                self.assertIsNone(plugin._resolve_song_file("../outside-song.wav"))
+                link = base / "link.wav"
+                try:
+                    link.symlink_to(outside)
+                except OSError:
+                    link = None
+                if link is not None:
+                    self.assertIsNone(plugin._resolve_song_file("link.wav"))
+            finally:
+                outside.unlink(missing_ok=True)
+
+    def test_no_copyright_audio_is_bundled(self):
+        bundled_audio = [
+            path
+            for path in MODULE.SONG_DIR.iterdir()
+            if path.is_file() and path.suffix.lower() in MODULE.SONG_SUFFIXES
+        ]
+        self.assertEqual(bundled_audio, [])
+
+
+class TestOptionCommand(unittest.IsolatedAsyncioTestCase):
+    async def test_option_lists_self_commands_config_and_loaded_plugins(self):
+        stars = [
+            SimpleNamespace(
+                name="qqbot_enhancer",
+                display_name="QQ Bot 增强回复",
+                version="1.4.1",
+                desc="插件增强",
+                activated=True,
+            ),
+            SimpleNamespace(
+                name="other_plugin",
+                display_name="其他插件",
+                version="0.2.0",
+                desc="其他插件说明",
+                activated=False,
+            ),
+        ]
+        context = FakeContext(
+            stars=stars,
+            responder=lambda kwargs: "不应调用 LLM",
+            global_provider_settings={"api_key": "secret-should-not-appear"},
+        )
+        plugin = make_plugin(context)
+        event = FakeEvent([Plain("/option")], message_str="/option", private=True)
+        results = await run_option_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        text = results[0].text
+        self.assertIn("QQ Bot 增强回复", text)
+        self.assertIn("v1.4.1", text)
+        self.assertIn("/找图", text)
+        self.assertIn("/搜图", text)
+        self.assertIn("/唱歌", text)
+        self.assertIn("/点歌", text)
+        self.assertIn("/option", text)
+        self.assertIn("配置入口", text)
+        self.assertIn("memory_mode=", text)
+        self.assertIn("其他插件", text)
+        self.assertNotIn("secret-should-not-appear", text)
+        self.assertIn("不逐个枚举其他插件命令", text)
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_option_falls_back_when_plugin_registry_unavailable(self):
+        context = FakeContext(stars=RuntimeError("registry unavailable"))
+        plugin = make_plugin(context)
+        event = FakeEvent([Plain("/option")], message_str="/option", private=True)
+        results = await run_option_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        text = results[0].text
+        self.assertIn("QQ Bot 增强回复", text)
+        self.assertIn("仅列本插件", text)
+        self.assertTrue(event.stopped)
+
+    async def test_option_output_is_length_limited(self):
+        context = FakeContext(stars=[])
+        plugin = make_plugin(context, option_max_chars=200)
+        event = FakeEvent([Plain("/option")], message_str="/option", private=True)
+        results = await run_option_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertLessEqual(len(results[0].text), 200)
+        self.assertTrue(results[0].text.endswith("…"))
+
+    def test_option_command_aliases_are_registered(self):
+        matching = [
+            kwargs
+            for args, kwargs in FakeFilter.command_registrations
+            if args and args[0] == "option"
+        ]
+        self.assertTrue(matching)
+        aliases = matching[0].get("alias", set())
+        self.assertIn("插件用法", aliases)
+        self.assertIn("用法", aliases)
 
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):

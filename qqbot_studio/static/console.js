@@ -31,7 +31,36 @@
     updateChecked: false,
     updateArmed: false,
     updateCanApply: false,
-    updateInfo: null
+    updateInfo: null,
+    optionalSupport: {
+      plugins: null,
+      memory: null,
+      stats: null
+    },
+    expandedV3: new Set(),
+    globalResourceStats: null,
+    globalResourceStatus: 'unknown',
+    globalResourceError: '',
+    globalResourcePartial: false,
+    assistantB: {
+      status: 'idle',
+      installed: false,
+      hasInstalledField: false,
+      path: '',
+      repo: '',
+      commit: '',
+      version: '',
+      entry: '',
+      readme: '',
+      message: '',
+      error: '',
+      actionError: '',
+      loading: false,
+      busy: false,
+      armed: false,
+      action: '',
+      updatedAt: 0
+    }
   };
 
   const $ = (id) => document.getElementById(id);
@@ -52,8 +81,8 @@
     if (value === 1 || value === 0) return value === 1;
     if (typeof value === 'string') {
       const normalised = value.trim().toLowerCase();
-      if (['true', '1', 'yes', 'on', 'running', 'deployed', 'ok'].includes(normalised)) return true;
-      if (['false', '0', 'no', 'off', 'stopped', 'not_deployed', 'error'].includes(normalised)) return false;
+      if (['true', '1', 'yes', 'on', 'running', 'deployed', 'ok', 'enabled', 'active', 'available', 'connected'].includes(normalised)) return true;
+      if (['false', '0', 'no', 'off', 'stopped', 'not_deployed', 'error', 'disabled', 'inactive', 'unavailable', 'disconnected'].includes(normalised)) return false;
     }
     return undefined;
   }
@@ -233,7 +262,13 @@
         snowluma_webui: textValue(urls.snowluma_webui || urls.snowluma, ''),
         novnc: textValue(urls.novnc || urls.no_vnc, '')
       },
-      state_error: textValue(instance.state_error, '')
+      memory_mode_hint: normaliseMemoryMode(instance.memory_mode || asRecord(instance.memory).mode),
+      state_error: textValue(instance.state_error, ''),
+      v3: {
+        plugins: emptyPluginState(),
+        memory: emptyMemoryState(instance.memory_mode || asRecord(instance.memory).mode),
+        stats: emptyStatsState()
+      }
     };
   }
 
@@ -255,6 +290,7 @@
         snowluma_webui: textValue(stateUrls.snowluma_webui, instance.urls.snowluma_webui),
         novnc: textValue(stateUrls.novnc, instance.urls.novnc)
       },
+      memory_mode_hint: normaliseMemoryMode(deployment.memory_mode || root.memory_mode || instance.memory_mode_hint),
       state_error: textValue(root.status_error, '')
     };
   }
@@ -487,6 +523,818 @@
     return button;
   }
 
+  const V3_MEMORY_META = {
+    direct: {
+      label: 'direct · 省 Token',
+      description: '只发送当前消息和系统提示，通常更省 token。'
+    },
+    astrbot: {
+      label: 'astrbot · 共享会话记忆',
+      description: '使用 AstrBot 会话历史，群聊按群、私聊按用户共享记忆。'
+    }
+  };
+
+  function numberOrUndefined(value) {
+    if (value === null || value === undefined || value === '') return undefined;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : undefined;
+  }
+
+  function pickNumber(source, keys) {
+    const record = asRecord(source);
+    for (const key of keys) {
+      const value = numberOrUndefined(record[key]);
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  }
+
+  function formatBytes(value) {
+    const number = numberOrUndefined(value);
+    if (number === undefined) return '未知';
+    if (number === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    let scaled = number;
+    let unit = 0;
+    while (scaled >= 1024 && unit < units.length - 1) {
+      scaled /= 1024;
+      unit += 1;
+    }
+    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+    return `${Number(scaled.toFixed(digits))} ${units[unit]}`;
+  }
+
+  function formatPercent(value) {
+    const number = numberOrUndefined(value);
+    if (number === undefined) return '未知';
+    return `${Number(number.toFixed(number >= 10 ? 1 : 2))}%`;
+  }
+
+  function formatFileCount(value) {
+    const number = numberOrUndefined(value);
+    if (number === undefined) return '未知';
+    try {
+      return `${new Intl.NumberFormat('zh-CN').format(Math.round(number))} 个文件`;
+    } catch (error) {
+      return `${Math.round(number)} 个文件`;
+    }
+  }
+
+  function normaliseMemoryMode(value) {
+    const mode = textValue(value, '').trim().toLowerCase();
+    return mode === 'direct' || mode === 'astrbot' ? mode : '';
+  }
+
+  function emptyPluginState() {
+    return {
+      status: 'idle',
+      items: [],
+      hasList: false,
+      error: '',
+      message: '',
+      restartRequired: false,
+      cached: false,
+      updatedAt: 0
+    };
+  }
+
+  function emptyMemoryState(mode = '') {
+    return {
+      status: 'idle',
+      mode: normaliseMemoryMode(mode),
+      options: ['direct', 'astrbot'],
+      restartRequired: false,
+      message: '',
+      error: '',
+      configPath: '',
+      scope: '',
+      updatedAt: 0
+    };
+  }
+
+  function emptyStatsState() {
+    return {
+      status: 'idle',
+      hostMemory: {},
+      global: {},
+      instanceData: {},
+      docker: {},
+      dataSizeBytes: undefined,
+      fileCount: undefined,
+      containerMemoryUsageBytes: undefined,
+      containerMemoryLimitBytes: undefined,
+      containerMemoryPercent: undefined,
+      cpuPercent: undefined,
+      errors: [],
+      error: '',
+      updatedAt: 0
+    };
+  }
+
+  function pluginEnabledFromRecord(raw) {
+    const plugin = asRecord(raw);
+    let enabled = boolOrUndefined(plugin.enabled);
+    if (enabled !== undefined) return enabled;
+    enabled = boolOrUndefined(plugin.active);
+    if (enabled !== undefined) return enabled;
+    const status = textValue(plugin.status, '').trim().toLowerCase();
+    if (['enabled', 'active', 'running', 'on', 'ok'].includes(status)) return true;
+    if (['disabled', 'inactive', 'stopped', 'off', 'error'].includes(status)) return false;
+    return undefined;
+  }
+
+  function normalisePluginRecord(raw) {
+    const plugin = asRecord(raw);
+    const fallbackId = textValue(plugin.id || plugin.plugin_id || plugin.name, '');
+    const id = textValue(plugin.id || plugin.plugin_id, '') || fallbackId;
+    return {
+      id,
+      name: textValue(plugin.name || plugin.display_name, '') || id || '未命名插件',
+      enabled: pluginEnabledFromRecord(plugin),
+      version: textValue(plugin.version, ''),
+      description: textValue(plugin.description, ''),
+      source: textValue(plugin.source, ''),
+      restartRequired: boolOrUndefined(plugin.restart_required) === true,
+      error: textValue(plugin.error, '')
+    };
+  }
+
+  function normalisePluginsPayload(raw) {
+    const root = asRecord(raw);
+    let rawPlugins = [];
+    let hasList = false;
+    if (Array.isArray(root.plugins)) {
+      rawPlugins = root.plugins;
+      hasList = true;
+    } else if (root.plugins && typeof root.plugins === 'object') {
+      rawPlugins = Object.entries(root.plugins).map(([id, value]) => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) return { id, ...value };
+        return { id, enabled: boolOrUndefined(value) };
+      });
+      hasList = true;
+    } else if (Array.isArray(root.items)) {
+      rawPlugins = root.items;
+      hasList = true;
+    }
+
+    const message = textValue(root.message, '');
+    const error = textValue(root.error, root.ok === false ? (message || '插件列表读取失败。') : '');
+    return {
+      status: root.ok === false ? 'error' : 'ok',
+      items: rawPlugins.map(normalisePluginRecord).filter((plugin) => Boolean(plugin.id || plugin.name)),
+      hasList,
+      error,
+      message,
+      restartRequired: boolOrUndefined(root.restart_required) === true,
+      cached: boolOrUndefined(root.cached) === true,
+      updatedAt: Date.now()
+    };
+  }
+
+  function normaliseMemoryPayload(raw, fallbackMode = '') {
+    const root = asRecord(raw);
+    const mode = normaliseMemoryMode(root.mode || root.memory_mode) || normaliseMemoryMode(fallbackMode);
+    const message = textValue(root.message, '');
+    const error = textValue(root.error, root.ok === false ? (message || '记忆模式读取失败。') : '');
+    return {
+      status: root.ok === false ? 'error' : 'ok',
+      mode,
+      options: ['direct', 'astrbot'],
+      restartRequired: boolOrUndefined(root.restart_required) === true,
+      message,
+      error,
+      configPath: textValue(root.config_path, ''),
+      scope: textValue(root.memory_scope, ''),
+      updatedAt: Date.now()
+    };
+  }
+
+  function findMetricEntry(rawList, instanceId) {
+    const entries = Array.isArray(rawList) ? rawList : [];
+    for (const item of entries) {
+      const record = asRecord(item);
+      const id = textValue(record.instance_id || record.id, '');
+      if (id && id === instanceId) return record;
+    }
+    if (entries.length === 1 && !textValue(asRecord(entries[0]).instance_id || asRecord(entries[0]).id, '')) {
+      return asRecord(entries[0]);
+    }
+    return {};
+  }
+
+  function normaliseStatsErrors(value) {
+    const errors = Array.isArray(value) ? value : [];
+    return errors.map((item) => {
+      if (typeof item === 'string') return item;
+      const record = asRecord(item);
+      return textValue(record.message || record.error || record.detail, '');
+    }).filter(Boolean);
+  }
+
+  function normaliseStatsPayload(raw, instanceId) {
+    const root = asRecord(raw);
+    const rawInstances = Array.isArray(root.instances)
+      ? root.instances
+      : Array.isArray(root.items) ? root.items : [];
+    let instanceData = findMetricEntry(rawInstances, instanceId);
+    if (Object.keys(instanceData).length === 0 && (root.scope === 'instance' || root.data_dir_size_bytes !== undefined)) {
+      instanceData = root;
+    }
+    if (Object.keys(instanceData).length === 0 && root.instance && typeof root.instance === 'object') {
+      instanceData = asRecord(root.instance);
+    }
+
+    let dockerEntries = Array.isArray(root.docker) ? root.docker : [];
+    if (dockerEntries.length === 0 && root.docker && typeof root.docker === 'object' && !Array.isArray(root.docker)) {
+      dockerEntries = [root.docker];
+    }
+    let dockerData = findMetricEntry(dockerEntries, instanceId);
+    if (Object.keys(dockerData).length === 0 && dockerEntries.length === 1) {
+      dockerData = asRecord(dockerEntries[0]);
+    }
+
+    const global = asRecord(root.global);
+    const errors = normaliseStatsErrors(root.errors);
+    const instanceErrors = normaliseStatsErrors(instanceData.errors);
+    const dockerError = textValue(dockerData.error, '');
+    if (dockerError && !errors.includes(dockerError)) errors.push(dockerError);
+    for (const message of instanceErrors) {
+      if (!errors.includes(message)) errors.push(message);
+    }
+    const error = textValue(root.error, root.ok === false ? (textValue(root.message, '') || '资源统计读取失败。') : '');
+    return {
+      status: root.ok === false ? 'error' : 'ok',
+      hostMemory: asRecord(root.host_memory),
+      global,
+      instanceData,
+      docker: dockerData,
+      dataSizeBytes: pickNumber(instanceData, ['data_dir_size_bytes', 'data_size_bytes']),
+      fileCount: pickNumber(instanceData, ['file_count', 'files']),
+      containerMemoryUsageBytes: pickNumber(dockerData, ['memory_usage_bytes', 'used_bytes', 'memory_bytes']),
+      containerMemoryLimitBytes: pickNumber(dockerData, ['memory_limit_bytes', 'limit_bytes']),
+      containerMemoryPercent: pickNumber(dockerData, ['memory_percent', 'mem_percent']),
+      cpuPercent: pickNumber(dockerData, ['cpu_percent', 'cpu_usage_percent']),
+      errors,
+      error,
+      updatedAt: Date.now()
+    };
+  }
+
+  function isMissingEndpointError(error) {
+    return error instanceof ApiError && (error.status === 404 || error.status === 405);
+  }
+
+  async function requestWithFallback(paths, options = {}) {
+    let lastError = null;
+    for (const path of paths) {
+      try {
+        return await apiRequest(path, options);
+      } catch (error) {
+        lastError = error;
+        if (!isMissingEndpointError(error)) throw error;
+      }
+    }
+    throw lastError || new ApiError('本地服务未提供该功能。', { status: 404 });
+  }
+
+  function previousV3State(instance) {
+    const previous = state.instances.find((item) => item.id === instance.id);
+    return previous && previous.v3 ? previous.v3 : null;
+  }
+
+  async function loadPluginsForInstance(instance) {
+    const previous = previousV3State(instance);
+    const previousPlugins = previous && previous.plugins ? previous.plugins : emptyPluginState();
+    if (state.optionalSupport.plugins === false) {
+      return {
+        ...previousPlugins,
+        status: 'unsupported',
+        error: '当前后端未提供插件管理接口，插件状态显示为未知。'
+      };
+    }
+    try {
+      const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugins`);
+      state.optionalSupport.plugins = true;
+      return normalisePluginsPayload(data);
+    } catch (error) {
+      if (isMissingEndpointError(error)) {
+        state.optionalSupport.plugins = false;
+        return {
+          ...previousPlugins,
+          status: 'unsupported',
+          error: '当前后端未提供插件管理接口，插件状态显示为未知。'
+        };
+      }
+      return {
+        ...previousPlugins,
+        status: 'error',
+        error: formatError(error, '插件列表读取失败。')
+      };
+    }
+  }
+
+  async function loadMemoryForInstance(instance) {
+    const previous = previousV3State(instance);
+    const previousMemory = previous && previous.memory ? previous.memory : emptyMemoryState(instance.memory_mode_hint || '');
+    if (state.optionalSupport.memory === false) {
+      return {
+        ...previousMemory,
+        status: 'unsupported',
+        error: '当前后端未提供记忆模式接口，记忆模式显示为未知。'
+      };
+    }
+    try {
+      const data = await requestWithFallback([
+        `/api/instances/${encodeURIComponent(instance.id)}/memory`,
+        instancePath('/api/memory', instance.id)
+      ]);
+      state.optionalSupport.memory = true;
+      return normaliseMemoryPayload(data, previousMemory.mode || instance.memory_mode_hint || '');
+    } catch (error) {
+      if (isMissingEndpointError(error)) {
+        state.optionalSupport.memory = false;
+        return {
+          ...previousMemory,
+          status: 'unsupported',
+          error: '当前后端未提供记忆模式接口，记忆模式显示为未知。'
+        };
+      }
+      return {
+        ...previousMemory,
+        status: 'error',
+        error: formatError(error, '记忆模式读取失败。')
+      };
+    }
+  }
+
+  async function loadStatsForInstance(instance) {
+    const previous = previousV3State(instance);
+    const previousStats = previous && previous.stats ? previous.stats : emptyStatsState();
+    if (state.optionalSupport.stats === false) {
+      return {
+        ...previousStats,
+        status: 'unsupported',
+        error: '当前后端未提供资源统计接口，数值显示为未知。'
+      };
+    }
+    try {
+      const data = await requestWithFallback([
+        instancePath('/api/stats', instance.id),
+        `/api/instances/${encodeURIComponent(instance.id)}/stats`
+      ]);
+      state.optionalSupport.stats = true;
+      return normaliseStatsPayload(data, instance.id);
+    } catch (error) {
+      if (isMissingEndpointError(error)) {
+        state.optionalSupport.stats = false;
+        return {
+          ...previousStats,
+          status: 'unsupported',
+          error: '当前后端未提供资源统计接口，数值显示为未知。'
+        };
+      }
+      return {
+        ...previousStats,
+        status: 'error',
+        error: formatError(error, '资源统计读取失败。')
+      };
+    }
+  }
+
+  async function loadV3ForInstance(instance) {
+    const [plugins, memory, stats] = await Promise.all([
+      loadPluginsForInstance(instance),
+      loadMemoryForInstance(instance),
+      loadStatsForInstance(instance)
+    ]);
+    return { ...instance, v3: { plugins, memory, stats } };
+  }
+
+  function setV3Status(element, message, tone = 'info') {
+    if (!element) return;
+    element.textContent = message || '';
+    element.className = `instance-v3-status${tone ? ` is-${tone}` : ''}`;
+    element.hidden = !message;
+  }
+
+  function findInstanceCard(instanceId) {
+    return $$('.instance-card').find((card) => card.dataset.instanceId === instanceId) || null;
+  }
+
+  function v3SummaryText(instance) {
+    const v3 = instance.v3 || {};
+    const plugins = v3.plugins || emptyPluginState();
+    const memory = v3.memory || emptyMemoryState(instance.memory_mode_hint || '');
+    const stats = v3.stats || emptyStatsState();
+    const pluginText = plugins.status === 'ok' ? `${plugins.items.length} 个插件` : '插件未知';
+    const memoryText = memory.mode ? `记忆 ${memory.mode}` : '记忆未知';
+    const statsText = stats.status === 'ok' ? '资源已同步' : '资源未知';
+    return `${pluginText} · ${memoryText} · ${statsText}`;
+  }
+
+  function updateV3Summary(instance) {
+    const card = findInstanceCard(instance.id);
+    if (!card) return;
+    const summary = card.querySelector('.instance-v3-summary');
+    if (summary) summary.textContent = v3SummaryText(instance);
+  }
+
+  function pluginSourceLabel(source) {
+    const value = textValue(source, '').trim().toLowerCase();
+    if (value === 'builtin') return '内置';
+    if (value === 'installed') return '已安装';
+    return textValue(source, '');
+  }
+
+  function pluginStateText(enabled) {
+    if (enabled === true) return '已启用';
+    if (enabled === false) return '已禁用';
+    return '状态未知';
+  }
+
+  function buildPluginSection(instance) {
+    const plugins = (instance.v3 && instance.v3.plugins) || emptyPluginState();
+    const section = makeElement('section', 'instance-v3-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-puzzle'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '插件管理'));
+    headingCopy.appendChild(makeElement('p', '', '查看插件状态并启用或禁用；变更可能需要在重启 AstrBot 后生效。'));
+    heading.appendChild(headingCopy);
+    if (plugins.cached) heading.appendChild(makeElement('span', 'instance-v3-badge', '缓存'));
+    section.appendChild(heading);
+
+    const statusElement = makeElement('p', 'instance-v3-status');
+    statusElement.dataset.v3Status = 'plugins';
+    statusElement.setAttribute('role', 'status');
+    if (plugins.status === 'unsupported' || plugins.status === 'error') {
+      setV3Status(statusElement, plugins.error || '插件接口暂不可用，状态显示为未知。', plugins.status === 'error' ? 'error' : 'warning');
+    } else if (plugins.error) {
+      setV3Status(statusElement, plugins.error, 'error');
+    } else if (plugins.message) {
+      setV3Status(statusElement, plugins.message, plugins.restartRequired ? 'warning' : 'info');
+    } else if (plugins.restartRequired) {
+      setV3Status(statusElement, '插件配置已变更，请重启 AstrBot 生效。', 'warning');
+    }
+
+    if (plugins.items.length > 0) {
+      const list = makeElement('div', 'plugin-list');
+      for (const plugin of plugins.items) {
+        const row = makeElement('div', 'plugin-item');
+        const info = makeElement('div', 'plugin-info');
+        const titleLine = makeElement('div', 'plugin-title-line');
+        titleLine.appendChild(makeElement('strong', 'plugin-name', plugin.name));
+        const sourceLabel = pluginSourceLabel(plugin.source);
+        if (sourceLabel) titleLine.appendChild(makeElement('span', 'plugin-source-badge', sourceLabel));
+        if (plugin.version) titleLine.appendChild(makeElement('span', 'plugin-version', `v${plugin.version}`));
+        info.appendChild(titleLine);
+        if (plugin.description) info.appendChild(makeElement('p', 'plugin-description', plugin.description));
+        if (plugin.error) info.appendChild(makeElement('p', 'plugin-error', plugin.error));
+
+        const control = makeElement('div', 'plugin-control');
+        const stateText = makeElement('span', 'plugin-state-text', pluginStateText(plugin.enabled));
+        const switchLabel = makeElement('label', 'plugin-switch');
+        const checkbox = document.createElement('input');
+        checkbox.setAttribute('type', 'checkbox');
+        checkbox.className = 'plugin-switch-input';
+        checkbox.checked = plugin.enabled === true;
+        checkbox.disabled = plugins.status !== 'ok' || !plugin.id || plugin.enabled === undefined;
+        checkbox.setAttribute('role', 'switch');
+        checkbox.setAttribute('aria-label', `启用插件 ${plugin.name}`);
+        const track = makeElement('span', 'plugin-switch-track');
+        switchLabel.appendChild(checkbox);
+        switchLabel.appendChild(track);
+        checkbox.addEventListener('change', () => {
+          void handlePluginToggle(instance, plugin, checkbox, row, stateText, statusElement);
+        });
+        control.appendChild(stateText);
+        control.appendChild(switchLabel);
+        row.appendChild(info);
+        row.appendChild(control);
+        list.appendChild(row);
+      }
+      section.appendChild(list);
+    } else if (plugins.status === 'ok') {
+      section.appendChild(makeElement('p', 'instance-v3-empty', plugins.hasList ? '未发现可管理的插件。' : '服务端没有返回插件列表数据。'));
+    }
+    section.appendChild(statusElement);
+    return section;
+  }
+
+  async function handlePluginToggle(instance, plugin, checkbox, row, stateText, statusElement) {
+    const previousEnabled = plugin.enabled === true;
+    const targetEnabled = checkbox.checked;
+    checkbox.disabled = true;
+    row.classList.add('is-busy');
+    stateText.textContent = '保存中…';
+    setV3Status(statusElement, '正在保存插件状态…', 'info');
+    try {
+      const data = await requestWithFallback([
+        `/api/instances/${encodeURIComponent(instance.id)}/plugins`,
+        `/api/instances/${encodeURIComponent(instance.id)}/plugins/toggle`
+      ], {
+        method: 'POST',
+        body: { plugin_id: plugin.id, enabled: targetEnabled }
+      });
+      if (!data || data.ok === false) {
+        throw new ApiError(textValue(data && data.message, '插件状态切换失败。'));
+      }
+      const updatedPlugin = asRecord(data.plugin);
+      const responseEnabled = pluginEnabledFromRecord(updatedPlugin);
+      plugin.enabled = responseEnabled === undefined ? targetEnabled : responseEnabled;
+      for (const field of ['name', 'version', 'description', 'source']) {
+        const value = textValue(updatedPlugin[field], '');
+        if (value) plugin[field] = value;
+      }
+      const pluginRestart = boolOrUndefined(updatedPlugin.restart_required) === true;
+      const restartRequired = boolOrUndefined(data.restart_required) === true || pluginRestart;
+      const message = textValue(data.message, plugin.enabled ? '插件已启用。' : '插件已禁用。');
+      const finalMessage = restartRequired && !message.includes('重启')
+        ? `${message} 请重启 AstrBot 生效。`
+        : message;
+      stateText.textContent = pluginStateText(plugin.enabled);
+      checkbox.checked = plugin.enabled;
+      setV3Status(statusElement, finalMessage, restartRequired ? 'warning' : 'success');
+      if (instance.v3 && instance.v3.plugins) {
+        instance.v3.plugins.message = finalMessage;
+        instance.v3.plugins.restartRequired = restartRequired;
+      }
+      updateV3Summary(instance);
+    } catch (error) {
+      plugin.enabled = previousEnabled;
+      checkbox.checked = previousEnabled;
+      stateText.textContent = pluginStateText(previousEnabled);
+      setV3Status(statusElement, formatError(error, '插件状态切换失败。'), 'error');
+    } finally {
+      row.classList.remove('is-busy');
+      checkbox.disabled = !plugin.id || plugin.enabled === undefined || (instance.v3 && instance.v3.plugins.status !== 'ok');
+    }
+  }
+
+  function buildMemorySection(instance) {
+    const memory = (instance.v3 && instance.v3.memory) || emptyMemoryState(instance.memory_mode_hint || '');
+    const section = makeElement('section', 'instance-v3-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-memory'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '记忆模式'));
+    headingCopy.appendChild(makeElement(
+      'p',
+      '',
+      'direct 通常更省 token，只带当前消息；astrbot 共享 AstrBot 会话记忆，历史越长 token 成本越高。切换后可能需要重启 AstrBot。'
+    ));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+
+    const group = makeElement('div', 'memory-mode-group');
+    group.setAttribute('role', 'radiogroup');
+    group.setAttribute('aria-label', `选择实例 ${instance.name} 的记忆模式`);
+    const radioName = `memory-mode-${String(instance.id || 'instance').replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    for (const mode of ['direct', 'astrbot']) {
+      const meta = V3_MEMORY_META[mode];
+      const label = makeElement('label', 'memory-mode-option');
+      const radio = document.createElement('input');
+      radio.setAttribute('type', 'radio');
+      radio.name = radioName;
+      radio.value = mode;
+      radio.checked = memory.mode === mode;
+      radio.disabled = memory.status !== 'ok';
+      const copy = makeElement('span', 'memory-mode-copy');
+      copy.appendChild(makeElement('strong', '', meta.label));
+      copy.appendChild(makeElement('small', '', meta.description));
+      label.classList.toggle('is-selected', memory.mode === mode);
+      label.appendChild(radio);
+      label.appendChild(copy);
+      radio.addEventListener('change', () => {
+        if (radio.checked) void handleMemoryModeChange(instance, mode, group, statusElement);
+      });
+      group.appendChild(label);
+    }
+    section.appendChild(group);
+
+    const statusElement = makeElement('p', 'instance-v3-status');
+    statusElement.dataset.v3Status = 'memory';
+    statusElement.setAttribute('role', 'status');
+    if (memory.status === 'unsupported' || memory.status === 'error') {
+      setV3Status(statusElement, memory.error || '记忆模式接口暂不可用，显示为未知。', memory.status === 'error' ? 'error' : 'warning');
+    } else if (memory.restartRequired) {
+      setV3Status(statusElement, memory.message || '记忆模式已变更，请重启 AstrBot 生效。', 'warning');
+    } else if (memory.message) {
+      setV3Status(statusElement, memory.message, 'info');
+    } else if (!memory.mode) {
+      setV3Status(statusElement, '服务端未返回当前记忆模式；可选择后保存。', 'info');
+    }
+    section.appendChild(statusElement);
+    return section;
+  }
+
+  async function handleMemoryModeChange(instance, mode, group, statusElement) {
+    const previousMode = normaliseMemoryMode(instance.v3 && instance.v3.memory && instance.v3.memory.mode);
+    const radios = Array.from(group.querySelectorAll('input[type="radio"]'));
+    for (const radio of radios) radio.disabled = true;
+    setV3Status(statusElement, '正在保存记忆模式…', 'info');
+    try {
+      const data = await requestWithFallback([
+        `/api/instances/${encodeURIComponent(instance.id)}/memory`,
+        instancePath('/api/memory', instance.id)
+      ], {
+        method: 'POST',
+        body: { mode }
+      });
+      if (!data || data.ok === false) {
+        throw new ApiError(textValue(data && data.message, '记忆模式保存失败。'));
+      }
+      const resolvedMode = normaliseMemoryMode(data.mode) || mode;
+      const restartRequired = boolOrUndefined(data.restart_required) === true;
+      const message = textValue(data.message, `记忆模式已切换为 ${resolvedMode}。`);
+      if (instance.v3) {
+        instance.v3.memory = {
+          ...(instance.v3.memory || emptyMemoryState()),
+          status: 'ok',
+          mode: resolvedMode,
+          restartRequired,
+          message,
+          error: '',
+          updatedAt: Date.now()
+        };
+      }
+      for (const radio of radios) {
+        radio.checked = radio.value === resolvedMode;
+        radio.disabled = false;
+        const option = radio.closest('.memory-mode-option');
+        if (option) option.classList.toggle('is-selected', radio.checked);
+      }
+      const finalMessage = restartRequired && !message.includes('重启')
+        ? `${message} 请重启 AstrBot 生效。`
+        : message;
+      setV3Status(statusElement, finalMessage, restartRequired ? 'warning' : 'success');
+      updateV3Summary(instance);
+    } catch (error) {
+      for (const radio of radios) {
+        radio.checked = radio.value === previousMode;
+        const option = radio.closest('.memory-mode-option');
+        if (option) option.classList.toggle('is-selected', radio.checked);
+        radio.disabled = false;
+      }
+      setV3Status(statusElement, formatError(error, '记忆模式保存失败。'), 'error');
+    }
+  }
+
+  function containerMemoryText(stats) {
+    const usage = stats.containerMemoryUsageBytes;
+    const limit = stats.containerMemoryLimitBytes;
+    if (usage !== undefined && limit !== undefined) return `${formatBytes(usage)} / ${formatBytes(limit)}`;
+    if (usage !== undefined) return formatBytes(usage);
+    if (stats.containerMemoryPercent !== undefined) return `已用 ${formatPercent(stats.containerMemoryPercent)}`;
+    return '未知';
+  }
+
+  function buildStatsSection(instance) {
+    const stats = (instance.v3 && instance.v3.stats) || emptyStatsState();
+    const section = makeElement('section', 'instance-v3-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-database'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '存储与资源'));
+    headingCopy.appendChild(makeElement('p', '', '数据目录、容器内存与 CPU 状态；无法读取的数字显示为“未知”。'));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+
+    if (stats.status === 'unsupported' || stats.status === 'error') {
+      section.appendChild(makeElement('p', 'instance-v3-note is-warning', stats.error || '资源统计暂不可用，数值显示为未知。'));
+    } else if (stats.error) {
+      section.appendChild(makeElement('p', 'instance-v3-note is-warning', stats.error));
+    }
+
+    const grid = makeElement('div', 'instance-resource-grid');
+    const dataMetric = makeElement('div', 'instance-resource-metric');
+    dataMetric.appendChild(makeElement('span', 'instance-resource-label', '数据目录'));
+    dataMetric.appendChild(makeElement('strong', 'instance-resource-value', stats.status === 'ok' ? formatBytes(stats.dataSizeBytes) : '未知'));
+    if (stats.status === 'ok' && stats.fileCount !== undefined) {
+      dataMetric.appendChild(makeElement('small', 'instance-resource-detail', formatFileCount(stats.fileCount)));
+    }
+    const containerMetric = makeElement('div', 'instance-resource-metric');
+    containerMetric.appendChild(makeElement('span', 'instance-resource-label', '容器内存'));
+    containerMetric.appendChild(makeElement('strong', 'instance-resource-value', stats.status === 'ok' ? containerMemoryText(stats) : '未知'));
+    if (stats.status === 'ok' && stats.containerMemoryPercent !== undefined) {
+      containerMetric.appendChild(makeElement('small', 'instance-resource-detail', `占用 ${formatPercent(stats.containerMemoryPercent)}`));
+    }
+    const cpuMetric = makeElement('div', 'instance-resource-metric');
+    cpuMetric.appendChild(makeElement('span', 'instance-resource-label', 'CPU'));
+    cpuMetric.appendChild(makeElement('strong', 'instance-resource-value', stats.status === 'ok' ? formatPercent(stats.cpuPercent) : '未知'));
+    grid.appendChild(dataMetric);
+    grid.appendChild(containerMetric);
+    grid.appendChild(cpuMetric);
+    section.appendChild(grid);
+
+    if (stats.status === 'ok' && stats.errors.length > 0) {
+      section.appendChild(makeElement('p', 'instance-v3-note is-warning', `部分指标读取失败：${stats.errors.slice(0, 3).join('；')}`));
+    }
+    return section;
+  }
+
+  function buildV3Panel(instance) {
+    const details = document.createElement('details');
+    details.className = 'instance-v3-panel';
+    const summary = document.createElement('summary');
+    summary.className = 'instance-v3-summary-row';
+    const icon = makeElement('span', 'instance-v3-summary-icon');
+    icon.appendChild(makeIcon('c-i-puzzle'));
+    summary.appendChild(icon);
+    summary.appendChild(makeElement('span', 'instance-v3-summary-title', '插件、记忆与资源'));
+    summary.appendChild(makeElement('span', 'instance-v3-summary', v3SummaryText(instance)));
+    const chevron = makeElement('span', 'instance-v3-chevron');
+    chevron.appendChild(makeIcon('c-i-chevron-right'));
+    summary.appendChild(chevron);
+    details.appendChild(summary);
+
+    const body = makeElement('div', 'instance-v3-body');
+    body.appendChild(buildPluginSection(instance));
+    body.appendChild(buildMemorySection(instance));
+    body.appendChild(buildStatsSection(instance));
+    details.appendChild(body);
+    details.open = state.expandedV3.has(instance.id);
+    details.addEventListener('toggle', () => {
+      if (details.open) state.expandedV3.add(instance.id);
+      else state.expandedV3.delete(instance.id);
+    });
+    return details;
+  }
+
+  function renderGlobalResourceSummary() {
+    const dataSize = $('global-data-size');
+    const hostValue = $('global-host-memory');
+    const hostDetail = $('global-host-memory-detail');
+    const diskValue = $('global-disk-free');
+    const diskDetail = $('global-disk-detail');
+    const note = $('console-resource-note');
+    const stats = state.globalResourceStats;
+    const status = state.globalResourceStatus;
+
+    if (!stats) {
+      if (dataSize) dataSize.textContent = '未知';
+      if (hostValue) hostValue.textContent = '未知';
+      if (hostDetail) hostDetail.textContent = '数值不可用时显示未知';
+      if (diskValue) diskValue.textContent = '未知';
+      if (diskDetail) diskDetail.textContent = '数值不可用时显示未知';
+      if (note) {
+        if (!state.instances.length) note.textContent = '暂无实例，资源统计显示为未知。';
+        else if (status === 'unsupported') note.textContent = '当前后端未提供资源统计接口，数值显示为未知。';
+        else if (status === 'error') note.textContent = `资源统计读取失败，数值显示为未知${state.globalResourceError ? `：${state.globalResourceError}` : '。'}`;
+        else note.textContent = '资源统计尚未读取，数值显示为未知。';
+      }
+      return;
+    }
+
+    const host = asRecord(stats.hostMemory);
+    const global = asRecord(stats.global);
+    const disk = asRecord(global.disk);
+    const globalDataSize = pickNumber(global, ['data_dir_size_bytes', 'instances_total_bytes']);
+    const hostUsed = pickNumber(host, ['used_bytes']);
+    const hostTotal = pickNumber(host, ['total_bytes']);
+    const hostAvailable = pickNumber(host, ['available_bytes']);
+    const hostPercent = pickNumber(host, ['used_percent']);
+    const diskFree = pickNumber(disk, ['free_bytes', 'available_bytes']);
+    const diskTotal = pickNumber(disk, ['total_bytes']);
+    const diskPercent = pickNumber(disk, ['used_percent']);
+
+    if (dataSize) dataSize.textContent = formatBytes(globalDataSize);
+    if (hostValue) {
+      if (hostUsed !== undefined && hostTotal !== undefined) hostValue.textContent = `${formatBytes(hostUsed)} / ${formatBytes(hostTotal)}`;
+      else if (hostUsed !== undefined) hostValue.textContent = formatBytes(hostUsed);
+      else if (hostPercent !== undefined) hostValue.textContent = `已用 ${formatPercent(hostPercent)}`;
+      else hostValue.textContent = '未知';
+    }
+    if (hostDetail) {
+      if (hostPercent !== undefined) hostDetail.textContent = `已用 ${formatPercent(hostPercent)}`;
+      else if (hostAvailable !== undefined) hostDetail.textContent = `可用 ${formatBytes(hostAvailable)}`;
+      else if (hostTotal !== undefined) hostDetail.textContent = `总内存 ${formatBytes(hostTotal)}`;
+      else hostDetail.textContent = '数值不可用';
+    }
+    if (diskValue) {
+      if (diskFree !== undefined) diskValue.textContent = `可用 ${formatBytes(diskFree)}`;
+      else if (diskPercent !== undefined) diskValue.textContent = `已用 ${formatPercent(diskPercent)}`;
+      else diskValue.textContent = '未知';
+    }
+    if (diskDetail) {
+      const details = [];
+      if (diskTotal !== undefined) details.push(`总容量 ${formatBytes(diskTotal)}`);
+      if (diskPercent !== undefined) details.push(`已用 ${formatPercent(diskPercent)}`);
+      diskDetail.textContent = details.length ? details.join(' · ') : '数值不可用';
+    }
+    if (note) {
+      const syncTime = formatSyncTime(state.lastSyncedAt || stats.updatedAt);
+      const partial = state.globalResourcePartial ? ' · 部分实例或指标不可用' : '';
+      note.textContent = `统计已更新${syncTime ? ` · ${syncTime}` : ''}${partial}`;
+      note.title = stats.error || '';
+    }
+  }
   function resetDeleteButtons() {
     $$('.instance-delete-btn').forEach((button) => {
       button.textContent = '删除实例';
@@ -594,6 +1442,8 @@
     webSection.appendChild(webLinks);
     card.appendChild(webSection);
 
+    card.appendChild(buildV3Panel(instance));
+
     const actions = makeElement('div', 'instance-actions');
     const wizardLink = makeElement('a', 'btn btn-primary btn-small instance-wizard-link', '');
     wizardLink.href = wizardUrl(instance.id);
@@ -632,6 +1482,7 @@
   async function loadConsole(options = {}) {
     if (state.loading) return false;
     const silent = options.silent === true;
+    void loadAssistantBStatus({ silent });
     state.loading = true;
     setRefreshBusy(true);
     setConsoleError('');
@@ -695,10 +1546,49 @@
         };
       });
 
-      state.instances = merged;
+      const v3Instances = await Promise.all(merged.map(async (instance) => {
+        if (!instance.id) return instance;
+        try {
+          return await loadV3ForInstance(instance);
+        } catch (error) {
+          const existing = instance.v3 || {
+            plugins: emptyPluginState(),
+            memory: emptyMemoryState(instance.memory_mode_hint || ''),
+            stats: emptyStatsState()
+          };
+          const message = formatError(error, '可选运维信息读取失败。');
+          return {
+            ...instance,
+            v3: {
+              plugins: { ...existing.plugins, status: 'error', error: message },
+              memory: { ...existing.memory, status: 'error', error: message },
+              stats: { ...existing.stats, status: 'error', error: message }
+            }
+          };
+        }
+      }));
+
+      const statsEntries = v3Instances
+        .map((instance) => instance.v3 && instance.v3.stats)
+        .filter(Boolean);
+      const successfulStats = statsEntries.find((entry) => entry.status === 'ok') || null;
+      const statsError = statsEntries.find((entry) => entry.status === 'error');
+      const allStatsUnsupported = statsEntries.length > 0 && statsEntries.every((entry) => entry.status === 'unsupported');
+      state.instances = v3Instances;
       state.loadedOnce = true;
       state.lastSyncedAt = Date.now();
+      state.globalResourceStats = successfulStats;
+      state.globalResourceStatus = successfulStats
+        ? 'ok'
+        : statsError
+          ? 'error'
+          : allStatsUnsupported
+            ? 'unsupported'
+            : 'unknown';
+      state.globalResourceError = statsError ? statsError.error || '' : '';
+      state.globalResourcePartial = Boolean(successfulStats) && statsEntries.some((entry) => entry.status !== 'ok');
       renderInstances();
+      renderGlobalResourceSummary();
       renderSettings();
       setConsoleError('');
       if (!silent) {
@@ -1343,7 +2233,336 @@
     if (!askAssistant(question)) input.focus();
   }
 
+  function sanitiseAssistantBText(value) {
+    return textValue(value, '').replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, 'sk-***');
+  }
+
+  function assistantBErrorMessageIsUnsupported(message) {
+    return /未提供.*(?:接口|扩展|安装|管理)|不支持.*(?:扩展|该功能|安装)|unsupported/i.test(textValue(message, ''));
+  }
+
+  function mergeAssistantBPartial(target, partial) {
+    if (!partial) return target;
+    const next = { ...target };
+    if (partial.hasInstalledField) next.installed = partial.installed;
+    for (const field of ['path', 'repo', 'commit', 'version', 'entry', 'readme']) {
+      if (partial[field]) next[field] = partial[field];
+    }
+    if (partial.message) next.message = partial.message;
+    return next;
+  }
+
+  function extractAssistantBSource(raw) {
+    const root = asRecord(raw);
+    let source = { ...root };
+    for (const key of ['assistant', 'status', 'result']) {
+      const nested = asRecord(root[key]);
+      if (Object.keys(nested).length > 0) source = { ...source, ...nested };
+    }
+    return source;
+  }
+
+  function normaliseAssistantBStatus(raw) {
+    const source = extractAssistantBSource(raw);
+    const installedValue = boolOrUndefined(source.installed);
+    const ok = source.ok !== false;
+    const message = sanitiseAssistantBText(source.message);
+    const error = sanitiseAssistantBText(source.error || (ok ? '' : message));
+    return {
+      status: ok ? 'ok' : 'error',
+      installed: installedValue === true,
+      hasInstalledField: installedValue !== undefined,
+      path: textValue(source.path, ''),
+      repo: textValue(source.repo, ''),
+      commit: textValue(source.commit, ''),
+      version: textValue(source.version, ''),
+      entry: textValue(source.entry, ''),
+      readme: textValue(source.readme, ''),
+      message,
+      error,
+      updatedAt: Date.now()
+    };
+  }
+
+  function renderAssistantBCard() {
+    const assistant = state.assistantB;
+    const badge = $('assistant-b-badge');
+    const statusElement = $('assistant-b-status');
+    const meta = $('assistant-b-meta');
+    const commitElement = $('assistant-b-commit');
+    const pathElement = $('assistant-b-path');
+    const entryElement = $('assistant-b-entry');
+    const readmeElement = $('assistant-b-readme');
+    const hint = $('assistant-b-hint');
+    const installButton = $('assistant-b-install');
+    const installLabel = $('assistant-b-install-label');
+    const updateButton = $('assistant-b-update');
+    const updateLabel = $('assistant-b-update-label');
+    const retryButton = $('assistant-b-retry');
+
+    if (!statusElement) return;
+
+    if (assistant.loading) {
+      setPill(badge, '检查中', 'neutral');
+    } else if (assistant.status === 'unsupported') {
+      setPill(badge, '后端不支持', 'warning');
+    } else if (assistant.status === 'error') {
+      setPill(badge, '状态异常', 'danger');
+    } else if (assistant.installed) {
+      setPill(badge, '已安装', 'success');
+    } else {
+      setPill(badge, '未安装', 'neutral');
+    }
+
+    let statusText = '';
+    let statusTone = 'info';
+    if (assistant.loading) {
+      statusText = '正在检查 AI 助手 B 状态…';
+      statusTone = 'info';
+    } else if (assistant.actionError) {
+      statusText = assistant.actionError;
+      statusTone = 'error';
+    } else if (assistant.busy) {
+      statusText = assistant.action === 'update'
+        ? '正在更新 AI 助手 B，请稍候…'
+        : '正在安装 AI 助手 B，会联网下载，请稍候…';
+      statusTone = 'info';
+    } else if (assistant.status === 'unsupported') {
+      statusText = '当前后端不支持扩展安装。A 离线使用助手不受影响。';
+      statusTone = 'warning';
+    } else if (assistant.status === 'error') {
+      statusText = assistant.error || 'AI 助手 B 状态读取失败。';
+      statusTone = 'error';
+    } else if (assistant.installed) {
+      statusText = assistant.message || 'AI 助手 B 已安装。';
+      statusTone = 'success';
+    } else if (assistant.status === 'ok') {
+      statusText = assistant.message || 'AI 助手 B 尚未安装。安装为可选操作，会联网下载独立仓库。';
+      statusTone = 'info';
+    } else {
+      statusText = '正在检查 AI 助手 B 状态…';
+      statusTone = 'info';
+    }
+    statusElement.textContent = statusText;
+    statusElement.className = `assistant-b-status is-${statusTone}`;
+
+    if (meta) meta.hidden = !assistant.installed;
+    if (commitElement) {
+      const parts = [];
+      if (assistant.version) parts.push(`版本 ${assistant.version}`);
+      if (assistant.commit) parts.push(`commit ${assistant.commit}`);
+      const commitText = parts.join(' · ') || '未提供';
+      commitElement.textContent = commitText;
+      commitElement.title = commitText;
+    }
+    if (pathElement) {
+      const value = assistant.path || '未提供';
+      pathElement.textContent = value;
+      pathElement.title = value;
+    }
+    if (entryElement) {
+      const value = assistant.entry || '未提供';
+      entryElement.textContent = value;
+      entryElement.title = value;
+    }
+    if (readmeElement) {
+      const value = assistant.readme || '未提供';
+      readmeElement.textContent = value;
+      readmeElement.title = value;
+    }
+
+    if (hint) {
+      if (assistant.status === 'unsupported') {
+        hint.textContent = '升级主项目后可启用该可选扩展；A 离线使用助手完全不受影响。';
+      } else if (assistant.status === 'error') {
+        hint.textContent = '状态读取失败时可点击“重试状态”。不会自动安装或下载任何内容。';
+      } else if (assistant.installed) {
+        hint.textContent = 'AI 助手 B 的 API Key 由其独立配置管理，本控制台不会读取或展示。A 离线助手仍默认可用。';
+      } else if (assistant.armed) {
+        hint.textContent = '再次点击将联网 clone 官方仓库。不会自动执行；如不同意，请不要再次点击。';
+      } else {
+        hint.textContent = '安装会联网 clone 官方仓库；A 离线助手一直可用。控制台不会读取或展示 B 的 API Key。';
+      }
+    }
+
+    const installVisible = assistant.status === 'ok' && !assistant.installed;
+    const updateVisible = assistant.status === 'ok' && assistant.installed;
+    if (installButton) {
+      installButton.hidden = !installVisible;
+      installButton.disabled = assistant.loading || assistant.busy;
+      installButton.setAttribute('aria-busy', assistant.busy && assistant.action === 'install' ? 'true' : 'false');
+    }
+    if (installLabel) {
+      installLabel.textContent = assistant.busy && assistant.action === 'install'
+        ? '正在安装…'
+        : assistant.armed
+          ? '再次点击确认安装'
+          : '安装 AI 助手 B';
+    }
+    if (updateButton) {
+      updateButton.hidden = !updateVisible;
+      updateButton.disabled = assistant.loading || assistant.busy;
+      updateButton.setAttribute('aria-busy', assistant.busy && assistant.action === 'update' ? 'true' : 'false');
+    }
+    if (updateLabel) {
+      updateLabel.textContent = assistant.busy && assistant.action === 'update' ? '正在更新…' : '更新 AI 助手 B';
+    }
+    if (retryButton) retryButton.hidden = assistant.status !== 'error';
+  }
+
+  async function loadAssistantBStatus(options = {}) {
+    const silent = options.silent !== false;
+    if (state.assistantB.loading) return false;
+    if (state.assistantB.status === 'unsupported' && silent) return false;
+    state.assistantB.loading = true;
+    state.assistantB.armed = false;
+    state.assistantB.actionError = '';
+    renderAssistantBCard();
+    try {
+      const data = await apiRequest('/api/assistant/status');
+      if (!data || data.ok === false) {
+        throw new ApiError(
+          sanitiseAssistantBText(asRecord(data).message || asRecord(data).error) || 'AI 助手 B 状态读取失败。',
+          { data }
+        );
+      }
+      const normalized = normaliseAssistantBStatus(data);
+      if (normalized.status === 'error') {
+        throw new ApiError(normalized.error || normalized.message || 'AI 助手 B 状态读取失败。', { data });
+      }
+      const nextAssistant = {
+        ...state.assistantB,
+        ...normalized,
+        status: 'ok',
+        loading: false,
+        error: '',
+        actionError: '',
+        armed: false
+      };
+      if (!normalized.hasInstalledField) nextAssistant.installed = state.assistantB.installed;
+      state.assistantB = nextAssistant;
+      renderAssistantBCard();
+      return true;
+    } catch (error) {
+      const errorData = error instanceof ApiError ? asRecord(error.data) : {};
+      const partial = Object.keys(errorData).length > 0
+        ? normaliseAssistantBStatus(errorData)
+        : null;
+      const rawMessage = error instanceof ApiError
+        ? error.message
+        : (partial ? partial.message || partial.error : '');
+      const unsupported = isMissingEndpointError(error)
+        || assistantBErrorMessageIsUnsupported(rawMessage)
+        || Boolean(partial && assistantBErrorMessageIsUnsupported(`${partial.message} ${partial.error}`));
+      state.assistantB = mergeAssistantBPartial({
+        ...state.assistantB,
+        status: unsupported ? 'unsupported' : 'error',
+        loading: false,
+        error: unsupported
+          ? '当前后端不支持扩展安装。'
+          : formatError(error, 'AI 助手 B 状态读取失败。'),
+        actionError: '',
+        armed: false
+      }, partial);
+      renderAssistantBCard();
+      return false;
+    }
+  }
+
+  async function runAssistantBAction(action) {
+    if (state.assistantB.busy || state.assistantB.loading) return;
+    if (action !== 'install' && action !== 'update') return;
+    state.assistantB.busy = true;
+    state.assistantB.action = action;
+    state.assistantB.armed = false;
+    state.assistantB.actionError = '';
+    renderAssistantBCard();
+    let refreshAfter = false;
+    try {
+      const data = action === 'update'
+        ? await requestWithFallback([
+          '/api/assistant/update',
+          '/api/assistant/install'
+        ], { method: 'POST', body: {} })
+        : await apiRequest('/api/assistant/install', { method: 'POST', body: {} });
+      if (!data || data.ok === false) {
+        throw new ApiError(
+          sanitiseAssistantBText(asRecord(data).message || asRecord(data).error) || 'AI 助手 B 操作失败。',
+          { data }
+        );
+      }
+      const source = extractAssistantBSource(data);
+      const normalized = normaliseAssistantBStatus({ ...source, ok: true });
+      if (action === 'install') {
+        state.assistantB.installed = normalized.hasInstalledField ? normalized.installed : true;
+      } else if (normalized.hasInstalledField) {
+        state.assistantB.installed = normalized.installed;
+      }
+      for (const field of ['path', 'repo', 'commit', 'version', 'entry', 'readme']) {
+        const value = textValue(source[field], '');
+        if (value) state.assistantB[field] = value;
+      }
+      state.assistantB.status = 'ok';
+      state.assistantB.error = '';
+      state.assistantB.actionError = '';
+      state.assistantB.message = sanitiseAssistantBText(source.message)
+        || (action === 'install' ? 'AI 助手 B 安装完成。' : 'AI 助手 B 已更新。');
+      state.assistantB.updatedAt = Date.now();
+      refreshAfter = true;
+    } catch (error) {
+      const unsupported = isMissingEndpointError(error)
+        || assistantBErrorMessageIsUnsupported(error instanceof ApiError ? error.message : '');
+      state.assistantB.actionError = unsupported
+        ? '当前后端不支持扩展安装。'
+        : formatError(error, action === 'install' ? 'AI 助手 B 安装失败。' : 'AI 助手 B 更新失败。');
+      if (unsupported) state.assistantB.status = 'unsupported';
+    } finally {
+      state.assistantB.busy = false;
+      state.assistantB.action = '';
+      renderAssistantBCard();
+    }
+    if (refreshAfter) await loadAssistantBStatus({ silent: false });
+  }
+
+  function handleAssistantBInstallClick() {
+    const assistant = state.assistantB;
+    if (assistant.busy || assistant.loading || assistant.status !== 'ok' || assistant.installed) return;
+    if (!assistant.armed) {
+      assistant.armed = true;
+      renderAssistantBCard();
+      window.setTimeout(() => {
+        if (state.assistantB.armed && !state.assistantB.busy) {
+          state.assistantB.armed = false;
+          renderAssistantBCard();
+        }
+      }, 8000);
+      return;
+    }
+    assistant.armed = false;
+    void runAssistantBAction('install');
+  }
+
+  function handleAssistantBUpdateClick() {
+    if (state.assistantB.status !== 'ok' || !state.assistantB.installed) return;
+    void runAssistantBAction('update');
+  }
+
+  function handleAssistantBRetryClick() {
+    if (state.assistantB.loading || state.assistantB.busy) return;
+    state.assistantB.status = 'idle';
+    state.assistantB.error = '';
+    state.assistantB.actionError = '';
+    renderAssistantBCard();
+    void loadAssistantBStatus({ silent: false });
+  }
   function bindEvents() {
+    const assistantBInstall = $('assistant-b-install');
+    if (assistantBInstall) assistantBInstall.addEventListener('click', handleAssistantBInstallClick);
+    const assistantBUpdate = $('assistant-b-update');
+    if (assistantBUpdate) assistantBUpdate.addEventListener('click', handleAssistantBUpdateClick);
+    const assistantBRetry = $('assistant-b-retry');
+    if (assistantBRetry) assistantBRetry.addEventListener('click', handleAssistantBRetryClick);
+
     const assistantOpen = $('assistant-open');
     if (assistantOpen) {
       assistantOpen.addEventListener('click', () => {

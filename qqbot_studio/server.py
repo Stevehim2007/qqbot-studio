@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import __version__
+from .assistant_ext import ASSISTANT_DIR_NAME, ASSISTANT_REPO_URL
 from .astrbot_api import AstrBotAPIError
 from .deployer import DeploymentError
 from .dockerctl import DockerError
@@ -189,6 +190,21 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
     def _query(parsed) -> dict[str, list[str]]:
         return urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
 
+    @staticmethod
+    def _nested_instance_route(path: str) -> tuple[str, str] | None:
+        """Parse ``/api/instances/<id>/<subroute>`` safely."""
+
+        prefix = "/api/instances/"
+        if not path.startswith(prefix):
+            return None
+        rest = urllib.parse.unquote(path[len(prefix) :]).strip()
+        if "/" not in rest:
+            return None
+        instance_id, subroute = rest.split("/", 1)
+        if not instance_id or not subroute:
+            return None
+        return instance_id, subroute.strip("/")
+
     def _method_not_allowed(self) -> None:
         self._json(
             HTTPStatus.METHOD_NOT_ALLOWED,
@@ -207,6 +223,31 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
 
     def do_TRACE(self) -> None:  # noqa: N802
         self._method_not_allowed()
+
+    @staticmethod
+    def _assistant_unavailable(detail: str) -> dict[str, Any]:
+        data_dir = default_data_dir()
+        path = data_dir / "extensions" / ASSISTANT_DIR_NAME
+        return {
+            "ok": False,
+            "installed": False,
+            "path": str(path),
+            "repo": ASSISTANT_REPO_URL,
+            "commit": "",
+            "entry": str(path / "assistant.py"),
+            "readme": str(path / "README.md"),
+            "entry_file": "assistant.py",
+            "readme_file": "README.md",
+            "entry_exists": False,
+            "readme_exists": False,
+            "repo_ok": False,
+            "directory_exists": path.exists(),
+            "branch": "",
+            "dirty": None,
+            "action": "",
+            "message": "可选 AI 助手 B 状态暂不可用。A 离线助手不受影响。",
+            "error": detail,
+        }
 
     # ------------------------------------------------------------------
     # HTML/static routes
@@ -286,11 +327,82 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if path == "/api/assistant/status":
+                getter = getattr(ctx.studio, "assistant_status", None)
+                if not callable(getter):
+                    self._json(
+                        HTTPStatus.OK,
+                        self._assistant_unavailable("当前后端未提供 AI 助手 B 管理接口。"),
+                    )
+                    return
+                try:
+                    payload = getter()
+                except Exception as exc:  # noqa: BLE001 - optional feature isolation
+                    traceback.print_exc()
+                    payload = self._assistant_unavailable(str(exc))
+                if not isinstance(payload, dict):
+                    payload = self._assistant_unavailable("AI 助手 B 状态返回格式异常。")
+                self._json(HTTPStatus.OK, payload)
+                return
             if path == "/api/instances":
                 self._json(
                     HTTPStatus.OK,
                     {"ok": True, "instances": ctx.studio.list_instance_summaries()},
                 )
+                return
+            nested = self._nested_instance_route(path)
+            if nested is not None:
+                instance_id, subroute = nested
+                ctx.studio.get_instance_meta(instance_id)
+                manager = ctx.studio.get_manager(instance_id)
+                if subroute in {"plugins", "plugins/list"}:
+                    getter = getattr(manager, "get_plugins", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件列表接口。")
+                        return
+                    self._json(HTTPStatus.OK, getter())
+                    return
+                if subroute == "memory":
+                    getter = getattr(manager, "get_memory_mode", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆模式接口。")
+                        return
+                    self._json(HTTPStatus.OK, getter())
+                    return
+                if subroute == "stats":
+                    getter = getattr(ctx.studio, "get_stats", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供资源统计接口。")
+                        return
+                    self._json(HTTPStatus.OK, getter(instance_id))
+                    return
+                self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+                return
+            if path == "/api/memory":
+                instance_id = ctx.instance_id(query)
+                manager = ctx.studio.get_manager(instance_id)
+                getter = getattr(manager, "get_memory_mode", None)
+                if not callable(getter):
+                    self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆模式接口。")
+                    return
+                self._json(HTTPStatus.OK, getter())
+                return
+            if path == "/api/plugins":
+                instance_id = ctx.instance_id(query)
+                manager = ctx.studio.get_manager(instance_id)
+                getter = getattr(manager, "get_plugins", None)
+                if not callable(getter):
+                    self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件列表接口。")
+                    return
+                self._json(HTTPStatus.OK, getter())
+                return
+            if path == "/api/stats":
+                getter = getattr(ctx.studio, "get_stats", None)
+                if not callable(getter):
+                    self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供资源统计接口。")
+                    return
+                explicit_instance = str((query.get("instance") or [""])[0]).strip()
+                self._json(HTTPStatus.OK, getter(explicit_instance or None))
                 return
             if path == "/api/mirrors":
                 settings = ctx.studio.load_settings()
@@ -361,15 +473,17 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
     # POST routes
     # ------------------------------------------------------------------
-    def _read_json_body(self) -> dict[str, Any] | None:
-        content_type = str(self.headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
-        if content_type != "application/json":
-            self._error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "请求必须使用 application/json。")
-            return None
+    def _read_json_body(self, *, allow_empty: bool = False) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
+        if length == 0 and allow_empty:
+            return {}
+        content_type = str(self.headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "请求必须使用 application/json。")
+            return None
         if length <= 0 or length > 2 * 1024 * 1024:
             self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "请求体为空或过大。")
             return None
@@ -390,11 +504,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         if not self._check_token():
             self._error(HTTPStatus.FORBIDDEN, "本地访问令牌无效或已过期，请回到启动器重新打开本页面。")
             return
-        payload = self._read_json_body()
-        if payload is None:
-            return
         parsed = urlsplit(self.path)
         path = parsed.path
+        payload = self._read_json_body(
+            allow_empty=path in {"/api/assistant/install", "/api/assistant/update"}
+        )
+        if payload is None:
+            return
         query = self._query(parsed)
         ctx = self.server.context
         try:
@@ -402,6 +518,26 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 if ctx.studio.has_active_deployments():
                     raise ValueError("有部署任务正在运行，不能自动更新。请在部署完成后再试。")
                 result = start_update(data_dir=ctx.studio.root)
+                self._json(HTTPStatus.OK, result)
+                return
+            if path in {"/api/assistant/install", "/api/assistant/update"}:
+                method_name = "install_assistant" if path.endswith("/install") else "update_assistant"
+                operation = getattr(ctx.studio, method_name, None)
+                if not callable(operation):
+                    self._json(
+                        HTTPStatus.OK,
+                        self._assistant_unavailable("当前后端未提供 AI 助手 B 安装/更新接口。"),
+                    )
+                    return
+                try:
+                    result = operation()
+                except Exception as exc:  # noqa: BLE001 - optional feature isolation
+                    traceback.print_exc()
+                    result = self._assistant_unavailable(
+                        f"AI 助手 B 安装/更新失败：{exc}。主项目仍可正常使用。"
+                    )
+                if not isinstance(result, dict):
+                    result = self._assistant_unavailable("AI 助手 B 操作返回格式异常。")
                 self._json(HTTPStatus.OK, result)
                 return
             if path == "/api/instances":
@@ -437,8 +573,59 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True})
                 return
 
+            nested = self._nested_instance_route(path)
+            if nested is not None:
+                instance_id, subroute = nested
+                ctx.studio.get_instance_meta(instance_id)
+                manager = ctx.studio.get_manager(instance_id)
+                if subroute in {"plugins", "plugins/toggle"}:
+                    plugin_id = str(payload.get("plugin_id") or payload.get("id") or "").strip()
+                    if not plugin_id:
+                        raise ValueError("缺少 plugin_id。")
+                    if not isinstance(payload.get("enabled"), bool):
+                        raise ValueError("enabled 必须为 true 或 false。")
+                    setter = getattr(manager, "set_plugin_enabled", None)
+                    if not callable(setter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件启停接口。")
+                        return
+                    self._json(
+                        HTTPStatus.OK,
+                        setter(plugin_id, bool(payload["enabled"])),
+                    )
+                    return
+                if subroute == "memory":
+                    mode = str(payload.get("mode") or payload.get("memory_mode") or "").strip()
+                    setter = getattr(manager, "set_memory_mode", None)
+                    if not callable(setter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆模式接口。")
+                        return
+                    self._json(HTTPStatus.OK, setter(mode))
+                    return
+                self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+                return
+
             instance_id = ctx.instance_id(query, payload)
             manager = ctx.studio.get_manager(instance_id)
+            if path == "/api/memory":
+                mode = str(payload.get("mode") or payload.get("memory_mode") or "").strip()
+                setter = getattr(manager, "set_memory_mode", None)
+                if not callable(setter):
+                    self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆模式接口。")
+                    return
+                self._json(HTTPStatus.OK, setter(mode))
+                return
+            if path == "/api/plugins":
+                plugin_id = str(payload.get("plugin_id") or payload.get("id") or "").strip()
+                if not plugin_id:
+                    raise ValueError("缺少 plugin_id。")
+                if not isinstance(payload.get("enabled"), bool):
+                    raise ValueError("enabled 必须为 true 或 false。")
+                setter = getattr(manager, "set_plugin_enabled", None)
+                if not callable(setter):
+                    self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件启停接口。")
+                    return
+                self._json(HTTPStatus.OK, setter(plugin_id, bool(payload["enabled"])))
+                return
             if path == "/api/test-key":
                 self._json(HTTPStatus.OK, manager.test_deepseek_key(str(payload.get("deepseek_api_key") or "")))
                 return

@@ -171,6 +171,8 @@ class ControlAssistantStaticTests(unittest.TestCase):
     def test_assistant_uses_dom_text_and_no_browser_storage(self) -> None:
         for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
             self.assertNotIn(forbidden, self.js)
+            self.assertNotIn(forbidden, self.html)
+        self.assertNotRegex(self.js, r"\balert\s*\(|\bconfirm\s*\(")
         self.assertIn("assistant-code-block", self.js)
         self.assertIn("textContent", self.js)
         self.assertIn("data-assistant-question", self.html)
@@ -181,7 +183,7 @@ class ControlAssistantStaticTests(unittest.TestCase):
 
     def test_assistant_knowledge_and_matching_are_offline(self) -> None:
         start = self.js.index("const ASSISTANT_KB =")
-        end = self.js.index("function bindEvents()")
+        end = self.js.index("function sanitiseAssistantBText")
         assistant_block = self.js[start:end]
         for forbidden in ("fetch(", "apiRequest(", "eval(", "new Function"):
             self.assertNotIn(forbidden, assistant_block)
@@ -193,6 +195,123 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertEqual(self.external_assets, [])
         self.assertNotRegex(self.css, r"url\s*\(|@import")
         self.assertNotRegex(self.html, r"<(?:script|link)[^>]+(?:src|href)=[\"'](?:https?:)?//")
+
+    def test_v3_operations_ui_and_api_hooks(self) -> None:
+        required_ids = {
+            "console-resource-summary",
+            "console-resource-note",
+            "global-data-size",
+            "global-host-memory",
+            "global-host-memory-detail",
+            "global-disk-free",
+            "global-disk-detail",
+        }
+        self.assertTrue(required_ids.issubset(set(self.ids)))
+        for term in (
+            "插件管理",
+            "记忆模式",
+            "direct",
+            "astrbot",
+            "instance-v3-panel",
+            "plugin-switch",
+            "memory-mode-option",
+            "instance-resource-grid",
+            "data_dir_size_bytes",
+            "memory_usage_bytes",
+            "cpu_percent",
+            "host_memory",
+            "containerMemoryUsageBytes",
+        ):
+            self.assertIn(term, self.js)
+        for endpoint in (
+            "/plugins",
+            "/plugins/toggle",
+            "/memory",
+            "/api/stats",
+            "/stats",
+        ):
+            self.assertIn(endpoint, self.js)
+        for style in (
+            ".console-resource-summary",
+            ".instance-v3-panel",
+            ".plugin-switch",
+            ".memory-mode-option",
+            ".instance-resource-grid",
+        ):
+            self.assertIn(style, self.css)
+        self.assertIn("当前后端未提供插件管理接口", self.js)
+        self.assertIn("当前后端未提供记忆模式接口", self.js)
+        self.assertIn("当前后端未提供资源统计接口", self.js)
+
+    def test_v3_errors_are_card_local(self) -> None:
+        plugin_start = self.js.index("async function handlePluginToggle")
+        plugin_end = self.js.index("function buildMemorySection")
+        plugin_handler = self.js[plugin_start:plugin_end]
+        self.assertNotIn("showToast", plugin_handler)
+        self.assertIn("setV3Status", plugin_handler)
+        memory_start = self.js.index("async function handleMemoryModeChange")
+        memory_end = self.js.index("function containerMemoryText")
+        memory_handler = self.js[memory_start:memory_end]
+        self.assertNotIn("showToast", memory_handler)
+        self.assertIn("setV3Status", memory_handler)
+
+    def test_optional_assistant_b_ui_and_api_hooks(self) -> None:
+        required_ids = {
+            "assistant-b-card",
+            "assistant-b-badge",
+            "assistant-b-status",
+            "assistant-b-meta",
+            "assistant-b-commit",
+            "assistant-b-path",
+            "assistant-b-entry",
+            "assistant-b-readme",
+            "assistant-b-install",
+            "assistant-b-install-label",
+            "assistant-b-update",
+            "assistant-b-update-label",
+            "assistant-b-retry",
+        }
+        self.assertTrue(required_ids.issubset(set(self.ids)))
+        for term in (
+            "AI 助手 B",
+            "可选扩展",
+            "A · 离线使用助手",
+            "安装 AI 助手 B",
+            "再次点击确认安装",
+            "更新 AI 助手 B",
+            "会联网",
+            "API Key",
+            "当前后端不支持扩展安装",
+        ):
+            self.assertIn(term, self.html + self.js)
+        for endpoint in (
+            "/api/assistant/status",
+            "/api/assistant/install",
+            "/api/assistant/update",
+        ):
+            self.assertIn(endpoint, self.js)
+        for style in (".assistant-b-card", ".assistant-b-meta", ".assistant-b-actions"):
+            self.assertIn(style, self.css)
+
+    def test_optional_assistant_b_is_confirm_first_and_card_local(self) -> None:
+        start = self.js.index("function sanitiseAssistantBText")
+        end = self.js.index("function bindEvents()")
+        block = self.js[start:end]
+        self.assertIn("assistant.armed", block)
+        self.assertIn("再次点击确认安装", block)
+        self.assertIn("runAssistantBAction('install')", block)
+        self.assertIn("status === 'unsupported'", block)
+        self.assertIn("当前后端不支持扩展安装", block)
+        self.assertIn("data.ok === false", block)
+        self.assertIn("hasInstalledField", block)
+        self.assertIn("sanitiseAssistantBText", block)
+        self.assertIn("entry", block)
+        self.assertIn("readme", block)
+        # The B helper must not read/persist API keys or emit global errors.
+        for forbidden in ("api_key", "deepseek_api_key", "localStorage", "sessionStorage", "innerHTML"):
+            self.assertNotIn(forbidden, block)
+        for forbidden in ("showToast", "setConsoleError"):
+            self.assertNotIn(forbidden, block)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_console_javascript_syntax(self) -> None:

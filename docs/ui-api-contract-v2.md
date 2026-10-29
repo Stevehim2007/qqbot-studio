@@ -497,3 +497,382 @@ v2 默认将管理服务、AstrBot WebUI、SnowLuma WebUI 和 noVNC 的宿主机
 - 如果扫码后要求设备验证、短信验证、滑块或安全验证，必须在 noVNC 里按 QQ 官方提示操作；工具不能绕过验证。
 - 第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。
 - DeepSeek API Key 仅写入本机 AstrBot 配置，不在浏览器持久存储中保存，也不在控制台展示。
+
+---
+
+## 8. v3 可选运维接口（向后兼容）
+
+所有接口仍要求 `X-QB-Token`。以下字段均为**新增可选字段**；v2 的 `/api/state`、`/api/instances`、
+`/api/job/<id>`、`/api/action`、`/api/persona`、`/api/logs`、镜像和删除接口保持不变。
+前端应把未知字段忽略，并在 404/405/网络失败时只降级对应卡片，不要阻断整页。
+
+### 8.1 实例插件列表
+
+```text
+GET /api/instances/<instance_id>/plugins
+```
+
+成功时使用 AstrBot v4.29 的 `GET /api/v1/plugins`（兼容旧版 `GET /api/plugin/get`）。
+插件记录来自 AstrBot，不伪造安装状态。
+
+```json
+{
+  "ok": true,
+  "plugins": [
+    {
+      "id": "qqbot_enhancer",
+      "plugin_id": "qqbot_enhancer",
+      "name": "QQ Bot 增强回复",
+      "enabled": true,
+      "version": "1.4.1",
+      "description": "QQ 群 @/私聊必回、概率回复等增强。",
+      "source": "installed",
+      "reserved": false,
+      "root_dir_name": "qqbot_enhancer",
+      "restart_required": false,
+      "error": ""
+    }
+  ],
+  "items": [],
+  "failed": "",
+  "api_available": true,
+  "cached": false,
+  "restart_required": false,
+  "message": "已从 AstrBot v4.29 插件接口读取插件状态。",
+  "error": ""
+}
+```
+
+- `source` 为 `installed` 或 `builtin`；`reserved=true` 表示 AstrBot 内置插件。
+- `enabled` 来自 AstrBot 的 `activated` 字段；AstrBot 不可达时降级读取本地插件目录和
+  `data_v4.db` 的禁用列表，此时 `enabled` 可能为 `null`，且 `api_available=false`。
+- 降级响应仍是 HTTP 200 JSON，但 `ok=false`，前端据此禁用启停开关。Docker 不可用不能导致 500。
+
+### 8.2 实例插件启停
+
+```text
+POST /api/instances/<instance_id>/plugins
+POST /api/instances/<instance_id>/plugins/toggle   # 兼容别名
+body: {"plugin_id": "qqbot_enhancer", "enabled": false}
+```
+
+服务端使用 AstrBot v4.29 真实接口
+`PATCH /api/v1/plugins/enabled`；旧版 AstrBot 回退到
+`POST /api/plugin/off` / `POST /api/plugin/on`。两者都会实际卸载/加载或更新运行时激活状态，
+不会通过改仓库文件伪装成功。
+
+```json
+{
+  "ok": true,
+  "plugin": {
+    "id": "qqbot_enhancer",
+    "name": "QQ Bot 增强回复",
+    "enabled": false,
+    "version": "1.4.1",
+    "description": "QQ 群 @/私聊必回、概率回复等增强。",
+    "source": "installed",
+    "restart_required": false,
+    "error": ""
+  },
+  "restart_required": false,
+  "message": "停用成功。",
+  "error": ""
+}
+```
+
+AstrBot v4.29 的启停接口会热更新插件；`restart_required=false`。如果 AstrBot 或接口不可达，
+返回可操作的中文错误，不会把插件标记为已修改。至少支持管理内置 `qqbot_enhancer` 及
+AstrBot 内置（reserved）插件。
+
+兼容别名：`GET /api/plugins?instance=<id>`、`POST /api/plugins?instance=<id>`，请求体相同。
+
+### 8.3 记忆模式
+
+```text
+GET  /api/instances/<instance_id>/memory
+POST /api/instances/<instance_id>/memory
+body: {"mode": "direct"}  或  {"mode": "astrbot"}
+```
+
+读取响应：
+
+```json
+{
+  "ok": true,
+  "mode": "astrbot",
+  "memory_mode": "astrbot",
+  "options": ["direct", "astrbot"],
+  "memory_scope": "session",
+  "group_session_key": "event.unified_msg_origin",
+  "private_session_key": "event.unified_msg_origin",
+  "unique_session": false,
+  "group_memory_shared": true,
+  "restart_required": false,
+  "config_path": "…/data/astrbot/config/qqbot_enhancer_config.json",
+  "astrbot_config_path": "…/data/astrbot/cmd_config.json",
+  "behavior": {
+    "group": "同一群的消息共享 event.unified_msg_origin 对应的会话。",
+    "private": "私聊按用户各自的 event.unified_msg_origin 会话保存。",
+    "reset": "/reset 清空当前会话历史，保留会话与人格。",
+    "new": "/new 切换到一个新会话，旧历史仍保存在 AstrBot 数据库中。"
+  },
+  "message": "astrbot 模式使用 AstrBot 当前会话……",
+  "error": ""
+}
+```
+
+保存成功响应额外包含 `applied_live`：
+
+```json
+{
+  "ok": true,
+  "mode": "astrbot",
+  "memory_mode": "astrbot",
+  "memory_scope": "session",
+  "applied_live": true,
+  "restart_required": true,
+  "message": "AstrBot 已热重载插件……重启 AstrBot 后共享会话迁移生效。",
+  "error": ""
+}
+```
+
+语义与迁移：
+
+- `direct` 是既有安装的默认值。读取旧配置时**不会写入或覆盖**用户已经选择的 `direct`；只有缺失
+  字段才按默认值补齐。
+- `astrbot` 模式把回复交给 AstrBot 默认 Agent。AstrBot v4.29 的
+  `platform_settings.unique_session` 必须为 `false`，群聊才会按
+  `event.unified_msg_origin` 共享同一份会话记忆；私聊的 UMO 天然包含用户会话，因此按用户隔离。
+- 保存 `astrbot` 时，服务端会以增量方式把 `cmd_config.json` 的
+  `platform_settings.unique_session` 迁移为 `false`，保留其它配置。迁移需要 AstrBot 重启才完全生效，
+  所以 `restart_required=true`；插件配置本身通过真实 `PUT /api/v1/plugins/config` 接口热重载。
+- AstrBot 未运行时可先把插件配置写到本地文件，`applied_live=false`、`restart_required=true`。
+  AstrBot 无法写入 `cmd_config.json` 等无法保证共享会话的情况返回 `ok=false` 和中文原因。
+- `/reset` 清空**当前**会话历史并保留会话与人格；`/new` 切换到新会话，旧会话仍在 AstrBot SQLite
+  数据卷中，可按会话管理功能查看。两命令都不提供跨群共享知识库；长期记忆边界是 AstrBot 的会话存储，
+  不是无限期全局记忆。
+- 兼容别名：`GET/POST /api/memory?instance=<id>`，POST 请求体相同。
+
+### 8.4 资源统计
+
+```text
+GET /api/stats?instance=<instance_id>
+GET /api/instances/<instance_id>/stats
+```
+
+省略 `instance` 时返回全局视图（`scope=global`）。Docker、`/proc` 或 Windows 内存 API 不可用时，
+接口仍返回 HTTP 200 JSON，`ok=true`，并在 `errors`、`host_memory.error` 或对应 Docker 条目的
+`error` 中说明原因。
+
+```json
+{
+  "ok": true,
+  "scope": "instance",
+  "instance_id": "bot-1",
+  "generated_at": "2026-01-01T12:00:00+00:00",
+  "cached": false,
+  "host_memory": {
+    "total_bytes": 17179869184,
+    "available_bytes": 8589934592,
+    "used_bytes": 8589934592,
+    "used_percent": 50.0,
+    "source": "/proc/meminfo",
+    "error": ""
+  },
+  "instances": [
+    {
+      "instance_id": "bot-1",
+      "name": "群聊助手一号",
+      "directory": "/home/user/.local/share/qqbot-studio/instances/bot-1",
+      "data_dir_size_bytes": 1234567,
+      "data_size_bytes": 1234567,
+      "file_count": 120,
+      "rollup": [
+        {"path": "data", "bytes": 1200000, "file_count": 100, "errors": []}
+      ],
+      "errors": []
+    }
+  ],
+  "docker": [
+    {
+      "instance_id": "bot-1",
+      "container": "qqbot-bot-1-astrbot",
+      "service": "astrbot",
+      "status": "available",
+      "cpu_percent": 1.25,
+      "memory_usage_bytes": 104857600,
+      "memory_limit_bytes": 1073741824,
+      "memory_percent": 9.77,
+      "error": ""
+    }
+  ],
+  "global": {
+    "data_dir": "/home/user/.local/share/qqbot-studio",
+    "data_dir_size_bytes": 5000000,
+    "file_count": 400,
+    "instances_total_bytes": 4000000,
+    "disk": {
+      "total_bytes": 100000000000,
+      "used_bytes": 40000000000,
+      "free_bytes": 60000000000,
+      "used_percent": 40.0,
+      "error": ""
+    }
+  },
+  "errors": [],
+  "error": "",
+  "message": "资源统计已更新。"
+}
+```
+
+- 全局和每个实例的数据目录占用使用标准库递归统计，不跟随符号链接；单文件/目录读取失败不会使整个响应失败。
+- Docker 容器 CPU/内存通过 `docker stats --no-stream --format '{{json .}}' <containers...>` 获取。
+- 响应短时缓存约 5 秒，`cached=true` 表示命中缓存；不要求前端参与缓存。
+- 兼容旧字段：没有移除 `/api/state` / `/api/instances` 中任何已有字段。
+  `/api/state` 的 `deployment.memory_mode` 和顶层 `memory_mode` 是新增可选提示。
+
+### 8.5 v1/v2 旧数据兼容与迁移
+
+- v1 单实例根目录布局（`config.json`、`secrets.json`、`compose.yml`、`.env`、`jobs/`、`data/`）
+  会在首次启动多实例服务时迁移到 `instances/bot-1`；原 compose、`.env` 和 `cmd_config.json`
+  内容保持不变，旧容器名/网络名会写入实例元数据以便继续管理。
+- v2 实例目录缺少 `instance.json` 时，会从 `compose.yml`/`config.json` 推断并补写最小元数据；
+  已有 `instance.json` 字段优先，不删除未知字段。
+- `config.json` 的新增字段采用 additive migration：只补缺失值，不覆盖用户已有的
+  `memory_mode=direct` 或其它调优值。`cmd_config.json` 的 `platform_settings` 其他键保持不变。
+- 旧版本地插件配置缺少 `memory_mode` 时按 `direct` 处理；只有保存记忆模式时才写入明确值。
+  旧版 `compose.yml`/`.env` 不需要为了升级后端而重写，更新镜像时仍可沿用。
+
+---
+
+## 9. 可选 AI 助手 B 安装与状态
+
+AI 助手 B 是独立仓库中的可选生成式 AI 助手，不是主项目内置的离线助手 A。A 始终保留；
+B 默认不安装、不自动启动，主项目也不会读取或传递 B 的 API Key。
+
+固定仓库（服务端不接受请求体传入 URL 或路径）：
+
+```text
+https://github.com/Stevehim2007/qqbot-studio-ai-assistant.git
+```
+
+固定安装目录：
+
+```text
+<QQBOT_STUDIO_DATA_DIR>/extensions/ai-assistant
+```
+
+Linux 默认即 `~/.local/share/qqbot-studio/extensions/ai-assistant`。服务端只 clone/更新该独立
+仓库，不执行该仓库内的任意脚本。B 的依赖安装、密钥配置和启动必须由用户按 B 的 README 手动完成。
+
+### 9.1 状态
+
+```text
+GET /api/assistant/status
+```
+
+需要 `X-QB-Token`。未安装、扩展目录缺失、目录不完整或 Git 不可用时仍返回 HTTP 200 JSON，不返回
+500；`installed=false` 是正常状态。检查失败时 `ok=false` 且 `error/message` 说明原因。
+
+```json
+{
+  "ok": true,
+  "installed": true,
+  "path": "/home/user/.local/share/qqbot-studio/extensions/ai-assistant",
+  "repo": "https://github.com/Stevehim2007/qqbot-studio-ai-assistant.git",
+  "commit": "c15fb5b",
+  "entry": "/home/user/.local/share/qqbot-studio/extensions/ai-assistant/assistant.py",
+  "readme": "/home/user/.local/share/qqbot-studio/extensions/ai-assistant/README.md",
+  "entry_file": "assistant.py",
+  "readme_file": "README.md",
+  "entry_exists": true,
+  "readme_exists": true,
+  "repo_ok": true,
+  "directory_exists": true,
+  "branch": "main",
+  "dirty": false,
+  "action": "",
+  "message": "AI 助手 B 已安装。主项目不会自动启动它。",
+  "error": ""
+}
+```
+
+字段说明：
+
+- `entry` / `readme` 为便于界面展示的**绝对路径**；`entry_file` / `readme_file` 为仓库内相对文件名。
+- `commit` 为当前 `HEAD` 的短 commit；无 Git 仓库时为空字符串。
+- `installed=true` 要求扩展目录、`.git`、`assistant.py`、`README.md` 和有效 commit 均可用。
+- 响应不包含 B 的 `config.json`、DeepSeek API Key、访问令牌或任何配置内容。
+- 扩展路径是符号链接、不是目录或必要文件不完整时，`ok=false`，但仍返回完整字段供界面降级展示。
+
+### 9.2 安装 / 更新
+
+```text
+POST /api/assistant/install
+POST /api/assistant/update
+Content-Type: application/json
+body: {}
+```
+
+需要 `X-QB-Token`。
+
+`/api/assistant/install`：
+
+- 未安装：clone 固定官方仓库到临时目录，校验 `assistant.py` 和 `README.md` 后原子移动到固定路径。
+- 已安装：等价于执行安全快进更新。
+- 已存在非空但不是有效 Git 仓库的目录：拒绝操作，绝不删除或覆盖用户目录。
+- clone/网络失败：返回 `ok=false`，主项目、A 离线助手和已有实例不受影响。
+
+`/api/assistant/update`：
+
+- 先检查工作区必须干净；有未提交修改时拒绝。
+- 执行 `git fetch origin --prune`，确认 `HEAD` 是远端分支的祖先，再执行 `git merge --ff-only`。
+- 不支持 merge commit、rebase、强制重置或覆盖配置。
+
+成功安装示例（更新时 `action` 为 `updated`，并可能带 `updated:true`）：
+
+```json
+{
+  "ok": true,
+  "installed": true,
+  "path": "/home/user/.local/share/qqbot-studio/extensions/ai-assistant",
+  "repo": "https://github.com/Stevehim2007/qqbot-studio-ai-assistant.git",
+  "commit": "c15fb5b",
+  "entry": "/home/user/.local/share/qqbot-studio/extensions/ai-assistant/assistant.py",
+  "readme": "/home/user/.local/share/qqbot-studio/extensions/ai-assistant/README.md",
+  "action": "installed",
+  "message": "AI 助手 B 已安装到本机扩展目录。主项目不会自动启动它；请阅读 README 并运行扩展目录内的 install.sh。",
+  "error": ""
+}
+```
+
+失败也使用 HTTP 200 + `ok=false`，便于控制台只降级 B 卡片。典型错误包括网络不可达、
+未安装 Git、工作区不干净、非快进更新、扩展目录不是 Git 仓库；不会把 stdout/stderr 中的
+敏感配置回显到前端，也不会为了重试删除旧安装。
+
+### 9.3 `install.sh` 可选安装入口
+
+主项目 `install.sh` 在依赖检查后、启动主服务前询问是否安装 B：
+
+- 首次安装：默认回答为否；明确提示会联网 clone 到
+  `$QQBOT_STUDIO_DATA_DIR/extensions/ai-assistant`，并说明 A 离线助手始终可用。
+- 已有 B：询问是否执行快进更新；有未提交修改时跳过。
+- 非交互环境默认跳过，不阻塞安装。
+- 也可显式设置环境变量：
+  - `QQBOT_INSTALL_AI_ASSISTANT=1` 安装/更新；
+  - `QQBOT_INSTALL_AI_ASSISTANT=0` 跳过。
+- 网络失败只打印警告和可重试命令，主安装继续。
+- clone 成功后只提示用户手动执行 B 的安装器：
+  `cd "$AI_ASSISTANT_DIR" && ./install.sh`，主项目**不自动启动 B**，不运行 B 的脚本，不传 Key。
+
+手动重试示例：
+
+```bash
+AI_ASSISTANT_DIR="${QQBOT_STUDIO_DATA_DIR:-$HOME/.local/share/qqbot-studio}/extensions/ai-assistant"
+git clone --depth 1 https://github.com/Stevehim2007/qqbot-studio-ai-assistant.git "$AI_ASSISTANT_DIR"
+cd "$AI_ASSISTANT_DIR"
+./install.sh
+```
+
+这些接口只新增能力，不修改 v2 现有 API 字段、旧实例目录或容器配置。旧后端没有
+`/api/assistant/*` 时，控制台应按 404/405 降级为“当前后端不支持扩展安装”，A 离线助手仍可用。

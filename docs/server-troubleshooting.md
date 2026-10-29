@@ -1,27 +1,50 @@
 # 服务器部署与实战排错指南
 
-本文记录在云服务器 / 远程 Ubuntu 上部署 QQ Bot Studio 时常见的问题，包括：
+面向 Ubuntu 云服务器/远程主机的专项排错文档。日常安装、使用和功能说明先看主项目 [`README.md`](../README.md)；本文只保留可复现的故障现象、原因和最短修复命令。
 
-- Git HTTPS 报 `Unsupported SSL backend 'openssl'`
-- Docker 安装被取消或只装了一半
-- Docker 已安装且 daemon 正常，但启动器仍误报“未检测到 Docker”
-- Docker 服务启动失败、`Start request repeated too quickly`
-- 旧版容器仍只监听 `127.0.0.1`，新版启动后应从服务器 IP 直接访问
-- 卸载并重装 Docker
-- 国内镜像拉取慢
-- 服务器上运行后，如何从自己的电脑直接访问管理控制台 / WebUI / noVNC
-- 腾讯云安全组 / 轻量应用服务器防火墙开放端口（新手逐步教程）
-- Ubuntu 本机 ufw / firewalld
-- 指定管理服务监听 IP 和端口
-- screen 后台运行与多机器人实例
+> 不要把 API Key、QQ 密码、短信验证码、SnowLuma/VNC 密码或含访问令牌的完整日志贴到公开 issue。本文命令默认项目目录为 `"/你的路径/QQ Ai bot"`，实际路径请替换。
 
-> 详细的日常部署步骤以项目根目录 `README.md` 为准；本文是服务器专项补充。
+## 目录
 
----
+1. [快速定位表](#triage)
+2. [Git 报 Unsupported SSL backend 'openssl'](#git-ssl)
+3. [Docker 安装不完整/被取消](#docker-install-incomplete)
+4. [Docker 已安装但报未检测到 Docker（v2.0.0 目录 bug）](#docker-false-negative)
+5. [Docker daemon 启动失败](#docker-daemon-start)
+6. [卸载并重装 Docker](#docker-reinstall)
+7. [国内镜像拉取慢、镜像节点和离线镜像](#mirror)
+8. [0.0.0.0、127.0.0.1 与 remote 访问](#remote-access)
+9. [腾讯云安全组/轻量应用服务器防火墙](#tencent-cloud)
+10. [Ubuntu ufw/firewalld 和 SSH 隧道](#firewall-ssh)
+11. [旧版 v1 容器仍只监听 127.0.0.1](#old-v1-containers)
+12. [多实例端口冲突、删除实例和残留端口](#port-conflict)
+13. [控制台/API 状态读取失败](#console-status)
+14. [SnowLuma 用户名 admin 密码错误/重置](#snowluma-password)
+15. [QQ 增强插件、找图、点歌不工作](#plugin-issues)
+16. [screen/后台管理服务和日志](#screen)
+17. [Windows 与 Docker Desktop 未验证](#windows)
 
-## 1. Git 报 Unsupported SSL backend 'openssl'
+<a id="triage"></a>
+## 1. 快速定位表
 
-### 现象
+| 症状 | 先做 | 详细章节 |
+|---|---|---|
+| `git pull` 报 SSL backend | 清理 `http.sslBackend` / `GIT_SSL_BACKEND` | [Git SSL](#git-ssl) |
+| 安装 Docker 取消后向导异常 | 确认 `docker compose version`、`docker info` | [Docker 安装不完整](#docker-install-incomplete) |
+| Docker 命令都正常，启动器说没 Docker | 升级到 v2.0.1+，检查旧版 `doctor` 目录 | [Docker 误报](#docker-false-negative) |
+| `Start request repeated too quickly` | 看 `journalctl -xeu docker.service` 的前置错误 | [Docker daemon](#docker-daemon-start) |
+| 本机能 `curl`，外网访问不了 | 查监听地址、实际端口、云安全组、ufw/firewalld | [远程访问](#remote-access) / [腾讯云](#tencent-cloud) |
+| 面板链接只到 `127.0.0.1` | 查旧容器和实例 `.env`/`config.json` | [旧容器](#old-v1-containers) / [端口冲突](#port-conflict) |
+| `port is already allocated` | `docker ps` + `ss`，删除/重建实例 | [端口冲突](#port-conflict) |
+| 控制台某个实例“状态读取失败” | `healthz`、管理日志、`docker info/ps` | [控制台状态](#console-status) |
+| SnowLuma `admin` 密码错误 | 控制台重置密码，或手动重建 `webui.json` 后读新密码 | [SnowLuma](#snowluma-password) |
+| 找图无结果、点歌没声音、概率不回复 | 查插件启用、provider、网络/音频文件 | [插件问题](#plugin-issues) |
+| Windows EXE/ Docker Desktop 问题 | 去独立 Windows 仓库 | [Windows](#windows) |
+
+<a id="git-ssl"></a>
+## 2. Git 报 Unsupported SSL backend 'openssl'
+
+### 症状
 
 ```text
 fatal: Unsupported SSL backend 'openssl'. Supported SSL backends:
@@ -31,64 +54,29 @@ fatal: remote helper 'https' aborted session
 
 ### 原因
 
-你的 Git 被配置成使用 OpenSSL 后端，但当前 Git / libcurl 只编译了 GnuTLS 后端。
-常见来源：
-
-- 从 Windows 或其他机器复制了 `~/.gitconfig`
-- 曾经执行过 `git config --global http.sslBackend openssl`
-- shell 环境里有 `GIT_SSL_BACKEND=openssl`
-- 项目仓库的 `.git/config` 或 `/etc/gitconfig` 也有这个配置
-
-这不是 GitHub 宕机，也不是证书过期。
+当前 Git/libcurl 只编译了 GnuTLS，但 Git 配置、环境变量或复制来的 `.gitconfig` 强制指定了 OpenSSL。这不是 GitHub 宕机或证书过期。
 
 ### 修复
-
-先定位配置来源：
 
 ```bash
 git config --show-origin --show-scope --get-all http.sslBackend
 env | grep -i GIT_SSL_BACKEND
-git --version --build-options
-```
 
-删除错误配置：
-
-```bash
-# 全局配置
 git config --global --unset-all http.sslBackend 2>/dev/null || true
-
-# 当前仓库配置
 git config --local --unset-all http.sslBackend 2>/dev/null || true
-
-# 系统配置（需要 sudo）
 sudo git config --system --unset-all http.sslBackend 2>/dev/null || true
-
-# 当前 shell 环境变量
 unset GIT_SSL_BACKEND
-```
 
-确认不存在残余配置：
-
-```bash
-git config --show-origin --get-all http.sslBackend
-env | grep -i GIT_SSL_BACKEND
-```
-
-然后重试：
-
-```bash
 git pull --ff-only
-# 或
-git push origin main
 ```
 
-如果确认当前 Git 支持 GnuTLS，也可以临时指定：
+如果确认本机 Git 支持 GnuTLS，也可以临时指定：
 
 ```bash
 git -c http.sslBackend=gnutls ls-remote https://github.com/Stevehim2007/qqbot-studio.git
 ```
 
-如果仍失败，可以暂时改用 SSH remote：
+仍失败时可临时改用 SSH remote：
 
 ```bash
 git remote set-url origin git@github.com:Stevehim2007/qqbot-studio.git
@@ -96,227 +84,111 @@ ssh -T git@github.com
 git push origin main
 ```
 
-不要把 `http.sslVerify false` 当作长期修复方案；它会关闭证书校验。
+不要长期使用 `http.sslVerify=false`，它会关闭证书校验。
 
----
+<a id="docker-install-incomplete"></a>
+## 3. Docker 安装不完整/被取消
 
-## 2. Docker 安装被取消后，项目仍然启动
+### 症状
 
-### 现象
-
-安装 Docker 时取消或中断，随后启动项目，向导看起来仍然正常打开，但 Docker 并未安装完成。
+安装 Docker 时取消、断网或只装了一半；向导看似能打开，但无法拉镜像或启动容器。
 
 ### 原因
 
-旧版启动脚本没有在启动向导前做最终的 Docker 状态检查。
+旧版启动器没有在启动向导前完整检查 Docker CLI、Compose 和 daemon。当前版本会检查并以错误退出，不会假装成功。
 
-### 当前版本的处理
-
-新版启动器会严格检查：
+### 修复
 
 ```bash
-docker --version
-docker compose version
-docker info
-```
-
-任何一项不可用都会直接退出，并打印修复命令，不会继续进入向导。
-
-### 处理方法
-
-先关闭旧向导进程：
-
-```bash
-pkill -f "python3 -m qqbot_studio" 2>/dev/null || true
-```
-
-更新代码：
-
-```bash
-cd "/你的项目路径/QQ Ai bot"
-git pull --ff-only
-```
-
-重新运行：
-
-```bash
+cd "/你的路径/QQ Ai bot"
 ./install.sh
 ```
 
-如果 Docker 仍然没有安装成功，可以手动安装：
+如果安装器仍失败，手动安装后再验证：
 
 ```bash
 sudo apt update
 sudo apt install -y docker.io docker-compose-v2
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
-```
-
-注销并重新登录，然后验证：
-
-```bash
+# 注销/重新登录后
 docker --version
 docker compose version
 docker info
 ```
 
----
+`docker info` 报 `permission denied` 时，先注销重登录，或临时重新运行 `sudo -v` 后从终端启动项目。不要直接在网页里输入 sudo 密码。
 
-## 3. Docker 已安装，但启动器仍提示“未检测到 Docker”
+<a id="docker-false-negative"></a>
+## 4. Docker 已安装但报未检测到 Docker（v2.0.0 目录 bug）
 
-### 现象
-
-Docker 明明已经安装并正常运行：
-
-```bash
-docker --version
-docker compose version
-docker info
-systemctl is-active docker
-```
-
-以上命令全部正常，但运行 `./install.sh` / `./start.sh` 时出现：
+### 症状
 
 ```text
 install.sh：Docker、Docker Compose 与守护进程均已就绪。
 start.sh：错误：未检测到 Docker。请先运行 ./install.sh 安装 Docker，或手动安装后重试。
 ```
 
-### 原因（v2.0.0 的启动器 bug）
-
-v2.0.0 的启动器在检查 Docker 时，使用了一个不存在的临时目录作为
-子进程工作目录：
-
-```text
-~/.local/share/qqbot-studio/doctor
-```
-
-Python 的 `subprocess.run(cwd=...)` 在目录不存在时会抛出
-`FileNotFoundError`；程序把这个错误误判成“找不到 docker 命令”，于是即使
-Docker、Compose 和 daemon 全部正常，也会报告“未检测到 Docker”。
-
-### 永久修复
-
-升级到 **v2.0.1 或更高版本**。该版本会使用已存在的数据目录，并且
-`DockerController` 会自行创建所需工作目录。
+但下面命令全部正常：
 
 ```bash
-cd "/你的项目路径/QQ Ai bot"
-git pull --ff-only
-git log -1 --oneline
-```
-
-确认当前提交包含或晚于：
-
-```text
-2f7eb49 fix: detect Docker from an existing working directory
-```
-
-验证版本：
-
-```bash
-python3 -m qqbot_studio --version
-```
-
-然后停掉旧管理服务并重新启动：
-
-```bash
-screen -S qqbot-studio-server -X quit 2>/dev/null || true
-pkill -f "python3 -m qqbot_studio" 2>/dev/null || true
-
-./start.sh --ip 0.0.0.0 --port 8765 --public-host 你的服务器公网IP或域名
-```
-
-### 临时绕过（无法立即更新时）
-
-如果暂时不能 `git pull`，可以手动创建 v2.0.0 缺失的工作目录。
-
-使用默认数据目录时：
-
-```bash
-mkdir -p "$HOME/.local/share/qqbot-studio/doctor"
-./start.sh --ip 0.0.0.0 --port 8765
-```
-
-使用了 `--data-dir` 时，目录要对应那个数据目录：
-
-```bash
-# 假设数据目录是 /data/qqbot-studio
-mkdir -p /data/qqbot-studio/doctor
-./start.sh --data-dir /data/qqbot-studio --ip 0.0.0.0 --port 8765
-```
-
-这只是绕过旧版的误判，长期仍应升级到 v2.0.1。
-
-### 如何确认 Docker 本身是否真的正常
-
-```bash
-command -v docker
 docker --version
 docker compose version
 docker info
 systemctl is-active docker
 ```
 
-- 如果 `docker info` 报 `permission denied`，是 Docker 用户组权限问题，
-  不是本节的目录 bug；
-- 如果 `docker --version` 找不到命令，检查 PATH、Snap 安装路径或重新安装 Docker；
-- 如果以上全部正常，但旧版仍报“未检测到 Docker”，优先按本文升级或创建
-  `doctor` 目录。
+### 原因
 
-### 旧版容器仍只监听 127.0.0.1
+v2.0.0 使用不存在的目录 `~/.local/share/qqbot-studio/doctor` 作为子进程工作目录。Python `subprocess.run(cwd=...)` 在目录不存在时抛 `FileNotFoundError`，程序误判为“找不到 docker 命令”。
 
-旧版 v1 部署可能留下：
+### 永久修复
 
-```text
-qqbot-astrbot
-qqbot-snowluma
-```
-
-它们即使在新版启动后仍可能监听：
-
-```text
-127.0.0.1:5099
-127.0.0.1:6081
-127.0.0.1:6185
-```
-
-v2 会创建自己独立的 `qqbot-bot-N-astrbot` / `qqbot-bot-N-snowluma`
-容器，并把端口绑定到 `0.0.0.0`。旧容器不会被 v2 控制台管理。
-
-查看当前容器：
+升级到 v2.0.1 或更高版本，并重启管理服务：
 
 ```bash
-docker ps --format 'table {{.Names}}	{{.Ports}}'
+cd "/你的路径/QQ Ai bot"
+git pull --ff-only
+git log -1 --oneline
+python3 -m qqbot_studio --version
+./console.sh --restart-service
 ```
 
-确认它们确实是旧版容器且不需要保留后，可以删除：
+目标修复提交包含或晚于：
+
+```text
+2f7eb49 fix: detect Docker from an existing working directory
+```
+
+### 旧版临时绕过
 
 ```bash
-docker rm -f qqbot-astrbot qqbot-snowluma
+mkdir -p "$HOME/.local/share/qqbot-studio/doctor"
+./start.sh --ip 0.0.0.0 --port 8765
 ```
 
-删除容器不会自动删除宿主机上的旧数据目录。若旧 QQ 登录状态还需要保留，
-先备份对应数据目录再操作。
+使用自定义数据目录时，把 `doctor` 建在对应数据目录下，例如：
 
----
+```bash
+mkdir -p /data/qqbot-studio/doctor
+./start.sh --data-dir /data/qqbot-studio --ip 0.0.0.0 --port 8765
+```
 
-## 4. Docker 服务启动失败：Start request repeated too quickly
+如果真正的问题是 Docker 权限或 daemon，按下面章节处理，不要只反复创建目录。
 
-### 现象
+<a id="docker-daemon-start"></a>
+## 5. Docker daemon 启动失败
+
+### 症状
 
 ```text
 docker.service: Start request repeated too quickly.
 docker.service: Failed with result 'exit-code'.
-Failed to start docker.service - Docker Application Container Engine.
 ```
 
-### 先理解这个提示
+`Start request repeated too quickly` 只是 systemd 连续失败后的限流，不是根因。
 
-`Start request repeated too quickly` 只是 systemd 在 Docker 连续失败后触发限流，
-不是根因。真正原因在更早的 `journalctl` 日志中。
-
-### 第一步：查看真正错误
+### 第一步：看真正错误
 
 ```bash
 echo '===== docker ====='
@@ -325,46 +197,21 @@ sudo journalctl -xeu docker.service -b --no-pager -n 200
 echo '===== containerd ====='
 sudo systemctl status containerd.service --no-pager -l
 sudo journalctl -u containerd.service -b --no-pager -n 100
+
+df -h
+df -i
 ```
 
-重点查找：
+重点找：`failed to start daemon`、`containerd`、`iptables/nftables`、`overlay2`、`permission denied`、`no space left`。
 
-- `failed to start daemon`
-- `failed to initialize`
-- `containerd`
-- `iptables` / `nftables`
-- `overlay2`
-- `permission denied`
-- `no space left`
-
-也可以在前台启动查看完整错误：
-
-```bash
-sudo dockerd --debug
-```
-
-看到错误后按 `Ctrl+C`。
-
-### 常见原因一：daemon.json 非法或镜像地址无效
-
-这是很常见的原因，尤其是配置镜像加速时写入了占位符或非法 URL。
-
-检查：
+### 5.1 `/etc/docker/daemon.json` 非法或含占位符
 
 ```bash
 sudo cat /etc/docker/daemon.json 2>/dev/null || echo '没有 daemon.json'
 sudo python3 -m json.tool /etc/docker/daemon.json 2>/dev/null
 ```
 
-如果 JSON 不合法，或里面还是：
-
-```json
-{
-  "registry-mirrors": ["https://<你的专属镜像加速地址>"]
-}
-```
-
-先移除：
+如果 JSON 不合法，或 `registry-mirrors` 仍是 `<你的专属镜像加速地址>` 这类占位符：
 
 ```bash
 sudo cp /etc/docker/daemon.json /etc/docker/daemon.json.bak 2>/dev/null || true
@@ -376,10 +223,9 @@ sudo systemctl start docker
 sudo systemctl status docker --no-pager -l
 ```
 
-如果 Docker 能正常启动，说明是配置文件问题。之后只使用真实可用的镜像地址，
-并先用 `python3 -m json.tool` 校验 JSON。
+Docker 恢复后，再只填真实可用的镜像地址，并先用 `python3 -m json.tool` 校验。
 
-### 常见原因二：containerd 没运行
+### 5.2 containerd 没运行
 
 ```bash
 sudo systemctl enable --now containerd
@@ -388,13 +234,13 @@ sudo systemctl restart containerd
 sudo systemctl start docker
 ```
 
-如果 containerd 也失败，查看：
+containerd 仍失败时看：
 
 ```bash
 sudo journalctl -u containerd.service -b --no-pager -n 100
 ```
 
-### 常见原因三：旧 PID / socket
+### 5.3 旧 PID/socket
 
 ```bash
 sudo systemctl stop docker.socket docker.service 2>/dev/null || true
@@ -404,19 +250,14 @@ sudo systemctl start containerd
 sudo systemctl start docker
 ```
 
-### 常见原因四：iptables / nftables 冲突
+### 5.4 iptables / nftables 冲突
 
-如果日志出现 `iptables failed`、`nftables` 或默认网桥创建失败：
+只有日志明确出现 `iptables failed`、`nftables` 或 Docker 默认网桥创建失败时，才考虑切换 legacy 工具：
 
 ```bash
 sudo apt install -y iptables
 iptables -V
 update-alternatives --display iptables
-```
-
-只有在确认系统使用 legacy iptables 且确实存在冲突时，才考虑：
-
-```bash
 sudo update-alternatives --set iptables /usr/sbin/iptables-legacy
 sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
 sudo systemctl restart containerd
@@ -425,14 +266,14 @@ sudo systemctl restart docker
 
 不要一开始就关闭 Docker 的 iptables 功能，这会破坏容器网络隔离。
 
-### 常见原因五：磁盘满或 Docker 数据损坏
+### 5.5 磁盘满或 Docker 数据损坏
 
 ```bash
 df -h
 df -i
 ```
 
-如果明确是 `/var/lib/docker` 损坏，先备份并移走旧数据：
+如果明确是 `/var/lib/docker` 损坏，先备份，再移走旧数据（会丢失镜像、容器和 Docker 卷）：
 
 ```bash
 sudo systemctl stop docker containerd
@@ -442,70 +283,47 @@ sudo systemctl start containerd
 sudo systemctl start docker
 ```
 
-注意：这会丢失所有 Docker 镜像、容器和 Docker 卷。
-QQ Bot Studio 的机器人数据通常在 `~/.local/share/qqbot-studio/data`，
-该目录是宿主机 bind mount，不受 `/var/lib/docker` 清理影响。
+机器人实例数据通常是宿主机 bind mount，在 `~/.local/share/qqbot-studio/instances`，不随 `/var/lib/docker` 清理自动删除；仍建议先整体备份。
 
-### 修复后的验证
+<a id="docker-reinstall"></a>
+## 6. 卸载并重装 Docker
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl reset-failed docker.service docker.socket
-sudo systemctl start docker
-sudo systemctl status docker --no-pager -l
-docker --version
-docker compose version
-docker info
-```
-
----
-
-## 5. 卸载并重装 Docker
-
-### 4.1 先停止容器并备份机器人数据
+### 6.1 先停止容器并备份机器人数据
 
 ```bash
-cd ~/.local/share/qqbot-studio 2>/dev/null && \
-  docker compose -p qqbot-studio down 2>/dev/null || true
+# 按需逐个停止实例容器；不要删除实例数据目录
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 tar czf ~/qqbot-studio-data-backup.tar.gz \
-  -C ~/.local/share/qqbot-studio data 2>/dev/null || true
+  -C ~/.local/share/qqbot-studio instances studio.json 2>/dev/null || true
 
 sudo systemctl stop docker.socket docker.service containerd.service 2>/dev/null || true
 ```
 
-### 4.2 判断 Docker 包来源
+### 6.2 判断包来源并卸载
 
 ```bash
 dpkg -l | awk '/^ii/ && ($2 ~ /docker|containerd/) {print $2}'
 ```
 
-#### Docker 官方源安装的包
-
-通常包含 `docker-ce`：
+Docker 官方源通常含 `docker-ce`：
 
 ```bash
 sudo apt-get purge -y \
   docker-ce docker-ce-cli containerd.io \
-  docker-buildx-plugin docker-compose-plugin \
-  docker-ce-rootless-extras
-
+  docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras
 sudo apt-get autoremove --purge -y
 ```
 
-#### Ubuntu 源安装的包
-
-通常包含 `docker.io`：
+Ubuntu 源通常含 `docker.io`：
 
 ```bash
 sudo apt-get purge -y \
-  docker.io docker-compose-v2 docker-compose \
-  docker-doc podman-docker
-
+  docker.io docker-compose-v2 docker-compose docker-doc podman-docker
 sudo apt-get autoremove --purge -y
 ```
 
-### 4.3 清理 Docker 源（可选）
+清理 Docker apt 源（可选）：
 
 ```bash
 sudo rm -f /etc/apt/sources.list.d/docker.list
@@ -513,35 +331,26 @@ sudo rm -f /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc
 sudo apt-get update
 ```
 
-### 4.4 是否删除 Docker 数据
-
-只修复安装问题时，建议保留 `/var/lib/docker`，这样已拉取的镜像不用重新下载。
-
-如果要做彻底干净重装，并且不介意重新拉镜像：
+只修复安装问题时建议保留 `/var/lib/docker`；彻底干净重装才执行：
 
 ```bash
 sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker
 ```
 
-### 4.5 重新安装
-
-方式 A：在项目目录中运行安装器：
+### 6.3 重装并验证
 
 ```bash
-cd "/你的项目路径/QQ Ai bot"
+cd "/你的路径/QQ Ai bot"
 ./install.sh
-```
 
-方式 B：Ubuntu 软件包（国内通常更快）：
-
-```bash
+# 或 Ubuntu 软件包
 sudo apt update
 sudo apt install -y docker.io docker-compose-v2
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 ```
 
-注销并重新登录后验证：
+注销重登录后验证：
 
 ```bash
 docker --version
@@ -549,346 +358,158 @@ docker compose version
 docker info
 ```
 
----
+<a id="mirror"></a>
+## 7. 国内镜像拉取慢、镜像节点和离线镜像
 
-## 6. 国内镜像加速
+### 症状
 
-向导现在默认勾选“使用国内镜像加速（自动多源）”，会依次尝试：
+拉 AstrBot/SnowLuma 镜像很慢、超时或拉取失败。
 
-1. `m.daocloud.io/docker.io/`
-2. `docker.1ms.run/`
-3. `docker.xuanyuan.me/`
-4. `hub.rat.dev/`
+### 原因
 
-拉取失败会自动切换下一个源。成功源记录在对应机器人实例的：
+Docker Hub/网络不稳定、镜像节点不可用，或节点可达但不包含目标 tag。
 
-```text
-~/.local/share/qqbot-studio/instances/<instance>/config.json
-```
+### 修复
 
-v2 的节点测速、切换、添加和删除都在部署向导 UI 中完成，不需要设置环境变量。
-节点列表保存在：
+1. 打开部署向导的 **Docker 镜像节点** 卡片，等待自动测速，优先选择低延迟且状态正常的节点。
+2. 默认会依次尝试：DaoCloud、1ms.run、轩辕镜像、RatHub；选中节点失败后会回退到其他候选。
+3. 自定义前缀只写主机和路径，不要写协议：
 
 ```text
-~/.local/share/qqbot-studio/studio.json
+registry.example.com/
 ```
 
-要求自定义前缀支持：
-
-```text
-<prefix>/soulter/astrbot:latest
-<prefix>/motricseven7/snowluma:latest
-```
-
-### Docker daemon 镜像加速器
-
-可选，不是必需。若配置 `/etc/docker/daemon.json`：
-
-```json
-{
-  "registry-mirrors": ["https://你的真实镜像加速地址"]
-}
-```
-
-必须使用真实地址，不能使用占位符。校验 JSON：
-
-```bash
-sudo python3 -m json.tool /etc/docker/daemon.json
-```
-
-再重启：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart docker
-```
-
-如果 Docker 因此无法启动，先移除 daemon.json，确认 Docker 正常后再重新配置。
-
-### 离线导入镜像
+4. 节点测速返回 HTTP 401 通常表示 Registry 端点可达且需要认证，不等于失败；最终以能否拉取目标镜像为准。
+5. 镜像拉不下来时，可在能联网的机器保存再导入：
 
 ```bash
 docker pull soulter/astrbot:latest
 docker pull motricseven7/snowluma:latest
-docker save -o qqbot-images.tar soulter/astrbot:latest motricseven7/snowluma:latest
-```
+docker save -o qqbot-images.tar \
+  soulter/astrbot:latest motricseven7/snowluma:latest
 
-拷贝到目标服务器后：
-
-```bash
+# 目标服务器
 docker load -i qqbot-images.tar
 ```
 
-程序会先检查本地镜像，已存在时跳过重复拉取。
-
----
-
-## 7. 服务器上运行，自己的电脑如何访问
-
-### v2 默认：直接使用服务器 IP
-
-v2 默认监听：
-
-```text
-0.0.0.0:8765
-```
-
-服务器上运行：
+6. 如果修改了 `/etc/docker/daemon.json` 的 `registry-mirrors`，必须使用真实地址、校验 JSON，并在 Docker 起不来时先移除该文件：
 
 ```bash
-cd "/你的项目路径/QQ Ai bot"
-./install.sh
+sudo python3 -m json.tool /etc/docker/daemon.json
+sudo systemctl daemon-reload
+sudo systemctl restart docker
 ```
 
-安装器完成后会自动调用 `start.sh`，创建第一个机器人实例并打印地址，例如：
+回退日志和当前节点写在实例的 `config.json`，部署页也可查看逐镜像拉取日志。
 
-```text
-请用电脑/手机浏览器打开部署向导：
-http://服务器IP:8765/wizard?instance=bot-1
+<a id="remote-access"></a>
+## 8. 0.0.0.0、127.0.0.1 与 remote 访问
 
-管理控制台：
-http://服务器IP:8765/console
-```
+### 先分清四件事
 
-在自己电脑浏览器打开对应地址即可。AstrBot、SnowLuma、noVNC 的宿主机端口也会
-绑定到 `0.0.0.0`，具体 URL 会显示在控制台/完成页中。
+| 项目 | 作用 |
+|---|---|
+| 监听地址 `bind_host` | `0.0.0.0` 表示所有网卡；`127.0.0.1` 只允许本机 |
+| 管理端口 `bind_port` | 默认 `8765`，不是机器人实例端口 |
+| 实例三端口块 | AstrBot/SnowLuma/noVNC，程序在 `5000–10000` 内自动分配 |
+| `public_host` | 只影响打印/打开的 URL，不改变监听地址 |
 
-### 多机器人实例
+### 症状与修复
 
 ```bash
-# 每次运行创建一个新实例
-./start.sh
+cd "/你的路径/QQ Ai bot"
 
-# 查看和控制所有实例
-./console.sh
+# 只允许本机
+./console.sh --ip 127.0.0.1 --port 8765
+
+# 允许外网/局域网访问，必须配合安全组和防火墙
+./console.sh --ip 0.0.0.0 --port 8765 --public-host 你的公网IP或域名
 ```
 
-控制台会显示每个实例的 QQ、容器状态、AstrBot/SnowLuma/noVNC 链接以及部署任务。
-
-### 管理服务 IP / 端口
-
-首次运行会询问并保存到：
-
-```text
-~/.local/share/qqbot-studio/studio.json
-```
-
-以后可通过参数修改：
+检查实际监听：
 
 ```bash
-./start.sh --ip 0.0.0.0 --port 8765
-./console.sh --ip 0.0.0.0 --port 8765
+ss -ltnp 2>/dev/null | grep 8765
+# 0.0.0.0:8765 或 *:8765 表示所有网卡；127.0.0.1:8765 只允许本机
 ```
 
-只允许本机访问时：
+服务器本机验证：
 
 ```bash
-./start.sh --ip 127.0.0.1 --port 8765
+curl -I http://127.0.0.1:8765/healthz
 ```
 
-### 安全风险（必须阅读）
+如果本机正常、外部打不开，按顺序查：
 
-v2 默认 `0.0.0.0` 是为了方便直接从电脑/手机访问，但这会把：
+1. `bind_host` 是否真的是 `0.0.0.0`；
+2. 云安全组/轻量防火墙是否放行实际端口；
+3. Ubuntu ufw/firewalld 和 Docker 发布规则；
+4. `public_host` 是否填错（它只改链接，不改监听）；
+5. 路由/NAT/公网 IP 是否正确。
 
-- 管理控制台
-- AstrBot WebUI
-- SnowLuma WebUI
-- noVNC 远程桌面
-- 会显示登录凭据的部分页面
-
-暴露到服务器网络。必须使用云安全组、防火墙或 VPN 限制来源 IP；
-不要把 noVNC/VNC 端口直接开放给公网。多人共用主机时，不应把本工具当作多租户
-安全隔离方案。
-
-### 可选：SSH 隧道
-
-如果只想通过 SSH 安全访问，先让管理服务只监听回环：
-
-```bash
-./start.sh --ip 127.0.0.1 --port 8765
-```
-
-自己电脑执行：
-
-```bash
-ssh -N -L 8765:127.0.0.1:8765 用户名@服务器IP
-```
-
-然后访问：
-
-```text
-http://127.0.0.1:8765/console
-```
-
-`-N` 表示只建立隧道、不执行远程命令；`-L` 表示本地端口转发。
-需要访问 AstrBot/noVNC 时，可以在命令中追加多个 `-L`：
-
-```bash
-ssh -N \
-  -L 8765:127.0.0.1:8765 \
-  -L 6185:127.0.0.1:6185 \
-  -L 5099:127.0.0.1:5099 \
-  -L 6081:127.0.0.1:6081 \
-  用户名@服务器IP
-```
-
-实际端口查看：
+实例的实际端口不要猜，查看：
 
 ```bash
 cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
----
+`docker ps` 中若看到 `127.0.0.1:xxxx->...`，说明该容器只绑定回环。旧版 v1 容器不会被 v2 自动迁移，见 [旧容器](#old-v1-containers)。
 
-## 8. 腾讯云开放端口 / 防火墙教程（新手）
+<a id="tencent-cloud"></a>
+## 9. 腾讯云安全组/轻量应用服务器防火墙
 
-很多人以为程序启动了就能从自己电脑访问，实际上需要同时确认两件事：
+### 需要放行什么
 
-1. **云服务器防火墙/安全组**是否放行了端口；
-2. **程序本身**是否监听在 `0.0.0.0`，而不是只监听 `127.0.0.1`。
+| 用途 | 端口 |
+|---|---|
+| 管理控制台/部署向导 | 默认 `8765/tcp` |
+| 每个实例 AstrBot/SnowLuma/noVNC | 以控制台和 `config.json` 中该实例的实际三端口为准，通常在 `5000–10000` |
 
-只完成其中一项都可能打不开页面。
+不要再假设旧版的固定宿主机端口 `6185/5099/6081`；这些是容器内部端口，宿主机映射已按实例重新分配。
 
-### 8.1 需要开放哪些端口
-
-先开放管理控制台端口：
-
-| 用途 | 默认端口 | 协议 |
-|---|---:|---|
-| QQ Bot Studio 管理控制台/部署向导 | `8765` | TCP |
-
-部署完成后，控制台/完成页会显示每个机器人的实际链接。默认服务端口通常是：
-
-| 用途 | 常见默认端口 | 协议 |
-|---|---:|---|
-| AstrBot WebUI | `6185` | TCP |
-| SnowLuma WebUI | `5099` | TCP |
-| noVNC（QQ 扫码/验证） | `6081` | TCP |
-
-> 这些机器人端口是自动分配的，端口被占用时会变化。不要只照着默认端口开，
-> 要以控制台显示的实际 URL/端口为准。
-
-查看当前实际端口：
-
-```bash
-docker ps --format 'table {{.Names}}	{{.Ports}}'
-```
-
-或者查看某个实例的配置：
-
-```bash
-cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
-```
-
-每新建一个机器人实例，都可能使用新的端口，需要把新实例的实际端口也加入防火墙。
-
-如果服务器出站规则被改成只允许白名单，还需要允许出站 `TCP 443` 访问 Docker Hub、
-镜像站和 `api.deepseek.com`。腾讯云默认出站通常是允许全部，一般不用额外配置。
-
-### 8.2 腾讯云 CVM（云服务器）安全组操作
+### CVM 安全组
 
 1. 登录腾讯云控制台：<https://console.cloud.tencent.com/cvm>
-2. 进入 **云服务器 → 实例**，确认服务器地域正确，找到你的服务器。
-3. 点击服务器名称或右侧操作，进入 **安全组** / **配置安全组**。
-4. 找到该实例绑定的安全组，点击 **修改规则** / **编辑规则**。
-5. 选择 **入站规则**，点击 **添加规则**。
-6. 新增一条规则，例如管理控制台：
+2. 进入 **云服务器 → 实例**，确认地域和实例。
+3. 打开 **安全组 → 修改规则/编辑规则**。
+4. **入站规则 → 添加规则**：类型自定义，协议端口 `TCP:8765`，来源填自己的公网 IP/32（例如 `203.0.113.25/32`），策略允许。
+5. 部署后按控制台显示的实际实例端口，仅按需添加对应 TCP 规则。
+6. 临时测试才使用 `0.0.0.0/0`，测试后立即收紧。
 
-   ```text
-   类型：自定义
-   来源：你的电脑公网 IP/32（更安全）或 0.0.0.0/0（临时测试）
-   协议端口：TCP:8765
-   策略：允许
-   备注：QQ Bot Studio 管理控制台
-   ```
+### 轻量应用服务器 Lighthouse
 
-7. 保存/应用规则。
-8. 首次部署完成后，再按控制台显示的实际端口，新增 AstrBot、SnowLuma、noVNC 的 TCP 入站规则。
+1. 登录：<https://console.cloud.tencent.com/lighthouse>
+2. 进入 **轻量应用服务器 → 服务器 → 防火墙**。
+3. 添加规则：应用类型自定义、协议 TCP、端口 `8765`、来源固定 IP/32、策略允许。
+4. 部署后按实际实例端口继续添加；不要一次开放整个端口段给公网。
 
-### 8.3 来源填什么：先方便还是先安全
+如果服务器出站规则被改成白名单，还要允许 TCP 443 访问 Docker Hub、镜像站和 `api.deepseek.com`；腾讯云默认出站通常是允许全部。
 
-**推荐：来源填你自己的公网 IP/32。**
+<a id="firewall-ssh"></a>
+## 10. Ubuntu ufw/firewalld 和 SSH 隧道
 
-例如你的电脑公网 IP 是 `203.0.113.25`，就填：
-
-```text
-203.0.113.25/32
-```
-
-腾讯云安全组页面通常有“我的 IP”快捷选项，可以直接使用。
-
-如果你是动态公网 IP、不知道自己的 IP，或者刚开始配置，可以先临时使用：
-
-```text
-0.0.0.0/0
-```
-
-这表示允许所有 IPv4 来源访问该端口。**临时测试完成后应尽快收紧到自己的 IP**。
-尤其不要把 noVNC/VNC 和管理控制台长期暴露给整个公网。
-
-如果你使用家庭宽带，公网 IP 经常变化，可以：
-
-- 每次变化时更新安全组来源；或
-- 只允许公司/家庭固定 IP；或
-- 使用 VPN、Tailscale、WireGuard、SSH 隧道（更推荐）。
-
-### 8.4 腾讯云轻量应用服务器（Lighthouse）防火墙
-
-轻量应用服务器不一定叫“安全组”，通常叫“防火墙”。
-
-1. 登录轻量应用服务器控制台：<https://console.cloud.tencent.com/lighthouse>
-2. 进入 **轻量应用服务器 → 服务器**，选择你的实例。
-3. 找到 **防火墙** 标签页。
-4. 点击 **添加规则**。
-5. 配置：
-
-   ```text
-   应用类型：自定义
-   协议：TCP
-   端口：8765
-   来源：你的公网 IP/32，或临时 0.0.0.0/0
-   策略：允许
-   备注：QQ Bot Studio
-   ```
-
-6. 保存后按同样方式添加部署完成后的实际服务端口。
-
-轻量服务器和 CVM 的安全组路径不同，但最终目的都是放行入站 TCP 端口。
-
-### 8.5 Ubuntu 本机 ufw 防火墙
-
-云安全组之外，Ubuntu 自己也可能启用了 ufw。
-
-查看状态：
+### ufw
 
 ```bash
 sudo ufw status verbose
-```
-
-如果显示 `inactive`，本机 ufw 没有拦截；云安全组是主要边界。
-
-如果显示 `active`，先确保 SSH 已放行，再开放管理端口（不要在远程 SSH 中把自己锁在外面）：
-
-```bash
+# 远程 SSH 中先放行 SSH，避免把自己锁在外面
 sudo ufw allow OpenSSH
 sudo ufw allow 8765/tcp
 sudo ufw status numbered
 ```
 
-部署后拿到实际服务端口，再按需开放，例如：
+部署后再按实例实际端口放行，例如：
 
 ```bash
-sudo ufw allow 6185/tcp
-sudo ufw allow 5099/tcp
-sudo ufw allow 6081/tcp
+sudo ufw allow 5000/tcp
+sudo ufw allow 5001/tcp
+sudo ufw allow 5002/tcp
 ```
 
-> 重要：Docker 发布端口时会写入自己的 iptables NAT 规则，部分场景下会绕过 ufw。
-> 因此不要只依赖 ufw，**腾讯云安全组/轻量防火墙才是最终公网边界**。
+**Docker 发布端口可能写入自己的 iptables NAT 规则，从而绕过部分 ufw 限制；云安全组/轻量防火墙才是最终公网边界。**
 
-### 8.6 Ubuntu firewalld
-
-如果系统使用 firewalld：
+### firewalld
 
 ```bash
 sudo firewall-cmd --state
@@ -897,184 +518,284 @@ sudo firewall-cmd --reload
 sudo firewall-cmd --list-ports
 ```
 
-部署后再添加实际端口：
+### SSH 隧道（最安全）
+
+服务器管理服务只绑定回环：
 
 ```bash
-sudo firewall-cmd --permanent --add-port=6185/tcp
-sudo firewall-cmd --permanent --add-port=5099/tcp
-sudo firewall-cmd --permanent --add-port=6081/tcp
-sudo firewall-cmd --reload
+./console.sh --ip 127.0.0.1 --port 8765
 ```
 
-### 8.7 检查程序是否监听 0.0.0.0
-
-开放安全组后，还要确认程序监听地址正确。
+自己电脑执行：
 
 ```bash
-ss -ltnp | grep -E '8765|6185|5099|6081'
+ssh -N -L 8765:127.0.0.1:8765 用户名@服务器IP
 ```
 
-正确的管理服务应该类似：
-
-```text
-LISTEN 0 128 0.0.0.0:8765 ...
-```
-
-如果看到：
-
-```text
-LISTEN 0 128 127.0.0.1:8765 ...
-```
-
-那么只有服务器本机能访问，安全组开得再宽也没用。检查：
+本机打开 `http://127.0.0.1:8765/console`。要访问某个实例的 AstrBot/SnowLuma/noVNC，按 `config.json` 中该实例实际端口追加 `-L`。例如实例端口为 `5000/5001/5002`：
 
 ```bash
-cat ~/.local/share/qqbot-studio/studio.json
+ssh -N \
+  -L 8765:127.0.0.1:8765 \
+  -L 5000:127.0.0.1:5000 \
+  -L 5001:127.0.0.1:5001 \
+  -L 5002:127.0.0.1:5002 \
+  用户名@服务器IP
 ```
 
-`bind_host` 应为：
+<a id="old-v1-containers"></a>
+## 11. 旧版 v1 容器仍只监听 127.0.0.1
 
-```json
-"bind_host": "0.0.0.0"
-```
+### 症状
 
-如果不是，用参数覆盖后重启管理服务：
+旧容器 `qqbot-astrbot`、`qqbot-snowluma` 仍占用旧端口，`docker ps` 显示绑定 `127.0.0.1:5099/6081/6185`；v2 控制台不管理它们。
+
+### 原因
+
+v1 单实例部署使用固定容器名/端口；v2 改成每实例独立名称、网络和三端口块，不会自动接管旧容器。
+
+### 修复
+
+先确认旧实例是否还需要保留，备份宿主机数据：
 
 ```bash
-./start.sh --ip 0.0.0.0 --port 8765 --public-host 你的服务器公网IP或域名
+docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+ls -la ~/.local/share/qqbot-studio
+# 备份旧数据目录后再操作
 ```
 
-容器端口也应检查：
+确认旧容器不再需要后删除容器（此命令不删除宿主机 bind mount 数据）：
 
 ```bash
-docker ps --format 'table {{.Names}}	{{.Ports}}'
+docker rm -f qqbot-astrbot qqbot-snowluma 2>/dev/null || true
 ```
 
-应看到 `0.0.0.0:端口->...`。如果仍是 `127.0.0.1:端口->...`，通常是旧容器
-或旧实例，按第 3 节旧容器清理说明处理。
+然后用当前版本重新创建实例、扫码并验证。不要为了刷新端口直接删除正在使用的数据目录。
 
-### 8.8 从自己的电脑验证
+<a id="port-conflict"></a>
+## 12. 多实例端口冲突、删除实例和残留端口
 
-在服务器本机测试：
+### 症状
+
+- 控制台提示端口已被占用；
+- Docker 报 `port is already allocated`；
+- 三个面板中某个打不开或指向了其他实例。
+
+### 原因
+
+旧实例容器、旧 v1 容器、手工进程、Docker Desktop 代理或上次异常退出仍占着端口。v2 新实例会在 `5000–10000` 分配三端口块，但旧实例不会自动迁移旧端口。
+
+### 修复
 
 ```bash
+docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
+cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
+```
+
+处理顺序：
+
+1. 控制台删除不再需要的实例：第一次点击确认，第二次实际删除；删除会清理容器和实例数据，不可恢复。
+2. 确认是旧 v1 容器时，按 [上一节](#old-v1-containers) 备份后删除。
+3. Docker Desktop/残留代理导致端口短时间不释放时，重启 Docker Desktop 或 Docker daemon；Linux 服务器先确认不会影响其他容器。
+4. 重新创建实例，让程序重新分配新的连续端口块。
+5. 若只是想在保留数据的情况下修复旧实例端口，先在停机状态完整备份实例目录，再在维护窗口调整/重建；不要在实例运行中手改 `.env`/`compose.yml`。
+
+管理服务默认 `8765` 由控制台预留，不应手动改实例配置去占用它。
+
+<a id="console-status"></a>
+## 13. 控制台/API 状态读取失败
+
+### 症状
+
+- 控制台实例卡片显示“实时状态读取失败”或状态未知；
+- `/api/state` 返回 `status_error`；
+- 整个控制台打不开。
+
+### 原因
+
+可能分别是管理服务未启动、Docker daemon 不可用、单个容器异常、实例目录/权限损坏、AstrBot API 未就绪，或浏览器打开了旧服务端口。
+
+### 修复
+
+```bash
+# 管理服务
 curl -I http://127.0.0.1:8765/healthz
+tail -n 150 ~/.local/share/qqbot-studio/studio-server.log
+
+# Docker 和实例容器
+docker info
+docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+# 实例元数据和端口
+cat ~/.local/share/qqbot-studio/instances/bot-1/instance.json
+cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 ```
 
-只能证明程序启动了，不能证明公网可访问。还要从自己的电脑测试。
-
-Windows PowerShell：
-
-```powershell
-Test-NetConnection 服务器公网IP -Port 8765
-```
-
-macOS / Linux：
+管理服务自身异常时可安全重启管理服务：
 
 ```bash
-nc -vz 服务器公网IP 8765
-# 或者
-curl -v http://服务器公网IP:8765/healthz
+./console.sh --restart-service
 ```
 
-浏览器直接打开：
+若只是某个实例状态失败：
 
-```text
-http://服务器公网IP:8765/console
-```
+- 看该实例容器日志和 `docker ps`；
+- 确认实例端口和容器名没有和别的实例冲突；
+- 刷新控制台，必要时重启该实例容器；
+- 不要根据一个失败状态直接删除数据目录。先备份，再执行修复/删除。
 
-如果 `curl 127.0.0.1` 正常、但自己电脑打不开，通常是：
+`/api/*` 需要页面注入的访问令牌；不要用浏览器直接去掉/伪造 token 调接口。控制台打不开但 `/healthz` 正常时，查看反向代理、端口转发和浏览器地址。
 
-- 腾讯云安全组/轻量防火墙没放行；
-- 来源 IP 填错；
-- 使用了内网 IP；
-- 程序只监听 `127.0.0.1`；
-- 服务器有多个安全组，规则冲突；
-- 运营商/公司网络限制。
+<a id="snowluma-password"></a>
+## 14. SnowLuma 用户名 admin 密码错误/重置
 
-### 8.9 新手最容易犯的错误
+### 症状
 
-1. **只开了 ufw，没开腾讯云安全组**：公网仍然进不来。
-2. **只开了腾讯云安全组，程序监听 127.0.0.1**：公网仍然进不来。
-3. **只开了 8765，忘记开 noVNC/服务端口**：控制台能打开，但点链接打不开。
-4. **把 `ip addr` 里的 10.x / 172.x 内网 IP 当成公网 IP**：应该使用腾讯云控制台显示的“公网 IP”。
-5. **来源填了错误 IP**：手机热点/宽带 IP 变化后需要更新。
-6. **安全组存在更高优先级的拒绝规则**：检查规则列表并把允许规则放到正确优先级。
-7. **用的是轻量应用服务器**：它叫“防火墙”，不是 CVM 安全组。
-8. **开了 `0.0.0.0/0` 后一直不收紧**：管理台和 noVNC 暴露风险很高。
+SnowLuma WebUI 登录失败，完成页显示密码无效，日志中的一次性密码已过期。
 
-### 8.10 最安全的替代方案：SSH 隧道
+### 原因
 
-如果只是自己电脑临时使用，SSH 隧道通常比开放大量公网端口更安全：
+用户名固定是 `admin`；新版可能使用 bootstrap 密码，旧实例/首次登录后手工改密/容器重启轮换都可能导致完成页密码过期。
+
+### 优先修复：控制台重置密码
+
+在控制台对应实例的 SnowLuma 卡片点击 **重置密码**，第一次进入确认状态，第二次执行。成功后用户名仍是 `admin`，卡片会显示新密码。
+
+### 命令行读取当前一次性密码
 
 ```bash
-ssh -N -L 8765:127.0.0.1:8765 用户名@服务器公网IP
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials\|初始登录"
 ```
 
-然后本机访问：
+常见格式：
 
 ```text
-http://127.0.0.1:8765/console
+initial credentials: user=admin password=xxxxxxxxxxxxxxxx
 ```
 
-这种方式只需要腾讯云安全组放行 SSH 端口（通常是 22），不需要把 8765、5099、
-6081、6185 直接开放到公网。
+### 手动重置 SnowLuma WebUI 登录
 
----
+先备份再删除 `webui.json`，然后重启容器并读新一次性密码：
 
-## 9. screen 后台运行
+```bash
+find ~/.local/share/qqbot-studio/instances -path '*/data/snowluma/config/webui.json' -print
 
-安装器会安装 screen。`start.sh` / `console.sh` 启动的后台管理服务名为：
+# 以 bot-1 为例
+cp ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json \
+   ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json.bak
+rm ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json
+docker restart qqbot-bot-1-snowluma
+sleep 5
+docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials"
+```
+
+登录用户名始终是 `admin`。删除 `webui.json` 只重置 SnowLuma WebUI 登录，不是删除 QQ 数据目录；QQ 登录态是否保留取决于 SnowLuma 版本，必要时在 noVNC 重新验证。
+
+<a id="plugin-issues"></a>
+## 15. QQ 增强插件、找图、点歌不工作
+
+### 先确认插件状态
+
+在控制台实例展开 **插件、记忆与资源 → 插件管理**，或登录 AstrBot WebUI → 插件，确认 `qqbot_enhancer` 已启用。AstrBot 停止时控制台只能显示本地文件状态，无法线上启停。
+
+### 非 @ 消息不回复
+
+这是设计行为：非 @ 群消息按 `reply_probability`（默认 0.12）和群/用户冷却随机回复；改成 `0` 后只有 @ 和私聊必回。检查：
+
+- 是否真的 @ 了机器人（@全体不算）；
+- 是否在 AstrBot 的指令前缀/唤醒范围内；
+- 消息是否太短、纯图片/纯表情被过滤；
+- 是否刚触发过群/用户冷却；
+- AstrBot provider 和 DeepSeek Key 是否可用。
+
+### 找图无结果
 
 ```text
-qqbot-studio-server
+/找图 橘猫
+/搜图 千早爱音
 ```
 
-常用命令：
+自然语言找图只在 @ 或私聊触发；非 @ 群聊即使概率命中也不会自动找图。找图依赖 Bing Images/百度图片页面结构，可能因地区、反爬或改版失败；图片下载失败会尝试候选/远程 URL 兜底。检查 `image_search_enabled`、网络出站 443 和插件日志。不要输入受版权/隐私限制或违法内容。
+
+### 图片识别不回复或答非所问
+
+图片理解依赖可用的多模态 provider 或图片转述 provider。`deepseek-flash` 是否支持图片输入以实际 API 为准；在 AstrBot WebUI 配置 `vision_provider_id`/转述 provider，并检查模型是否实际接收到图片。
+
+### 点歌没有声音
+
+本地点歌只读取实例插件目录直属 `songs/` 文件，不调用 TTS/音乐生成；仓库不附带歌曲。放入你有权使用的音频：
+
+```bash
+SONGS="$HOME/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugins/qqbot_enhancer/songs"
+mkdir -p "$SONGS"
+cp "/你的授权音频.wav" "$SONGS/"
+```
+
+支持 `.mp3/.wav/.ogg/.flac/.m4a/.aac`，默认单文件上限 20 MB；部分 QQ 适配器可能只可靠支持 WAV，真实播放需按 AstrBot/SnowLuma 日志确认。
+
+`/option`、`/插件用法`、`/用法` 可显示本插件用法和已加载插件元数据，但不会猜测其他插件的子命令。完整配置见 [`plugin-qqbot-enhancer.md`](plugin-qqbot-enhancer.md)。
+
+<a id="screen"></a>
+## 16. screen/后台管理服务和日志
+
+管理服务默认在 screen 会话 `qqbot-studio-server` 中运行；受限系统/沙箱会降级到 nohup。查看：
 
 ```bash
 screen -ls
 screen -r qqbot-studio-server
+# screen 内脱离：Ctrl+A，然后按 D
 tail -f ~/.local/share/qqbot-studio/studio-server.log
-screen -S qqbot-studio-server -X quit
 ```
 
-脱离 screen：先按 `Ctrl+A`，再按 `D`。
+如果 screen 不可用或 `/run/screen` 只读，启动器可能打印警告并切到 nohup；此时以 `studio-server.log` 和 `server.pid` 为准。不要用 `pkill -f python3` 盲杀所有 Python 进程，先确认 PID/命令行属于本项目。
 
-如果系统限制 screen（例如 `/run/screen` 只读），启动器会自动降级为 `nohup`
-后台模式，仍可通过日志文件查看服务状态。
+关闭浏览器不会停止后台部署；关闭管理服务会中断部署任务（任务会标记为中断，通常可以重试）。Docker 容器不会因为关闭管理服务自动停止。
 
----
+<a id="windows"></a>
+## 17. Windows 与 Docker Desktop 未验证
 
-## 10. 最终验证清单
+Windows 10/11 是**独立项目**，不是本仓库的 Linux 脚本包装，也不能共用 Linux 数据目录/自动更新：
+
+- Windows 独立仓库：<https://github.com/Stevehim2007/qqbot-studio-windows>
+- EXE 构建 workflow：<https://github.com/Stevehim2007/qqbot-studio-windows/actions/workflows/windows-build.yml>
+- 主仓库 [`windows/README.md`](../windows/README.md) 是早期移植资料/开发记录，正式 Windows 入口以独立仓库为准。
+
+Windows 排错先确认 Docker Desktop 已启动、使用 **Linux containers**、WSL2 backend 正常：
+
+```powershell
+wsl --status
+docker context ls
+docker version
+docker compose version
+docker info --format "{{.OSType}}"
+```
+
+当前没有完成真实 Windows 10/11 + Docker Desktop + EXE 的完整 E2E；不能把 Linux 主项目的结果外推为 Windows 生产可用。Windows 防火墙和云安全组是两层，具体步骤和未验证项以独立 Windows 仓库 README 为准。
+
+## 18. 最终验证清单
 
 ```bash
-# Git
-git --version
-git config --show-origin --get-all http.sslBackend
-# 无输出即可
+cd "/你的路径/QQ Ai bot"
+
+# 代码和版本
+python3 -m qqbot_studio --version
+git status --short --branch
 
 # Docker
 docker --version
 docker compose version
 docker info
 
-# 项目
-cd "/你的项目路径/QQ Ai bot"
-./start.sh --ip 0.0.0.0 --port 8765
-./console.sh --ip 0.0.0.0 --port 8765
+# 管理服务
+curl -I http://127.0.0.1:8765/healthz
 screen -ls
-```
-
-浏览器打开脚本输出的 URL。
-
-如果仍有问题，请提供以下输出（敏感信息请先打码）：
-
-```bash
-sudo journalctl -xeu docker.service -b --no-pager -n 100
-git config --show-origin --get-all http.sslBackend
 tail -n 100 ~/.local/share/qqbot-studio/studio-server.log
-docker --version
-docker compose version
-docker info
+
+# 多实例和实际端口
+cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
+
+最后确认安全组/防火墙只放行实际需要的来源 IP 和端口；不要在公开网络暴露 noVNC。

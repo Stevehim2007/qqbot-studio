@@ -18,6 +18,12 @@
     "type": "bool",
     "default": true
   },
+  "image_search_natural_language_enabled": {
+    "description": "允许 @/私聊自然语言找图",
+    "type": "bool",
+    "default": true,
+    "hint": "仅对 @ 机器人和私聊生效；非 @ 群消息不会触发。命中后直接搜索发送并阻断默认 LLM。"
+  },
   "image_search_timeout_seconds": {
     "description": "Bing Images HTML 搜索超时（秒）",
     "type": "int",
@@ -132,6 +138,142 @@
     "type": "text",
     "default": "图片搜索冷却中，请约 {seconds} 秒后再试。",
     "hint": "支持 {seconds} 占位符。"
+  },
+  "image_search_second_source_enabled": {
+    "description": "Bing 结果不足时启用百度图片 JSON 第二搜索源",
+    "type": "bool",
+    "default": true,
+    "hint": "两个搜索源均免 API Key，但都依赖第三方页面/接口结构。"
+  },
+  "image_search_download_timeout_seconds": {
+    "description": "单张图片下载超时（秒）",
+    "type": "int",
+    "default": 20,
+    "slider": {
+      "min": 3,
+      "max": 120,
+      "step": 1
+    }
+  },
+  "image_search_download_max_bytes": {
+    "description": "单张图片最大下载字节数",
+    "type": "int",
+    "default": 8000000,
+    "slider": {
+      "min": 65536,
+      "max": 20971520,
+      "step": 65536
+    },
+    "hint": "下载时读取上限+1 字节用于判断超限；超过即拒绝并尝试下一个候选。"
+  },
+  "image_search_download_attempts": {
+    "description": "每次命令最多尝试下载的候选数",
+    "type": "int",
+    "default": 8,
+    "slider": {
+      "min": 1,
+      "max": 15,
+      "step": 1
+    }
+  },
+  "song_enabled": {
+    "description": "启用 /唱歌 和 /点歌 本地点歌",
+    "type": "bool",
+    "default": true
+  },
+  "song_group_cooldown_seconds": {
+    "description": "本地点歌每群冷却（秒）",
+    "type": "int",
+    "default": 15,
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 5
+    }
+  },
+  "song_user_cooldown_seconds": {
+    "description": "本地点歌每用户冷却（秒）",
+    "type": "int",
+    "default": 10,
+    "slider": {
+      "min": 0,
+      "max": 1800,
+      "step": 5
+    }
+  },
+  "song_max_file_bytes": {
+    "description": "本地单曲文件最大字节数",
+    "type": "int",
+    "default": 20000000,
+    "slider": {
+      "min": 1048576,
+      "max": 100000000,
+      "step": 1048576
+    },
+    "hint": "超过上限的音频不会发送，避免误放超大文件。"
+  },
+  "song_success_prefix": {
+    "description": "点歌成功后的文字前缀",
+    "type": "text",
+    "default": "🎵 本地歌曲：{name}",
+    "hint": "支持 {name} 占位符，表示不含扩展名的文件名。"
+  },
+  "song_disabled_reply": {
+    "description": "本地点歌关闭时的提示",
+    "type": "text",
+    "default": "本地点歌功能当前未启用。"
+  },
+  "song_empty_reply": {
+    "description": "songs/ 目录没有可用音频时的提示",
+    "type": "text",
+    "default": "本地点歌目录还没有音频文件。请把授权的 mp3/wav 放进 plugins/qqbot_enhancer/songs/ 后再试。"
+  },
+  "song_not_found_reply": {
+    "description": "点歌关键词无匹配时的提示",
+    "type": "text",
+    "default": "没有找到匹配的本地歌曲，换个关键词试试吧。"
+  },
+  "song_too_large_reply": {
+    "description": "音频超过大小限制时的提示",
+    "type": "text",
+    "default": "本地音频超过大小限制，管理员可调整 song_max_file_bytes。"
+  },
+  "song_error_reply": {
+    "description": "本地音频组件构造失败时的提示",
+    "type": "text",
+    "default": "本地音频构造失败，请检查文件格式或让管理员查看日志。"
+  },
+  "song_cooldown_reply": {
+    "description": "本地点歌冷却提示模板",
+    "type": "text",
+    "default": "点歌冷却中，请约 {seconds} 秒后再试。",
+    "hint": "支持 {seconds} 占位符。"
+  },
+  "option_include_other_plugins": {
+    "description": "/option 是否列出已加载插件元数据",
+    "type": "bool",
+    "default": true,
+    "hint": "使用公开 Context.get_all_stars() 读取名称/版本/描述；不枚举其他插件命令。"
+  },
+  "option_max_plugins": {
+    "description": "/option 最多显示的插件数",
+    "type": "int",
+    "default": 20,
+    "slider": {
+      "min": 1,
+      "max": 50,
+      "step": 1
+    }
+  },
+  "option_max_chars": {
+    "description": "/option 输出最大字符数",
+    "type": "int",
+    "default": 1800,
+    "slider": {
+      "min": 200,
+      "max": 4000,
+      "step": 100
+    }
   },
   "reply_probability": {
     "description": "群聊非 @ 消息的回复概率",

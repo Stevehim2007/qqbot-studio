@@ -22,6 +22,7 @@ import math
 import os
 import random
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -38,8 +39,15 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 STICKER_DIR = PLUGIN_DIR / "stickers"
 STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+SONG_DIR = PLUGIN_DIR / "songs"
+SONG_SUFFIXES = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
+PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
+PLUGIN_FALLBACK_VERSION = "1.4.1"
 
 BING_IMAGES_ENDPOINT = "https://www.bing.com/images/search"
+BING_IMAGES_REFERER = "https://www.bing.com/images/search"
+BAIDU_IMAGES_ENDPOINT = "https://image.baidu.com/search/acjson"
+BAIDU_IMAGES_REFERER = "https://image.baidu.com/"
 IMAGE_PATH_EXTENSIONS = (
     ".jpg",
     ".jpeg",
@@ -50,18 +58,63 @@ IMAGE_PATH_EXTENSIONS = (
     ".avif",
 )
 IMAGE_SEARCH_MAX_CANDIDATES = 200
+IMAGE_SEARCH_MAX_CANDIDATE_URLS = 15
+IMAGE_SEARCH_MAX_RESULTS_PER_COMMAND = 5
+IMAGE_SEARCH_MAX_REDIRECTS = 3
 IMAGE_SEARCH_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+IMAGE_SEARCH_NL_RE = re.compile(
+    r"(?P<prefix>(?:帮(?:我|忙)|给(?:我|一下)|请(?:你)?|麻烦(?:你)?|你|去|来|再|能|可以|一下|\s)*)"
+    r"(?P<action>搜索|搜|查找|找|发|来|整|搞|要)"
+    r"\s*(?P<quantity>(?:\d+|[一二两三四五六七八九十几]+|一些))?\s*"
+    r"(?:张|幅|个)?\s*"
+    r"(?P<keyword>.{1,40}?)\s*(?:的)?\s*"
+    r"(?P<noun>图片|照片|壁纸|头像|插画|美图|图集|图)"
+)
+IMAGE_SEARCH_NL_NEGATION_RE = re.compile(
+    r"(?:^|[，。！？!?\s])(?:我)?(?:"
+    r"找不到|没找到|没有找到|搜不到|没搜到|没有搜到|无法找到|"
+    r"别找|不用找|不想找|不要找|不需要找)"
+)
+IMAGE_SEARCH_NL_REFUSAL_RE = re.compile(
+    r"(?:不要|不用|别|不想|不需要|无需|没必要)"
+    r".{0,8}(?:找|搜|发|来|整|搞|给|要)"
+    r".{0,12}(?:图片|照片|壁纸|头像|插画|美图|图集|图)"
 )
 
 
 class ImageSearchError(RuntimeError):
     """Raised when a safe, bounded image-search request cannot be completed."""
 
+
+class _LimitedSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Limit redirect chains and reject non-HTTP(S) redirect targets."""
+
+    max_repeats = 2
+    max_redirections = IMAGE_SEARCH_MAX_REDIRECTS
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_request = super().redirect_request(
+            req,
+            fp,
+            code,
+            msg,
+            headers,
+            newurl,
+        )
+        if new_request is not None:
+            scheme = urllib.parse.urlsplit(new_request.full_url).scheme.lower()
+            if scheme not in {"http", "https"}:
+                raise ImageSearchError("网络重定向到非 HTTP(S) 地址")
+        return new_request
+
+
 DEFAULTS: dict[str, Any] = {
     "memory_mode": "direct",
     "image_search_enabled": True,
+    "image_search_natural_language_enabled": True,
     "image_search_timeout_seconds": 12,
     "image_search_result_count": 1,
     "image_search_safe_search": "strict",
@@ -69,6 +122,10 @@ DEFAULTS: dict[str, Any] = {
     "image_search_user_cooldown_seconds": 10,
     "image_search_max_response_bytes": 2_000_000,
     "image_search_max_keyword_chars": 100,
+    "image_search_second_source_enabled": True,
+    "image_search_download_timeout_seconds": 20,
+    "image_search_download_max_bytes": 8_000_000,
+    "image_search_download_attempts": 8,
     "image_search_success_prefix": "为你找到这些图片：",
     "image_search_usage_reply": "用法：/找图 关键词（也可以 /搜图 关键词）",
     "image_search_disabled_reply": "图片搜索功能当前未启用。",
@@ -76,6 +133,23 @@ DEFAULTS: dict[str, Any] = {
     "image_search_error_reply": "搜索图片失败了，请稍后再试。",
     "image_search_timeout_reply": "搜索图片超时了，请稍后再试。",
     "image_search_cooldown_reply": "图片搜索冷却中，请约 {seconds} 秒后再试。",
+    "song_enabled": True,
+    "song_group_cooldown_seconds": 15,
+    "song_user_cooldown_seconds": 10,
+    "song_max_file_bytes": 20_000_000,
+    "song_success_prefix": "🎵 本地歌曲：{name}",
+    "song_disabled_reply": "本地点歌功能当前未启用。",
+    "song_empty_reply": (
+        "本地点歌目录还没有音频文件。请把授权的 mp3/wav 放进 "
+        "plugins/qqbot_enhancer/songs/ 后再试。"
+    ),
+    "song_not_found_reply": "没有找到匹配的本地歌曲，换个关键词试试吧。",
+    "song_too_large_reply": "本地音频超过大小限制，管理员可调整 song_max_file_bytes。",
+    "song_error_reply": "本地音频构造失败，请检查文件格式或让管理员查看日志。",
+    "song_cooldown_reply": "点歌冷却中，请约 {seconds} 秒后再试。",
+    "option_include_other_plugins": True,
+    "option_max_plugins": 20,
+    "option_max_chars": 1800,
     "reply_probability": 0.12,
     "group_cooldown_seconds": 30,
     "user_cooldown_seconds": 90,
@@ -131,6 +205,9 @@ class QQBotEnhancerPlugin(Star):
         self._last_sticker_file: dict[str, str] = {}
         self._last_image_search_group: dict[str, float] = {}
         self._last_image_search_user: dict[str, float] = {}
+        self._last_song_group: dict[str, float] = {}
+        self._last_song_user: dict[str, float] = {}
+        self._song_dir = SONG_DIR
 
         self._sticker_entries: list[dict[str, Any]] = []
         self._emotion_keywords: dict[str, tuple[str, ...]] = {}
@@ -246,6 +323,38 @@ class QQBotEnhancerPlugin(Star):
             else:
                 mode = "explicit"
 
+            # Explicit @/private natural-language image search. This intentionally
+            # runs before memory_mode=astrbot so the plugin executes the search
+            # directly and stops the default Agent from generating a duplicate.
+            if (
+                explicit
+                and self._cfg_bool("image_search_natural_language_enabled")
+                and self._cfg_bool("image_search_enabled")
+            ):
+                search_intent = self._detect_natural_language_image_search(
+                    message_text
+                )
+                if search_intent is not None:
+                    should_stop = True
+                    event.should_call_llm(True)
+                    remaining = self._image_search_cooldown_remaining(event)
+                    if remaining > 0:
+                        template = self._cfg_str("image_search_cooldown_reply")
+                        try:
+                            reply = template.format(seconds=remaining)
+                        except (KeyError, ValueError):
+                            reply = template
+                        yield event.plain_result(reply)
+                    else:
+                        result = await self._build_image_search_result(
+                            event,
+                            search_intent["keyword"],
+                            result_count=search_intent["result_count"],
+                        )
+                        yield result
+                    yielded = True
+                    return
+
             if self._memory_mode() == "astrbot":
                 # 交给 AstrBot 默认 Agent：它会使用会话管理器、人格和持久化
                 # 对话历史。非 @ 概率命中时，临时把事件标记为可唤醒，让默认
@@ -325,42 +434,12 @@ class QQBotEnhancerPlugin(Star):
                 yielded = True
                 return
 
-            try:
-                image_urls = await self._search_image_urls(keyword)
-            except asyncio.TimeoutError:
-                logger.warning("qqbot_enhancer 图片搜索超时: %s", keyword)
-                yield event.plain_result(self._cfg_str("image_search_timeout_reply"))
-                yielded = True
-                return
-            except Exception:
-                logger.warning(
-                    "qqbot_enhancer 图片搜索失败: %s",
-                    keyword,
-                    exc_info=True,
-                )
-                yield event.plain_result(self._cfg_str("image_search_error_reply"))
-                yielded = True
-                return
-
-            if not image_urls:
-                yield event.plain_result(self._cfg_str("image_search_empty_reply"))
-                yielded = True
-                return
-
-            chain: list[Any] = [Comp.Plain(self._cfg_str("image_search_success_prefix"))]
-            for image_url in image_urls:
-                try:
-                    chain.append(Comp.Image.fromURL(image_url))
-                except Exception:
-                    logger.warning(
-                        "qqbot_enhancer 跳过无法构造的图片 URL: %s",
-                        image_url,
-                    )
-            if len(chain) == 1:
-                yield event.plain_result(self._cfg_str("image_search_empty_reply"))
-                yielded = True
-                return
-            yield event.chain_result(chain)
+            result = await self._build_image_search_result(
+                event,
+                keyword,
+                result_count=None,
+            )
+            yield result
             yielded = True
         except Exception:
             logger.exception("qqbot_enhancer /找图 命令处理失败")
@@ -372,6 +451,120 @@ class QQBotEnhancerPlugin(Star):
                     logger.exception("qqbot_enhancer /找图 错误回复发送失败")
         finally:
             # 与普通回复一致：结果已经 yield 给 RespondStage 后才执行这里。
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("唱歌", alias={"点歌"}, priority=110)
+    async def local_song_command(self, event: AstrMessageEvent):
+        """发送 songs/ 目录中的本地授权音频，不调用 LLM。"""
+
+        event.should_call_llm(True)
+        yielded = False
+        try:
+            if not self._cfg_bool("song_enabled"):
+                yield event.plain_result(self._cfg_str("song_disabled_reply"))
+                yielded = True
+                return
+
+            keyword = self._extract_local_song_keyword(event)
+            song_files, has_oversized = self._list_song_files()
+            if not song_files:
+                yield event.plain_result(
+                    self._cfg_str(
+                        "song_too_large_reply" if has_oversized else "song_empty_reply"
+                    )
+                )
+                yielded = True
+                return
+
+            if keyword:
+                keyword_folded = keyword.casefold()
+                matched = [
+                    path
+                    for path in song_files
+                    if keyword_folded in path.name.casefold()
+                ]
+                if not matched:
+                    yield event.plain_result(
+                        self._cfg_str("song_not_found_reply")
+                    )
+                    yielded = True
+                    return
+                song_files = matched
+
+            remaining = self._song_cooldown_remaining(event)
+            if remaining > 0:
+                template = self._cfg_str("song_cooldown_reply")
+                try:
+                    text = template.format(seconds=remaining)
+                except (KeyError, ValueError):
+                    text = template
+                yield event.plain_result(text)
+                yielded = True
+                return
+
+            chosen = self._rng.choice(song_files)
+            try:
+                record = Comp.Record.fromFileSystem(str(chosen))
+            except Exception:
+                logger.warning(
+                    "qqbot_enhancer 本地音频组件构造失败: %s",
+                    chosen,
+                    exc_info=True,
+                )
+                yield event.plain_result(self._cfg_str("song_error_reply"))
+                yielded = True
+                return
+
+            prefix_template = self._cfg_str("song_success_prefix")
+            try:
+                prefix = prefix_template.format(name=chosen.stem)
+            except (KeyError, ValueError):
+                prefix = prefix_template
+            yield event.chain_result([Comp.Plain(prefix), record])
+            yielded = True
+        except Exception:
+            logger.exception("qqbot_enhancer /唱歌 命令处理失败")
+            if not yielded:
+                try:
+                    yield event.plain_result(self._cfg_str("song_error_reply"))
+                    yielded = True
+                except Exception:
+                    logger.exception("qqbot_enhancer 点歌错误回复发送失败")
+        finally:
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("option", alias={"插件用法", "用法"}, priority=110)
+    async def option_command(self, event: AstrMessageEvent):
+        """显示本插件用法、配置入口与可可靠枚举的已加载插件元数据。"""
+
+        event.should_call_llm(True)
+        try:
+            text = self._build_option_text()
+            limit = self._cfg_int("option_max_chars", 1)
+            if limit > 0 and len(text) > limit:
+                text = text[: max(1, limit - 1)].rstrip() + "…"
+            yield event.plain_result(text)
+        except Exception:
+            logger.exception("qqbot_enhancer /option 命令处理失败")
+            try:
+                yield event.plain_result(
+                    "插件用法暂时读取失败，请到 AstrBot WebUI → 插件 查看。"
+                )
+            except Exception:
+                logger.exception("qqbot_enhancer /option 错误回复发送失败")
+        finally:
             event.stop_event()
 
     @filter.on_decorating_result()
@@ -401,6 +594,124 @@ class QQBotEnhancerPlugin(Star):
                 "qqbot_enhancer 默认 Agent 表情包追加失败",
                 exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # /option help
+    # ------------------------------------------------------------------
+    def _loaded_star_metadata(self) -> list[Any]:
+        getter = getattr(self.context, "get_all_stars", None)
+        if not callable(getter):
+            return []
+        try:
+            stars = getter()
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 读取已加载插件元数据失败",
+                exc_info=True,
+            )
+            return []
+        if not isinstance(stars, (list, tuple)):
+            return []
+        return [star for star in stars if star is not None]
+
+    def _build_option_text(self) -> str:
+        stars = self._loaded_star_metadata()
+        my_name = str(getattr(self, "name", "") or "qqbot_enhancer")
+        display_name = PLUGIN_DISPLAY_NAME
+        version = PLUGIN_FALLBACK_VERSION
+
+        for star in stars:
+            star_name = str(getattr(star, "name", "") or "")
+            is_self = (
+                getattr(star, "star_cls", None) is self
+                or star_name == my_name
+                or getattr(star, "root_dir_name", "") == "qqbot_enhancer"
+            )
+            if not is_self:
+                continue
+            display_name = (
+                str(getattr(star, "display_name", "") or "")
+                or star_name
+                or display_name
+            )
+            version = str(getattr(star, "version", "") or version)
+            break
+
+        mode = self._memory_mode()
+        probability = self._cfg_float("reply_probability", 0.0, 1.0)
+        group_cooldown = self._cfg_int("group_cooldown_seconds", 0)
+        user_cooldown = self._cfg_int("user_cooldown_seconds", 0)
+        natural_language = "开启" if self._cfg_bool(
+            "image_search_natural_language_enabled"
+        ) else "关闭"
+
+        lines = [
+            f"{display_name} 用法速览（v{version}）",
+            "",
+            "本插件命令：",
+            "/找图 <关键词>（别名 /搜图）",
+            "/唱歌 [文件名关键词]（别名 /点歌）",
+            "/option（别名 /插件用法、/用法）",
+            "",
+            (
+                f"当前行为：memory_mode={mode}；群 @ 必回；私聊必回；"
+                f"非 @ 群消息概率 {probability:.0%}；"
+                f"群冷却 {group_cooldown}s / 用户冷却 {user_cooldown}s；"
+                f"自然语言找图{natural_language}。"
+            ),
+            (
+                "配置入口：AstrBot WebUI → 插件 → "
+                f"{display_name} → 配置。"
+            ),
+            (
+                "找图说明：/找图 和 /搜图 会下载并校验图片后发本地文件；"
+                "@ 或私聊的自然语言找图也复用同一流程。"
+            ),
+        ]
+
+        if self._cfg_bool("option_include_other_plugins"):
+            max_plugins = max(1, self._cfg_int("option_max_plugins", 1))
+            shown = 0
+            if stars:
+                lines.extend(
+                    [
+                        "",
+                        f"已加载插件元数据（共 {len(stars)} 个，最多显示 {max_plugins} 个）：",
+                    ]
+                )
+                for star in stars[:max_plugins]:
+                    star_name = str(getattr(star, "name", "") or "")
+                    star_display = (
+                        str(getattr(star, "display_name", "") or "")
+                        or star_name
+                        or "未命名插件"
+                    )
+                    star_version = str(getattr(star, "version", "") or "unknown")
+                    star_desc = re.sub(
+                        r"\s+",
+                        " ",
+                        str(getattr(star, "desc", "") or ""),
+                    ).strip()
+                    activated = bool(getattr(star, "activated", True))
+                    suffix = "" if activated else "（未激活）"
+                    line = f"- {star_display} v{star_version}{suffix}"
+                    if star_desc:
+                        line += f"：{star_desc[:80]}"
+                    lines.append(line)
+                    shown += 1
+                if len(stars) > shown:
+                    lines.append(f"- 另有 {len(stars) - shown} 个插件未展开。")
+            else:
+                lines.append("")
+                lines.append(
+                    "已加载插件元数据：当前上下文不支持读取，仅列本插件。"
+                )
+            lines.append(
+                "说明：AstrBot v4.29 没有稳定的公开命令枚举 API；"
+                "这里只列插件元数据，不逐个枚举其他插件命令。"
+            )
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Message analysis
@@ -496,6 +807,8 @@ class QQBotEnhancerPlugin(Star):
             + len(self._last_sticker_at)
             + len(self._last_image_search_group)
             + len(self._last_image_search_user)
+            + len(self._last_song_group)
+            + len(self._last_song_user)
             < 4096
         ):
             return
@@ -506,6 +819,8 @@ class QQBotEnhancerPlugin(Star):
             self._last_sticker_at,
             self._last_image_search_group,
             self._last_image_search_user,
+            self._last_song_group,
+            self._last_song_user,
         ):
             for key, timestamp in list(mapping.items()):
                 if timestamp < cutoff:
@@ -927,6 +1242,118 @@ class QQBotEnhancerPlugin(Star):
                     return keyword[:max_chars]
         return ""
 
+    def _detect_natural_language_image_search(
+        self,
+        text: str,
+    ) -> dict[str, Any] | None:
+        """Conservatively detect an explicit request to find/send images.
+
+        Only called for @/private events. Returns ``None`` when any part of the
+        request is ambiguous; ordinary conversation then continues normally.
+        """
+
+        value = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not value:
+            return None
+        if IMAGE_SEARCH_NL_REFUSAL_RE.search(value):
+            return None
+
+        negations = list(IMAGE_SEARCH_NL_NEGATION_RE.finditer(value))
+        for match in IMAGE_SEARCH_NL_RE.finditer(value):
+            action_start = match.start("action")
+            # Skip a "找不到/没搜到..." match, but keep looking for a later
+            # explicit request such as "我找不到图片了，帮我找几张猫图".
+            if any(
+                negation.start() <= action_start < negation.end()
+                for negation in negations
+            ):
+                continue
+            keyword = self._clean_natural_language_image_keyword(
+                match.group("keyword")
+            )
+            if not keyword:
+                continue
+            return {
+                "keyword": keyword,
+                "result_count": self._natural_language_result_count(
+                    match.group("quantity")
+                ),
+            }
+        return None
+
+    def _clean_natural_language_image_keyword(self, raw: str) -> str:
+        value = re.sub(r"\s+", " ", str(raw or "")).strip()
+        value = re.sub(
+            r"^(?:帮我|给我|请你?|麻烦你?|你|去|来|再|一下|下|能|可以|帮忙|关于|有关|的)+",
+            "",
+            value,
+        ).strip()
+        value = re.sub(r"^(?:张|幅|个)+", "", value).strip()
+        value = re.sub(
+            r"(?:的)?(?:图片|照片|壁纸|头像|插画|美图|图集|图)$",
+            "",
+            value,
+        ).strip()
+        value = value.strip(" \t\r\n，。！？!?,.、:：;；\"'“”‘’")
+        value = re.sub(r"^[的地得]+|[的地得]+$", "", value).strip()
+        if value in {
+            "",
+            "张",
+            "幅",
+            "个",
+            "的",
+            "图",
+            "图片",
+            "照片",
+            "壁纸",
+            "头像",
+            "插画",
+            "美图",
+            "图集",
+            "好看的",
+            "好看",
+            "一些",
+            "几张",
+            "一下",
+            "帮我",
+            "给我",
+            "你",
+            "去",
+            "来",
+            "这个",
+            "那个",
+        }:
+            return ""
+        max_chars = self._cfg_int("image_search_max_keyword_chars", 1)
+        return value[:max_chars]
+
+    def _natural_language_result_count(self, quantity: str | None) -> int:
+        if not quantity:
+            return self._image_search_result_limit()
+        normalized = str(quantity).strip()
+        mapping = {
+            "一": 1,
+            "1": 1,
+            "二": 2,
+            "两": 2,
+            "2": 2,
+            "三": 3,
+            "3": 3,
+            "四": 4,
+            "4": 4,
+            "五": 5,
+            "5": 5,
+            "几": max(2, self._image_search_result_limit()),
+            "一些": max(2, self._image_search_result_limit()),
+        }
+        return max(
+            1,
+            min(
+                IMAGE_SEARCH_MAX_RESULTS_PER_COMMAND,
+                mapping.get(normalized, self._image_search_result_limit()),
+            ),
+        )
+
     def _image_search_cooldown_remaining(self, event: AstrMessageEvent) -> int:
         now = self._clock()
         self._prune_state(now)
@@ -990,6 +1417,12 @@ class QQBotEnhancerPlugin(Star):
         except asyncio.TimeoutError:
             raise
 
+    def _open_bounded_http(self, request: urllib.request.Request, timeout: int):
+        """Open one HTTP request with bounded redirects and safe targets."""
+
+        opener = urllib.request.build_opener(_LimitedSafeRedirectHandler())
+        return opener.open(request, timeout=timeout)
+
     def _fetch_image_search_html_sync(self, search_url: str) -> str:
         """Blocking HTTP GET; called through asyncio.to_thread."""
 
@@ -1001,10 +1434,11 @@ class QQBotEnhancerPlugin(Star):
                 "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                 "Cache-Control": "no-cache",
+                "Accept-Encoding": "identity",
             },
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with self._open_bounded_http(request, timeout) as response:
             final_url = response.geturl()
             if not self._sanitize_http_url(
                 final_url,
@@ -1013,7 +1447,7 @@ class QQBotEnhancerPlugin(Star):
                 raise ImageSearchError("图片搜索被重定向到非安全 HTTP(S) 地址")
             return self._read_search_response(response)
 
-    def _read_search_response(self, response: Any) -> str:
+    def _read_search_response(self, response: Any, *, expected: str = "html") -> str:
         max_bytes = self._cfg_int(
             "image_search_max_response_bytes",
             1024,
@@ -1040,10 +1474,18 @@ class QQBotEnhancerPlugin(Star):
             raise ImageSearchError("图片搜索响应超过大小限制")
 
         lowered_type = content_type.lower()
-        if lowered_type and "html" not in lowered_type and not lowered_type.startswith(
-            "text/"
-        ):
-            raise ImageSearchError("图片搜索返回的 Content-Type 不是 HTML")
+        if lowered_type:
+            if expected == "json":
+                if (
+                    "json" not in lowered_type
+                    and not lowered_type.startswith("text/")
+                ):
+                    raise ImageSearchError("百度图片搜索返回的 Content-Type 不是 JSON")
+            elif (
+                "html" not in lowered_type
+                and not lowered_type.startswith("text/")
+            ):
+                raise ImageSearchError("图片搜索返回的 Content-Type 不是 HTML")
 
         charset = "utf-8"
         match = re.search(r"charset=([\w.+-]+)", content_type, re.IGNORECASE)
@@ -1063,14 +1505,469 @@ class QQBotEnhancerPlugin(Star):
         except LookupError:
             return data.decode("utf-8", errors="replace")
 
+    def _image_search_result_limit(self) -> int:
+        return max(
+            1,
+            min(
+                IMAGE_SEARCH_MAX_RESULTS_PER_COMMAND,
+                self._cfg_int("image_search_result_count", 1),
+            ),
+        )
+
+    def _image_search_candidate_limit(self) -> int:
+        return min(
+            IMAGE_SEARCH_MAX_CANDIDATE_URLS,
+            max(6, self._image_search_result_limit() * 3),
+        )
+
+    def _build_baidu_image_search_url(self, keyword: str) -> str:
+        fetch_count = min(
+            30,
+            max(10, self._image_search_result_limit() * 8),
+        )
+        params = {
+            "tn": "resultjson_com",
+            "ipn": "rj",
+            "ct": "201326592",
+            "is": "",
+            "fp": "result",
+            "queryWord": keyword,
+            "cl": "2",
+            "lm": "-1",
+            "ie": "utf-8",
+            "oe": "utf-8",
+            "adpicid": "",
+            "st": "-1",
+            "z": "",
+            "ic": "0",
+            "hd": "",
+            "latest": "",
+            "copyright": "",
+            "word": keyword,
+            "s": "",
+            "se": "",
+            "tab": "",
+            "width": "",
+            "height": "",
+            "face": "0",
+            "istype": "2",
+            "qc": "",
+            "nc": "1",
+            "fr": "",
+            "expermode": "",
+            "nojc": "",
+            "pn": "0",
+            "rn": str(fetch_count),
+            "gsm": "1e",
+        }
+        return f"{BAIDU_IMAGES_ENDPOINT}?{urllib.parse.urlencode(params)}"
+
+    async def _fetch_baidu_image_json(self, search_url: str) -> str:
+        timeout = self._cfg_int("image_search_timeout_seconds", 1)
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                self._fetch_baidu_image_json_sync,
+                search_url,
+            ),
+            timeout=timeout,
+        )
+
+    def _fetch_baidu_image_json_sync(self, search_url: str) -> str:
+        timeout = self._cfg_int("image_search_timeout_seconds", 1)
+        request = urllib.request.Request(
+            search_url,
+            headers={
+                "User-Agent": IMAGE_SEARCH_USER_AGENT,
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": BAIDU_IMAGES_REFERER,
+                "Cache-Control": "no-cache",
+                "Accept-Encoding": "identity",
+            },
+            method="GET",
+        )
+        with self._open_bounded_http(request, timeout) as response:
+            final_url = response.geturl()
+            if not self._sanitize_http_url(
+                final_url,
+                require_image_extension=False,
+            ):
+                raise ImageSearchError("百度图片搜索被重定向到非安全 HTTP(S) 地址")
+            return self._read_search_response(response, expected="json")
+
+    async def _search_image_candidates(self, keyword: str) -> list[dict[str, str]]:
+        result_limit = self._image_search_result_limit()
+        candidate_limit = self._image_search_candidate_limit()
+        candidates: list[dict[str, str]] = []
+        errors: list[BaseException] = []
+        bing_ok = False
+        baidu_ok = False
+
+        try:
+            bing_url = self._build_bing_image_search_url(keyword)
+            bing_page = await self._fetch_image_search_html(bing_url)
+            bing_urls = self._parse_bing_image_urls(
+                bing_page,
+                limit=candidate_limit,
+            )
+            bing_ok = True
+            candidates.extend(
+                {
+                    "url": url,
+                    "referer": BING_IMAGES_REFERER,
+                    "source": "bing",
+                }
+                for url in bing_urls
+            )
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning(
+                "qqbot_enhancer Bing 图片搜索失败，尝试第二搜索源",
+                exc_info=True,
+            )
+
+        # 第二搜索源：Baidu Images JSON。只在 Bing 结果不足时请求，避免双重流量。
+        if (
+            len(candidates) < result_limit
+            and self._cfg_bool("image_search_second_source_enabled")
+        ):
+            try:
+                baidu_url = self._build_baidu_image_search_url(keyword)
+                baidu_payload = await self._fetch_baidu_image_json(baidu_url)
+                baidu_urls = self._parse_baidu_image_urls(
+                    baidu_payload,
+                    limit=candidate_limit,
+                )
+                baidu_ok = True
+                existing = {item["url"] for item in candidates}
+                for url in baidu_urls:
+                    if url in existing:
+                        continue
+                    existing.add(url)
+                    candidates.append(
+                        {
+                            "url": url,
+                            "referer": BAIDU_IMAGES_REFERER,
+                            "source": "baidu",
+                        }
+                    )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "qqbot_enhancer 百度图片搜索失败",
+                    exc_info=True,
+                )
+
+        if not candidates and not bing_ok and not baidu_ok:
+            if any(isinstance(error, asyncio.TimeoutError) for error in errors):
+                raise asyncio.TimeoutError
+            raise ImageSearchError("所有图片搜索源均请求失败")
+        return candidates[:candidate_limit]
+
     async def _search_image_urls(self, keyword: str) -> list[str]:
-        search_url = self._build_bing_image_search_url(keyword)
-        page = await self._fetch_image_search_html(search_url)
+        candidates = await self._search_image_candidates(keyword)
+        return [item["url"] for item in candidates]
+
+    async def _build_image_search_result(
+        self,
+        event: AstrMessageEvent,
+        keyword: str,
+        *,
+        result_count: int | None = None,
+    ):
+        """Shared search/download/send pipeline for command and NL intents."""
+
+        if result_count is None:
+            result_limit = self._image_search_result_limit()
+        else:
+            result_limit = max(
+                1,
+                min(
+                    IMAGE_SEARCH_MAX_RESULTS_PER_COMMAND,
+                    int(result_count),
+                ),
+            )
+
+        try:
+            candidates = await self._search_image_candidates(keyword)
+        except asyncio.TimeoutError:
+            logger.warning("qqbot_enhancer 图片搜索超时: %s", keyword)
+            return event.plain_result(self._cfg_str("image_search_timeout_reply"))
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 图片搜索失败: %s",
+                keyword,
+                exc_info=True,
+            )
+            return event.plain_result(self._cfg_str("image_search_error_reply"))
+
+        if not candidates:
+            return event.plain_result(self._cfg_str("image_search_empty_reply"))
+
+        local_paths, remote_urls = await self._download_search_image_files(
+            event,
+            candidates,
+            result_limit=result_limit,
+        )
+        image_components: list[Any] = []
+        for local_path in local_paths:
+            try:
+                image_components.append(
+                    Comp.Image.fromFileSystem(str(local_path))
+                )
+            except Exception:
+                logger.warning(
+                    "qqbot_enhancer 本地图片组件构造失败: %s",
+                    local_path,
+                    exc_info=True,
+                )
+        if not image_components:
+            # 远程 URL 兜底：本地下载全部失败时仍尝试让协议端加载。
+            for image_url in remote_urls[:result_limit]:
+                try:
+                    image_components.append(Comp.Image.fromURL(image_url))
+                except Exception:
+                    logger.warning(
+                        "qqbot_enhancer 跳过无法构造的图片 URL: %s",
+                        image_url,
+                    )
+        if not image_components:
+            return event.plain_result(self._cfg_str("image_search_empty_reply"))
+        return event.chain_result(
+            [
+                Comp.Plain(self._cfg_str("image_search_success_prefix")),
+                *image_components,
+            ]
+        )
+
+    def _parse_baidu_image_urls(
+        self,
+        payload: str | dict[str, Any],
+        *,
+        limit: int = 1,
+    ) -> list[str]:
+        """Extract image proxy/direct URLs from Baidu Images JSON."""
+
         result_limit = max(
             1,
-            min(5, self._cfg_int("image_search_result_count", 1)),
+            min(IMAGE_SEARCH_MAX_CANDIDATE_URLS, int(limit or 1)),
         )
-        return self._parse_bing_image_urls(page, limit=result_limit)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError):
+                return []
+        if not isinstance(payload, dict):
+            return []
+        entries = payload.get("data", [])
+        if not isinstance(entries, list):
+            return []
+
+        results: list[str] = []
+        seen: set[str] = set()
+        for entry in entries:
+            if len(results) >= result_limit:
+                break
+            if not isinstance(entry, dict):
+                continue
+            raw_candidates: list[Any] = [
+                entry.get("middleURL"),
+                entry.get("thumbURL"),
+                entry.get("hoverURL"),
+            ]
+            replace_urls = entry.get("replaceUrl", [])
+            if isinstance(replace_urls, list):
+                for replacement in replace_urls:
+                    if not isinstance(replacement, dict):
+                        continue
+                    raw_candidates.extend(
+                        [
+                            replacement.get("ObjURL"),
+                            replacement.get("ObjUrl"),
+                        ]
+                    )
+            for raw_candidate in raw_candidates:
+                safe_url = self._sanitize_http_url(
+                    raw_candidate,
+                    require_image_extension=False,
+                )
+                if not safe_url or safe_url in seen:
+                    continue
+                seen.add(safe_url)
+                results.append(safe_url)
+                break
+
+        return results
+
+    async def _download_search_image_files(
+        self,
+        event: AstrMessageEvent,
+        candidates: list[dict[str, str]],
+        *,
+        result_limit: int,
+    ) -> tuple[list[str], list[str]]:
+        """Download candidates to bounded temp files; return paths and URL fallbacks."""
+
+        local_paths: list[str] = []
+        remote_urls: list[str] = []
+        seen_remote: set[str] = set()
+        for candidate in candidates:
+            url = str(candidate.get("url", "") or "")
+            if not url or url in seen_remote:
+                continue
+            seen_remote.add(url)
+            remote_urls.append(url)
+
+        max_attempts = min(
+            len(candidates),
+            max(1, self._cfg_int("image_search_download_attempts", 1)),
+        )
+        for candidate in candidates[:max_attempts]:
+            if len(local_paths) >= result_limit:
+                break
+            url = str(candidate.get("url", "") or "")
+            referer = str(candidate.get("referer", "") or BING_IMAGES_REFERER)
+            if not url:
+                continue
+            try:
+                local_path = await self._download_image(url, referer=referer)
+            except Exception:
+                logger.warning(
+                    "qqbot_enhancer 下载图片失败，尝试下一个候选: %s",
+                    url,
+                    exc_info=True,
+                )
+                continue
+            local_paths.append(local_path)
+            tracker = getattr(event, "track_temporary_local_file", None)
+            if callable(tracker):
+                try:
+                    tracker(local_path)
+                except Exception:
+                    logger.debug(
+                        "qqbot_enhancer 登记临时图片失败: %s",
+                        local_path,
+                        exc_info=True,
+                    )
+        return local_paths, remote_urls
+
+    async def _download_image(self, image_url: str, *, referer: str) -> str:
+        timeout = self._cfg_int("image_search_download_timeout_seconds", 1)
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                self._download_image_sync,
+                image_url,
+                referer,
+            ),
+            timeout=timeout,
+        )
+
+    def _download_image_sync(self, image_url: str, referer: str) -> str:
+        safe_url = self._sanitize_http_url(
+            image_url,
+            require_image_extension=False,
+        )
+        if not safe_url:
+            raise ImageSearchError("图片下载 URL 不是安全的 HTTP(S) 地址")
+        timeout = self._cfg_int("image_search_download_timeout_seconds", 1)
+        max_bytes = self._cfg_int("image_search_download_max_bytes", 1024)
+        request = urllib.request.Request(
+            safe_url,
+            headers={
+                "User-Agent": IMAGE_SEARCH_USER_AGENT,
+                "Accept": (
+                    "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+                ),
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": referer or BING_IMAGES_REFERER,
+                "Cache-Control": "no-cache",
+                "Accept-Encoding": "identity",
+            },
+            method="GET",
+        )
+        with self._open_bounded_http(request, timeout) as response:
+            final_url = response.geturl()
+            if not self._sanitize_http_url(
+                final_url,
+                require_image_extension=False,
+            ):
+                raise ImageSearchError("图片下载被重定向到非安全 HTTP(S) 地址")
+
+            headers = getattr(response, "headers", None)
+            content_type = ""
+            content_length = ""
+            if headers is not None and hasattr(headers, "get"):
+                content_type = str(headers.get("Content-Type", "") or "")
+                content_length = str(headers.get("Content-Length", "") or "")
+            if content_length:
+                try:
+                    if int(content_length) > max_bytes:
+                        raise ImageSearchError("图片响应超过大小限制")
+                except ValueError:
+                    pass
+
+            declared_type = content_type.split(";", 1)[0].strip().lower()
+            if declared_type and not declared_type.startswith("image/") and (
+                declared_type not in {"application/octet-stream", "binary/octet-stream"}
+            ):
+                raise ImageSearchError("图片响应 Content-Type 不是图片")
+            if declared_type.startswith("image/") and declared_type not in {
+                "image/jpeg",
+                "image/jpg",
+                "image/png",
+                "image/gif",
+                "image/webp",
+                "image/bmp",
+                "image/x-ms-bmp",
+                "image/avif",
+            }:
+                raise ImageSearchError("不支持的图片 Content-Type")
+
+            data = response.read(max_bytes + 1)
+            if data is None:
+                data = b""
+            if not data:
+                raise ImageSearchError("图片响应为空")
+            if len(data) > max_bytes:
+                raise ImageSearchError("图片响应超过大小限制")
+            detected = self._detect_image_magic(data)
+            if detected is None:
+                raise ImageSearchError("下载内容不是受支持的图片格式")
+            _, suffix = detected
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="qqbot_enhancer_img_",
+                suffix=suffix,
+                delete=False,
+            ) as temporary:
+                temp_path = temporary.name
+                temporary.write(data)
+            return temp_path
+        except Exception:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
+
+    @staticmethod
+    def _detect_image_magic(data: bytes) -> tuple[str, str] | None:
+        if data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg", ".jpg"
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png", ".png"
+        if data.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif", ".gif"
+        if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return "image/webp", ".webp"
+        if data.startswith(b"BM"):
+            return "image/bmp", ".bmp"
+        if len(data) >= 12 and data[4:12] in {b"ftypavif", b"ftypavis"}:
+            return "image/avif", ".avif"
+        return None
 
     def _parse_bing_image_urls(self, page: str, *, limit: int = 1) -> list[str]:
         """Extract image URLs from Bing Images HTML without third-party libs.
@@ -1082,7 +1979,10 @@ class QQBotEnhancerPlugin(Star):
         component.
         """
 
-        result_limit = max(1, min(5, int(limit or 1)))
+        result_limit = max(
+            1,
+            min(IMAGE_SEARCH_MAX_CANDIDATE_URLS, int(limit or 1)),
+        )
         scan_limit = min(
             IMAGE_SEARCH_MAX_CANDIDATES,
             max(50, result_limit * 20),
@@ -1223,6 +2123,101 @@ class QQBotEnhancerPlugin(Star):
         return urllib.parse.urlunsplit(
             (scheme, parsed.netloc, parsed.path, parsed.query, "")
         )
+
+    # ------------------------------------------------------------------
+    # Local songs / voice notes
+    # ------------------------------------------------------------------
+    def _extract_local_song_keyword(self, event: AstrMessageEvent) -> str:
+        text = str(getattr(event, "message_str", "") or "").strip()
+        for prefix in self._command_prefixes(event):
+            if prefix and text.startswith(prefix):
+                text = text[len(prefix) :].strip()
+                break
+        for command_name in ("唱歌", "点歌"):
+            if text == command_name:
+                return ""
+            if text.startswith(command_name):
+                rest = text[len(command_name) :]
+                if rest and rest[0].isspace():
+                    keyword = re.sub(r"\s+", " ", rest).strip()
+                    keyword = "".join(
+                        char for char in keyword if char.isprintable()
+                    ).strip()
+                    return keyword
+        return ""
+
+    def _song_cooldown_remaining(self, event: AstrMessageEvent) -> int:
+        now = self._clock()
+        self._prune_state(now)
+        session_key = event.unified_msg_origin
+        user_key = f"{session_key}:{event.get_sender_id()}"
+
+        group_cooldown = self._cfg_int("song_group_cooldown_seconds", 0)
+        user_cooldown = self._cfg_int("song_user_cooldown_seconds", 0)
+        remaining = 0.0
+        last_group = self._last_song_group.get(session_key)
+        last_user = self._last_song_user.get(user_key)
+        if last_group is not None:
+            remaining = max(remaining, group_cooldown - (now - last_group))
+        if last_user is not None:
+            remaining = max(remaining, user_cooldown - (now - last_user))
+        if remaining > 0:
+            return max(1, int(math.ceil(remaining)))
+
+        self._last_song_group[session_key] = now
+        self._last_song_user[user_key] = now
+        return 0
+
+    def _resolve_song_file(self, filename: str) -> Path | None:
+        if not filename:
+            return None
+        try:
+            base = self._song_dir.resolve()
+            raw_candidate = base / filename
+            if raw_candidate.is_symlink():
+                return None
+            candidate = raw_candidate.resolve()
+            if candidate.parent != base:
+                return None
+            if candidate.suffix.lower() not in SONG_SUFFIXES:
+                return None
+            if not candidate.is_file():
+                return None
+            return candidate
+        except (OSError, ValueError):
+            return None
+
+    def _list_song_files(self) -> tuple[list[Path], bool]:
+        try:
+            base = self._song_dir.resolve()
+            entries = sorted(base.iterdir(), key=lambda path: path.name.casefold())
+        except (OSError, ValueError):
+            return [], False
+
+        max_bytes = self._cfg_int("song_max_file_bytes", 1)
+        song_files: list[Path] = []
+        has_oversized = False
+        for entry in entries:
+            song_file = self._resolve_song_file(entry.name)
+            if song_file is None:
+                continue
+            try:
+                size = song_file.stat().st_size
+            except OSError:
+                continue
+            if size <= 0:
+                continue
+            if size > max_bytes:
+                has_oversized = True
+                logger.warning(
+                    "qqbot_enhancer 本地音频超过大小限制: %s (%s > %s)",
+                    song_file,
+                    size,
+                    max_bytes,
+                )
+                continue
+            song_files.append(song_file)
+        return song_files, has_oversized
 
     # ------------------------------------------------------------------
     # Stickers

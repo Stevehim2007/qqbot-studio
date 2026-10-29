@@ -1,7 +1,7 @@
 name: qqbot_enhancer
 display_name: QQ Bot 增强回复
-desc: QQ 群 @/私聊必回、非 @ 概率回复、图片理解、Bing 图片搜索与本地表情包增强插件。
-version: 1.2.0
+desc: QQ 群 @/私聊必回、非 @ 概率回复、图片理解、双源图片搜索下载与本地唱歌/表情包增强插件。
+version: 1.4.1
 author: QQ Bot Studio
 support_platforms:
   - aiocqhttp

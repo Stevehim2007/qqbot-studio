@@ -2,12 +2,14 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import tempfile
 import time
 import unittest
 from unittest import mock
 from pathlib import Path
 
+from qqbot_studio.astrbot_api import AstrBotAPIError
 from qqbot_studio.deployer import DeployManager, DeploymentError, Job, PERSONA_ID
 from qqbot_studio.dockerctl import CommandResult, DockerError, DockerStatus
 from qqbot_studio.store import Store
@@ -76,6 +78,69 @@ class FakeApi:
         self.persona_ids.append(persona_id)
         self.prompts.append(prompt)
 
+
+
+class FakePluginApi(FakeApi):
+    """In-memory stand-in for AstrBot's v4.29 plugin/config routes."""
+
+    def __init__(self):
+        super().__init__()
+        self.plugin_config = {
+            "memory_mode": "direct",
+            "reply_probability": 0.12,
+            "custom_user_value": "keep-me",
+        }
+        self.plugins = [
+            {
+                "name": "qqbot_enhancer",
+                "display_name": "QQ Bot 增强回复",
+                "desc": "测试插件",
+                "version": "1.4.1",
+                "reserved": False,
+                "activated": True,
+            },
+            {
+                "name": "builtin_help",
+                "display_name": "内置帮助",
+                "desc": "保留插件",
+                "version": "4.29.3",
+                "reserved": True,
+                "activated": False,
+            },
+        ]
+        self.toggled = []
+        self.updated_configs = []
+
+    def login(self):
+        return "fake-token"
+
+    def _request(self, method, path, *, payload=None, token=None, timeout=None):
+        assert token == "fake-token"
+        if method == "GET" and path == "/api/v1/plugins":
+            return {
+                "status": "ok",
+                "message": "",
+                "data": [dict(item) for item in self.plugins],
+            }
+        if method == "GET" and path.startswith("/api/v1/plugins/config?"):
+            return {
+                "status": "ok",
+                "data": {"plugin_name": "qqbot_enhancer", "config": dict(self.plugin_config)},
+            }
+        if method == "PUT" and path == "/api/v1/plugins/config":
+            assert payload["plugin_id"] == "qqbot_enhancer"
+            self.plugin_config = dict(payload["config"])
+            self.updated_configs.append(dict(payload["config"]))
+            return {"status": "ok", "message": "插件配置已保存并热重载。", "data": {}}
+        if method == "PATCH" and path == "/api/v1/plugins/enabled":
+            plugin_id = payload["plugin_id"]
+            enabled = bool(payload["enabled"])
+            self.toggled.append((plugin_id, enabled))
+            for item in self.plugins:
+                if item.get("name") == plugin_id:
+                    item["activated"] = enabled
+            return {"status": "ok", "message": "操作成功。", "data": {}}
+        raise AstrBotAPIError("not found", status_code=404)
 
 
 class FallbackDocker(FakeDocker):
@@ -203,6 +268,8 @@ class DeployerTests(unittest.TestCase):
         raw_astrbot = (Path(self.tmp.name) / "data" / "astrbot" / "cmd_config.json").read_text(encoding="utf-8")
         self.assertIn("sk-test-secret", raw_astrbot)
         self.assertNotIn("sk-test-secret", json.dumps(job, ensure_ascii=False))
+        parsed_astrbot = json.loads(raw_astrbot)
+        self.assertIs(parsed_astrbot["platform_settings"]["unique_session"], False)
         plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
         self.assertTrue((plugin_dir / "main.py").exists())
         enhancer_config = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
@@ -390,6 +457,185 @@ class DeployerTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "repaired")
         self.assertIn("up", self.docker.actions)
+
+    def _mark_deployed(self):
+        config = self.store.load_config()
+        config["deployed"] = True
+        config["ports"] = {
+            "astrbot_webui": 16185,
+            "snowluma_webui": 15099,
+            "novnc": 16081,
+        }
+        self.store.save_config(config)
+
+    def test_memory_mode_preserves_user_values_and_migrates_group_session(self):
+        self._mark_deployed()
+        plugin_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        plugin_path.parent.mkdir(parents=True, exist_ok=True)
+        plugin_path.write_text(
+            json.dumps(
+                {
+                    "memory_mode": "direct",
+                    "reply_probability": 0.33,
+                    "custom_user_value": "must-stay",
+                }
+            ),
+            encoding="utf-8",
+        )
+        cmd_path = Path(self.tmp.name) / "data" / "astrbot" / "cmd_config.json"
+        cmd_path.write_text(
+            json.dumps(
+                {
+                    "provider": "keep-provider",
+                    "platform_settings": {"unique_session": True, "keep": 7},
+                }
+            ),
+            encoding="utf-8",
+        )
+        fake_api = FakePluginApi()
+        fake_api.plugin_config = json.loads(plugin_path.read_text(encoding="utf-8"))
+        self.manager._api_client_factory = lambda base, user, password: fake_api
+
+        result = self.manager.set_memory_mode("astrbot")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["mode"], "astrbot")
+        self.assertTrue(result["applied_live"])
+        self.assertTrue(result["restart_required"])
+        self.assertEqual(fake_api.plugin_config["memory_mode"], "astrbot")
+        self.assertEqual(fake_api.plugin_config["reply_probability"], 0.33)
+        self.assertEqual(fake_api.plugin_config["custom_user_value"], "must-stay")
+        saved_plugin = json.loads(plugin_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved_plugin["memory_mode"], "astrbot")
+        self.assertEqual(saved_plugin["custom_user_value"], "must-stay")
+        saved_cmd = json.loads(cmd_path.read_text(encoding="utf-8"))
+        self.assertIs(saved_cmd["platform_settings"]["unique_session"], False)
+        self.assertEqual(saved_cmd["platform_settings"]["keep"], 7)
+        self.assertEqual(saved_cmd["provider"], "keep-provider")
+
+        direct = self.manager.set_memory_mode("direct")
+        self.assertTrue(direct["ok"], direct.get("error"))
+        self.assertEqual(direct["mode"], "direct")
+        self.assertFalse(direct["restart_required"])
+        self.assertEqual(fake_api.plugin_config["memory_mode"], "direct")
+        self.assertEqual(fake_api.plugin_config["custom_user_value"], "must-stay")
+
+    def test_old_enhancer_config_defaults_are_added_without_overwrite(self):
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        config_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps({"memory_mode": "direct", "custom_user_value": "keep-me"}),
+            encoding="utf-8",
+        )
+        DeployManager(
+            store=Store(self.tmp.name),
+            docker=self.docker,
+            api_client_factory=lambda base, user, password: self.api,
+        )
+        migrated = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["memory_mode"], "direct")
+        self.assertEqual(migrated["custom_user_value"], "keep-me")
+        self.assertIn("reply_probability", migrated)
+        self.assertIn("system_prompt", migrated)
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+
+    def test_memory_mode_default_is_direct_for_old_configs(self):
+        plugin_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        plugin_path.parent.mkdir(parents=True, exist_ok=True)
+        original = {"reply_probability": 0.2, "custom_user_value": "old"}
+        plugin_path.write_text(json.dumps(original), encoding="utf-8")
+        payload = self.manager.get_memory_mode()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["mode"], "direct")
+        self.assertEqual(payload["memory_scope"], "none")
+        self.assertEqual(json.loads(plugin_path.read_text(encoding="utf-8")), original)
+        # Reading the mode must not turn an explicit direct into astrbot or
+        # rewrite/lose unknown plugin fields.
+        self.assertEqual(json.loads(plugin_path.read_text(encoding="utf-8")), original)
+        self.assertEqual(self.store.load_config()["memory_mode"], "direct")
+
+    def test_plugin_inventory_and_toggle_use_real_api_contract(self):
+        self._mark_deployed()
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "metadata.yaml").write_text(
+            "name: qqbot_enhancer\ndisplay_name: QQ Bot 增强回复\nversion: 1.4.1\n",
+            encoding="utf-8",
+        )
+        fake_api = FakePluginApi()
+        self.manager._api_client_factory = lambda base, user, password: fake_api
+
+        listing = self.manager.get_plugins()
+        self.assertTrue(listing["ok"], listing.get("error"))
+        self.assertTrue(listing["api_available"])
+        self.assertEqual([item["id"] for item in listing["plugins"]], ["qqbot_enhancer", "builtin_help"])
+        self.assertEqual(listing["plugins"][1]["source"], "builtin")
+        self.assertFalse(listing["plugins"][1]["enabled"])
+
+        toggled = self.manager.set_plugin_enabled("qqbot_enhancer", False)
+        self.assertTrue(toggled["ok"])
+        self.assertFalse(toggled["restart_required"])
+        self.assertEqual(fake_api.toggled, [("qqbot_enhancer", False)])
+        self.assertFalse(toggled["plugin"]["enabled"])
+
+    def test_plugin_inventory_degrades_when_astrbot_is_offline(self):
+        self._mark_deployed()
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "metadata.yaml").write_text("name: qqbot_enhancer\nversion: 1.4.1\n", encoding="utf-8")
+
+        class OfflineApi(FakeApi):
+            def wait_until_ready(self, timeout=180):
+                raise RuntimeError("AstrBot 不可达")
+
+        self.manager._api_client_factory = lambda base, user, password: OfflineApi()
+        listing = self.manager.get_plugins()
+        self.assertFalse(listing["ok"])
+        self.assertFalse(listing["api_available"])
+        self.assertIn("降级", listing["message"])
+        self.assertEqual(listing["plugins"][0]["id"], "qqbot_enhancer")
+        with self.assertRaises(DeploymentError):
+            self.manager.set_plugin_enabled("qqbot_enhancer", True)
+
+    def test_plugin_fallback_reads_persisted_disabled_state(self):
+        self._mark_deployed()
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "metadata.yaml").write_text(
+            "name: qqbot_enhancer\ndisplay_name: QQ Bot 增强回复\nversion: 1.4.1\n",
+            encoding="utf-8",
+        )
+        db_path = Path(self.tmp.name) / "data" / "astrbot" / "data_v4.db"
+        connection = sqlite3.connect(str(db_path))
+        try:
+            connection.execute(
+                "CREATE TABLE preferences (scope TEXT, scope_id TEXT, key TEXT, value TEXT)"
+            )
+            connection.execute(
+                "INSERT INTO preferences VALUES (?, ?, ?, ?)",
+                (
+                    "global",
+                    "global",
+                    "inactivated_plugins",
+                    json.dumps({"val": ["data.plugins.qqbot_enhancer.main"]}),
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        class OfflineApi(FakeApi):
+            def wait_until_ready(self, timeout=180):
+                raise RuntimeError("AstrBot 不可达")
+
+        self.manager._api_client_factory = lambda base, user, password: OfflineApi()
+        listing = self.manager.get_plugins()
+        self.assertFalse(listing["ok"])
+        plugin = next(item for item in listing["plugins"] if item["id"] == "qqbot_enhancer")
+        self.assertIs(plugin["enabled"], False)
+        self.assertEqual(plugin["enabled_source"], "shared_preferences")
+        self.assertEqual(plugin["name"], "QQ Bot 增强回复")
 
     def test_snowluma_password_parser(self):
         secrets_data = self.store.load_secrets()
