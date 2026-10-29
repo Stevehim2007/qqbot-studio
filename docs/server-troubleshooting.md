@@ -4,7 +4,9 @@
 
 - Git HTTPS 报 `Unsupported SSL backend 'openssl'`
 - Docker 安装被取消或只装了一半
+- Docker 已安装且 daemon 正常，但启动器仍误报“未检测到 Docker”
 - Docker 服务启动失败、`Start request repeated too quickly`
+- 旧版容器仍只监听 `127.0.0.1`，新版启动后应从服务器 IP 直接访问
 - 卸载并重装 Docker
 - 国内镜像拉取慢
 - 服务器上运行后，如何从自己的电脑直接访问管理控制台 / WebUI / noVNC
@@ -158,7 +160,146 @@ docker info
 
 ---
 
-## 3. Docker 服务启动失败：Start request repeated too quickly
+## 3. Docker 已安装，但启动器仍提示“未检测到 Docker”
+
+### 现象
+
+Docker 明明已经安装并正常运行：
+
+```bash
+docker --version
+docker compose version
+docker info
+systemctl is-active docker
+```
+
+以上命令全部正常，但运行 `./install.sh` / `./start.sh` 时出现：
+
+```text
+install.sh：Docker、Docker Compose 与守护进程均已就绪。
+start.sh：错误：未检测到 Docker。请先运行 ./install.sh 安装 Docker，或手动安装后重试。
+```
+
+### 原因（v2.0.0 的启动器 bug）
+
+v2.0.0 的启动器在检查 Docker 时，使用了一个不存在的临时目录作为
+子进程工作目录：
+
+```text
+~/.local/share/qqbot-studio/doctor
+```
+
+Python 的 `subprocess.run(cwd=...)` 在目录不存在时会抛出
+`FileNotFoundError`；程序把这个错误误判成“找不到 docker 命令”，于是即使
+Docker、Compose 和 daemon 全部正常，也会报告“未检测到 Docker”。
+
+### 永久修复
+
+升级到 **v2.0.1 或更高版本**。该版本会使用已存在的数据目录，并且
+`DockerController` 会自行创建所需工作目录。
+
+```bash
+cd "/你的项目路径/QQ Ai bot"
+git pull --ff-only
+git log -1 --oneline
+```
+
+确认当前提交包含或晚于：
+
+```text
+2f7eb49 fix: detect Docker from an existing working directory
+```
+
+验证版本：
+
+```bash
+python3 -m qqbot_studio --version
+```
+
+然后停掉旧管理服务并重新启动：
+
+```bash
+screen -S qqbot-studio-server -X quit 2>/dev/null || true
+pkill -f "python3 -m qqbot_studio" 2>/dev/null || true
+
+./start.sh --ip 0.0.0.0 --port 8765 --public-host 你的服务器公网IP或域名
+```
+
+### 临时绕过（无法立即更新时）
+
+如果暂时不能 `git pull`，可以手动创建 v2.0.0 缺失的工作目录。
+
+使用默认数据目录时：
+
+```bash
+mkdir -p "$HOME/.local/share/qqbot-studio/doctor"
+./start.sh --ip 0.0.0.0 --port 8765
+```
+
+使用了 `--data-dir` 时，目录要对应那个数据目录：
+
+```bash
+# 假设数据目录是 /data/qqbot-studio
+mkdir -p /data/qqbot-studio/doctor
+./start.sh --data-dir /data/qqbot-studio --ip 0.0.0.0 --port 8765
+```
+
+这只是绕过旧版的误判，长期仍应升级到 v2.0.1。
+
+### 如何确认 Docker 本身是否真的正常
+
+```bash
+command -v docker
+docker --version
+docker compose version
+docker info
+systemctl is-active docker
+```
+
+- 如果 `docker info` 报 `permission denied`，是 Docker 用户组权限问题，
+  不是本节的目录 bug；
+- 如果 `docker --version` 找不到命令，检查 PATH、Snap 安装路径或重新安装 Docker；
+- 如果以上全部正常，但旧版仍报“未检测到 Docker”，优先按本文升级或创建
+  `doctor` 目录。
+
+### 旧版容器仍只监听 127.0.0.1
+
+旧版 v1 部署可能留下：
+
+```text
+qqbot-astrbot
+qqbot-snowluma
+```
+
+它们即使在新版启动后仍可能监听：
+
+```text
+127.0.0.1:5099
+127.0.0.1:6081
+127.0.0.1:6185
+```
+
+v2 会创建自己独立的 `qqbot-bot-N-astrbot` / `qqbot-bot-N-snowluma`
+容器，并把端口绑定到 `0.0.0.0`。旧容器不会被 v2 控制台管理。
+
+查看当前容器：
+
+```bash
+docker ps --format 'table {{.Names}}	{{.Ports}}'
+```
+
+确认它们确实是旧版容器且不需要保留后，可以删除：
+
+```bash
+docker rm -f qqbot-astrbot qqbot-snowluma
+```
+
+删除容器不会自动删除宿主机上的旧数据目录。若旧 QQ 登录状态还需要保留，
+先备份对应数据目录再操作。
+
+---
+
+## 4. Docker 服务启动失败：Start request repeated too quickly
 
 ### 现象
 
@@ -317,7 +458,7 @@ docker info
 
 ---
 
-## 4. 卸载并重装 Docker
+## 5. 卸载并重装 Docker
 
 ### 4.1 先停止容器并备份机器人数据
 
@@ -408,7 +549,7 @@ docker info
 
 ---
 
-## 5. 国内镜像加速
+## 6. 国内镜像加速
 
 向导现在默认勾选“使用国内镜像加速（自动多源）”，会依次尝试：
 
@@ -480,7 +621,7 @@ docker load -i qqbot-images.tar
 
 ---
 
-## 6. 服务器上运行，自己的电脑如何访问
+## 7. 服务器上运行，自己的电脑如何访问
 
 ### v2 默认：直接使用服务器 IP
 
@@ -597,7 +738,7 @@ cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 
 ---
 
-## 7. screen 后台运行
+## 8. screen 后台运行
 
 安装器会安装 screen。`start.sh` / `console.sh` 启动的后台管理服务名为：
 
@@ -621,7 +762,7 @@ screen -S qqbot-studio-server -X quit
 
 ---
 
-## 8. 最终验证清单
+## 9. 最终验证清单
 
 ```bash
 # Git
