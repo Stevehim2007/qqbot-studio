@@ -58,6 +58,35 @@ class StudioManagerTests(unittest.TestCase):
         self.assertEqual(manager.docker.SNOWLUMA_CONTAINER, first["snowluma_container"])
         self.assertEqual(manager.bind_address, "0.0.0.0")
 
+    def test_new_instances_get_distinct_ports(self):
+        first = self.studio.create_instance("一号机器人")
+        second = self.studio.create_instance("二号机器人")
+        first_config = json.loads(
+            (Path(self.tmp.name) / "instances" / first["id"] / "config.json").read_text(encoding="utf-8")
+        )
+        second_config = json.loads(
+            (Path(self.tmp.name) / "instances" / second["id"] / "config.json").read_text(encoding="utf-8")
+        )
+        first_ports = set(first_config["ports"].values())
+        second_ports = set(second_config["ports"].values())
+        self.assertTrue(first_ports)
+        self.assertTrue(second_ports)
+        self.assertTrue(first_ports.isdisjoint(second_ports))
+
+    def test_delete_instance_removes_its_directory(self):
+        meta = self.studio.create_instance("待删除机器人")
+        instance_dir = Path(self.tmp.name) / "instances" / meta["id"]
+        (instance_dir / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+        (instance_dir / ".env").write_text("X=1\n", encoding="utf-8")
+        fake_manager = mock.MagicMock()
+        fake_manager._active_job_id = ""
+        fake_manager.docker.down.return_value = None
+        with mock.patch.object(self.studio, "get_manager", return_value=fake_manager):
+            deleted = self.studio.delete_instance(meta["id"])
+        self.assertEqual(deleted["id"], meta["id"])
+        self.assertFalse(instance_dir.exists())
+        fake_manager.docker.down.assert_called_once()
+
     def test_instance_id_validation(self):
         with self.assertRaises(ValueError):
             self.studio.get_instance_meta("../bad")

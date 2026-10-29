@@ -156,6 +156,11 @@ class FakeStudio:
     def has_active_deployments(self):
         return False
 
+    def delete_instance(self, instance_id):
+        if instance_id != "bot-1":
+            raise ValueError("实例不存在")
+        return {"id": instance_id, "name": "测试机器人"}
+
 
 class CliTests(unittest.TestCase):
     def test_port_can_come_from_environment(self):
@@ -367,6 +372,16 @@ class ServerTests(unittest.TestCase):
             self.assertIsNone(exc.headers.get("Access-Control-Allow-Origin"))
             payload = json.loads(exc.read().decode("utf-8"))
             self.assertFalse(payload["ok"])
+
+
+    def test_delete_instance_contract(self):
+        status, body = self._delete("/api/instances/bot-1")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["instance"]["id"], "bot-1")
+        status, body = self._delete("/api/instances/missing")
+        self.assertEqual(status, 400)
 
     def test_unknown_job_returns_404(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import time
 import urllib.error
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .configgen import choose_ports
 from .dockerctl import DockerController, DockerError
 from .store import Store, chmod_best_effort, default_data_dir, utc_now
 
@@ -357,6 +359,77 @@ class StudioManager:
             raise ValueError("无效的实例 ID")
         return self.instances_dir / str(instance_id)
 
+    def used_instance_ports(self, *, exclude: str | None = None) -> set[int]:
+        """Collect ports already allocated to instance configs or env files."""
+
+        used: set[int] = set()
+        for meta in self.list_instance_metas():
+            instance_id = str(meta.get("id") or "")
+            if not instance_id or instance_id == exclude:
+                continue
+            path = self._instance_path(instance_id)
+            for filename in ("config.json", "secrets.json"):
+                try:
+                    data = json.loads((path / filename).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                ports = data.get("ports") if isinstance(data, dict) else None
+                if isinstance(ports, dict):
+                    for value in ports.values():
+                        try:
+                            used.add(int(value))
+                        except (TypeError, ValueError):
+                            pass
+            try:
+                env_text = (path / ".env").read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for line in env_text.splitlines():
+                key, _, value = line.partition("=")
+                if key in {"ASTRBOT_WEBUI_PORT", "SNOWLUMA_WEBUI_PORT_HOST", "NOVNC_PORT"}:
+                    try:
+                        used.add(int(value.strip()))
+                    except ValueError:
+                        pass
+        return used
+
+    def delete_instance(self, instance_id: str) -> dict[str, Any]:
+        """Remove one instance's containers, metadata and data directory."""
+
+        meta = self.get_instance_meta(instance_id)
+        path = self._instance_path(instance_id)
+        manager = self.get_manager(instance_id)
+        if getattr(manager, "_active_job_id", ""):
+            raise ValueError("实例有部署任务正在运行，不能删除。")
+        compose_path = path / "compose.yml"
+        env_path = path / ".env"
+        cleanup_error = ""
+        try:
+            if compose_path.exists() and env_path.exists():
+                manager.docker.down()
+            else:
+                manager.docker.require_ready()
+                manager.docker._docker(
+                    [
+                        "rm",
+                        "-f",
+                        str(meta.get("astrbot_container") or ""),
+                        str(meta.get("snowluma_container") or ""),
+                    ],
+                    timeout=120,
+                )
+        except Exception as exc:  # noqa: BLE001 - report but do not orphan silently
+            cleanup_error = str(exc)
+        if cleanup_error:
+            raise ValueError(
+                "实例容器清理失败，未删除数据目录。请先在终端确认容器已停止："
+                f" {cleanup_error}"
+            )
+        with self._lock:
+            self._manager_cache.pop(instance_id, None)
+        shutil.rmtree(path)
+        return {"id": instance_id, "name": meta.get("name") or instance_id}
+
     def create_instance(self, name: str | None = None) -> dict[str, Any]:
         settings = self.load_settings()
         seq = int(settings.get("next_instance_seq") or 1)
@@ -383,8 +456,23 @@ class StudioManager:
             "network_name": f"qqbot-studio-{instance_id}-net",
         }
         self._write_instance_meta(path, meta)
-        # Initialize instance-local Store immediately (creates 0700 directories).
-        Store(path)
+        # Initialize instance-local Store immediately (creates 0700 directories)
+        # and reserve host ports at creation time. This prevents two instances
+        # from choosing the same defaults when the first one is not running yet.
+        store = Store(path)
+        settings = self.load_settings()
+        reserved = self.used_instance_ports(exclude=instance_id)
+        try:
+            reserved.add(int(settings.get("bind_port") or DEFAULT_BIND_PORT))
+        except (TypeError, ValueError):
+            pass
+        ports = choose_ports(
+            host=str(settings.get("bind_host") or DEFAULT_BIND_HOST),
+            reserved=reserved,
+        )
+        config = store.load_config()
+        config["ports"] = ports
+        store.save_config(config)
         return meta
 
     @staticmethod

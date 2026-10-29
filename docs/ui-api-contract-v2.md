@@ -385,6 +385,21 @@ GET /api/state?instance=<id>
 window.location.assign('/wizard?instance=' + encodeURIComponent(instance.id));
 ```
 
+### DELETE `/api/instances/<id>`
+
+删除一个实例及其容器和数据目录。需要 `X-QB-Token`。有活动部署任务时返回 400。
+响应：
+
+```json
+{
+  "ok": true,
+  "instance": { "id": "bot-1", "name": "群聊助手一号" }
+}
+```
+
+前端必须做二次点击确认，不能使用 `confirm()`/`alert()`。
+
+### 控制台实例操作
 ### 控制台实例操作
 
 对指定实例执行启动 / 停止 / 重启：

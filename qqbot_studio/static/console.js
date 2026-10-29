@@ -23,6 +23,8 @@
     loadedOnce: false,
     actionInstanceId: '',
     creating: false,
+    deleteArmedId: '',
+    deletingInstanceId: '',
     lastSyncedAt: 0,
     pollTimer: null,
     updateBusy: false,
@@ -485,6 +487,51 @@
     return button;
   }
 
+  function resetDeleteButtons() {
+    $$('.instance-delete-btn').forEach((button) => {
+      button.textContent = '删除实例';
+      button.disabled = false;
+      button.classList.remove('is-loading');
+    });
+    state.deleteArmedId = '';
+  }
+
+  async function handleDeleteInstance(instance, button) {
+    if (!instance.id || state.deletingInstanceId) return;
+    if (state.deleteArmedId !== instance.id) {
+      resetDeleteButtons();
+      state.deleteArmedId = instance.id;
+      button.textContent = '再次点击确认删除';
+      window.setTimeout(() => {
+        if (state.deleteArmedId === instance.id && !state.deletingInstanceId) {
+          resetDeleteButtons();
+        }
+      }, 6000);
+      return;
+    }
+
+    state.deleteArmedId = '';
+    state.deletingInstanceId = instance.id;
+    button.disabled = true;
+    button.classList.add('is-loading');
+    button.textContent = '正在删除…';
+    try {
+      const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}`, {
+        method: 'DELETE'
+      }));
+      if (data.ok === false) throw new ApiError(textValue(data.message, '删除实例失败。'));
+      showToast(`实例「${instance.name || instance.id}」已删除。`, 'success', 4500);
+      state.deletingInstanceId = '';
+      await loadConsole({ silent: true });
+    } catch (error) {
+      const message = formatError(error, '删除实例失败。');
+      showToast(message, 'error', 7000);
+    } finally {
+      state.deletingInstanceId = '';
+      resetDeleteButtons();
+    }
+  }
+
   function buildInstanceCard(instance) {
     const card = makeElement('article', 'instance-card');
     card.dataset.instanceId = instance.id;
@@ -557,6 +604,10 @@
     controlGroup.appendChild(makeActionButton(instance, 'start'));
     controlGroup.appendChild(makeActionButton(instance, 'stop'));
     controlGroup.appendChild(makeActionButton(instance, 'restart'));
+    const deleteButton = makeElement('button', 'instance-delete-btn', '删除实例');
+    deleteButton.type = 'button';
+    deleteButton.addEventListener('click', () => void handleDeleteInstance(instance, deleteButton));
+    controlGroup.appendChild(deleteButton);
     actions.appendChild(controlGroup);
     card.appendChild(actions);
 

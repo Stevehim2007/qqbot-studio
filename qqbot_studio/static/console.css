@@ -755,3 +755,19 @@
 @media (max-width: 700px) and (max-height: 680px) {
   .assistant-panel { max-height: 96vh; }
 }
+
+
+.instance-delete-btn {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(202, 78, 78, 0.35);
+  border-radius: 8px;
+  background: rgba(202, 78, 78, 0.06);
+  color: #a53434;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.instance-delete-btn:hover { background: rgba(202, 78, 78, 0.12); }
+.instance-delete-btn:disabled { cursor: not-allowed; opacity: .6; }

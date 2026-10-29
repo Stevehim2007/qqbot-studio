@@ -484,6 +484,11 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             return
         parsed = urlsplit(self.path)
         try:
+            if parsed.path.startswith("/api/instances/"):
+                instance_id = urllib.parse.unquote(parsed.path[len("/api/instances/") :]).strip()
+                result = self.server.context.studio.delete_instance(instance_id)
+                self._json(HTTPStatus.OK, {"ok": True, "instance": result})
+                return
             if parsed.path.startswith("/api/mirrors/"):
                 node_id = urllib.parse.unquote(parsed.path[len("/api/mirrors/") :]).strip()
                 self.server.context.studio.delete_mirror_node(node_id)

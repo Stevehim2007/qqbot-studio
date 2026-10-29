@@ -114,10 +114,16 @@ def choose_ports(
     host: str = "127.0.0.1",
     max_attempts: int = 200,
     probe: bool = True,
+    reserved: set[int] | None = None,
 ) -> dict[str, int]:
-    """Choose unique, available loopback ports for the host port mappings."""
+    """Choose unique, available host ports.
+
+    ``reserved`` lets the multi-instance manager avoid ports already allocated
+    to another instance even when that instance's containers are stopped.
+    """
 
     preferred = {**DEFAULT_PORTS, **(preferred or {})}
+    reserved_ports = {int(item) for item in (reserved or set())}
     chosen: dict[str, int] = {}
     used: set[int] = set()
     for name, start in preferred.items():
@@ -127,7 +133,11 @@ def choose_ports(
         for _ in range(max_attempts):
             if candidate > 65535:
                 break
-            if candidate not in used and (not probe or is_port_free(candidate, host)):
+            if (
+                candidate not in used
+                and candidate not in reserved_ports
+                and (not probe or is_port_free(candidate, host))
+            ):
                 chosen[name] = candidate
                 used.add(candidate)
                 found = True

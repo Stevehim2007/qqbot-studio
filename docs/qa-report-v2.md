@@ -21,7 +21,7 @@
 python3 -m unittest discover -s tests -v
 ```
 
-结果：**116 tests OK**。
+结果：**119 tests OK**。
 
 覆盖：
 
@@ -45,6 +45,7 @@ python3 -m unittest discover -s tests -v
 - QQ 增强插件 `/找图`/`/搜图` Bing Images 搜索、安全过滤、冷却与 8 张本地表情包
 - 控制台离线“使用助手”知识库，覆盖安装、端口、扫码、SnowLuma、概率、记忆、更新、Windows
 - Windows 初始移植的 PowerShell 入口、后台进程管理和静态/跨平台测试（真实 Windows E2E 未验证）
+- 实例创建时预留宿主机端口，控制台删除实例时清理容器和实例目录
 - `start.sh` 部署模式和 `console.sh` 控制台模式的后台 URL 行为
 - QQ 增强插件 20 个 mock 用例（@ 必回、概率回复、图片、表情包、默认 LLM 阻断）
 
@@ -156,7 +157,7 @@ HTML/CSS 静态检查：
 
 ## 6. 发布建议
 
-当前可发布为 **v2.1.0 条件通过**，但 README 和发布说明必须明确：
+当前可发布为 **v2.1.1 条件通过**，但 README 和发布说明必须明确：
 
 - 默认 `0.0.0.0` 的安全风险；
 - 真实 Docker/QQ/DeepSeek E2E 尚未完成；
