@@ -631,10 +631,20 @@ body: {"mode": "direct"}  或  {"mode": "astrbot"}
   "memory_scope": "session",
   "applied_live": true,
   "restart_required": true,
-  "message": "AstrBot 已热重载插件……重启 AstrBot 后共享会话迁移生效。",
+  "warning": "AstrBot unique_session 迁移未完成：无法解析 JSON object：…（文件为空或正在并发写入）",
+  "warnings": ["AstrBot unique_session 迁移未完成：…"],
+  "nonfatal": true,
+  "nonfatal_warning": true,
+  "nonfatal_errors": ["AstrBot unique_session 迁移未完成：…"],
+  "message": "AstrBot 已热重载插件……非致命警告：AstrBot unique_session 迁移未完成……",
   "error": ""
 }
 ```
+
+`warning` / `warnings` / `nonfatal` 是新增字段，用于区分“模式已经保存”与“可选的
+`unique_session` 迁移暂未完成”。只要增强插件本地配置已安全写入且 Studio mirror 已更新，
+即使 `cmd_config.json` 在并发写入窗口暂时为空/半写，响应仍为 `ok:true` 和 `error:""`；
+`unique_session` 可能为 `null`，`restart_required` 保留原语义（仍为布尔值）。
 
 语义与迁移：
 
@@ -646,8 +656,12 @@ body: {"mode": "direct"}  或  {"mode": "astrbot"}
 - 保存 `astrbot` 时，服务端会以增量方式把 `cmd_config.json` 的
   `platform_settings.unique_session` 迁移为 `false`，保留其它配置。迁移需要 AstrBot 重启才完全生效，
   所以 `restart_required=true`；插件配置本身通过真实 `PUT /api/v1/plugins/config` 接口热重载。
+- 后端读取 `cmd_config.json` 时会针对临时空文件/并发截断重试最多 3 次（约 100ms 间隔）。
+  稳定损坏的 JSON 仍不会被当作正常配置；但此时如果增强插件配置和 Studio mirror 已经成功保存，
+  保存响应仍为 `ok=true`，并通过 `warning/warnings/nonfatal` 说明 `unique_session` 迁移未完成，
+  不会把已经切换的记忆模式误报成失败。`unique_session` 可为 `null`（未知而非伪造 false），
+  `error` 为空字符串；以上字段均是 additive，不改变旧字段类型。
 - AstrBot 未运行时可先把插件配置写到本地文件，`applied_live=false`、`restart_required=true`。
-  AstrBot 无法写入 `cmd_config.json` 等无法保证共享会话的情况返回 `ok=false` 和中文原因。
 - `/reset` 清空**当前**会话历史并保留会话与人格；`/new` 切换到新会话，旧会话仍在 AstrBot SQLite
   数据卷中，可按会话管理功能查看。两命令都不提供跨群共享知识库；长期记忆边界是 AstrBot 的会话存储，
   不是无限期全局记忆。
@@ -690,7 +704,10 @@ GET /api/instances/<instance_id>/stats
       "rollup": [
         {"path": "data", "bytes": 1200000, "file_count": 100, "errors": []}
       ],
-      "errors": []
+      "errors": [],
+      "warnings": [],
+      "partial": false,
+      "permission_denied": false
     }
   ],
   "docker": [
@@ -720,12 +737,21 @@ GET /api/instances/<instance_id>/stats
     }
   },
   "errors": [],
+  "warnings": [],
+  "partial": false,
+  "permission_denied": false,
   "error": "",
   "message": "资源统计已更新。"
 }
 ```
 
 - 全局和每个实例的数据目录占用使用标准库递归统计，不跟随符号链接；单文件/目录读取失败不会使整个响应失败。
+- 遇到 `PermissionError` 时跳过不可读目录/文件，继续统计同一实例中可读的 core/其它目录，并在
+  `warnings`/`errors` 中返回明确提示（例如“部分不可读（权限不足，已跳过）：…”）。
+  此时 `ok` 仍为 `true`、`error` 为空，新增的 `partial=true`、`permission_denied=true`；
+  实例条目和 `global` 也有对应的 `partial/warnings/permission_denied` 字段。
+- `/console` 只显示可读部分的统计，并在实例 V3 状态/全局统计提示中展示“部分指标读取失败”；
+  `warnings` 文本包含“部分不可读”，不会因为插件收藏表情目录不可读而把整份资源统计置为失败。
 - Docker 容器 CPU/内存通过 `docker stats --no-stream --format '{{json .}}' <containers...>` 获取。
 - 响应短时缓存约 5 秒，`cached=true` 表示命中缓存；不要求前端参与缓存。
 - 兼容旧字段：没有移除 `/api/state` / `/api/instances` 中任何已有字段。
@@ -1226,6 +1252,8 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
 - AstrBot 在线时再以真实 `GET /api/v1/plugins/config` 返回的当前配置为准；
 - AstrBot 离线时仍返回 HTTP 200 + `ok:true`，`api_available:false`、`source:"local"` 或
   `source:"schema"`，不返回 500、不阻塞控制台；
+- 本地插件配置读取会针对临时空文件/半写 JSON 做最多 3 次、约 100ms 间隔的短重试；
+  保存后立即重读不应因并发窗口报“本地插件配置损坏”。稳定损坏的 JSON 仍会报错并拒绝覆盖。
 - `source` 为 `astrbot` / `local` / `schema`；
 - `schema` 和 `values` 会过滤掉字段名或 schema 标记中带 `api_key`、`token`、`password`、
   `secret`、`credential` 等敏感语义的 Key 类字段。
@@ -1258,6 +1286,8 @@ Content-Type: application/json
 - AstrBot 不在线或在线接口不可用：配置先安全写入本地 0600 文件，
   返回 `ok:true, api_available:false, source:"local", restart_required:true`，
   信息中说明需重启 AstrBot；不会返回 500；
+- 返回前会重新读取刚写入的本地配置以构造安全 values；短暂并发/半写读取会重试。
+  真正稳定损坏的本地 JSON 仍返回 `ok:false`，不会用默认值覆盖用户文件。
 - 校验失败：HTTP 200 + `ok:false`，`error` 给出中文原因，不写入任何字段。
 
 字段校验（以 schema 为准）：

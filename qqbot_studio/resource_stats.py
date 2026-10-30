@@ -18,22 +18,36 @@ from typing import Any
 from .contracts import ResourceStats
 
 
-def directory_usage(path: Path | str) -> tuple[int, int, list[str]]:
-    """Return ``(bytes, files, errors)`` without following symbolic links."""
+def _directory_scan_warning(path: Path | str, exc: OSError, *, action: str) -> str:
+    if isinstance(exc, PermissionError):
+        return f"部分不可读（权限不足，已跳过）：{path}"
+    return f"无法{action} {path}：{exc}"
+
+
+def _collect_directory_usage(path: Path | str) -> tuple[int, int, list[str], int, bool]:
+    """Walk a directory without following links and classify read warnings."""
 
     root = Path(path)
     total = 0
     files = 0
-    errors: list[str] = []
+    warnings: list[str] = []
+    skipped = 0
+    permission_denied = False
     if not root.exists():
-        return 0, 0, errors
+        return 0, 0, warnings, skipped, permission_denied
     stack = [root]
     while stack:
         current = stack.pop()
         try:
             entries = list(os.scandir(current))
+        except PermissionError as exc:
+            permission_denied = True
+            skipped += 1
+            warnings.append(_directory_scan_warning(current, exc, action="读取"))
+            continue
         except OSError as exc:
-            errors.append(f"无法读取 {current}：{exc}")
+            skipped += 1
+            warnings.append(_directory_scan_warning(current, exc, action="读取"))
             continue
         for entry in entries:
             try:
@@ -44,9 +58,41 @@ def directory_usage(path: Path | str) -> tuple[int, int, list[str]]:
                 elif entry.is_file(follow_symlinks=False):
                     total += int(entry.stat(follow_symlinks=False).st_size)
                     files += 1
+            except PermissionError as exc:
+                permission_denied = True
+                skipped += 1
+                warnings.append(_directory_scan_warning(entry.path, exc, action="统计"))
             except OSError as exc:
-                errors.append(f"无法统计 {entry.path}：{exc}")
-    return total, files, errors[:20]
+                skipped += 1
+                warnings.append(_directory_scan_warning(entry.path, exc, action="统计"))
+    return total, files, warnings[:20], skipped, permission_denied
+
+
+def directory_usage(path: Path | str) -> tuple[int, int, list[str]]:
+    """Return ``(bytes, files, warnings)`` without following symbolic links.
+
+    Permission errors are skipped and returned as warnings; a partially
+    unreadable tree still reports the bytes/files that *are* readable.
+    """
+
+    total, files, warnings, _skipped, _permission_denied = _collect_directory_usage(path)
+    return total, files, warnings
+
+
+def directory_usage_details(path: Path | str) -> dict[str, Any]:
+    """Return structured usage details, including permission degradation."""
+
+    total, files, warnings, skipped, permission_denied = _collect_directory_usage(path)
+    return {
+        "bytes": int(total),
+        "total_bytes": int(total),
+        "file_count": int(files),
+        "warnings": list(warnings),
+        "errors": list(warnings),
+        "partial": bool(warnings),
+        "permission_denied": bool(permission_denied),
+        "skipped_entries": int(skipped),
+    }
 
 
 def disk_usage(path: Path | str) -> dict[str, Any]:
@@ -269,6 +315,9 @@ class DefaultResourceStats:
     def directory_usage(self, path: Path | str) -> tuple[int, int, list[str]]:
         return directory_usage(path)
 
+    def directory_usage_details(self, path: Path | str) -> dict[str, Any]:
+        return directory_usage_details(path)
+
     def disk_usage(self, path: Path | str) -> dict[str, Any]:
         return disk_usage(path)
 
@@ -286,6 +335,7 @@ __all__ = [
     "DefaultResourceStats",
     "DefaultResourceStatsProvider",
     "directory_usage",
+    "directory_usage_details",
     "disk_usage",
     "host_memory_info",
     "parse_docker_stats_output",

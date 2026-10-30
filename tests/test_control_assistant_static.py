@@ -343,6 +343,56 @@ class ControlAssistantStaticTests(unittest.TestCase):
         for script in ("/services/api.js", "/services/plugin-config.js", "/components/instance-settings.js"):
             self.assertIn(f'src="{script}"', self.console_html)
 
+    def test_console_ai_tools_and_auto_sticker_permissions_contract(self) -> None:
+        for token in (
+            "AI 工具权限",
+            "AI 自动表情",
+            "允许机器人自己调用插件能力",
+            "搜索图片",
+            "发送表情",
+            "收藏表情",
+            "查询表情分类",
+            "仅白名单",
+            "无电脑控制",
+            "safe_tools_enabled",
+            "safe_tools_allow_search_images",
+            "safe_tools_allow_send_sticker",
+            "safe_tools_allow_collect_sticker",
+            "safe_tools_allow_list_categories",
+            "sticker_enabled",
+            "sticker_ai_select_enabled",
+            "sticker_ai_marker_enabled",
+            "sticker_ai_select_probability",
+            "sticker_probability",
+            "sticker_cooldown_seconds",
+            "collected_sticker_enabled",
+            "defaultValue: 0.6",
+            "direct 模式由插件给模型提供安全表情 marker",
+            "memory/astrbot 模式使用本地情绪或分类匹配",
+            "pluginConfigService.load(instance.id, 'qqbot_enhancer')",
+            "pluginConfigService.save(instance.id, 'qqbot_enhancer', values)",
+            "当前后端不支持 AI 工具权限。",
+            "已保存；AstrBot 已热重载。",
+            "已保存；AstrBot 需要重启后生效。",
+            "AI_STICKER_NUMBERS", "ui.numberInputs[field.key]",
+            "values[field.key] = number;", "ai-sticker-number-grid",
+            "ai-tools-controls", "ai-tools-enabled", "ai-tools-save",
+            "ai-tools-error", "ai-sticker-enabled",
+            "ai-sticker-ai-select-probability", "ai-sticker-probability",
+            "ai-sticker-cooldown-seconds",
+            "QQ 增强插件当前已禁用", "插件当前已禁用",
+        ):
+            self.assertIn(token, self.console_js)
+        for style in (
+            ".ai-tools-section", ".ai-tools-controls", ".ai-tools-grid",
+            ".ai-tools-subsection", ".ai-sticker-number-grid",
+            ".ai-tools-section.is-plugin-disabled",
+        ):
+            self.assertIn(style, self.console_css)
+        for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
+            self.assertNotIn(forbidden, self.console_js)
+        self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
+
     def test_console_plugin_parameter_editor_contract(self) -> None:
         required = {
             "plugin-config-overlay", "plugin-config-panel", "plugin-config-title",

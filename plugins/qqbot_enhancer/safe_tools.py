@@ -24,7 +24,7 @@ ARG_RE = re.compile(
 SAFE_CATEGORY_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]{1,32}$")
 TOOL_ARG_KEYS = {
     "search_images": {"keyword", "count"},
-    "send_sticker": {"category", "emotion"},
+    "send_sticker": {"category", "emotion", "tag"},
     "collect_sticker": {"category"},
     "list_sticker_categories": set(),
 }
@@ -140,14 +140,16 @@ def validate_intent(
     elif intent.name == "send_sticker":
         category = intent.args.get("category", "").strip()
         emotion = intent.args.get("emotion", "").strip()
-        if bool(category) == bool(emotion):
+        tag = intent.args.get("tag", "").strip()
+        values = [value for value in (category, emotion, tag) if value]
+        if len(values) != 1:
             intent.valid = False
-            intent.error = "必须且只能指定 category 或 emotion"
+            intent.error = "必须且只能指定 category/emotion/tag 之一"
             return intent
-        value = category or emotion
+        value = values[0]
         if not SAFE_CATEGORY_RE.fullmatch(value):
             intent.valid = False
-            intent.error = "表情分类/情绪非法"
+            intent.error = "表情分类/情绪/标签非法"
             return intent
     elif intent.name == "collect_sticker":
         category = intent.args.get("category", "").strip()
@@ -189,7 +191,7 @@ def tool_instruction(enabled_tools: list[str]) -> str:
         )
     if "send_sticker" in enabled_tools:
         lines.append(
-            'send_sticker(category="分类") 或 send_sticker(emotion="happy")'
+            'send_sticker(category="分类") / emotion="happy" / tag="嘲讽"'
         )
     if "collect_sticker" in enabled_tools:
         lines.append('collect_sticker(category="分类")')

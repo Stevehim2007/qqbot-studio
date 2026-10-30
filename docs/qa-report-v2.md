@@ -1,4 +1,4 @@
-# QQ Bot Studio v3.7.1 QA 报告（含 v3 控制台功能）
+# QQ Bot Studio v3.8.0 QA 报告（含 v3 控制台功能）
 
 日期：2026-10-29
 结论：**条件通过（Conditional Pass）**。自动化测试、静态检查、本地 HTTP 冒烟和管理 API 冒烟通过；真实 Docker 容器、AstrBot/SnowLuma、QQ 扫码/noVNC、DeepSeek 实际对话和 Windows Docker Desktop E2E 仍未在本环境执行。
@@ -55,7 +55,7 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m qqbot_studio --version
 ```
 
-结果：全部通过；版本为 `qqbot-studio 3.7.1`。
+结果：全部通过；版本为 `qqbot-studio 3.8.0`。
 
 静态 UI 检查：
 
@@ -71,7 +71,7 @@ python3 -m qqbot_studio --version
 
 使用临时 `QQBOT_STUDIO_DATA_DIR` 启动真实管理服务，未启动 Docker、未执行真实部署：
 
-- `/healthz` 200，返回 `ok:true` 和版本 `3.7.1`
+- `/healthz` 200，返回 `ok:true` 和版本 `3.8.0`
 - `/` 302 到 `/console`；控制台/向导静态资源 200
 - 两页 token 注入成功；`/api/settings` 无 token 403、有 token 200
 - `POST /api/instances` 创建实例成功；`GET /api/instances` 返回该实例
@@ -152,7 +152,7 @@ python3 -m qqbot_studio --version
 
 ## 5. 发布建议
 
-当前快照可作为 **v3.7.1 条件通过** 交付文档和候选版本；正式生产发布前必须按第 3 节在真实 Ubuntu + Docker + QQ + DeepSeek 环境完成准入验证，并优先验证实际三端口、扫码、插件消息、记忆/统计、自动更新和默认 `0.0.0.0` 的防火墙边界。
+当前快照可作为 **v3.8.0 条件通过** 交付文档和候选版本；正式生产发布前必须按第 3 节在真实 Ubuntu + Docker + QQ + DeepSeek 环境完成准入验证，并优先验证实际三端口、扫码、插件消息、记忆/统计、自动更新和默认 `0.0.0.0` 的防火墙边界。
 
 建议发布说明明确：
 

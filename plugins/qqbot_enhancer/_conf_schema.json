@@ -594,6 +594,175 @@
     "default": "这个表情我收下了（{category}）。",
     "hint": "只显示分类，不显示路径/用户 ID/API Key。"
   },
+  "sticker_natural_language_enabled": {
+    "description": "启用显式 @/私聊自然语言发表情",
+    "type": "bool",
+    "default": true,
+    "hint": "命令、safe_tools marker、AI sticker marker 优先；自然语言命中后不调用 LLM。"
+  },
+  "sticker_natural_language_send_prefix": {
+    "description": "自然语言发信表情前缀文字",
+    "type": "string",
+    "default": "给你一个表情："
+  },
+  "sticker_natural_language_not_found_reply": {
+    "description": "自然语言目标无匹配时回复模板",
+    "type": "text",
+    "default": "没有找到「{target}」相关的表情，换个分类或情绪试试吧。"
+  },
+  "sticker_natural_language_empty_reply": {
+    "description": "自然语言发表情但池为空时回复",
+    "type": "text",
+    "default": "暂时没有可发送的表情。"
+  },
+  "sticker_natural_language_cooldown_reply": {
+    "description": "自然语言发表情冷却中回复",
+    "type": "text",
+    "default": "表情刚发过，稍等一下再试吧。"
+  },
+  "sticker_natural_language_reclassify_enabled": {
+    "description": "启用显式 @/私聊自然语言重分类最近收藏",
+    "type": "bool",
+    "default": true
+  },
+  "sticker_natural_language_reclassify_ai_enabled": {
+    "description": "本地无法解析时使用当前会话 provider 做受控分类",
+    "type": "bool",
+    "default": true,
+    "hint": "仅发送分类意图文本，不发送用户 ID/路径，不注册 tool/电脑控制；失败回退本地/纯文本。"
+  },
+  "sticker_natural_language_reclassify_provider_id": {
+    "description": "重分类语义 AI Provider（可留空）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "留空使用当前会话 provider（DeepSeek Flash 可用）；只发送分类意图文本，不传用户 ID/路径。"
+  },
+  "sticker_natural_language_reclassify_min_confidence": {
+    "description": "AI 重分类最低置信度",
+    "type": "float",
+    "default": 0.6,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  },
+  "sticker_natural_language_reclassify_moved_reply": {
+    "description": "最近收藏移动成功回复",
+    "type": "text",
+    "default": "已把刚才那个表情移到分类「{category}」。"
+  },
+  "sticker_natural_language_reclassify_cached_reply": {
+    "description": "缓存图片新收藏成功回复",
+    "type": "text",
+    "default": "已把刚才那张图保存到分类「{category}」。"
+  },
+  "sticker_natural_language_reclassify_same_reply": {
+    "description": "已在目标分类回复",
+    "type": "text",
+    "default": "刚才那个表情已经是「{category}」分类了。"
+  },
+  "sticker_natural_language_reclassify_not_found_reply": {
+    "description": "没有最近收藏/缓存回复",
+    "type": "text",
+    "default": "没有找到最近的表情或可收藏的缓存图片。"
+  },
+  "sticker_natural_language_reclassify_unclear_reply": {
+    "description": "分类意图无法解析回复",
+    "type": "text",
+    "default": "没听清要分到哪个分类，可以发 /收藏表情 分类 手动指定。"
+  },
+  "sticker_natural_language_reclassify_failed_reply": {
+    "description": "重分类失败回复",
+    "type": "text",
+    "default": "分类失败，旧收藏和分类未改动，请稍后再试。"
+  },
+  "sticker_natural_language_reclassify_memorized_reply": {
+    "description": "语义标注成功回复模板",
+    "type": "text",
+    "default": "已记住：这个表情用于表达{meaning}（分类：{category}）。"
+  },
+  "sticker_natural_language_reclassify_added_reply": {
+    "description": "追加分类成功回复",
+    "type": "text",
+    "default": "已把刚才那个表情加入分类「{categories}」。"
+  },
+  "sticker_natural_language_reclassify_removed_reply": {
+    "description": "移除分类成功回复",
+    "type": "text",
+    "default": "已把刚才那个表情移出分类「{categories}」。"
+  },
+  "sticker_natural_language_reclassify_categories_same_reply": {
+    "description": "分类未变化回复",
+    "type": "text",
+    "default": "刚才那个表情的分类没有变化。"
+  },
+  "sticker_semantic_tags_enabled": {
+    "description": "启用收藏表情 tags/meaning/tone 语义元数据与按标签调用",
+    "type": "bool",
+    "default": true
+  },
+  "collected_sticker_max_tags": {
+    "description": "每个收藏表情最多标签数",
+    "type": "int",
+    "default": 12,
+    "slider": {
+      "min": 0,
+      "max": 32,
+      "step": 1
+    }
+  },
+  "collected_sticker_max_tag_chars": {
+    "description": "单个标签最大字符数",
+    "type": "int",
+    "default": 24,
+    "slider": {
+      "min": 1,
+      "max": 64,
+      "step": 1
+    }
+  },
+  "collected_sticker_max_meaning_chars": {
+    "description": "meaning 最大字符数",
+    "type": "int",
+    "default": 200,
+    "slider": {
+      "min": 1,
+      "max": 500,
+      "step": 1
+    }
+  },
+  "collected_sticker_max_tone_chars": {
+    "description": "tone 最大字符数",
+    "type": "int",
+    "default": 24,
+    "slider": {
+      "min": 1,
+      "max": 64,
+      "step": 1
+    }
+  },
+  "collected_sticker_multi_category_enabled": {
+    "description": "启用收藏表情多分类（一个文件一份，多分类归属）",
+    "type": "bool",
+    "default": true
+  },
+  "collected_sticker_max_categories": {
+    "description": "每个收藏表情最多分类数",
+    "type": "int",
+    "default": 8,
+    "slider": {
+      "min": 1,
+      "max": 32,
+      "step": 1
+    }
+  },
+  "collected_sticker_category_separators": {
+    "description": "多分类分隔符字符集合",
+    "type": "string",
+    "default": ",，、;；|/"
+  },
   "safe_tools_enabled": {
     "description": "启用受限安全工具意图路由",
     "type": "bool",

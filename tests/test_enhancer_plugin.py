@@ -13,11 +13,14 @@ import hashlib
 import importlib.util
 import inspect
 import json as json_module
+import os
+import stat
 import struct
 import sys
 import tempfile
 import types
 import unittest
+import unittest.mock as mock
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
@@ -3190,8 +3193,17 @@ class TestModuleArchitecture(unittest.TestCase):
             loaded = store.load_index()
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0]["category"], "猫猫")
+            self.assertEqual(loaded[0]["categories"], ["猫猫"])
             self.assertEqual(loaded[0]["path"], category_dir / filename)
             self.assertEqual(store.categories(loaded), {"猫猫": 1})
+            store.save_index(loaded)
+            migrated_index = json_module.loads(
+                (root / "index.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                migrated_index["stickers"][0]["categories"],
+                ["猫猫"],
+            )
             self.assertIsNotNone(store.find_by_sha(loaded, sha256))
             store.save_index(loaded)
             reloaded = store.load_index()
@@ -3275,6 +3287,95 @@ class TestModuleArchitecture(unittest.TestCase):
                 ):
                     forbidden_calls.add("unsafe-import")
         self.assertEqual(forbidden_calls, set())
+
+    def test_sticker_intent_module_emotion_category_and_generic(self):
+        sticker_intent = importlib.import_module("sticker_intent")
+        emotions = [
+            "happy",
+            "sad",
+            "angry",
+            "thinking",
+            "love",
+            "sleepy",
+            "surprised",
+            "cool",
+        ]
+        categories = ["猫猫"]
+        self.assertEqual(
+            sticker_intent.detect_sticker_request(
+                "给我发个嘲讽表情包",
+                available_emotions=emotions,
+                available_categories=categories,
+            )["value"],
+            "angry",
+        )
+        self.assertEqual(
+            sticker_intent.detect_sticker_request(
+                "来一个开心的表情",
+                available_emotions=emotions,
+                available_categories=categories,
+            )["value"],
+            "happy",
+        )
+        self.assertEqual(
+            sticker_intent.detect_sticker_request(
+                "发张猫猫表情包",
+                available_emotions=emotions,
+                available_categories=categories,
+            ),
+            {"kind": "category", "value": "猫猫", "target": "猫猫"},
+        )
+        self.assertEqual(
+            sticker_intent.detect_sticker_request(
+                "发个表情",
+                available_emotions=emotions,
+                available_categories=categories,
+            )["kind"],
+            "generic",
+        )
+        self.assertIsNone(
+            sticker_intent.detect_sticker_request(
+                "今天天气真好",
+                available_emotions=emotions,
+                available_categories=categories,
+            )
+        )
+        self.assertIsNone(
+            sticker_intent.detect_sticker_request(
+                "我发了个表情包",
+                available_emotions=emotions,
+                available_categories=categories,
+            )
+        )
+
+    def test_sticker_reclassify_parser_examples_and_safety(self):
+        reclassify = importlib.import_module("sticker_reclassify")
+        examples = {
+            "刚刚的表情包是嘲讽的意思": ("嘲讽", "angry"),
+            "刚才那个表情包分类为猫猫": ("猫猫", "猫猫"),
+            "这个表情是阴阳怪气": ("阴阳怪气", "angry"),
+            "把上一个表情改成无语分类": ("无语", "angry"),
+            "刚刚那个是开心的": ("开心", "happy"),
+        }
+        for text, (target, category) in examples.items():
+            intent = reclassify.detect_reclassify_request(text)
+            self.assertIsNotNone(intent, text)
+            self.assertEqual(intent["target"], target)
+            self.assertEqual(
+                reclassify.classify_target_local(intent["target"]),
+                category,
+            )
+        self.assertIsNone(
+            reclassify.detect_reclassify_request("我觉得这个表情很嘲讽")
+        )
+        self.assertIsNone(
+            reclassify.detect_reclassify_request("今天天气真好")
+        )
+        self.assertTrue(
+            reclassify.looks_like_incomplete_reclassify_request(
+                "刚刚的表情包分类为"
+            )
+        )
 
     def test_protocol_interfaces_are_exposed(self):
         interfaces = importlib.import_module("interfaces")
@@ -3502,6 +3603,1233 @@ class TestSafeToolRouter(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             any(isinstance(comp, Image) for comp in event.result.chain)
         )
+
+class TestCollectedStickerPermissions(unittest.IsolatedAsyncioTestCase):
+    async def test_saved_dirs_and_files_are_0755_and_0644(self):
+        plugin = make_plugin(
+            FakeContext(),
+            collected_sticker_enabled=True,
+            collected_sticker_max_count=10,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            root.chmod(0o700)
+            event = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"permission-save"))],
+                message_str="",
+                private=True,
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                event
+            )
+            self.assertEqual(status, "ok")
+            save_status, _ = await plugin._save_collected_payload(
+                event,
+                "猫猫",
+                payload,
+            )
+            self.assertEqual(save_status, "saved")
+            category_dir = root / "猫猫"
+            filename = (
+                plugin._collected_entries[0]["sha256"] + ".png"
+            )
+            sticker_file = category_dir / filename
+            index_file = root / "index.json"
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o755)
+            self.assertEqual(
+                stat.S_IMODE(category_dir.stat().st_mode),
+                0o755,
+            )
+            self.assertEqual(
+                stat.S_IMODE(sticker_file.stat().st_mode),
+                0o644,
+            )
+            self.assertEqual(
+                stat.S_IMODE(index_file.stat().st_mode),
+                0o644,
+            )
+            self.assertEqual(plugin._collected_entries[0]["category"], "猫猫")
+
+    def test_existing_tree_migration_skips_symlinks_and_preserves_files(self):
+        store_module = importlib.import_module("sticker_store")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "collected_stickers"
+            category_dir = root / "猫猫"
+            nested_dir = category_dir / "nested"
+            nested_dir.mkdir(parents=True)
+            root.chmod(0o700)
+            category_dir.chmod(0o700)
+            nested_dir.chmod(0o700)
+            data = make_test_png(32, 32, b"migration-survives")
+            sticker_file = category_dir / ("a" * 64 + ".png")
+            sticker_file.write_bytes(data)
+            sticker_file.chmod(0o600)
+            index_file = root / "index.json"
+            index_payload = b'{"version":1,"stickers":[]}'
+            index_file.write_bytes(index_payload)
+            index_file.chmod(0o600)
+            nested_file = nested_dir / "legacy.txt"
+            nested_file.write_text("keep-me", encoding="utf-8")
+            nested_file.chmod(0o600)
+
+            outside_dir = base / "outside"
+            outside_dir.mkdir()
+            outside_dir.chmod(0o700)
+            outside_file = base / "outside.txt"
+            outside_file.write_text("outside", encoding="utf-8")
+            outside_file.chmod(0o600)
+            try:
+                os.symlink(outside_dir, root / "escape-dir")
+                os.symlink(outside_file, category_dir / "escape.txt")
+            except (OSError, NotImplementedError):
+                self.skipTest("当前平台不支持创建符号链接")
+
+            warnings = []
+            store = store_module.CollectedStickerStore(
+                root,
+                max_file_bytes=1024 * 1024,
+                category_normalizer=lambda raw: (
+                    str(raw) if raw and len(str(raw)) <= 32 else "未分类"
+                ),
+                log_warning=warnings.append,
+            )
+            summary = store.migrate_permissions(base)
+            self.assertGreaterEqual(summary["skipped"], 2)
+            for directory in (root, category_dir, nested_dir):
+                self.assertEqual(
+                    stat.S_IMODE(directory.stat().st_mode),
+                    0o755,
+                )
+            for file_path in (sticker_file, index_file, nested_file):
+                self.assertEqual(
+                    stat.S_IMODE(file_path.stat().st_mode),
+                    0o644,
+                )
+            self.assertEqual(sticker_file.read_bytes(), data)
+            self.assertEqual(index_file.read_bytes(), index_payload)
+            self.assertEqual(nested_file.read_text(encoding="utf-8"), "keep-me")
+            # Symlink targets outside the data root must never be chmodded.
+            self.assertEqual(
+                stat.S_IMODE(outside_dir.stat().st_mode),
+                0o700,
+            )
+            self.assertEqual(
+                stat.S_IMODE(outside_file.stat().st_mode),
+                0o600,
+            )
+
+    def test_resolve_root_migrates_legacy_index_and_permissions(self):
+        old_data_dir = MODULE.StarTools.data_dir
+        with tempfile.TemporaryDirectory() as temp_dir:
+            MODULE.StarTools.data_dir = Path(temp_dir)
+            try:
+                data_dir = Path(temp_dir) / "qqbot_enhancer"
+                root = data_dir / "collected_stickers"
+                category_dir = root / "猫猫"
+                category_dir.mkdir(parents=True)
+                data_dir.chmod(0o700)
+                root.chmod(0o700)
+                category_dir.chmod(0o700)
+                data = make_test_png(40, 40, b"legacy-root-migration")
+                sha256 = hashlib.sha256(data).hexdigest()
+                filename = sha256 + ".png"
+                sticker_file = category_dir / filename
+                sticker_file.write_bytes(data)
+                sticker_file.chmod(0o600)
+                index_file = root / "index.json"
+                index_file.write_text(
+                    json_module.dumps(
+                        {
+                            "version": 1,
+                            "saved_at": 1,
+                            "stickers": [
+                                {
+                                    "sha256": sha256,
+                                    "filename": filename,
+                                    "category": "猫猫",
+                                    "size": len(data),
+                                    "created_at": 1,
+                                    "source": "legacy",
+                                }
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                index_file.chmod(0o600)
+
+                plugin = make_plugin(
+                    FakeContext(),
+                    collected_sticker_enabled=True,
+                )
+                self.assertEqual(
+                    plugin._collected_root,
+                    root.resolve(),
+                )
+                self.assertEqual(len(plugin._collected_entries), 1)
+                for directory in (data_dir, root, category_dir):
+                    self.assertEqual(
+                        stat.S_IMODE(directory.stat().st_mode),
+                        0o755,
+                    )
+                for file_path in (sticker_file, index_file):
+                    self.assertEqual(
+                        stat.S_IMODE(file_path.stat().st_mode),
+                        0o644,
+                    )
+            finally:
+                MODULE.StarTools.data_dir = old_data_dir
+
+    def test_root_resolution_permission_failure_degrades_without_crash(self):
+        with mock.patch.object(
+            MODULE.StarTools,
+            "get_data_dir",
+            side_effect=PermissionError(13, "Permission denied"),
+        ):
+            plugin = make_plugin(
+                FakeContext(),
+                collected_sticker_enabled=True,
+            )
+        self.assertIsNone(plugin._collected_root)
+        self.assertEqual(plugin._collected_entries, [])
+
+    def test_store_reclassify_moves_atomically_and_handles_same_and_symlink(self):
+        store_module = importlib.import_module("sticker_store")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "collected_stickers"
+            store = store_module.CollectedStickerStore(
+                root,
+                max_file_bytes=1024 * 1024,
+                category_normalizer=lambda raw: (
+                    str(raw) if raw and len(str(raw)) <= 32 else None
+                ),
+            )
+            data = make_test_png(40, 40, b"store-reclass")
+            sha256 = hashlib.sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            old_path = store.write_sticker("未分类", filename, data)
+            entries = [
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": "未分类",
+                    "size": len(data),
+                    "created_at": 1,
+                    "source": "test",
+                    "path": old_path,
+                }
+            ]
+            store.save_index(entries)
+            status, new_entry = store.reclassify(entries, sha256, "angry")
+            self.assertEqual(status, "moved")
+            self.assertIsNotNone(new_entry)
+            new_path = root / "angry" / filename
+            self.assertFalse(old_path.exists())
+            self.assertTrue(new_path.is_file())
+            self.assertEqual(
+                stat.S_IMODE(new_path.parent.stat().st_mode),
+                0o755,
+            )
+            self.assertEqual(
+                stat.S_IMODE(new_path.stat().st_mode),
+                0o644,
+            )
+            loaded = store.load_index()
+            self.assertEqual(loaded[0]["category"], "angry")
+            same_status, _ = store.reclassify(loaded, sha256, "angry")
+            self.assertEqual(same_status, "same")
+
+            outside = base / "outside-category"
+            outside.mkdir()
+            os.symlink(outside, root / "evil")
+            conflict_status, conflict_entry = store.reclassify(
+                loaded,
+                sha256,
+                "evil",
+            )
+            self.assertEqual(conflict_status, "storage")
+            self.assertIsNone(conflict_entry)
+            self.assertTrue(new_path.exists())
+            self.assertEqual(store.load_index()[0]["category"], "angry")
+
+    def test_store_reclassify_rolls_back_file_when_index_write_fails(self):
+        store_module = importlib.import_module("sticker_store")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "collected_stickers"
+            store = store_module.CollectedStickerStore(
+                root,
+                max_file_bytes=1024 * 1024,
+                category_normalizer=lambda raw: str(raw),
+            )
+            data = make_test_png(32, 32, b"rollback-reclass")
+            sha256 = hashlib.sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            old_path = store.write_sticker("未分类", filename, data)
+            entries = [
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": "未分类",
+                    "size": len(data),
+                    "created_at": 1,
+                    "source": "test",
+                    "path": old_path,
+                }
+            ]
+            store.save_index(entries)
+            original_save_index = store.save_index
+
+            def fail_save_index(_entries):
+                raise OSError("simulated index failure")
+
+            store.save_index = fail_save_index
+            with self.assertRaises(OSError):
+                store.reclassify(entries, sha256, "happy")
+            self.assertTrue(old_path.exists())
+            self.assertFalse((root / "happy" / filename).exists())
+            store.save_index = original_save_index
+            self.assertEqual(store.load_index()[0]["category"], "未分类")
+
+    def test_permission_failures_are_logged_not_raised(self):
+        store_module = importlib.import_module("sticker_store")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "collected_stickers"
+            category_dir = root / "猫猫"
+            category_dir.mkdir(parents=True)
+            sticker_file = category_dir / ("b" * 64 + ".png")
+            sticker_file.write_bytes(make_test_png(24, 24, b"no-crash"))
+            warnings = []
+            store = store_module.CollectedStickerStore(
+                root,
+                max_file_bytes=1024 * 1024,
+                category_normalizer=lambda raw: "猫猫",
+                log_warning=warnings.append,
+            )
+            with mock.patch.object(
+                Path,
+                "chmod",
+                side_effect=PermissionError(13, "Permission denied"),
+            ):
+                summary = store.migrate_permissions(base)
+            self.assertGreater(summary["errors"], 0)
+            self.assertTrue(warnings)
+            self.assertTrue(sticker_file.is_file())
+            self.assertEqual(
+                sticker_file.read_bytes(),
+                make_test_png(24, 24, b"no-crash"),
+            )
+
+class TestNaturalLanguageStickerIntent(unittest.IsolatedAsyncioTestCase):
+    async def test_private_snark_request_sends_angry_without_llm(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+            sticker_natural_language_enabled=True,
+            user_sticker_reaction_enabled=False,
+        )
+        event = FakeEvent(
+            [Plain("给我发个嘲讽表情包")],
+            message_str="给我发个嘲讽表情包",
+            private=True,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 2)
+        self.assertIsInstance(results[0].chain[1], Image)
+        self.assertEqual(Path(results[0].chain[1].path).name, "angry.png")
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_group_at_happy_request_sends_one_sticker_without_llm(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+            sticker_natural_language_enabled=True,
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("来一个开心的表情")],
+            message_str="来一个开心的表情",
+            private=False,
+            self_id="10001",
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 2)
+        self.assertEqual(Path(results[0].chain[1].path).name, "happy.png")
+        self.assertEqual(context.calls, [])
+
+    async def test_collected_category_exact_match_is_sent(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+            sticker_cooldown_seconds=0,
+            sticker_natural_language_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            category_dir = root / "猫猫"
+            category_dir.mkdir()
+            data = make_test_png(40, 40, b"nl-cat")
+            sha256 = hashlib.sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            path = category_dir / filename
+            path.write_bytes(data)
+            plugin._collected_entries = [
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": "猫猫",
+                    "size": len(data),
+                    "created_at": 1,
+                    "source": "test",
+                    "path": path,
+                }
+            ]
+            event = FakeEvent(
+                [Plain("发张猫猫表情包")],
+                message_str="发张猫猫表情包",
+                private=True,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(results[0].chain), 2)
+            self.assertEqual(results[0].chain[1].path, str(path))
+            self.assertEqual(context.calls, [])
+
+    async def test_unknown_target_and_empty_pool_reply_text_only(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_natural_language_enabled=True,
+            sticker_cooldown_seconds=0,
+        )
+        event = FakeEvent(
+            [Plain("发张不存在分类的表情包")],
+            message_str="发张不存在分类的表情包",
+            private=True,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertIsInstance(results[0].chain[0], Plain)
+        self.assertIn("没有找到", results[0].text)
+        self.assertNotIn("[[sticker:", results[0].text)
+        self.assertEqual(context.calls, [])
+
+        plugin._sticker_entries = []
+        plugin._cfg_bool = lambda key: (
+            True if key == "sticker_natural_language_enabled" else False
+        )
+        empty_event = FakeEvent(
+            [Plain("发个表情")],
+            message_str="发个表情",
+            private=True,
+        )
+        empty_results = await run_handler(plugin, empty_event)
+        self.assertEqual(len(empty_results), 1)
+        self.assertIn("暂时没有", empty_results[0].text)
+        self.assertEqual(len(empty_results[0].chain), 1)
+
+    async def test_non_at_group_request_does_not_trigger(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            reply_probability=0.0,
+            sticker_enabled=True,
+            sticker_natural_language_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("给我发个嘲讽表情包")],
+            message_str="给我发个嘲讽表情包",
+            private=False,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+
+    async def test_cooldown_and_disabled_fall_back_without_duplicate(self):
+        clock = FakeClock(100.0)
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            clock=clock,
+            sticker_enabled=True,
+            sticker_cooldown_seconds=60,
+            sticker_natural_language_enabled=True,
+        )
+        first = FakeEvent(
+            [Plain("发个表情")],
+            message_str="发个表情",
+            private=True,
+            session_id="nl-cooldown",
+        )
+        first_results = await run_handler(plugin, first)
+        self.assertEqual(len(first_results[0].chain), 2)
+
+        clock.value = 101.0
+        second = FakeEvent(
+            [Plain("发个表情")],
+            message_str="发个表情",
+            private=True,
+            session_id="nl-cooldown",
+        )
+        second_results = await run_handler(plugin, second)
+        self.assertEqual(len(second_results), 1)
+        self.assertIn("稍等", second_results[0].text)
+        self.assertEqual(len(second_results[0].chain), 1)
+        self.assertEqual(context.calls, [])
+
+        disabled_context = FakeContext(responder=lambda kwargs: "普通回复")
+        disabled_plugin = make_plugin(
+            disabled_context,
+            sticker_enabled=False,
+            sticker_natural_language_enabled=False,
+        )
+        disabled_event = FakeEvent(
+            [Plain("发个表情")],
+            message_str="发个表情",
+            private=True,
+        )
+        disabled_results = await run_handler(disabled_plugin, disabled_event)
+        self.assertEqual(len(disabled_results), 1)
+        self.assertEqual(disabled_results[0].text, "普通回复")
+        self.assertEqual(len(disabled_results[0].chain), 1)
+
+class TestNaturalLanguageReclassify(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_collected_sticker_is_moved_by_local_phrase(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            collected_sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"reclass-source"))],
+                message_str="",
+                private=True,
+                session_id="reclass-local",
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                first
+            )
+            self.assertEqual(status, "ok")
+            save_status, _ = await plugin._save_collected_payload(
+                first,
+                "未分类",
+                payload,
+            )
+            self.assertEqual(save_status, "saved")
+            old_path = plugin._collected_entries[0]["path"]
+            self.assertEqual(plugin._collected_entries[0]["category"], "未分类")
+
+            second = FakeEvent(
+                [Plain("刚刚的表情包是嘲讽的意思")],
+                message_str="刚刚的表情包是嘲讽的意思",
+                private=True,
+                session_id="reclass-local",
+            )
+            results = await run_handler(plugin, second)
+            self.assertEqual(len(results), 1)
+            self.assertIn("已记住", results[0].text)
+            self.assertIn("嘲讽", results[0].text)
+            self.assertNotIn("没存下来", results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["category"], "嘲讽")
+            self.assertIn("嘲讽", plugin._collected_entries[0]["tags"])
+            self.assertIn("讽刺", plugin._collected_entries[0]["meaning"])
+            self.assertEqual(plugin._collected_entries[0]["tone"], "sarcastic")
+            new_path = plugin._collected_entries[0]["path"]
+            self.assertNotEqual(old_path, new_path)
+            self.assertFalse(old_path.exists())
+            self.assertTrue(new_path.exists())
+            self.assertEqual(
+                stat.S_IMODE(new_path.parent.stat().st_mode),
+                0o755,
+            )
+            self.assertEqual(
+                stat.S_IMODE(new_path.stat().st_mode),
+                0o644,
+            )
+            self.assertEqual(context.calls, [])
+
+    async def test_local_auto_collect_then_reclassify_to_angry(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            collected_sticker_enabled=True,
+            auto_collect_user_sticker_enabled=True,
+            auto_collect_sticker_cooldown_seconds=0,
+            sticker_natural_language_reclassify_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"auto-reclass"))],
+                message_str="",
+                private=True,
+                session_id="reclass-auto",
+            )
+            first_results = await run_handler(plugin, first)
+            self.assertEqual(len(first_results), 1)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(plugin._collected_entries[0]["category"], "未分类")
+            self.assertIn(
+                first.unified_msg_origin,
+                plugin._last_collected_by_session,
+            )
+
+            second = FakeEvent(
+                [Plain("刚刚的表情包是嘲讽的意思")],
+                message_str="刚刚的表情包是嘲讽的意思",
+                private=True,
+                session_id="reclass-auto",
+            )
+            second_results = await run_handler(plugin, second)
+            self.assertEqual(len(second_results), 1)
+            self.assertIn("已记住", second_results[0].text)
+            self.assertIn("嘲讽", second_results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["category"], "嘲讽")
+            self.assertEqual(context.calls, [])
+
+    async def test_cached_uncollected_image_is_saved_to_target_category(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            collected_sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"cache-reclass"))],
+                message_str="",
+                private=True,
+                session_id="reclass-cache",
+            )
+            await plugin._remember_recent_user_media(
+                first,
+                first.get_messages(),
+            )
+            self.assertNotIn(
+                first.unified_msg_origin,
+                plugin._last_collected_by_session,
+            )
+
+            second = FakeEvent(
+                [Plain("这个表情是开心的")],
+                message_str="这个表情是开心的",
+                private=True,
+                session_id="reclass-cache",
+            )
+            results = await run_handler(plugin, second)
+            self.assertEqual(len(results), 1)
+            self.assertIn("已记住", results[0].text)
+            self.assertIn("开心", results[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(plugin._collected_entries[0]["category"], "开心")
+            self.assertIn("开心", plugin._collected_entries[0]["tags"])
+            self.assertEqual(context.calls, [])
+
+    async def test_ai_target_classification_with_safe_fallback(self):
+        context = FakeContext(
+            responder=lambda kwargs: json_module.dumps(
+                {
+                    "category": "猫猫",
+                    "tags": ["可爱", "猫猫"],
+                    "meaning": "用于表达可爱",
+                    "tone": "cute",
+                    "confidence": 0.95,
+                },
+                ensure_ascii=False,
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"ai-reclass"))],
+                message_str="",
+                private=True,
+                session_id="reclass-ai",
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                first
+            )
+            self.assertEqual(status, "ok")
+            await plugin._save_collected_payload(first, "未分类", payload)
+            second = FakeEvent(
+                [Plain("刚刚那个表情分类为超级 可爱的猫猫")],
+                message_str="刚刚那个表情分类为超级 可爱的猫猫",
+                private=True,
+                session_id="reclass-ai",
+            )
+            results = await run_handler(plugin, second)
+            self.assertEqual(len(results), 1)
+            self.assertIn("猫猫", results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["category"], "猫猫")
+            self.assertEqual(
+                plugin._collected_entries[0]["tags"],
+                ["可爱", "猫猫"],
+            )
+            self.assertEqual(
+                plugin._collected_entries[0]["meaning"],
+                "用于表达可爱",
+            )
+            self.assertEqual(plugin._collected_entries[0]["tone"], "cute")
+            self.assertEqual(len(context.calls), 1)
+            self.assertIn("用户说明", context.calls[0]["prompt"])
+            self.assertNotIn("tools", context.calls[0])
+
+            disabled_context = FakeContext(
+                responder=lambda kwargs: self.fail("AI 不应被调用")
+            )
+            disabled_plugin = make_plugin(
+                disabled_context,
+                sticker_enabled=True,
+                collected_sticker_enabled=True,
+                sticker_natural_language_reclassify_ai_enabled=False,
+            )
+            with tempfile.TemporaryDirectory() as temp_dir:
+                install_temp_collected_root(disabled_plugin, temp_dir)
+                first = FakeEvent(
+                    [Image(data=make_test_png(48, 48, b"ai-disabled"))],
+                    message_str="",
+                    private=True,
+                    session_id="reclass-ai-disabled",
+                )
+                status, payload = await disabled_plugin._extract_collectible_image_payload(
+                    first
+                )
+                await disabled_plugin._save_collected_payload(
+                    first,
+                    "未分类",
+                    payload,
+                )
+                second = FakeEvent(
+                    [Plain("刚刚那个表情分类为超级 可爱的猫猫")],
+                    message_str="刚刚那个表情分类为超级 可爱的猫猫",
+                    private=True,
+                    session_id="reclass-ai-disabled",
+                )
+                results = await run_handler(disabled_plugin, second)
+                self.assertEqual(len(results), 1)
+                self.assertIn("没听清", results[0].text)
+                self.assertEqual(
+                    disabled_plugin._collected_entries[0]["category"],
+                    "未分类",
+                )
+                self.assertEqual(disabled_context.calls, [])
+
+    async def test_ai_unavailable_keeps_old_category_and_falls_back_text(self):
+        def fail(kwargs):
+            raise RuntimeError("classification provider unavailable")
+
+        context = FakeContext(responder=fail)
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+            sticker_natural_language_reclassify_ai_enabled=True,
+            sticker_natural_language_reclassify_min_confidence=0.6,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(40, 40, b"ai-unavailable"))],
+                message_str="",
+                private=True,
+                session_id="reclass-ai-fail",
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                first
+            )
+            await plugin._save_collected_payload(first, "未分类", payload)
+            second = FakeEvent(
+                [Plain("刚刚那个表情分类为超级 可爱的猫猫")],
+                message_str="刚刚那个表情分类为超级 可爱的猫猫",
+                private=True,
+                session_id="reclass-ai-fail",
+            )
+            results = await run_handler(plugin, second)
+            self.assertEqual(len(results), 1)
+            self.assertIn("没听清", results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["category"], "未分类")
+            self.assertEqual(len(context.calls), 1)
+
+    async def test_no_recent_media_and_ordinary_chat_do_not_move(self):
+        context = FakeContext(responder=lambda kwargs: "普通聊天回复")
+        plugin = make_plugin(
+            context,
+            collected_sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            no_media = FakeEvent(
+                [Plain("刚刚的表情包是嘲讽的意思")],
+                message_str="刚刚的表情包是嘲讽的意思",
+                private=True,
+            )
+            results = await run_handler(plugin, no_media)
+            self.assertEqual(len(results), 1)
+            self.assertIn("没有找到最近", results[0].text)
+            self.assertEqual(context.calls, [])
+
+            ordinary = FakeEvent(
+                [Plain("我觉得这个表情很嘲讽")],
+                message_str="我觉得这个表情很嘲讽",
+                private=True,
+            )
+            ordinary_results = await run_handler(plugin, ordinary)
+            self.assertEqual(len(ordinary_results), 1)
+            self.assertEqual(ordinary_results[0].text, "普通聊天回复")
+            self.assertEqual(len(context.calls), 1)
+
+    async def test_reclassify_move_failure_keeps_old_entry(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"reclass-fail"))],
+                message_str="",
+                private=True,
+                session_id="reclass-fail",
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                first
+            )
+            await plugin._save_collected_payload(first, "未分类", payload)
+            old_path = plugin._collected_entries[0]["path"]
+            store = plugin._collected_store()
+            self.assertIsNotNone(store)
+            original_save_index = store.save_index
+
+            def fail_save(entries):
+                raise OSError("index write failed")
+
+            store.save_index = fail_save
+            second = FakeEvent(
+                [Plain("刚刚的表情包是嘲讽的意思")],
+                message_str="刚刚的表情包是嘲讽的意思",
+                private=True,
+                session_id="reclass-fail",
+            )
+            # Patch the store factory used by the handler to use this store.
+            plugin._collected_store = lambda: store
+            results = await run_handler(plugin, second)
+            self.assertEqual(len(results), 1)
+            self.assertIn("分类失败", results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["category"], "未分类")
+            self.assertTrue(old_path.exists())
+
+    async def test_incomplete_and_marker_messages_do_not_move(self):
+        context = FakeContext(responder=lambda kwargs: "普通回复")
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+            sticker_natural_language_reclassify_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(40, 40, b"incomplete-reclass"))],
+                message_str="",
+                private=True,
+                session_id="reclass-incomplete",
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                first
+            )
+            await plugin._save_collected_payload(first, "未分类", payload)
+            incomplete = FakeEvent(
+                [Plain("刚刚的表情包分类为")],
+                message_str="刚刚的表情包分类为",
+                private=True,
+                session_id="reclass-incomplete",
+            )
+            incomplete_results = await run_handler(plugin, incomplete)
+            self.assertEqual(len(incomplete_results), 1)
+            self.assertIn("没听清", incomplete_results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["category"], "未分类")
+
+            marker_text = (
+                "刚刚的表情包是嘲讽的意思 [[sticker:happy]]"
+            )
+            marker_event = FakeEvent(
+                [Plain(marker_text)],
+                message_str=marker_text,
+                private=True,
+                session_id="reclass-incomplete",
+            )
+            await run_handler(plugin, marker_event)
+            self.assertEqual(plugin._collected_entries[0]["category"], "未分类")
+
+    async def test_non_at_group_reclassify_does_not_trigger(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            reply_probability=0.0,
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("刚刚的表情包是嘲讽的意思")],
+            message_str="刚刚的表情包是嘲讽的意思",
+            private=False,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+
+class TestMultiCategoryAndGlobalPool(unittest.IsolatedAsyncioTestCase):
+    async def test_multi_category_collect_and_cross_session_commands(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            collected_sticker_enabled=True,
+            sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            collect_event = FakeEvent(
+                [
+                    Image(data=make_test_png(48, 48, b"multi-category")),
+                    Plain("/收藏表情 嘲讽,无语"),
+                ],
+                message_str="/收藏表情 嘲讽,无语",
+                private=True,
+                session_id="session-a",
+            )
+            collect_results = await run_collect_sticker_command(
+                plugin,
+                collect_event,
+            )
+            self.assertEqual(len(collect_results), 1)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            entry = plugin._collected_entries[0]
+            self.assertEqual(entry["category"], "嘲讽")
+            self.assertEqual(entry["categories"], ["嘲讽", "无语"])
+            filename = entry["filename"]
+            category_files = [
+                path for path in root.rglob(filename) if path.is_file()
+            ]
+            self.assertEqual(len(category_files), 1)
+
+            categories_event = FakeEvent(
+                [Plain("/表情分类")],
+                message_str="/表情分类",
+                private=True,
+                session_id="session-b",
+            )
+            categories_results = await run_categories_command(
+                plugin,
+                categories_event,
+            )
+            category_text = categories_results[0].text
+            self.assertIn("共 1 张", category_text)
+            self.assertIn("分类归属 2 次", category_text)
+            self.assertIn("嘲讽", category_text)
+            self.assertIn("无语", category_text)
+
+            list_event = FakeEvent(
+                [Plain("/表情列表 无语")],
+                message_str="/表情列表 无语",
+                private=True,
+                session_id="session-b",
+            )
+            list_results = await run_list_command(plugin, list_event)
+            self.assertIn(filename, list_results[0].text)
+
+            send_event = FakeEvent(
+                [Plain("/发表情 无语")],
+                message_str="/发表情 无语",
+                private=True,
+                session_id="session-b",
+            )
+            send_results = await run_send_sticker_command(plugin, send_event)
+            self.assertEqual(len(send_results), 1)
+            self.assertEqual(len(send_results[0].chain), 2)
+            self.assertEqual(
+                Path(send_results[0].chain[1].path),
+                entry["path"],
+            )
+            self.assertEqual(context.calls, [])
+
+    async def test_natural_add_remove_and_only_multiple_categories(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            collected_sticker_enabled=True,
+            sticker_enabled=True,
+            sticker_semantic_tags_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            collect_event = FakeEvent(
+                [
+                    Image(data=make_test_png(48, 48, b"multi-natural")),
+                    Plain("/收藏表情 未分类"),
+                ],
+                message_str="/收藏表情 未分类",
+                private=True,
+                session_id="multi-natural",
+            )
+            await run_collect_sticker_command(plugin, collect_event)
+            old_path = plugin._collected_entries[0]["path"]
+            self.assertEqual(plugin._collected_entries[0]["categories"], ["未分类"])
+
+            add_event = FakeEvent(
+                [Plain("刚刚的表情包加入猫猫分类")],
+                message_str="刚刚的表情包加入猫猫分类",
+                private=True,
+                session_id="multi-natural",
+            )
+            add_results = await run_handler(plugin, add_event)
+            self.assertEqual(len(add_results), 1)
+            self.assertIn("加入分类", add_results[0].text)
+            self.assertEqual(
+                plugin._collected_entries[0]["categories"],
+                ["未分类", "猫猫"],
+            )
+            self.assertEqual(plugin._collected_entries[0]["path"], old_path)
+
+            remove_event = FakeEvent(
+                [Plain("刚刚的表情包移出猫猫分类")],
+                message_str="刚刚的表情包移出猫猫分类",
+                private=True,
+                session_id="multi-natural",
+            )
+            remove_results = await run_handler(plugin, remove_event)
+            self.assertEqual(len(remove_results), 1)
+            self.assertIn("移出分类", remove_results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["categories"], ["未分类"])
+
+            only_event = FakeEvent(
+                [Plain("把上一个表情只放到猫猫,可爱分类")],
+                message_str="把上一个表情只放到猫猫,可爱分类",
+                private=True,
+                session_id="multi-natural",
+            )
+            only_results = await run_handler(plugin, only_event)
+            self.assertEqual(len(only_results), 1)
+            self.assertEqual(
+                plugin._collected_entries[0]["categories"],
+                ["猫猫", "可爱"],
+            )
+            self.assertEqual(plugin._collected_entries[0]["category"], "猫猫")
+            self.assertTrue(
+                plugin._collected_entries[0]["path"].is_file()
+            )
+            self.assertIn("猫猫", str(plugin._collected_entries[0]["path"]))
+            self.assertFalse(old_path.exists())
+            self.assertEqual(context.calls, [])
+
+    async def test_learned_tags_select_collected_sticker_across_sessions(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            collected_sticker_enabled=True,
+            sticker_enabled=True,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+            sticker_natural_language_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            source_event = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"tagged-sticker"))],
+                message_str="",
+                private=True,
+                session_id="session-source",
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                source_event
+            )
+            save_status, _ = await plugin._save_collected_payload(
+                source_event,
+                "未分类",
+                payload,
+                tags=["嘲讽", "无语"],
+                meaning="讽刺、无语或轻微挖苦",
+                tone="sarcastic",
+            )
+            self.assertEqual(save_status, "saved")
+            tagged_path = plugin._collected_entries[0]["path"]
+
+            natural_event = FakeEvent(
+                [Plain("发个嘲讽表情包")],
+                message_str="发个嘲讽表情包",
+                private=True,
+                session_id="session-other",
+            )
+            natural_results = await run_handler(plugin, natural_event)
+            self.assertEqual(len(natural_results), 1)
+            self.assertEqual(len(natural_results[0].chain), 2)
+            self.assertEqual(
+                Path(natural_results[0].chain[1].path),
+                tagged_path,
+            )
+            self.assertEqual(context.calls, [])
+
+            safe_context = FakeContext(
+                responder=lambda kwargs: (
+                    '给你 [[tool:send_sticker tag="嘲讽"]]'
+                )
+            )
+            safe_plugin = make_plugin(
+                safe_context,
+                collected_sticker_enabled=True,
+                sticker_enabled=True,
+                sticker_cooldown_seconds=0,
+                sticker_prevent_repeat=False,
+                safe_tools_enabled=True,
+                safe_tools_allow_send_sticker=True,
+            )
+            safe_plugin._collected_root = plugin._collected_root
+            safe_plugin._collected_entries = [dict(plugin._collected_entries[0])]
+            safe_event = FakeEvent(
+                [Plain("你好")],
+                message_str="你好",
+                private=True,
+                session_id="session-safe-tag",
+            )
+            safe_results = await run_handler(safe_plugin, safe_event)
+            self.assertEqual(len(safe_results), 1)
+            self.assertEqual(len(safe_results[0].chain), 2)
+            self.assertEqual(
+                Path(safe_results[0].chain[1].path),
+                tagged_path,
+            )
+
+    async def test_ai_marker_can_select_collected_tag(self):
+        context = FakeContext(
+            responder=lambda kwargs: "好呀 [[sticker:嘲讽]]"
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            source_event = FakeEvent(
+                [Image(data=make_test_png(40, 40, b"ai-tag-marker"))],
+                message_str="",
+                private=True,
+                session_id="ai-tag-source",
+            )
+            status, payload = await plugin._extract_collectible_image_payload(
+                source_event
+            )
+            await plugin._save_collected_payload(
+                source_event,
+                "未分类",
+                payload,
+                tags=["嘲讽"],
+                meaning="讽刺或无语",
+                tone="sarcastic",
+            )
+            tagged_path = plugin._collected_entries[0]["path"]
+            event = FakeEvent(
+                [Plain("你好呀")],
+                message_str="你好呀",
+                private=True,
+                session_id="ai-tag-call",
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(results[0].chain), 2)
+            self.assertEqual(Path(results[0].chain[1].path), tagged_path)
+            self.assertNotIn("[[sticker:", results[0].text)
+
+    def test_store_add_remove_categories_and_file_stays_single(self):
+        store_module = importlib.import_module("sticker_store")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "collected_stickers"
+            store = store_module.CollectedStickerStore(
+                root,
+                max_file_bytes=1024 * 1024,
+                category_normalizer=lambda raw: str(raw),
+                max_categories=8,
+            )
+            data = make_test_png(32, 32, b"store-multi")
+            sha256 = hashlib.sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            old_path = store.write_sticker("未分类", filename, data)
+            entries = [
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": "未分类",
+                    "categories": ["未分类"],
+                    "size": len(data),
+                    "created_at": 1,
+                    "source": "test",
+                    "path": old_path,
+                }
+            ]
+            store.save_index(entries)
+            status, _ = store.add_categories(
+                entries,
+                sha256,
+                ["嘲讽", "无语", "嘲讽"],
+            )
+            self.assertEqual(status, "updated")
+            after_add = store.load_index()
+            self.assertEqual(
+                after_add[0]["categories"],
+                ["未分类", "嘲讽", "无语"],
+            )
+            self.assertEqual(after_add[0]["path"], old_path)
+            self.assertEqual(len(list(root.rglob(filename))), 1)
+
+            status, _ = store.remove_categories(
+                after_add,
+                sha256,
+                ["未分类"],
+            )
+            self.assertEqual(status, "updated")
+            after_remove = store.load_index()
+            self.assertEqual(after_remove[0]["category"], "嘲讽")
+            self.assertEqual(after_remove[0]["categories"], ["嘲讽", "无语"])
+            self.assertFalse(old_path.exists())
+            self.assertTrue((root / "嘲讽" / filename).is_file())
+            self.assertEqual(len(list(root.rglob(filename))), 1)
+            self.assertEqual(
+                stat.S_IMODE((root / "嘲讽").stat().st_mode),
+                0o755,
+            )
+            self.assertEqual(
+                stat.S_IMODE((root / "嘲讽" / filename).stat().st_mode),
+                0o644,
+            )
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):

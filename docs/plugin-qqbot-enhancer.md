@@ -202,6 +202,33 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `sticker_ai_auto_collect_provider_id` | string | `""` | 视觉 provider；留空用当前会话（DeepSeek Flash 1017 可用） |
 | `sticker_ai_auto_collect_min_confidence` | float | `0.6` | AI 表情判定最低置信度 |
 | `sticker_ai_auto_collect_saved_reply` | text | `这个表情我收下了（{category}）。` | 保存成功回复模板 |
+| `sticker_natural_language_enabled` | bool | `true` | 启用显式 @/私聊自然语言发表情 |
+| `sticker_natural_language_send_prefix` | string | `给你一个表情：` | 自然语言发表情前缀 |
+| `sticker_natural_language_not_found_reply` | text | `没有找到「{target}」相关的表情，换个分类或情绪试试吧。` | 无匹配回复 |
+| `sticker_natural_language_empty_reply` | text | `暂时没有可发送的表情。` | 表情池为空回复 |
+| `sticker_natural_language_cooldown_reply` | text | `表情刚发过，稍等一下再试吧。` | 冷却中回复 |
+| `sticker_natural_language_reclassify_enabled` | bool | `true` | 启用最近收藏自然语言重分类 |
+| `sticker_natural_language_reclassify_ai_enabled` | bool | `true` | 本地无法解析时用当前会话 provider 受控分类 |
+| `sticker_natural_language_reclassify_min_confidence` | float | `0.6` | AI 重分类最低置信度 |
+| `sticker_natural_language_reclassify_moved_reply` | text | `已把刚才那个表情移到分类「{category}」。` | 移动成功回复 |
+| `sticker_natural_language_reclassify_cached_reply` | text | `已把刚才那张图保存到分类「{category}」。` | 缓存新收藏回复 |
+| `sticker_natural_language_reclassify_same_reply` | text | `刚才那个表情已经是「{category}」分类了。` | 同分类回复 |
+| `sticker_natural_language_reclassify_not_found_reply` | text | `没有找到最近的表情或可收藏的缓存图片。` | 无记录/缓存回复 |
+| `sticker_natural_language_reclassify_unclear_reply` | text | `没听清要分到哪个分类，可以发 /收藏表情 分类 手动指定。` | 无法解析回复 |
+| `sticker_natural_language_reclassify_failed_reply` | text | `分类失败，旧收藏和分类未改动，请稍后再试。` | 移动失败回复 |
+| `sticker_natural_language_reclassify_provider_id` | string | `""` | 语义 AI provider；留空用当前会话 |
+| `sticker_natural_language_reclassify_memorized_reply` | text | `已记住：这个表情用于表达{meaning}（分类：{category}）。` | 语义标注成功回复 |
+| `sticker_natural_language_reclassify_added_reply` | text | `已把刚才那个表情加入分类「{categories}」。` | 追加分类回复 |
+| `sticker_natural_language_reclassify_removed_reply` | text | `已把刚才那个表情移出分类「{categories}」。` | 移除分类回复 |
+| `sticker_natural_language_reclassify_categories_same_reply` | text | `刚才那个表情的分类没有变化。` | 分类无变化回复 |
+| `sticker_semantic_tags_enabled` | bool | `true` | 启用 tags/meaning/tone 语义元数据与按标签调用 |
+| `collected_sticker_max_tags` | int | `12` | 每个表情最多标签数 |
+| `collected_sticker_max_tag_chars` | int | `24` | 单标签最大字符数 |
+| `collected_sticker_max_meaning_chars` | int | `200` | meaning 最大字符数 |
+| `collected_sticker_max_tone_chars` | int | `24` | tone 最大字符数 |
+| `collected_sticker_multi_category_enabled` | bool | `true` | 启用一个文件多分类归属 |
+| `collected_sticker_max_categories` | int | `8` | 每个表情最多分类数 |
+| `collected_sticker_category_separators` | string | `,，、;；\|/` | 多分类分隔符 |
 | `safe_tools_enabled` | bool | `true` | 启用受限安全工具 intent router |
 | `safe_tools_marker_enabled` | bool | `true` | direct 模式注入白名单工具 marker 说明 |
 | `safe_tools_max_actions_per_reply` | int | `1` | 单条回复最多工具数 |
@@ -468,25 +495,27 @@ data/plugin_data/qqbot_enhancer/collected_stickers/index.json
 
 限制：真实视觉 provider 的图片识别准确性、DeepSeek Flash/Qwen 等实际视觉接口和 QQ 端展示均未验证；视觉判断会产生额外 token 消耗，默认关闭。AI 建议分类也只通过本地安全正则，非法分类回退默认分类。
 
-### 4.12 模块化接口与依赖装配（1.6.0）
+### 4.12 模块化接口与依赖装配（1.12.0）
 
 `main.py` 是 AstrBot 组合根：保留 `Star`、`filter` 装饰器、事件 hander、`Context`/`Comp` 适配和模块装配。业务能力拆分为：
 
 | 模块 | 职责 |
 |---|---|
 | `interfaces.py` | `StickerRepository` / `MediaDecoder` / `ImageSearchProvider` / `SongRepository` / `LLMService` Protocol；`MediaPayload` / `StickerRecord` / `ImageCandidate` 数据对象 |
-| `config.py` | 120 个默认配置集中定义、默认值兜底、旧 config 缺失键兼容、类型读取 |
+| `config.py` | 147 个默认配置集中定义、默认值兜底、旧 config 缺失键兼容、类型读取 |
 | `media.py` | 图片 magic/尺寸、base64 解码、媒体引用、公网 HTTP(S) URL 过滤 |
 | `image_search.py` | 中/日/英文相关性规范化、别名/阈值过滤纯函数 |
 | `songs.py` | 本地授权音频路径解析、超大文件检测、歌曲 repository |
-| `sticker_store.py` | 收藏 index 原子写/加载、旧 index 兼容、分类目录/文件校验、分类/去重查询辅助 |
+| `sticker_store.py` | 收藏 index 原子写/加载、旧 index 兼容、0755/0644 权限迁移、分类目录/文件校验、分类/去重查询辅助 |
 | `llm.py` | sticker marker 提取、AI 判定 JSON 严格解析、注入标签指令 |
 | `safe_tools.py` | 白名单 tool marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成 |
+| `sticker_intent.py` | 显式自然语言表情请求解析、情绪/收藏分类安全解析 |
+| `sticker_reclassify.py` | 最近收藏重分类句式/情绪映射、AI JSON 解析 |
 | `main.py` | AstrBot handler/事件编排、网络/LLM 适配、依赖装配 |
 
 兼容性：
 
-- 配置 schema 仍 120 项、`DEFAULTS` 与 schema 完全一致；
+- 配置 schema 仍 147 项、`DEFAULTS` 与 schema 完全一致；
 - 旧 config 只需提供已有字段，新字段通过 `ConfigReader` 默认值补齐；
 - 旧收藏 `index.json` 版本/字段仍可读取，旧内置 8 张贴纸保持不变；
 - `main.py` 优先 `from .config/...`，直接测试 harness 使用同目录绝对导入 fallback；新增 `__init__.py` 后插件目录可作为 package 部署；
@@ -503,7 +532,7 @@ AstrBot v4.29 的 tool/function-calling API 没有被本插件当作稳定公开
 | 工具 | 参数 | 执行边界 |
 |---|---|---|
 | `search_images` | `keyword`（1–100 字）、`count`（1–5，实际附件硬上限 1） | 只调用现有 Bing 搜索/安全下载/大小 magic 校验；不接受 URL/path；复用图片搜索群/用户冷却；一次最多 1 张 |
-| `send_sticker` | 二选一 `category` 或 `emotion` | 只从内置/收藏表情池取；分类安全正则；不接受路径；复用 sticker 冷却/防重复；最多 1 个附件 |
+| `send_sticker` | `category` / `emotion` / `tag` 三选一 | 只从内置/收藏表情池取；分类/标签安全正则；不接受路径；复用 sticker 冷却/防重复；最多 1 个附件 |
 | `collect_sticker` | 可选 `category` | 只从当前消息/引用/本会话最近缓存取图；禁止任意文件路径；复用收藏大小/数量/原子写/去重；独立冷却 |
 | `list_sticker_categories` | 无参数 | 只回安全分类名+数量，不含路径/Key；数量有上限 |
 
@@ -522,6 +551,115 @@ direct 模式仅向 system prompt 注入简短白名单说明；memory 模式不
 `safe_tools_enabled`、`safe_tools_marker_enabled`、`safe_tools_max_actions_per_reply`、`safe_tools_search_max_count`、`safe_tools_max_categories`、`safe_tools_allow_search_images`、`safe_tools_allow_send_sticker`、`safe_tools_allow_collect_sticker`、`safe_tools_allow_list_categories`、`safe_tools_sticker_prefix`、`safe_tools_collect_cooldown_seconds`。
 
 真实 AstrBot tool 联调未做（设计上不依赖 tool API）；真实 QQ E2E 未验证。
+
+### 4.14 收藏目录权限与宿主机可读（1.7.1）
+
+问题背景：AstrBot 容器内的插件若以 root/严格 umask 创建 `collected_stickers`，容易出现 0700/0600；宿主机上的 ubuntu 管理服务虽然能访问项目目录，却会在 `plugin_data/qqbot_enhancer/collected_stickers` 处收到 `Permission denied`。
+
+本版本规则：
+
+- 插件创建的收藏根目录/分类目录：**0755**（可遍历、不可写/执行文件）。
+- 收藏图片文件和 `index.json`：**0644**（可读，不可执行）。
+- 原子写完成后显式 `chmod`，不依赖 umask；临时文件删除/替换逻辑不变。
+- 启动时对 `collected_stickers` 做一次 best-effort 迁移：
+  - `os.walk(..., followlinks=False)`，只处理普通目录/普通文件；
+  - 目录 chmod 0755、文件 chmod 0644；
+  - 跳过符号链接和非普通文件；
+  - 每个路径先 `resolve()` 并限制在插件 data 根内，越界绝不 chmod；
+  - 失败只记录可操作日志，不删除收藏、不抛到聊天层；若父目录 `plugin_data/qqbot_enhancer` 无权限，插件仍可启动并返回存储不可用降级。
+- 不改变分类安全、SHA-256 去重、文件大小/数量上限和原子写入。
+
+若自动迁移无法修复父目录权限，可在宿主机项目根目录用有权限管理员执行（路径按实际 data 根调整）：
+
+```bash
+DATA_DIR="data/astrbot/plugin_data/qqbot_enhancer"
+chmod 755 "$DATA_DIR" "$DATA_DIR/collected_stickers"
+find -P "$DATA_DIR/collected_stickers" -type d -exec chmod 755 {} +
+find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
+```
+
+不要使用 `0777`，也不要删除 `collected_stickers` 或 `index.json`。`find -P` 不跟随符号链接。真实 AstrBot 容器与宿主机 ubuntu 管理用户仍可能存在 UID/GID、挂载/ACL/SELinux 差异，本版本未做真实容器 E2E；如仍 Permission denied，需要由部署管理员调整挂载或同组权限，而不是放宽到 0777。
+
+### 4.15 显式自然语言发表情（1.8.0）
+
+只在显式 @ 机器人或私聊文本中触发，非 @ 群消息不会误触发。支持“发/来/给我一个/给我发个 … 表情/表情包/贴纸/图”的明确请求：
+
+- `给我发个嘲讽表情包` / `来一个阴阳怪气的表情` / `无语表情` / `鄙视/挖苦表情`：映射到安全现有 emotion，优先 `angry`，缺失时 `cool`；
+- 开心/高兴→`happy`，难过/伤心→`sad`，生气→`angry`，思考→`thinking`，喜欢→`love`，困→`sleepy`，惊讶→`surprised`，酷→`cool`；
+- `发张猫猫表情包`：先精确匹配收藏分类名（不区分英文大小写，中文精确）；不走文件路径猜测；
+- `发个表情`：从内置+收藏池随机一张；
+- 目标分类/情绪不存在：中文提示“没有找到…”，不发送图片、不进入 LLM；
+- 冷却/防重复沿用 `sticker_cooldown_seconds`、`sticker_prevent_repeat`、`_last_sticker_at/_last_sticker_file`；冷却中发中文纯文本。
+- 一次最多一张，成功回复链为文字前缀 + 一个本地 `Comp.Image.fromFileSystem`，不调用 LLM，不调用 safe_tools/电脑控制/终端。
+
+优先级：slash 命令先由命令 handler 处理；AI sticker marker 或 safe_tools marker 文本不会被当作自然语言请求；无 marker 的显式自然语言请求才进入本分支。所有失败仅回退中文文本，不泄漏绝对路径/文件名/Key。真实 QQ 展示未验证。
+
+配置：`sticker_natural_language_enabled`、`sticker_natural_language_send_prefix`、`sticker_natural_language_not_found_reply`、`sticker_natural_language_empty_reply`、`sticker_natural_language_cooldown_reply`。
+
+### 4.16 自然语言重分类最近收藏（1.12.0）
+
+修复实际场景：自动收藏已保存在 `未分类`，用户随后说“刚刚的表情包是嘲讽的意思”，插件仍应定位最近一次收藏并移动分类，而不是回复“没存下来”。
+
+#### 最近收藏内存记录
+
+- 每个 `unified_msg_origin` 仅记录最近一次成功收藏：`{sha256, category, filename, saved_at}`。
+- 不记录用户 ID、用户文字或绝对路径；进程重启后自动清空，最多 256 个会话。
+- 手动收藏、自动收藏、AI 自动收藏、safe_tools 收藏都通过 `_save_collected_payload`，因此共用该记录。
+
+#### 识别与分类
+
+只在显式 @/私聊中识别保守句式，例如：
+- 刚刚的表情包是嘲讽的意思
+- 刚才那个表情包分类为猫猫
+- 这个表情是阴阳怪气
+- 把上一个表情改成无语分类
+- 刚刚那个是开心的
+
+本地映射：
+- 嘲讽/阴阳/无语/鄙视/挖苦 → 现有 emotion `angry`（本版本选择首个安全 emotion；`cool` 为兜底语义）；
+- 开心/高兴→happy，难过→sad，生气→angry，思考→thinking，喜欢→love，困→sleepy，惊讶→surprised，酷→cool；
+- 安全的短分类名（中文/字母/数字/-/_，≤32）直接作为目标分类，例如猫猫。
+
+本地无法确定且 `sticker_natural_language_reclassify_ai_enabled=true` 时，调用**当前会话 provider**（部署 DeepSeek Flash 时默认可用）做受控 JSON 分类：
+```json
+{"category":"猫猫","confidence":0.9}
+```
+只发送分类意图文本，不传用户 ID/路径/图片；不注册 LLM tool、不启用电脑控制/沙箱/终端；低于 `sticker_natural_language_reclassify_min_confidence` 或 provider 失败时回退本地/纯文本提示，不移动旧收藏。
+
+#### 安全移动
+
+`CollectedStickerStore.reclassify(entries, sha256, new_category)`：
+- 校验 SHA-256、分类 normalizer、文件名、旧路径、符号链接、新分类目录；
+- `os.replace(old,new)` 原子移动，随后 chmod 0644、目录 0755；
+- 原子写 index；index 写入失败时把文件移回旧分类并保留旧 index；
+- 已在目标分类返回 `same`，不重复移动；
+- 目标冲突/符号链接/越界返回安全失败；不删除旧收藏。
+
+若没有最近收藏记录但当前消息/引用/最近缓存有图：直接保存到目标分类。无媒体则回复“没有找到最近的表情或可收藏的缓存图片”。分类意图不完整提示可用 `/收藏表情 分类`，不会谎称没保存。
+
+普通聊天“我觉得这个表情很嘲讽”不触发；非 @ 群聊不触发；命令和 marker 文本优先。
+
+语义元数据：成功标注时 index 条目增加 `tags`/`meaning`/`tone`/`updated_at`（旧 index 缺省为空数组/空字符串/0）；`sticker_semantic_tags_enabled=false` 时只保存分类。选择收藏表情时除 category 外会匹配 tags/meaning；AI marker 的标签候选包含收藏 tags/categories；safe_tools `send_sticker` 支持 `category`/`emotion`/`tag` 三选一。真实 AstrBot provider/QQ E2E 未验证。
+
+### 4.17 全局收藏池与多分类归属（1.12.0）
+
+收藏池是**全局单例**：所有群/私聊共用同一 `collected_stickers/index.json` 和文件池；只有“最近一次收藏”和“最近媒体”按 `unified_msg_origin` 内存记录，用于重分类定位。任意会话的 `/表情分类`、`/表情列表 分类`、`/发表情 分类` 都查询全局池，不做会话隔离。
+
+多分类数据模型（向后兼容旧 index）：
+- 每个条目同时保存 `category`（主分类/旧兼容字段）和 `categories`（安全分类数组，第一项为主分类）。
+- 旧 index 无 `categories` 时自动迁移为 `[category]`，文件不移动、不重写内容。
+- 一个文件只有一份，物理路径继续放在主分类目录；追加其他分类只更新 index，不复制文件；移除主分类时选择下一个分类为主分类并原子移动文件。
+- 分类去重、安全正则（中文/字母/数字/-/_、长度限制）、最大分类数由 `collected_sticker_max_categories` 控制。
+- `StickerStore.update_categories/add_categories/remove_categories` 原子 index 写入；需要移动主分类时 `os.replace`，index 失败会回滚文件；目录 0755/文件 0644；符号链接/路径/文件名安全校验保留。
+
+命令语义：
+- `/收藏表情 嘲讽,无语`、`/收藏表情 猫猫，可爱`：分隔符由 `collected_sticker_category_separators` 控制，第一个为主分类；同图 SHA-256 去重，不复制文件。
+- `/表情分类`：按分类归属计数（一个多分类表情在每个归属各计 1 次），同时显示唯一图片总数。
+- `/表情列表 分类`、`/发表情 分类`：按 `categories` 包含匹配，跨会话可见。
+- 自然语言“加入分类/同时放到多个分类”会追加； “移出分类/只放到/只保留”会在明确语义下移除/替换；不因为普通聊天误改。
+- tags/meaning/tone 与 categories 同条目保存；选择逻辑支持分类/tags/meaning/情绪匹配，safe_tools 的 `send_sticker` 支持 `category`/`emotion`/`tag`。
+
+配置：`collected_sticker_multi_category_enabled=true`、`collected_sticker_max_categories=8`、`collected_sticker_category_separators`、`sticker_semantic_tags_enabled=true` 及 tags/meaning/tone 长度上限。真实 QQ/AstrBot 多分类展示未验证。
 
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
@@ -687,6 +825,11 @@ yield event.chain_result(chain)
 26. **AI 自动收藏仅支持 Comp.Image。** Comp.Face 只有 QQ 表情 id、无图片字节，不处理；大图/未知尺寸/纯风景/截图可能被跳过或交由本地启发式判断。每会话每小时次数、冷却、总数量、文件大小均有硬限制。
 27. **模块化重构不保证真实 AstrBot 实例复制部署零配置。** 新增 package `__init__.py`、main 相对导入和 test harness fallback 已在 mock/package smoke 中验证；但真实 AstrBot 插件加载器、Windows 路径/文件权限和 QQ E2E 未验证。`main.py` 仍保留 handler，业务模块未改变用户可见行为。
 28. **安全工具通过私有 marker 而非 AstrBot tool API。** 本版本未验证/依赖 AstrBot v4.29 tool/function-calling 稳定性；模型可能不输出 marker、格式不合法或被直接拒绝，此时只回退普通文本。工具白名单不含任意 URL/文件/命令/电脑控制；真实 QQ 群聊工具联调未验证。一次回复最多一个附件。
+29. **0755/0644 权限迁移只解决文件模式问题。** 若宿主机 ubuntu 管理服务与容器进程 UID/GID 不同、挂载点无遍历权限、ACL/SELinux 拒绝，0755/0644 仍可能无法读取；插件会记录日志但不提升到 0777，也不删除收藏。真实 AstrBot 容器 + 宿主机管理服务 E2E 未验证。
+30. **自然语言发表情不是语义理解。** 只匹配明确的“发/来/给我…表情包”句式；普通聊天、非 @ 群聊、命令、marker 文本不会触发。嘲讽等映射到安全现有 emotion，不是按图片内容判断；真实 QQ 展示与用户自定义分类覆盖范围未验证。
+31. **最近收藏重分类只作用于内存记录中的最近一次收藏。** 进程重启、其他会话/并发覆盖或 index 手工修改后，插件可能找不到最近记录而提示没找到；不会猜测或批量修改旧收藏。AI 分类仅提供分类名建议，实际移动仍走本地安全校验/回滚；真实 DeepSeek/provider 与 QQ 重分类 E2E 未验证。
+32. **多分类是 index 归属关系，不是复制文件。** 主分类决定物理目录；追加分类不复制文件，移除主分类会移动文件。外部手工编辑 index、磁盘移动或旧版本缓存可能导致分类归属与物理路径不一致；插件会跳过无效条目，不删除数据。真实 QQ/AstrBot 多分类展示未验证。
+33. **语义 tags/meaning/tone 和 AI 分类建议不保证语义准确。** 本地情绪映射与 AI JSON 都可能误判；只写入通过长度/字符/路径安全校验的元数据。AI 失败/低置信度不移动旧收藏；真实 DeepSeek/provider/QQ E2E 未验证。
 19. **自动表情反应只针对无文字图片/Face。** 带文字的图片仍按识图/聊天逻辑处理。默认 `user_sticker_reaction_enabled=true` 时，@/私聊中的无文字纯图片会优先走短句反应而不是原生视觉理解；需要视觉理解时应带文字、关闭该开关，或显式调整概率。
 20. **收藏表情数据目录/权限/index 损坏未做真实部署验证。** 使用公开 `StarTools.get_data_dir()` 和原子写入，但磁盘写满、权限变化、手工破坏 index、跨容器读取等仍可能导致收藏不可用；插件会降级提示，不会主动删除用户文件。没有实现破坏性删除命令。
 21. **收藏表情不会自动收集所有用户图片。** 只有显式执行 `/收藏表情` 才会保存；不会保存朋友圈/聊天原文、用户 ID 或敏感路径。收藏文件跨 QQ/协议端可读性仍取决于部署与文件服务。
@@ -701,7 +844,7 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-当前增强插件测试为 **116 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析（含 title/desc 元数据）、百度 JSON 解析、相关性中/日/英文规范化/阈值过滤/无相关候选不发图/百度第二源默认不调用、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用、AI 自动收藏默认关闭、任意群成员图片视觉判定收藏、AI 失败本地启发式降级、AI 非表情/大图/纯 Face 不收藏、每小时限频、provider overrides、恶意分类安全回退、无 tool/电脑控制、模块导入/package 相对导入/ConfigReader 旧配置/旧 index/媒体/歌曲/相关性/store/llm helper、安全工具白名单/参数 schema/路径/URL/命令拒绝、search_images/send_sticker/collect_sticker/list_sticker_categories mock、权限关闭回退、多 marker 拒绝、memory 模式工具链替换、无 eval/exec/subprocess。单测本身**不访问真实网络**。
+当前增强插件测试为 **145 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析（含 title/desc 元数据）、百度 JSON 解析、相关性中/日/英文规范化/阈值过滤/无相关候选不发图/百度第二源默认不调用、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用、AI 自动收藏默认关闭、任意群成员图片视觉判定收藏、AI 失败本地启发式降级、AI 非表情/大图/纯 Face 不收藏、每小时限频、provider overrides、恶意分类安全回退、无 tool/电脑控制、模块导入/package 相对导入/ConfigReader 旧配置/旧 index/媒体/歌曲/相关性/store/llm helper、安全工具白名单/参数 schema/路径/URL/命令拒绝、search_images/send_sticker/collect_sticker/list_sticker_categories mock、权限关闭回退、多 marker 拒绝、memory 模式工具链替换、无 eval/exec/subprocess、收藏目录 0755/文件 0644、已有树迁移、符号链接跳过、越界不 chmod、root 创建权限失败降级、旧 index/收藏读写回归、自然语言嘲讽/开心/收藏分类/通用表情/无匹配/非 @ 不触发/冷却/禁用降级、一次一张且不调用 LLM、最近收藏重分类本地/AI/缓存/无媒体/普通聊天/不完整指令、移动成功 0755/0644、store move/index 原子回滚/同分类/符号链接拒绝、AI 不可用保留旧分类、命令/marker 不误触发、tags/meaning/tone index 持久化与旧 index 缺省兼容、AI 语义分类、按 tags 触发自然语言/AI marker/safe_tools send_sticker、全局收藏跨会话查询/发送、多分类文件去重单份、多分类命令/计数/列表/发送、追加/移出/只放到分类、旧 index categories 迁移、store 分类原子更新/权限。单测本身**不访问真实网络**。
 
 非单测在线冒烟（不代表 AstrBot/QQ 端到端）：
 
@@ -715,4 +858,4 @@ python3 -m unittest tests.test_enhancer_plugin -v
 
 第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
 
-本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **288 tests OK**；其中本插件 116 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。
+本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **330 tests OK**；其中本插件 145 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。

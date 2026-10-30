@@ -995,11 +995,51 @@ class DeployManager:
         return defaults
 
     @staticmethod
+    def _read_json_object_with_error(
+        path: Path,
+        *,
+        attempts: int = 3,
+        delay: float = 0.1,
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Read a JSON object, retrying transient empty/partial writes.
+
+        AstrBot may rewrite ``cmd_config.json`` in place.  Seeing an empty or
+        temporarily truncated file during that window is not a permanent
+        corruption, so retry a few times before returning an error.  A stable
+        malformed file still fails after all attempts.
+        """
+
+        path = Path(path)
+        attempts = max(1, int(attempts))
+        last_reason = ""
+        for attempt in range(attempts):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return {}, ""
+            except (OSError, UnicodeError) as exc:
+                last_reason = str(exc)
+            else:
+                if not text.strip():
+                    last_reason = "文件为空或正在并发写入"
+                else:
+                    try:
+                        value = json.loads(text)
+                    except ValueError as exc:
+                        last_reason = f"JSON 解析失败：{exc}"
+                    else:
+                        if not isinstance(value, dict):
+                            return None, f"JSON 顶层不是 object：{path}"
+                        return value, ""
+            if attempt + 1 < attempts:
+                time.sleep(max(0.0, float(delay)))
+        return None, f"无法解析 JSON object：{path}（{last_reason or '未知原因'}）"
+
+    @staticmethod
     def _read_json_object(path: Path) -> dict[str, Any]:
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
+        """Backward-compatible wrapper used by tolerant migration paths."""
+
+        value, _error = DeployManager._read_json_object_with_error(path)
         return value if isinstance(value, dict) else {}
 
     @staticmethod
@@ -1071,6 +1111,20 @@ class DeployManager:
         mode = str(value or "").strip().lower()
         return mode if mode in MEMORY_MODES else DEFAULT_MEMORY_MODE
 
+    @staticmethod
+    def _memory_behavior_payload() -> dict[str, str]:
+        """Stable behavior documentation shared by read and write responses."""
+
+        return {
+            "direct": "只发送系统提示词和当前消息，不读取 AstrBot 历史。",
+            "astrbot": "交给 AstrBot 默认 Agent，使用当前统一消息来源的会话历史、人格和 Agent 能力。",
+            "group": "同一群的消息共享 event.unified_msg_origin 对应的会话。",
+            "private": "私聊按用户各自的 event.unified_msg_origin 会话保存。",
+            "reset": "/reset 清空当前会话历史，保留会话与人格。",
+            "new": "/new 切换到一个新会话，旧历史仍保存在 AstrBot 数据库中。",
+            "persistence": "AstrBot 历史存储在其本机 SQLite 数据卷中，跨 AstrBot 重启保留；它不是跨群共享的永久知识库。",
+        }
+
     def _migrate_enhancer_config_defaults(self) -> bool:
         """Create/fill enhancer config defaults without replacing user values.
 
@@ -1118,9 +1172,11 @@ class DeployManager:
         therefore the effective default, not a fabricated UI value.
         """
 
-        data = self._read_json_object(self.astrbot_cmd_config_path)
-        if not data:
-            return False, ""
+        data, read_error = self._read_json_object_with_error(self.astrbot_cmd_config_path)
+        if read_error:
+            return None, read_error
+        if data is None:
+            return None, f"无法读取 AstrBot 配置：{self.astrbot_cmd_config_path}"
         platform_settings = data.get("platform_settings")
         if not isinstance(platform_settings, dict):
             return False, ""
@@ -1137,9 +1193,11 @@ class DeployManager:
         path = self.astrbot_cmd_config_path
         if not path.exists():
             return False, ""
-        data = self._read_json_object(path)
-        if not data:
-            return False, f"AstrBot 配置无法解析：{path}"
+        data, read_error = self._read_json_object_with_error(path)
+        if read_error:
+            return False, read_error
+        if data is None:
+            return False, f"无法读取 AstrBot 配置：{path}"
         platform_settings = data.get("platform_settings")
         if not isinstance(platform_settings, dict):
             platform_settings = {}
@@ -1168,9 +1226,11 @@ class DeployManager:
             # Not an error before the first deployment: the generated
             # cmd_config will add unique_session=false at deploy time.
             return False, ""
-        data = self._read_json_object(path)
-        if not data:
-            return False, f"AstrBot 配置无法解析：{path}"
+        data, read_error = self._read_json_object_with_error(path)
+        if read_error:
+            return False, read_error
+        if data is None:
+            return False, f"无法读取 AstrBot 配置：{path}"
         platform_settings = data.get("platform_settings")
         if not isinstance(platform_settings, dict):
             platform_settings = {}
@@ -1442,15 +1502,7 @@ class DeployManager:
             "restart_required": False,
             "config_path": str(self.enhancer_config_path),
             "astrbot_config_path": str(self.astrbot_cmd_config_path),
-            "behavior": {
-                "direct": "只发送系统提示词和当前消息，不读取 AstrBot 历史。",
-                "astrbot": "交给 AstrBot 默认 Agent，使用当前统一消息来源的会话历史、人格和 Agent 能力。",
-                "group": "同一群的消息共享 event.unified_msg_origin 对应的会话。",
-                "private": "私聊按用户各自的 event.unified_msg_origin 会话保存。",
-                "reset": "/reset 清空当前会话历史，保留会话与人格。",
-                "new": "/new 切换到一个新会话，旧历史仍保存在 AstrBot 数据库中。",
-                "persistence": "AstrBot 历史存储在其本机 SQLite 数据卷中，跨 AstrBot 重启保留；它不是跨群共享的永久知识库。",
-            },
+            "behavior": self._memory_behavior_payload(),
             "message": message,
             "error": "；".join(errors),
         }
@@ -1506,8 +1558,19 @@ class DeployManager:
 
         unique_changed = False
         unique_error = ""
+        unique_session: bool | None = None
         if value == "astrbot":
             unique_changed, unique_error = self._migrate_unique_session_for_shared_memory()
+            # Do not parse a known-broken cmd_config.json repeatedly in the
+            # same request.  Retry once only after a successful migration read.
+            if not unique_error:
+                unique_session, unique_state_error = self._unique_session_state()
+                if unique_state_error:
+                    unique_error = unique_state_error
+        else:
+            unique_session, unique_state_error = self._unique_session_state()
+            if unique_state_error:
+                unique_error = unique_state_error
 
         restart_required = bool(unique_changed or not applied_live)
         messages: list[str] = []
@@ -1522,29 +1585,41 @@ class DeployManager:
         if api_error:
             messages.append(f"AstrBot 在线配置接口暂不可用：{api_error}")
         if unique_error:
-            messages.append(unique_error)
-        errors = [item for item in (api_error, unique_error) if item]
-        # If we could not ensure the required group-session migration, report a
-        # non-fatal API error so the console can display the security boundary
-        # without hiding the fact that the mode file itself was saved.
-        ok = not bool(unique_error)
+            messages.append(f"非致命警告：{unique_error}")
+
+        # The enhancer config and Studio mirror are already saved and the mode
+        # has switched.  A transient cmd_config read/write failure only affects
+        # the optional unique_session migration, so it must not turn the whole
+        # response into a failure.  Keep it machine-readable as warnings while
+        # preserving the old restart_required/behavior fields.
+        warnings: list[str] = []
+        if api_error:
+            warnings.append(f"AstrBot 在线配置接口暂不可用：{api_error}")
+        if unique_error:
+            warnings.append(f"AstrBot unique_session 迁移未完成：{unique_error}")
         return {
-            "ok": ok,
+            "ok": True,
             "mode": value,
             "memory_mode": value,
             "options": list(MEMORY_MODES),
             "memory_scope": "session" if value == "astrbot" else "none",
-            "unique_session": self._unique_session_state()[0],
-            "group_memory_shared": (self._unique_session_state()[0] is False)
+            "unique_session": unique_session,
+            "group_memory_shared": (unique_session is False)
             if value == "astrbot"
             else None,
             "applied_live": applied_live,
             "restart_required": restart_required,
             "config_path": str(self.enhancer_config_path),
             "astrbot_config_path": str(self.astrbot_cmd_config_path),
-            "behavior": self.get_memory_mode().get("behavior", {}),
+            "behavior": self._memory_behavior_payload(),
             "message": " ".join(item for item in messages if item),
-            "error": "；".join(errors),
+            "warning": " ".join(warnings),
+            "warnings": warnings,
+            "nonfatal": bool(warnings),
+            "nonfatal_warning": bool(warnings),
+            "nonfatal_errors": warnings,
+            "api_error": api_error,
+            "error": "",
         }
 
     @staticmethod
@@ -1865,12 +1940,9 @@ class DeployManager:
         path = self._plugin_config_path(plugin_id)
         if not path.exists():
             return {}, "", False
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except OSError as exc:
-            return {}, f"无法读取本地插件配置：{exc}", True
-        except ValueError as exc:
-            return {}, f"本地插件配置不是有效 JSON：{exc}", True
+        raw, read_error = self._read_json_object_with_error(path)
+        if read_error:
+            return {}, f"本地插件配置读取失败：{read_error}", True
         if not isinstance(raw, dict):
             return {}, "本地插件配置顶层必须是 JSON object。", True
         return raw, "", True

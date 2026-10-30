@@ -813,6 +813,48 @@ class StudioManager:
     # ------------------------------------------------------------------
     # Storage, host memory and Docker container statistics
     # ------------------------------------------------------------------
+    def _resource_usage(
+        self,
+        path: Path | str,
+    ) -> tuple[int, int, list[str], bool]:
+        """Return bytes/files/warnings/permission_denied for stats.
+
+        The injected provider protocol stays backward-compatible: a provider
+        may expose only ``directory_usage`` (tuple) or additionally
+        ``directory_usage_details`` for structured warnings.
+        """
+
+        details_reader = getattr(self.resource_stats, "directory_usage_details", None)
+        if callable(details_reader):
+            try:
+                details = details_reader(path)
+            except Exception:  # noqa: BLE001 - fall back to legacy tuple API
+                details = None
+            if isinstance(details, dict):
+                raw_warnings = details.get("warnings") or details.get("errors") or []
+                if isinstance(raw_warnings, str):
+                    raw_warnings = [raw_warnings]
+                elif not isinstance(raw_warnings, (list, tuple, set)):
+                    raw_warnings = []
+                warnings = [str(item) for item in raw_warnings if str(item)]
+                return (
+                    int(details.get("bytes", details.get("total_bytes", 0)) or 0),
+                    int(details.get("file_count", 0) or 0),
+                    warnings,
+                    bool(details.get("permission_denied")),
+                )
+        size_bytes, file_count, warnings = self.resource_stats.directory_usage(path)
+        if isinstance(warnings, str):
+            warnings = [warnings]
+        elif not isinstance(warnings, (list, tuple, set)):
+            warnings = []
+        warning_texts = [str(item) for item in warnings if str(item)]
+        permission_denied = any(
+            "权限" in item or "permission denied" in item.lower()
+            for item in warning_texts
+        )
+        return int(size_bytes), int(file_count), warning_texts, permission_denied
+
     def _docker_stats_records(
         self,
         metas: list[dict[str, Any]],
@@ -959,19 +1001,26 @@ class StudioManager:
         for meta in metas:
             current_id = str(meta.get("id") or "")
             instance_dir = self._instance_path(current_id)
-            size_bytes, file_count, read_errors = self.resource_stats.directory_usage(instance_dir)
+            size_bytes, file_count, read_errors, instance_permission_denied = self._resource_usage(instance_dir)
             rollup: list[dict[str, Any]] = []
             if instance_dir.is_dir():
                 try:
                     children = sorted(instance_dir.iterdir(), key=lambda item: item.name.lower())
                 except OSError as exc:
                     children = []
-                    read_errors.append(f"无法读取实例目录：{exc}")
+                    if isinstance(exc, PermissionError):
+                        instance_permission_denied = True
+                        read_errors.append(
+                            f"部分不可读（权限不足，已跳过）：{instance_dir}"
+                        )
+                    else:
+                        read_errors.append(f"无法读取实例目录：{exc}")
                 for child in children:
                     if child.is_symlink():
                         continue
+                    child_permission_denied = False
                     if child.is_dir():
-                        child_bytes, child_files, child_errors = self.resource_stats.directory_usage(child)
+                        child_bytes, child_files, child_errors, child_permission_denied = self._resource_usage(child)
                     elif child.is_file():
                         child_errors = []
                         try:
@@ -980,15 +1029,26 @@ class StudioManager:
                         except OSError as exc:
                             child_bytes = 0
                             child_files = 0
-                            child_errors = [f"无法读取 {child}：{exc}"]
+                            child_permission_denied = isinstance(exc, PermissionError)
+                            child_errors = [
+                                f"部分不可读（权限不足，已跳过）：{child}"
+                                if child_permission_denied
+                                else f"无法读取 {child}：{exc}"
+                            ]
                     else:
                         continue
+                    instance_permission_denied = bool(
+                        instance_permission_denied or child_permission_denied
+                    )
                     rollup.append(
                         {
                             "path": child.name,
                             "bytes": child_bytes,
                             "file_count": child_files,
                             "errors": list(dict.fromkeys(child_errors))[:5],
+                            "warnings": list(dict.fromkeys(child_errors))[:5],
+                            "partial": bool(child_errors),
+                            "permission_denied": bool(child_permission_denied),
                         }
                     )
                     for item in child_errors:
@@ -1007,6 +1067,9 @@ class StudioManager:
                     "file_count": int(file_count),
                     "rollup": rollup,
                     "errors": list(dict.fromkeys(read_errors))[:20],
+                    "warnings": list(dict.fromkeys(read_errors))[:20],
+                    "partial": bool(read_errors),
+                    "permission_denied": bool(instance_permission_denied),
                 }
             )
             try:
@@ -1028,7 +1091,7 @@ class StudioManager:
                 label = record.get("container") or record.get("instance_id") or "容器"
                 errors.append(f"{label}: {record['error']}")
 
-        global_bytes, global_files, global_read_errors = self.resource_stats.directory_usage(self.root)
+        global_bytes, global_files, global_read_errors, global_permission_denied = self._resource_usage(self.root)
         for item in global_read_errors:
             if item not in errors:
                 errors.append(item)
@@ -1036,6 +1099,12 @@ class StudioManager:
         if global_disk.get("error"):
             errors.append(str(global_disk["error"]))
         instances_total = sum(int(item.get("data_dir_size_bytes") or 0) for item in instance_entries)
+        warnings = list(dict.fromkeys(errors))
+        instance_permission_denied = any(
+            bool(item.get("permission_denied")) for item in instance_entries
+        )
+        permission_denied = bool(global_permission_denied or instance_permission_denied)
+        partial = bool(warnings) or permission_denied
 
         response: dict[str, Any] = {
             "ok": True,
@@ -1053,10 +1122,22 @@ class StudioManager:
                 "file_count": int(global_files),
                 "instances_total_bytes": int(instances_total),
                 "disk": global_disk,
+                "partial": bool(global_read_errors),
+                "warnings": list(dict.fromkeys(global_read_errors))[:20],
+                "permission_denied": bool(global_permission_denied),
             },
-            "errors": list(dict.fromkeys(errors)),
+            "partial": partial,
+            "warnings": warnings,
+            "permission_denied": permission_denied,
+            "errors": warnings,
             "error": "",
-            "message": "资源统计已更新。",
+            "message": (
+                "资源统计已更新；部分不可读（权限不足，已跳过），其余可读统计已显示。"
+                if permission_denied
+                else "资源统计已更新；部分指标不可用，已跳过。"
+                if partial
+                else "资源统计已更新。"
+            ),
         }
         if wanted:
             response["instance"] = instance_entries[0]

@@ -25,6 +25,7 @@
 17. [Windows 与 Docker Desktop 未验证](#windows)
 18. [最终验证清单](#final-checklist)
 19. [AI 助手 B 公网拒绝连接](#assistant-public-diagnose)
+20. [记忆模式误报与资源统计 Permission denied](#memory-stats-permission)
 
 <a id="triage"></a>
 ## 1. 快速定位表
@@ -842,3 +843,54 @@ ssh -N -L <port>:127.0.0.1:<port> <用户名>@192.144.206.201
 
 诊断接口返回的本机 listener、health、公网探测、日志摘要和中文建议均不包含 API Key。
 如果页面/接口显示“当前后端不支持诊断”，请更新主项目后重启管理服务再试。
+
+<a id="memory-stats-permission"></a>
+## 20. 记忆模式误报与资源统计 Permission denied
+
+### 20.1 切换记忆模式后先报 cmd_config.json 无法解析
+
+AstrBot 可能正在原地重写 `data/astrbot/cmd_config.json`。主项目现在会对临时空文件或半写
+JSON 做最多 3 次、约 100ms 间隔的短重试；真正稳定损坏的 JSON 仍会报告。
+
+如果增强插件配置已保存、记忆模式已切换，但 `unique_session` 迁移遇到并发写入窗口：
+
+- HTTP 仍返回 `ok:true`，`error:""`；
+- 查看 `warning`、`warnings`、`nonfatal` 字段；
+- 页面刷新后模式已经生效是正常的；
+- 可稍后再次保存一次 `astrbot` 模式，或重启 AstrBot 后再确认 `unique_session=false`。
+
+不要手动删除或清空 `cmd_config.json`。如需检查：
+```bash
+python3 -m json.tool ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/cmd_config.json >/dev/null
+```
+
+### 20.2 资源统计报 collected_stickers Permission denied
+
+资源统计现在会跳过不可读的目录，继续显示可读的 core/其它目录大小。API 响应仍是
+`ok:true`，并新增：
+
+- `partial: true`
+- `permission_denied: true`
+- `warnings` / `errors` 中包含“部分不可读（权限不足，已跳过）”；
+- 实例和 `global` 子对象也有对应字段。
+
+页面会显示“部分指标读取失败”，不再把整个实例统计变成失败。若需要让宿主机统计到收藏表情目录，
+可检查容器 root 创建目录的权限，并以管理员确认后用类似命令修复（路径按实际实例调整）：
+```bash
+sudo chmod -R u+rwX,g+rX,o+rX \
+  ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugin_data/qqbot_enhancer/collected_stickers
+```
+不要使用 `777`，不要删除收藏；AstrBot 容器与宿主机用户权限的插件侧彻底修复由插件任务负责。
+
+### 20.3 修改插件参数后再次打开提示“本地插件配置损坏”
+
+本地插件配置保存后会立即重读；如果恰逢另一个进程写入或读到临时半写文件，主项目会做
+最多 3 次、约 100ms 间隔的重试。重试成功时页面不再误报损坏。
+
+如果文件稳定损坏（例如手动编辑后 JSON 不完整），接口仍会返回 `ok:false` 并拒绝覆盖；
+请先备份，再用以下命令确认并修复，不要直接删除含用户调优值的文件：
+```bash
+python3 -m json.tool \
+  ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_enhancer_config.json \
+  >/dev/null
+```

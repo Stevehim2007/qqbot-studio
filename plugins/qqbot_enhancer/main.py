@@ -49,6 +49,8 @@ try:  # Loaded as a package by AstrBot.
     )
     from .songs import SONG_SUFFIXES, list_song_files, resolve_song_file
     from . import safe_tools as safe_tools_engine
+    from . import sticker_intent as sticker_intent_engine
+    from . import sticker_reclassify as sticker_reclassify_engine
     from .llm import (
         STICKER_AI_MARKER_RE,
         STICKER_AI_TAG_RE,
@@ -82,6 +84,8 @@ except ImportError:  # Loaded directly by a test harness.
     )
     from songs import SONG_SUFFIXES, list_song_files, resolve_song_file
     import safe_tools as safe_tools_engine
+    import sticker_intent as sticker_intent_engine
+    import sticker_reclassify as sticker_reclassify_engine
     from llm import (
         STICKER_AI_MARKER_RE,
         STICKER_AI_TAG_RE,
@@ -103,7 +107,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.7.0"
+PLUGIN_FALLBACK_VERSION = "1.12.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PENDING_USER_MEDIA_MAX_SESSIONS = 128
@@ -205,12 +209,14 @@ class QQBotEnhancerPlugin(Star):
         self._last_song_user: dict[str, float] = {}
         self._last_auto_collect_at: dict[str, float] = {}
         self._last_safe_tool_collect_at: dict[str, float] = {}
+        self._last_collected_by_session: dict[str, dict[str, Any]] = {}
         self._sticker_ai_auto_collect_times: dict[str, list[float]] = {}
         self._pending_user_media: dict[str, dict[str, Any]] = {}
         self._song_dir = SONG_DIR
 
         self._sticker_entries: list[dict[str, Any]] = []
         self._emotion_keywords: dict[str, tuple[str, ...]] = {}
+        self._collected_permissions_checked = False
         self._load_sticker_entries()
 
         # 用户收藏表情：官方 StarTools.get_data_dir() 返回
@@ -329,6 +335,49 @@ class QQBotEnhancerPlugin(Star):
             else:
                 mode = "explicit"
 
+            # Explicit @/private reclassification of the most recent saved
+            # sticker. The local parser is deliberately narrow; AI is only
+            # consulted for an unclear target and never touches files/tools.
+            if (
+                explicit
+                and message_text.strip()
+                and self._cfg_bool(
+                    "sticker_natural_language_reclassify_enabled"
+                )
+                and not safe_tools_engine.TOOL_MARKER_RE.search(message_text)
+                and not STICKER_AI_MARKER_RE.search(message_text)
+            ):
+                reclassify_intent = (
+                    sticker_reclassify_engine.detect_reclassify_request(
+                        message_text
+                    )
+                )
+                if reclassify_intent is not None:
+                    should_stop = True
+                    event.should_call_llm(True)
+                    reclassify_reply = (
+                        await self._handle_natural_language_reclassify(
+                            event,
+                            reclassify_intent,
+                        )
+                    )
+                    yield event.plain_result(reclassify_reply)
+                    yielded = True
+                    return
+                if (
+                    sticker_reclassify_engine
+                    .looks_like_incomplete_reclassify_request(message_text)
+                ):
+                    should_stop = True
+                    event.should_call_llm(True)
+                    yield event.plain_result(
+                        self._cfg_str(
+                            "sticker_natural_language_reclassify_unclear_reply"
+                        )
+                    )
+                    yielded = True
+                    return
+
             # Natural-language collection on an explicit @/private text message.
             # It can use the quoted image or the most recent media in this UMO.
             if explicit:
@@ -343,6 +392,30 @@ class QQBotEnhancerPlugin(Star):
                         collect_intent["category"],
                     )
                     yield event.plain_result(collect_reply)
+                    yielded = True
+                    return
+
+            # Explicit @/private natural-language sticker request. Commands
+            # have already been filtered above; private marker text is not
+            # treated as a natural-language request. This branch deliberately
+            # skips the LLM and sends at most one sticker.
+            if (
+                explicit
+                and message_text.strip()
+                and self._cfg_bool("sticker_natural_language_enabled")
+                and not safe_tools_engine.TOOL_MARKER_RE.search(message_text)
+                and not STICKER_AI_MARKER_RE.search(message_text)
+            ):
+                sticker_intent = (
+                    self._detect_natural_language_sticker_intent(message_text)
+                )
+                if sticker_intent is not None:
+                    should_stop = True
+                    event.should_call_llm(True)
+                    yield self._build_natural_language_sticker_result(
+                        event,
+                        sticker_intent,
+                    )
                     yielded = True
                     return
 
@@ -687,8 +760,8 @@ class QQBotEnhancerPlugin(Star):
                 event,
                 ("收藏表情",),
             )
-            category = self._normalize_collected_category(raw_category)
-            if category is None:
+            categories = self._parse_collected_categories(raw_category)
+            if categories is None:
                 max_chars = min(
                     COLLECTED_CATEGORY_MAX_CHARS,
                     max(
@@ -708,7 +781,11 @@ class QQBotEnhancerPlugin(Star):
                     )
                 )
                 return
-            reply = await self._collect_user_sticker(event, category)
+            reply = await self._collect_user_sticker(
+                event,
+                categories[0],
+                categories=categories,
+            )
             yield event.plain_result(reply)
         except Exception:
             logger.exception("qqbot_enhancer /收藏表情 命令处理失败")
@@ -739,13 +816,25 @@ class QQBotEnhancerPlugin(Star):
                 )
                 return
             counts = self._collected_category_counts()
-            total = sum(counts.values())
-            if total <= 0:
+            valid_entries = self._valid_collected_entries()
+            unique_total = len(
+                {
+                    str(entry.get("sha256", ""))
+                    for entry in valid_entries
+                    if entry.get("sha256")
+                }
+            )
+            membership_total = sum(counts.values())
+            if unique_total <= 0:
                 yield event.plain_result(
                     self._cfg_str("collected_sticker_empty_reply")
                 )
                 return
-            lines = [f"收藏表情共 {total} 张，分类 {len(counts)} 个："]
+            lines = [
+                f"收藏表情共 {unique_total} 张"
+                f"（分类归属 {membership_total} 次），"
+                f"分类 {len(counts)} 个："
+            ]
             list_limit = max(1, self._cfg_int("collected_sticker_list_limit", 1))
             ordered_categories = sorted(counts)
             for category in ordered_categories[:list_limit]:
@@ -817,7 +906,9 @@ class QQBotEnhancerPlugin(Star):
             entries = self._valid_collected_entries()
             if category is not None:
                 entries = [
-                    entry for entry in entries if entry.get("category") == category
+                    entry
+                    for entry in entries
+                    if category in self._entry_categories(entry)
                 ]
             if not entries:
                 reply_key = (
@@ -2870,12 +2961,16 @@ class QQBotEnhancerPlugin(Star):
                 category = str(
                     entry.get("category", DEFAULT_COLLECTED_CATEGORY)
                 ).strip().casefold()
-                if (
-                    isinstance(path, Path)
-                    and path.is_file()
-                    and STICKER_AI_TAG_RE.fullmatch(category)
-                ):
-                    tags.setdefault(category, []).append(path)
+                if isinstance(path, Path) and path.is_file():
+                    for raw_category in self._entry_categories(entry):
+                        safe_category = raw_category.strip()
+                        if STICKER_AI_TAG_RE.fullmatch(safe_category):
+                            tags.setdefault(safe_category, []).append(path)
+                if isinstance(path, Path) and path.is_file():
+                    for raw_tag in entry.get("tags", []):
+                        tag = str(raw_tag or "").strip()
+                        if STICKER_AI_TAG_RE.fullmatch(tag):
+                            tags.setdefault(tag, []).append(path)
         return tags
 
     def _sticker_ai_system_instruction(self) -> str:
@@ -2981,33 +3076,78 @@ class QQBotEnhancerPlugin(Star):
         self._last_sticker_file[session_key] = chosen.name
         return chosen
 
-    def _select_safe_tool_sticker(
+    def _collected_entry_matches_term(
+        self,
+        entry: dict[str, Any],
+        term: str,
+    ) -> bool:
+        normalized = str(term or "").strip().casefold()
+        if not normalized:
+            return False
+        if any(
+            str(category).strip().casefold() == normalized
+            for category in self._entry_categories(entry)
+        ):
+            return True
+        if any(
+            str(tag or "").strip().casefold() == normalized
+            for tag in entry.get("tags", [])
+        ):
+            return True
+        meaning = str(entry.get("meaning", "") or "").casefold()
+        return bool(meaning and normalized in meaning)
+
+    def _select_sticker_from_pool(
         self,
         event: AstrMessageEvent,
-        intent: Any,
+        *,
+        category: str | None = None,
+        emotion: str | None = None,
+        tag: str | None = None,
     ) -> Path | None:
         if not self._cfg_bool("sticker_enabled"):
             return None
         session_key = event.unified_msg_origin
         candidates: list[Path] = []
-        emotion = str(intent.args.get("emotion", "") or "").strip().casefold()
-        category = str(intent.args.get("category", "") or "").strip()
         if emotion:
+            normalized_emotion = str(emotion).strip().casefold()
             for entry in self._sticker_entries:
                 path = entry.get("path")
                 if (
                     isinstance(path, Path)
                     and path.is_file()
                     and str(entry.get("emotion", "") or "").strip().casefold()
-                    == emotion
+                    == normalized_emotion
                 ):
                     candidates.append(path)
-        elif category and self._cfg_bool("collected_sticker_enabled"):
-            normalized = self._normalize_collected_category(category)
-            if normalized is None:
+        elif category:
+            if not self._cfg_bool("collected_sticker_enabled"):
+                return None
+            normalized_category = self._normalize_collected_category(category)
+            if normalized_category is None:
                 return None
             for entry in self._valid_collected_entries():
-                if entry.get("category") == normalized:
+                if normalized_category not in self._entry_categories(entry):
+                    continue
+                path = entry.get("path")
+                if isinstance(path, Path) and path.is_file():
+                    candidates.append(path)
+        elif tag:
+            if not self._cfg_bool("collected_sticker_enabled"):
+                return None
+            for entry in self._valid_collected_entries():
+                if not self._collected_entry_matches_term(entry, tag):
+                    continue
+                path = entry.get("path")
+                if isinstance(path, Path) and path.is_file():
+                    candidates.append(path)
+        else:
+            for entry in self._sticker_entries:
+                path = entry.get("path")
+                if isinstance(path, Path) and path.is_file():
+                    candidates.append(path)
+            if self._cfg_bool("collected_sticker_enabled"):
+                for entry in self._valid_collected_entries():
                     path = entry.get("path")
                     if isinstance(path, Path) and path.is_file():
                         candidates.append(path)
@@ -3033,6 +3173,582 @@ class QQBotEnhancerPlugin(Star):
         self._last_sticker_at[session_key] = now
         self._last_sticker_file[session_key] = chosen.name
         return chosen
+
+    def _detect_natural_language_sticker_intent(
+        self,
+        text: str,
+    ) -> dict[str, str] | None:
+        if not self._cfg_bool("sticker_natural_language_enabled"):
+            return None
+        emotions: set[str] = set()
+        for entry in self._sticker_entries:
+            path = entry.get("path")
+            emotion = str(entry.get("emotion", "") or "").strip()
+            if isinstance(path, Path) and path.is_file() and emotion:
+                emotions.add(emotion)
+        categories = (
+            set(self._collected_category_counts().keys())
+            if self._cfg_bool("collected_sticker_enabled")
+            else set()
+        )
+        intent = sticker_intent_engine.detect_sticker_request(
+            text,
+            available_emotions=emotions,
+            available_categories=categories,
+        )
+        if intent is not None:
+            target = str(intent.get("target", "") or "").strip()
+            if target and self._cfg_bool("collected_sticker_enabled"):
+                if any(
+                    self._collected_entry_matches_term(entry, target)
+                    for entry in self._valid_collected_entries()
+                ):
+                    return {
+                        "kind": "tag",
+                        "value": target,
+                        "target": target,
+                    }
+        return intent
+
+    def _normalize_semantic_metadata(
+        self,
+        raw: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        category = self._normalize_collected_category(raw.get("category"))
+        if category is None:
+            return None
+        raw_categories = raw.get("categories")
+        if not isinstance(raw_categories, (list, tuple, set)):
+            raw_categories = [category]
+        normalized_categories = self._normalize_collected_categories_list(
+            list(raw_categories),
+            primary=category,
+        )
+        if normalized_categories is None:
+            return None
+        category = normalized_categories[0]
+        if not self._cfg_bool("sticker_semantic_tags_enabled"):
+            return {
+                "category": category,
+                "categories": normalized_categories,
+                "tags": [],
+                "meaning": "",
+                "tone": "",
+            }
+        max_tags = max(0, self._cfg_int("collected_sticker_max_tags", 0))
+        max_tag_chars = max(
+            1,
+            self._cfg_int("collected_sticker_max_tag_chars", 1),
+        )
+        raw_tags = raw.get("tags", [])
+        if raw_tags is None:
+            raw_tags = []
+        if not isinstance(raw_tags, list):
+            return None
+        tags: list[str] = []
+        for raw_tag in raw_tags:
+            tag = str(raw_tag or "").strip()
+            if not tag or len(tag) > max_tag_chars:
+                return None
+            if not re.fullmatch(r"[0-9A-Za-z_\-\u4e00-\u9fff]+", tag):
+                return None
+            if tag not in tags:
+                tags.append(tag)
+        if len(tags) > max_tags:
+            return None
+        meaning = str(raw.get("meaning", "") or "").strip()
+        if len(meaning) > self._cfg_int(
+            "collected_sticker_max_meaning_chars",
+            1,
+        ):
+            return None
+        if any(ord(char) < 32 or ord(char) == 127 for char in meaning):
+            return None
+        tone = str(raw.get("tone", "") or "").strip()
+        if len(tone) > self._cfg_int("collected_sticker_max_tone_chars", 1):
+            return None
+        if tone and not re.fullmatch(
+            r"[0-9A-Za-z_\-\u4e00-\u9fff]+",
+            tone,
+        ):
+            return None
+        return {
+            "category": category,
+            "categories": normalized_categories,
+            "tags": tags,
+            "meaning": meaning,
+            "tone": tone,
+        }
+
+    async def _ai_classify_reclassify_target(
+        self,
+        event: AstrMessageEvent,
+        target: str,
+    ) -> dict[str, Any] | None:
+        if not self._cfg_bool(
+            "sticker_natural_language_reclassify_ai_enabled"
+        ):
+            return None
+        provider_id = self._cfg_str(
+            "sticker_natural_language_reclassify_provider_id"
+        ).strip()
+        if not provider_id:
+            provider_id = await self._get_current_provider_id(event)
+        if not provider_id:
+            return None
+        prompt = (
+            "把用户对聊天表情包含义/用途的自然语言说明结构化为安全元数据。"
+            "只输出 JSON 对象，不要 Markdown、不要解释："
+            '{"category":"安全短分类名（中文/字母/数字/-/_，最多32字）",'
+            '"tags":["安全短标签"],"meaning":"不超过200字的用途说明",'
+            '"tone":"可选语气标签","confidence":0.0 到 1.0}。'
+            f"用户说明：{target}"
+        )
+        try:
+            response_text = await self._llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+                system_prompt=(
+                    "你只负责输出表情含义的结构化 JSON。"
+                    "不得调用工具、读取文件、执行命令或输出路径、"
+                    "用户 ID、凭据。标签和分类必须是安全短词语。"
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 语义分类 AI 失败，回退本地/纯文本",
+                exc_info=True,
+            )
+            return None
+        judgement = sticker_reclassify_engine.parse_reclassify_judgement(
+            response_text
+        )
+        if judgement is None:
+            return None
+        if float(judgement["confidence"]) < self._cfg_float(
+            "sticker_natural_language_reclassify_min_confidence",
+            0.0,
+            1.0,
+        ):
+            return None
+        return self._normalize_semantic_metadata(judgement)
+
+    async def _reclassify_collected_by_sha(
+        self,
+        event: AstrMessageEvent,
+        sha256: str,
+        semantics: dict[str, Any],
+    ) -> str | None:
+        store = self._collected_store()
+        if store is None:
+            return self._cfg_str(
+                "sticker_natural_language_reclassify_failed_reply"
+            )
+        category = str(semantics.get("category", ""))
+        async with self._collected_lock:
+            self._collected_entries = self._valid_collected_entries()
+            old_entry = next(
+                (
+                    entry
+                    for entry in self._collected_entries
+                    if entry.get("sha256") == sha256
+                ),
+                None,
+            )
+            old_category = (
+                old_entry.get("category") if old_entry is not None else None
+            )
+            try:
+                status, new_entry = store.update_metadata(
+                    self._collected_entries,
+                    sha256,
+                    category=category,
+                    categories=semantics.get("categories", [category]),
+                    tags=semantics.get("tags", []),
+                    meaning=semantics.get("meaning", ""),
+                    tone=semantics.get("tone", ""),
+                )
+            except Exception:
+                logger.warning(
+                    "qqbot_enhancer 收藏语义更新失败，旧文件/index 保留",
+                    exc_info=True,
+                )
+                return self._cfg_str(
+                    "sticker_natural_language_reclassify_failed_reply"
+                )
+            if status == "not_found":
+                return None
+            if status == "same":
+                if new_entry is not None:
+                    self._last_collected_by_session[
+                        event.unified_msg_origin
+                    ] = {
+                        "sha256": sha256,
+                        "category": category,
+                        "filename": str(new_entry.get("filename", "")),
+                        "saved_at": int(time.time()),
+                    }
+                return self._format_collected_reply(
+                    self._cfg_str(
+                        "sticker_natural_language_reclassify_same_reply"
+                    ),
+                    category=category,
+                )
+            if status != "updated" or new_entry is None:
+                return self._cfg_str(
+                    "sticker_natural_language_reclassify_failed_reply"
+                )
+            self._load_collected_sticker_index()
+            self._last_collected_by_session[event.unified_msg_origin] = {
+                "sha256": sha256,
+                "category": category,
+                "filename": str(new_entry.get("filename", "")),
+                "saved_at": int(time.time()),
+            }
+            meaning = str(semantics.get("meaning", "") or "").strip()
+            if meaning:
+                return self._format_collected_reply(
+                    self._cfg_str(
+                        "sticker_natural_language_reclassify_memorized_reply"
+                    ),
+                    meaning=meaning,
+                    category=category,
+                )
+            if old_category != category:
+                return self._format_collected_reply(
+                    self._cfg_str(
+                        "sticker_natural_language_reclassify_moved_reply"
+                    ),
+                    category=category,
+                )
+            return self._format_collected_reply(
+                self._cfg_str(
+                    "sticker_natural_language_reclassify_same_reply"
+                ),
+                category=category,
+            )
+
+    async def _update_collected_categories_by_sha(
+        self,
+        event: AstrMessageEvent,
+        sha256: str,
+        categories: list[str],
+        action: str,
+    ) -> str | None:
+        store = self._collected_store()
+        if store is None:
+            return self._cfg_str(
+                "sticker_natural_language_reclassify_failed_reply"
+            )
+        async with self._collected_lock:
+            self._collected_entries = self._valid_collected_entries()
+            old_entry = next(
+                (
+                    entry
+                    for entry in self._collected_entries
+                    if entry.get("sha256") == sha256
+                ),
+                None,
+            )
+            if old_entry is None:
+                return None
+            try:
+                if action == "add":
+                    status, new_entry = store.add_categories(
+                        self._collected_entries,
+                        sha256,
+                        categories,
+                    )
+                elif action == "remove":
+                    status, new_entry = store.remove_categories(
+                        self._collected_entries,
+                        sha256,
+                        categories,
+                    )
+                else:
+                    return None
+            except Exception:
+                logger.warning(
+                    "qqbot_enhancer 收藏多分类更新失败，旧文件/index 保留",
+                    exc_info=True,
+                )
+                return self._cfg_str(
+                    "sticker_natural_language_reclassify_failed_reply"
+                )
+            if status == "not_found":
+                return None
+            if status == "same":
+                return self._cfg_str(
+                    "sticker_natural_language_reclassify_categories_same_reply"
+                )
+            if status != "updated" or new_entry is None:
+                return self._cfg_str(
+                    "sticker_natural_language_reclassify_failed_reply"
+                )
+            self._load_collected_sticker_index()
+            primary = str(new_entry.get("category", ""))
+            self._last_collected_by_session[event.unified_msg_origin] = {
+                "sha256": sha256,
+                "category": primary,
+                "filename": str(new_entry.get("filename", "")),
+                "saved_at": int(time.time()),
+            }
+            template_key = (
+                "sticker_natural_language_reclassify_added_reply"
+                if action == "add"
+                else "sticker_natural_language_reclassify_removed_reply"
+            )
+            return self._format_collected_reply(
+                self._cfg_str(template_key),
+                categories=", ".join(categories),
+            )
+
+    async def _update_recent_categories(
+        self,
+        event: AstrMessageEvent,
+        categories: list[str],
+        action: str,
+    ) -> str:
+        last = self._last_collected_by_session.get(
+            event.unified_msg_origin
+        )
+        if last and last.get("sha256"):
+            reply = await self._update_collected_categories_by_sha(
+                event,
+                str(last["sha256"]),
+                categories,
+                action,
+            )
+            if reply is not None:
+                return reply
+        status, payload = await self._extract_collectible_image_payload(
+            event
+        )
+        if status == "ok" and payload is not None:
+            sha256 = str(payload.get("sha256", ""))
+            reply = await self._update_collected_categories_by_sha(
+                event,
+                sha256,
+                categories,
+                action,
+            )
+            if reply is not None:
+                return reply
+            if action == "add":
+                save_status, _ = await self._save_collected_payload(
+                    event,
+                    categories[0],
+                    payload,
+                    categories=categories,
+                )
+                if save_status == "saved":
+                    return self._format_collected_reply(
+                        self._cfg_str(
+                            "sticker_natural_language_reclassify_added_reply"
+                        ),
+                        categories=", ".join(categories),
+                    )
+        return self._cfg_str(
+            "sticker_natural_language_reclassify_not_found_reply"
+        )
+
+    async def _reclassify_recent_collected(
+        self,
+        event: AstrMessageEvent,
+        semantics: dict[str, Any],
+    ) -> str:
+        category = str(semantics.get("category", ""))
+        last = self._last_collected_by_session.get(
+            event.unified_msg_origin
+        )
+        if last and last.get("sha256"):
+            reply = await self._reclassify_collected_by_sha(
+                event,
+                str(last["sha256"]),
+                semantics,
+            )
+            if reply is not None:
+                return reply
+
+        status, payload = await self._extract_collectible_image_payload(
+            event
+        )
+        if status != "ok" or payload is None:
+            return self._cfg_str(
+                "sticker_natural_language_reclassify_not_found_reply"
+            )
+        sha256 = str(payload.get("sha256", ""))
+        reply = await self._reclassify_collected_by_sha(
+            event,
+            sha256,
+            semantics,
+        )
+        if reply is not None:
+            return reply
+
+        save_status, _ = await self._save_collected_payload(
+            event,
+            category,
+            payload,
+            categories=semantics.get("categories", [category]),
+            tags=semantics.get("tags", []),
+            meaning=str(semantics.get("meaning", "")),
+            tone=str(semantics.get("tone", "")),
+        )
+        if save_status == "saved":
+            meaning = str(semantics.get("meaning", "") or "").strip()
+            if meaning:
+                return self._format_collected_reply(
+                    self._cfg_str(
+                        "sticker_natural_language_reclassify_memorized_reply"
+                    ),
+                    meaning=meaning,
+                    category=category,
+                )
+            return self._format_collected_reply(
+                self._cfg_str(
+                    "sticker_natural_language_reclassify_cached_reply"
+                ),
+                category=category,
+            )
+        if save_status == "duplicate":
+            reply = await self._reclassify_collected_by_sha(
+                event,
+                sha256,
+                semantics,
+            )
+            if reply is not None:
+                return reply
+        return self._cfg_str(
+            "sticker_natural_language_reclassify_failed_reply"
+        )
+
+    async def _handle_natural_language_reclassify(
+        self,
+        event: AstrMessageEvent,
+        intent: dict[str, str],
+    ) -> str:
+        target = str(intent.get("target", "") or "").strip()
+        action = str(intent.get("action", "set") or "set")
+        if action in {"add", "remove"}:
+            target_categories = self._parse_collected_categories(target)
+            if target_categories is None:
+                return self._format_collected_reply(
+                    self._cfg_str(
+                        "sticker_natural_language_reclassify_unclear_reply"
+                    ),
+                    target=target,
+                )
+            return await self._update_recent_categories(
+                event,
+                target_categories,
+                action,
+            )
+        semantics = sticker_reclassify_engine.build_local_semantics(target)
+        if semantics is None:
+            semantics = await self._ai_classify_reclassify_target(
+                event,
+                target,
+            )
+        if isinstance(semantics, dict) and not semantics.get("categories"):
+            parsed_categories = self._parse_collected_categories(target)
+            if parsed_categories:
+                semantics["categories"] = parsed_categories
+                semantics["category"] = parsed_categories[0]
+        normalized = self._normalize_semantic_metadata(semantics)
+        if normalized is None:
+            return self._format_collected_reply(
+                self._cfg_str(
+                    "sticker_natural_language_reclassify_unclear_reply"
+                ),
+                target=target,
+            )
+        return await self._reclassify_recent_collected(
+            event,
+            normalized,
+        )
+
+    def _build_natural_language_sticker_result(
+        self,
+        event: AstrMessageEvent,
+        intent: dict[str, str],
+    ):
+        kind = intent.get("kind")
+        if kind == "not_found":
+            return event.plain_result(
+                self._format_collected_reply(
+                    self._cfg_str(
+                        "sticker_natural_language_not_found_reply"
+                    ),
+                    target=str(intent.get("target", "")),
+                )
+            )
+        if kind == "emotion":
+            chosen = self._select_sticker_from_pool(
+                event,
+                emotion=intent.get("value", ""),
+            )
+        elif kind == "category":
+            chosen = self._select_sticker_from_pool(
+                event,
+                category=intent.get("value", ""),
+            )
+        elif kind == "tag":
+            chosen = self._select_sticker_from_pool(
+                event,
+                tag=intent.get("value", ""),
+            )
+        else:
+            chosen = self._select_sticker_from_pool(event)
+
+        if chosen is None:
+            now = self._clock()
+            cooldown = self._cfg_int("sticker_cooldown_seconds", 0)
+            last_sent = self._last_sticker_at.get(event.unified_msg_origin)
+            if last_sent is not None and now - last_sent < cooldown:
+                return event.plain_result(
+                    self._cfg_str(
+                        "sticker_natural_language_cooldown_reply"
+                    )
+                )
+            return event.plain_result(
+                self._cfg_str("sticker_natural_language_empty_reply")
+            )
+        try:
+            image_component = Comp.Image.fromFileSystem(str(chosen))
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 自然语言发表情组件构造失败",
+                exc_info=True,
+            )
+            return event.plain_result(
+                self._cfg_str("sticker_natural_language_empty_reply")
+            )
+        return event.chain_result(
+            [
+                Comp.Plain(
+                    self._cfg_str("sticker_natural_language_send_prefix")
+                ),
+                image_component,
+            ]
+        )
+
+    def _select_safe_tool_sticker(
+        self,
+        event: AstrMessageEvent,
+        intent: Any,
+    ) -> Path | None:
+        emotion = str(intent.args.get("emotion", "") or "").strip()
+        category = str(intent.args.get("category", "") or "").strip()
+        tag = str(intent.args.get("tag", "") or "").strip()
+        return self._select_sticker_from_pool(
+            event,
+            emotion=emotion or None,
+            category=category or None,
+            tag=tag or None,
+        )
 
     async def _execute_safe_tool(
         self,
@@ -3395,7 +4111,28 @@ class QQBotEnhancerPlugin(Star):
             ),
             category_normalizer=self._normalize_collected_category,
             default_category=DEFAULT_COLLECTED_CATEGORY,
+            log_warning=self._log_collected_permission_warning,
+            max_tags=self._cfg_int("collected_sticker_max_tags", 0),
+            max_tag_chars=self._cfg_int(
+                "collected_sticker_max_tag_chars",
+                1,
+            ),
+            max_meaning_chars=self._cfg_int(
+                "collected_sticker_max_meaning_chars",
+                1,
+            ),
+            max_tone_chars=self._cfg_int(
+                "collected_sticker_max_tone_chars",
+                1,
+            ),
+            max_categories=self._cfg_int(
+                "collected_sticker_max_categories",
+                1,
+            ),
         )
+
+    def _log_collected_permission_warning(self, message: str) -> None:
+        logger.warning("%s", message)
 
     def _resolve_collected_sticker_root(self) -> Path | None:
         try:
@@ -3405,15 +4142,55 @@ class QQBotEnhancerPlugin(Star):
             if raw_root.is_symlink():
                 logger.warning("qqbot_enhancer 收藏目录不能是符号链接")
                 return None
-            raw_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            raw_root.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o755,
+            )
             root = raw_root.resolve()
             if root.parent != data_dir:
                 logger.warning("qqbot_enhancer 收藏目录越出插件数据目录")
                 return None
+
+            # The plugin data root itself must also be traversable by the host
+            # management user; child 0755 alone is insufficient if this is 0700.
+            for directory in (data_dir, root):
+                try:
+                    directory.chmod(0o755)
+                except OSError as exc:
+                    logger.warning(
+                        "qqbot_enhancer 无法将收藏相关目录调整为 0755："
+                        "%s；请确认容器用户与宿主机管理用户对 "
+                        "plugin_data/qqbot_enhancer 有遍历权限，或由管理员"
+                        "手动执行 chmod 755 修复",
+                        exc.strerror or exc,
+                    )
+
+            if not self._collected_permissions_checked:
+                migration_store = CollectedStickerStore(
+                    root,
+                    max_file_bytes=self._cfg_int(
+                        "collected_sticker_max_file_bytes",
+                        1,
+                    ),
+                    category_normalizer=self._normalize_collected_category,
+                    default_category=DEFAULT_COLLECTED_CATEGORY,
+                    log_warning=self._log_collected_permission_warning,
+                )
+                summary = migration_store.migrate_permissions(data_dir)
+                if summary["errors"]:
+                    logger.warning(
+                        "qqbot_enhancer 收藏目录权限迁移完成但有 %s 个错误；"
+                        "收藏数据未删除，可手动检查 plugin_data/"
+                        "qqbot_enhancer 的 0755/0644 权限",
+                        summary["errors"],
+                    )
+                self._collected_permissions_checked = True
             return root
         except Exception:
             logger.warning(
-                "qqbot_enhancer 无法创建用户收藏表情数据目录",
+                "qqbot_enhancer 无法创建用户收藏表情数据目录或迁移权限；"
+                "可手动检查 plugin_data/qqbot_enhancer 的容器/宿主机权限",
                 exc_info=True,
             )
             return None
@@ -3425,7 +4202,11 @@ class QQBotEnhancerPlugin(Star):
 
     @staticmethod
     def _atomic_write_bytes(path: Path, data: bytes) -> None:
-        CollectedStickerStore.atomic_write_bytes(path, data)
+        CollectedStickerStore.atomic_write_bytes(
+            path,
+            data,
+            log_warning=lambda message: logger.warning("%s", message),
+        )
 
     def _save_collected_sticker_index(self) -> None:
         store = self._collected_store()
@@ -3448,6 +4229,55 @@ class QQBotEnhancerPlugin(Star):
         if not COLLECTED_CATEGORY_RE.fullmatch(value):
             return None
         return value
+
+    def _normalize_collected_categories_list(
+        self,
+        raw_categories: Any,
+        *,
+        primary: str | None = None,
+    ) -> list[str] | None:
+        if not isinstance(raw_categories, (list, tuple, set)):
+            return None
+        categories: list[str] = []
+        for raw_category in raw_categories:
+            category = self._normalize_collected_category(raw_category)
+            if category is None:
+                return None
+            if category not in categories:
+                categories.append(category)
+        if primary is not None:
+            primary_norm = self._normalize_collected_category(primary)
+            if primary_norm is None:
+                return None
+            if primary_norm in categories:
+                categories.remove(primary_norm)
+            categories.insert(0, primary_norm)
+        max_categories = max(
+            1,
+            self._cfg_int("collected_sticker_max_categories", 1),
+        )
+        if not categories or len(categories) > max_categories:
+            return None
+        return categories
+
+    def _parse_collected_categories(self, raw: Any) -> list[str] | None:
+        value = str(raw or "").strip()
+        if not self._cfg_bool("collected_sticker_multi_category_enabled"):
+            category = self._normalize_collected_category(value)
+            return [category] if category is not None else None
+        if not value:
+            category = self._normalize_collected_category("")
+            return [category] if category is not None else None
+        separators = self._cfg_str(
+            "collected_sticker_category_separators"
+        ).strip() or ",，、;；|/"
+        pattern = "[" + re.escape(separators) + "]+"
+        parts = [
+            part.strip()
+            for part in re.split(pattern, value)
+            if part.strip()
+        ]
+        return self._normalize_collected_categories_list(parts)
 
     def _collected_category_dir(
         self,
@@ -3950,11 +4780,27 @@ class QQBotEnhancerPlugin(Star):
         event: AstrMessageEvent,
         category: str,
         payload: dict[str, Any],
+        *,
+        tags: list[str] | None = None,
+        meaning: str = "",
+        tone: str = "",
+        categories: list[str] | None = None,
     ) -> tuple[str, str]:
         if self._collected_root is None:
             return (
                 "storage",
                 self._cfg_str("collected_sticker_storage_unavailable_reply"),
+            )
+        normalized_categories = self._normalize_collected_categories_list(
+            list(categories or [category]),
+            primary=category,
+        )
+        if normalized_categories is None:
+            return (
+                "invalid",
+                self._cfg_str(
+                    "collected_sticker_invalid_category_reply"
+                ),
             )
         max_count = self._cfg_int("collected_sticker_max_count", 1)
         async with self._collected_lock:
@@ -4024,9 +4870,14 @@ class QQBotEnhancerPlugin(Star):
                 "sha256": payload["sha256"],
                 "filename": filename,
                 "category": category,
+                "categories": normalized_categories,
                 "size": int(payload.get("size", len(payload["data"]))),
                 "created_at": int(time.time()),
                 "source": source,
+                "tags": list(tags or []),
+                "meaning": str(meaning or ""),
+                "tone": str(tone or ""),
+                "updated_at": int(time.time()),
                 "path": final_path,
             }
             old_entries = list(self._collected_entries)
@@ -4041,6 +4892,23 @@ class QQBotEnhancerPlugin(Star):
                 except OSError:
                     pass
                 raise
+            self._last_collected_by_session[event.unified_msg_origin] = {
+                "sha256": str(payload["sha256"]),
+                "category": category,
+                "filename": filename,
+                "saved_at": int(time.time()),
+            }
+            if len(self._last_collected_by_session) > 256:
+                oldest = sorted(
+                    self._last_collected_by_session.items(),
+                    key=lambda pair: int(
+                        pair[1].get("saved_at", 0) or 0
+                    ),
+                )
+                for session, _ in oldest[
+                    : len(self._last_collected_by_session) - 256
+                ]:
+                    self._last_collected_by_session.pop(session, None)
             return (
                 "saved",
                 self._format_collected_reply(
@@ -4054,6 +4922,7 @@ class QQBotEnhancerPlugin(Star):
         self,
         event: AstrMessageEvent,
         category: str,
+        categories: list[str] | None = None,
     ) -> str:
         if self._collected_root is None:
             return self._cfg_str("collected_sticker_storage_unavailable_reply")
@@ -4073,6 +4942,7 @@ class QQBotEnhancerPlugin(Star):
             event,
             category,
             payload,
+            categories=categories,
         )
         return message
 
@@ -4119,11 +4989,27 @@ class QQBotEnhancerPlugin(Star):
             category=category,
         )
 
+    @staticmethod
+    def _entry_categories(entry: dict[str, Any]) -> list[str]:
+        categories = entry.get("categories")
+        if isinstance(categories, (list, tuple, set)):
+            result = [
+                str(category).strip()
+                for category in categories
+                if str(category).strip()
+            ]
+            if result:
+                return result
+        category = str(
+            entry.get("category", DEFAULT_COLLECTED_CATEGORY)
+        ).strip()
+        return [category] if category else []
+
     def _collected_category_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         for entry in self._valid_collected_entries():
-            category = str(entry.get("category", DEFAULT_COLLECTED_CATEGORY))
-            counts[category] = counts.get(category, 0) + 1
+            for category in self._entry_categories(entry):
+                counts[category] = counts.get(category, 0) + 1
         return counts
 
     def _select_collected_sticker(
@@ -4135,7 +5021,11 @@ class QQBotEnhancerPlugin(Star):
     ) -> Path | None:
         entries = self._valid_collected_entries()
         if category is not None:
-            entries = [entry for entry in entries if entry.get("category") == category]
+            entries = [
+                entry
+                for entry in entries
+                if category in self._entry_categories(entry)
+            ]
         if not entries:
             return None
 
@@ -4144,7 +5034,19 @@ class QQBotEnhancerPlugin(Star):
             category_matches = [
                 entry
                 for entry in entries
-                if str(entry.get("category", "")).casefold() in text
+                if any(
+                    category.casefold() in text
+                    for category in self._entry_categories(entry)
+                )
+                or any(
+                    str(tag or "").strip().casefold()
+                    and str(tag or "").strip().casefold() in text
+                    for tag in entry.get("tags", [])
+                )
+                or (
+                    str(entry.get("meaning", "") or "").casefold()
+                    and str(entry.get("meaning", "")).casefold() in text
+                )
             ]
             if category_matches:
                 entries = category_matches

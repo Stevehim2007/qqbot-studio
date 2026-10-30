@@ -15,6 +15,8 @@ AstrBot v4.29 自动加载插件，提供：
 - AI 可结合语境决定是否发表情：direct 模式通过系统提示中的私有 `[[sticker:标签]]` 标记选择内置情绪/收藏分类；astrbot memory 模式用本地关键词/情绪/分类匹配 + 概率。不增加 LLM tool、电脑控制、沙箱或终端权限。
 - 可选 AI 自动识别收藏任意群成员纯图片：默认关闭；开启后优先使用当前会话 DeepSeek Flash 视觉 provider，失败回退本地小图/方图启发式，严格限频，不调用电脑控制/终端。
 - 受限安全工具意图路由：模型只能输出白名单 marker，调用 search_images / send_sticker / collect_sticker / list_sticker_categories；禁止任意文件路径、URL 下载、shell/命令、电脑控制或任意插件函数。
+- 显式 @/私聊自然语言发表情：如“给我发个嘲讽表情包”“来一个开心的表情”“发张猫猫表情包”“发个表情”，直接选安全内置/收藏表情，不调用 LLM；非 @ 群聊不触发。
+- 显式 @/私聊自然语言重分类最近收藏：如“刚刚的表情包是嘲讽的意思”，按本地情绪映射或当前会话 provider 受控分类，把最近收藏安全移动到新分类；无缓存时明确“没有找到”，不会谎称没保存。
 - `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]` 管理用户收藏表情，保存到 AstrBot 插件数据目录；收藏表情也参与正常回复。
 - `/收藏表情` 优先保存引用消息里的图片；没有引用时使用本会话内存中最近 3 张图片缓存（TTL 300 秒，不落盘、不记录用户文字/ID）。自动收藏默认关闭。
 
@@ -158,6 +160,52 @@ AstrBot v4.29 没有稳定的公开 API 把 handler 映射回用户命令，因�
 
 **限制：** `Comp.Face` 只有 QQ 表情 id，没有可保存的图片字节，因此纯 `Comp.Face` 可以触发短句反应，但 `/收藏表情` 会提示改用图片/贴纸形式。没有实现破坏性删除命令；需要清理时由管理员直接管理插件数据目录。
 
+### 收藏目录权限（容器/宿主机可读）
+
+收藏目录在 `StarTools.get_data_dir(plugin_name="qqbot_enhancer")/collected_stickers`。插件创建目录使用 **0755**、收藏图片和 `index.json` 使用 **0644**，保存后显式 `chmod`，避免容器 root/umask 生成 0600/0700 导致宿主机管理服务 `Permission denied`。启动时会做一次 best-effort 迁移：`os.walk(followlinks=False)`，只迁移 `collected_stickers` 子树内的普通目录/普通文件，跳过符号链接和非普通文件，越界路径绝不 chmod；失败只记录日志，不删除收藏、不崩溃。
+
+不要使用 `0777`。若 AstrBot 容器与宿主机管理服务是不同用户，且自动迁移仍因父目录权限失败，可在宿主机项目根目录以有权限的管理员执行（路径按实际 AstrBot data 根调整）：
+
+```bash
+DATA_DIR="data/astrbot/plugin_data/qqbot_enhancer"
+chmod 755 "$DATA_DIR" "$DATA_DIR/collected_stickers"
+find -P "$DATA_DIR/collected_stickers" -type d -exec chmod 755 {} +
+find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
+```
+
+这些命令不会删除收藏内容；`find -P` 不跟随符号链接。真实 AstrBot 容器与宿主机用户权限的 E2E 未验证。
+
+## 自然语言发表情（显式 @/私聊）
+
+`sticker_natural_language_enabled=true` 时，插件会在显式 @ 机器人或私聊文本中识别明确请求，例如：
+
+- `给我发个嘲讽表情包`、`来一个嘲讽/阴阳/无语/鄙视/挖苦表情`：映射到安全 emotion，优先 `angry`，缺失时 `cool`；
+- `来一个开心的表情`：`happy`；难过/伤心→`sad`，生气→`angry`，思考→`thinking`，喜欢→`love`，困→`sleepy`，惊讶→`surprised`，酷→`cool`；
+- `发张猫猫表情包`：先精确匹配收藏分类名；
+- `发个表情`：从内置+收藏池随机一个。
+
+命中后直接发送 1 张本地表情，**不调用 LLM**；失败、分类/情绪不存在、冷却中、池为空只回中文纯文本，不猜路径、不泄漏文件名。非 @ 群聊不触发；slash 命令优先，AI sticker marker 和 safe_tools marker 优先于自然语言启发式。一次最多一个附件，冷却/防重复沿用 sticker 配置。相关配置：`sticker_natural_language_enabled`、`sticker_natural_language_send_prefix`、`sticker_natural_language_not_found_reply`、`sticker_natural_language_empty_reply`、`sticker_natural_language_cooldown_reply`。真实 QQ 展示未验证。
+
+## 自然语言重分类最近收藏
+
+内存按 `unified_msg_origin` 记录最近一次成功收藏的 `{sha256, category, filename, saved_at}`，不记录用户 ID/文字。显式 @/私聊下支持：
+
+- `刚刚的表情包是嘲讽的意思`
+- `刚才那个表情包分类为猫猫`
+- `这个表情是阴阳怪气`
+- `把上一个表情改成无语分类`
+- `刚刚那个是开心的`
+
+处理顺序：
+
+1. 保守本地句式解析；嘲讽/阴阳/无语/鄙视/挖苦 → 现有 emotion `angry`（缺失时 `cool`，本版本默认 `angry`），开心/难过/生气/思考/喜欢/困/惊讶/酷 → happy/sad/angry/thinking/love/sleepy/surprised/cool；安全短分类名可直接作为新分类。
+2. 本地无法确定且 `sticker_natural_language_reclassify_ai_enabled=true` 时，调用当前会话 provider（DeepSeek Flash 可）做受控 JSON 分类，只发送分类意图文本，不传用户 ID/路径，不注册 tool、不调用电脑控制/终端；置信度低于 `sticker_natural_language_reclassify_min_confidence` 视为失败。
+3. 优先定位本会话最近一次收藏；若无但当前消息/引用/最近缓存有图，则直接收藏到目标分类。移动使用 `CollectedStickerStore.reclassify` 原子移动 + 原子 index；失败回滚旧文件/index，不删除收藏；目录 0755、文件 0644，分类/文件名/符号链接/路径安全校验沿用。
+4. 回复：移动成功“已把刚才那个表情移到分类 X”；语义标注成功“已记住：这个表情用于表达…（分类：X）”；已在目标分类“已经是…”；无最近收藏/缓存“没有找到最近…”；分类失败“分类失败，旧收藏和分类未改动”；分类意图不完整提示可用 `/收藏表情 分类`，不会谎称没保存。
+5. 成功标注会在 index 写入 `tags`/`meaning`/`tone`/`updated_at`；旧 index 缺字段自动补空值。之后发送/搜索收藏表情会匹配 category/tags/meaning，safe_tools `send_sticker` 也支持 `tag`。
+
+普通聊天“我觉得这个表情很嘲讽”不会触发；非 @ 群聊不触发；命令和 marker 文本优先。配置：`sticker_natural_language_reclassify_enabled`、`..._ai_enabled`、`..._min_confidence` 及 6 个回复模板。真实 AstrBot provider/QQ E2E 未验证。
+
 ## AI 语境发表情
 
 - `sticker_ai_select_enabled=true`：启用语境选表情。
@@ -186,7 +234,7 @@ AstrBot v4.29 没有稳定的公开 API 把 handler 映射回用户命令，因�
 不依赖 AstrBot v4.29 的 tool/function-calling API（未把它当作稳定公开依赖），而是使用插件内私有 marker/intent router。模型只能输出白名单工具标记，插件解析、校验后调用自己已有的受限能力：
 
 - `search_images(keyword="...", count=1)`：仅复用 Bing 搜索与下载安全管线；参数不能是路径/URL/命令；单条回复最多 1 张。
-- `send_sticker(category="猫猫")` 或 `send_sticker(emotion="happy")`：只从内置/收藏表情池选择；不接受文件路径。
+- `send_sticker(category="猫猫")` / `send_sticker(emotion="happy")` / `send_sticker(tag="嘲讽")`：三选一，只从内置/收藏表情池选择；不接受文件路径。
 - `collect_sticker(category="猫猫")`：只使用当前消息/引用/本会话最近缓存图片；不接受任意文件路径。
 - `list_sticker_categories()`：只返回安全分类名和数量，不返回路径。
 
@@ -198,21 +246,34 @@ AstrBot v4.29 没有稳定的公开 API 把 handler 映射回用户命令，因�
 
 插件会删除 marker，校验工具名/参数/权限/冷却后执行；失败、非法参数、无权限或多 marker 时只回退普通文本，不泄漏内部路径/Key，不调用 `eval/exec/subprocess`，不执行 shell/终端/电脑控制，也不接受模型提供的任意 URL 下载。每会话搜索/收藏冷却及收藏大小/数量限制沿用现有逻辑。配置前缀 `safe_tools_*`；真实 AstrBot/QQ E2E 未验证。
 
-## 代码架构（1.7.0）
+## 全局收藏池与一个表情多分类
+
+- 收藏池全局共享：所有群聊/私聊共用同一 `collected_stickers/index.json` 和文件池；只有最近收藏/最近媒体按会话内存定位。
+- 每个条目的 `category` 保留为主分类/旧兼容字段，新增 `categories` 安全分类数组；旧 index 无 `categories` 时自动视为 `[category]`，不改文件内容。
+- 一个文件只有一份：主分类决定物理目录，追加其它分类只更新 index，不复制文件；移除主分类时选择下一分类为主分类并原子移动文件，index 失败回滚。
+- `/收藏表情 嘲讽,无语`、`/收藏表情 猫猫，可爱` 支持多分类，第一个为主分类；分隔符由 `collected_sticker_category_separators` 配置。
+- `/表情分类` 按归属计数（多分类重复计归属）并同时显示唯一图片总数；`/表情列表 分类`、`/发表情 分类` 按 categories 包含匹配，跨会话全局可见。
+- 自然语言“加入分类/同时放到多个分类”追加；“移出/只放到/只保留”在明确语义下移除/替换；普通聊天不误改。
+- `update_categories/add_categories/remove_categories` 原子 index 更新，目录 0755/文件 0644，路径/符号链接/分类/文件名安全校验；不删除用户数据。
+- tags/meaning/tone 与 categories 同条目保存，选择可按分类/tags/meaning/情绪匹配。真实 QQ/AstrBot 多分类展示未验证。
+
+## 代码架构（1.12.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 
 - `interfaces.py`：`StickerRepository`、`MediaDecoder`、`ImageSearchProvider`、`SongRepository`、`LLMService` 等 Protocol 和 `MediaPayload`/`StickerRecord`/`ImageCandidate` 数据对象。
-- `config.py`：120 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
+- `config.py`：147 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
 - `media.py`：图片 magic/尺寸、base64、媒体引用和公网 HTTP(S) URL 安全过滤。
 - `image_search.py`：中/日/英文相关性规范化、别名/阈值过滤。
 - `songs.py`：本地授权音频的安全路径解析/列表仓库。
 - `sticker_store.py`：收藏 index 原子写/旧 index 兼容/分类目录与文件校验。
 - `llm.py`：direct sticker marker 提取、AI 判定 JSON 解析、标签指令生成。
+- `sticker_intent.py`：显式自然语言表情请求解析、情绪/收藏分类安全解析。
+- `sticker_reclassify.py`：最近收藏重分类句式/情绪映射、AI JSON 解析。
 - `safe_tools.py`：白名单工具 marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成。
 - `__init__.py`：让插件目录可作为 Python package 部署，`main.py` 优先相对导入；测试 harness 也支持同目录模块 fallback。
 
-未变：所有配置键、schema 120 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
+未变：所有配置键、schema 147 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
 
 ## 依赖
 
