@@ -275,6 +275,40 @@
       "step": 100
     }
   },
+  "user_sticker_reaction_enabled": {
+    "description": "@/私聊用户发表情/图片时启用自然短句反应",
+    "type": "bool",
+    "default": true
+  },
+  "user_sticker_reaction_probability": {
+    "description": "用户表情自然反应概率",
+    "type": "float",
+    "default": 0.85,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  },
+  "user_sticker_reaction_replies": {
+    "description": "用户表情的自然回复短句列表",
+    "type": "list",
+    "default": [
+      "收到这张表情啦～",
+      "这个表情我收下啦！",
+      "好可爱，回你一张～",
+      "表情包已收到，嘿嘿～"
+    ],
+    "items": {
+      "type": "string"
+    }
+  },
+  "user_sticker_reaction_attach_sticker": {
+    "description": "用户表情短句回复是否可附加本地表情",
+    "type": "bool",
+    "default": true,
+    "hint": "附加仍受 sticker_probability、sticker_cooldown_seconds 以及收藏表情概率控制。"
+  },
   "reply_probability": {
     "description": "群聊非 @ 消息的回复概率",
     "type": "float",
@@ -458,6 +492,148 @@
     "description": "避免同一会话连续发送同一张表情包",
     "type": "bool",
     "default": true
+  },
+  "collected_sticker_enabled": {
+    "description": "启用用户收藏表情的保存、管理和使用",
+    "type": "bool",
+    "default": true
+  },
+  "collected_sticker_disabled_reply": {
+    "description": "收藏表情功能关闭时的提示",
+    "type": "text",
+    "default": "用户表情收藏/使用功能当前未启用。"
+  },
+  "collected_sticker_max_count": {
+    "description": "收藏表情最大数量",
+    "type": "int",
+    "default": 200,
+    "slider": {
+      "min": 1,
+      "max": 2000,
+      "step": 1
+    }
+  },
+  "collected_sticker_max_file_bytes": {
+    "description": "单张收藏表情最大字节数",
+    "type": "int",
+    "default": 8388608,
+    "slider": {
+      "min": 65536,
+      "max": 33554432,
+      "step": 65536
+    }
+  },
+  "collected_sticker_use_probability": {
+    "description": "正常回复附加表情时优先使用收藏表情的概率",
+    "type": "float",
+    "default": 0.5,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "hint": "收藏表情不可用时自动回退到内置 stickers。"
+  },
+  "collected_sticker_category_max_chars": {
+    "description": "收藏分类名最大长度",
+    "type": "int",
+    "default": 32,
+    "slider": {
+      "min": 1,
+      "max": 32,
+      "step": 1
+    },
+    "hint": "分类仅允许中文、字母、数字、-、_。"
+  },
+  "collected_sticker_list_limit": {
+    "description": "/表情列表 最多显示条数",
+    "type": "int",
+    "default": 30,
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "collected_sticker_storage_unavailable_reply": {
+    "description": "收藏数据目录不可用提示",
+    "type": "text",
+    "default": "收藏存储目录不可用，请检查 AstrBot 的 data/plugin_data 权限。"
+  },
+  "collected_sticker_no_image_reply": {
+    "description": "收藏命令消息没有图片时的提示",
+    "type": "text",
+    "default": "这条消息里没有可收藏的图片。请发送图片/表情包并同时使用 /收藏表情。"
+  },
+  "collected_sticker_face_unsupported_reply": {
+    "description": "尝试收藏 QQ 原生 Face 时提示",
+    "type": "text",
+    "default": "QQ 原生 Face 表情没有可保存的图片文件，无法收藏；请发送图片/贴纸形式的 Image。"
+  },
+  "collected_sticker_invalid_category_reply": {
+    "description": "分类名非法提示模板",
+    "type": "text",
+    "default": "分类名不合法，只允许中文、字母、数字、-、_，且不超过 {max_chars} 个字符。"
+  },
+  "collected_sticker_invalid_image_reply": {
+    "description": "收藏图片格式不合法提示",
+    "type": "text",
+    "default": "无法识别这张图片的格式，未收藏。支持 JPEG/PNG/GIF/WebP/BMP/AVIF。"
+  },
+  "collected_sticker_too_large_reply": {
+    "description": "收藏图片超过大小限制提示",
+    "type": "text",
+    "default": "图片超过收藏大小限制，未收藏。"
+  },
+  "collected_sticker_duplicate_reply": {
+    "description": "重复收藏提示模板",
+    "type": "text",
+    "default": "这张表情已经收藏过（分类：{category}）。"
+  },
+  "collected_sticker_limit_reply": {
+    "description": "收藏数量达到上限提示模板",
+    "type": "text",
+    "default": "收藏数量已达上限 {max_count} 张，请先清理数据目录。"
+  },
+  "collected_sticker_saved_reply": {
+    "description": "收藏成功提示模板",
+    "type": "text",
+    "default": "已收藏到「{category}」：{filename}"
+  },
+  "collected_sticker_empty_reply": {
+    "description": "无任何收藏表情提示",
+    "type": "text",
+    "default": "还没有收藏任何表情。"
+  },
+  "collected_sticker_not_found_reply": {
+    "description": "指定分类无收藏或找不到表情提示",
+    "type": "text",
+    "default": "没有找到符合条件的收藏表情。"
+  },
+  "collected_sticker_send_prefix": {
+    "description": "/发表情 发送前缀模板",
+    "type": "text",
+    "default": "送你一张收藏表情（{category}）：{filename}"
+  },
+  "collected_sticker_list_header": {
+    "description": "/表情列表 全部列表标题模板",
+    "type": "text",
+    "default": "收藏表情共 {count} 张："
+  },
+  "collected_sticker_category_header": {
+    "description": "/表情列表 分类标题模板",
+    "type": "text",
+    "default": "分类「{category}」共 {count} 张："
+  },
+  "collected_sticker_list_more": {
+    "description": "表情列表截断提示模板",
+    "type": "text",
+    "default": "……另有 {count} 张未展开。"
+  },
+  "collected_sticker_command_error_reply": {
+    "description": "表情收藏命令异常提示",
+    "type": "text",
+    "default": "表情收藏命令处理失败，请稍后再试。"
   },
   "max_images_per_message": {
     "description": "单条消息最多送入 provider 的图片数",

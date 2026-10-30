@@ -10,7 +10,9 @@ AstrBot v4.29 自动加载插件，提供：
 - @/私聊支持保守自然语言找图，如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，命中后复用同一搜索下载流程并阻断默认 LLM；
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的授权音频并用 `Comp.Record` 发送，不调用 LLM，不烧 token；
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式与配置入口，并用 AstrBot 公开的 `Context.get_all_stars()` 列出已加载插件元数据；不暴露 Key，不枚举不稳定的内部 handler。
-- 从 `stickers/` 读取本地图片，按关键词、情绪或随机方式附加到回复，带冷却和防重复。
+- 从 `stickers/` 读取本地图片，按关键词、情绪或随机方式附加到回复，带冷却和防重复；
+- @/私聊收到纯 `Comp.Image`/`Comp.Face` 时优先用自然短句反应，可按概率附加内置或收藏表情；
+- `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]` 管理用户收藏表情，保存到 AstrBot 插件数据目录；收藏表情也参与正常回复。
 
 ## 文件
 
@@ -112,6 +114,38 @@ Bing/Baidu 页面/JSON 结构变化、网络限制或反爬都可能导致无结
 AstrBot v4.29 没有稳定的公开 API 把 handler 映射回用户命令，因此 `/option` **不会伪称枚举其他插件命令**，也不会访问内部 `star_handlers_registry`。输出不读取/不展示插件配置值或 API Key。
 
 可配置 `option_include_other_plugins`、`option_max_plugins`、`option_max_chars` 控制插件列表和输出长度。
+
+## 用户表情反应与收藏
+
+### 自动反应
+
+@ 机器人或私聊发来不带文字的纯图片/表情包，或纯 QQ `Comp.Face` 时，插件按 `user_sticker_reaction_probability` 用配置的短句自然回应，不调用 LLM。`user_sticker_reaction_attach_sticker=true` 时还可能附加一个本地表情，仍受 `sticker_probability` / `sticker_cooldown_seconds` 以及收藏表情使用概率控制。非 @ 群消息不进入该自动反应分支。
+
+### 收藏与管理
+
+```text
+/收藏表情 [分类]
+/表情分类
+/表情列表 [分类]
+/发表情 [分类]
+```
+
+- 发送图片/表情包时同时使用 `/收藏表情 开心` 即可收藏；不带分类默认 `未分类`。
+- 使用 AstrBot 公开 `StarTools.get_data_dir(...)`，实际落盘：
+
+  ```text
+  data/plugin_data/qqbot_enhancer/collected_stickers/<分类>/<sha256>.<ext>
+  data/plugin_data/qqbot_enhancer/collected_stickers/index.json
+  ```
+
+- 分类只允许中文、字母、数字、`-`、`_`；拒绝路径穿越、绝对路径和符号链接。
+- 图片校验 magic、大小上限；文件与 `index.json` 均原子写入；SHA-256 全局去重。
+- `index.json` 仅保存 sha256、文件名、分类、大小、时间、来源适配器名，不保存用户文字/用户 ID。
+- `/表情列表` 只显示分类和文件名，不输出绝对路径。
+- `collected_sticker_enabled`、`collected_sticker_max_count`、`collected_sticker_max_file_bytes`、`collected_sticker_use_probability` 等可在 WebUI 配置。
+- 旧内置 8 张 stickers 保持兼容，和收藏表情一起参与正常回复。
+
+**限制：** `Comp.Face` 只有 QQ 表情 id，没有可保存的图片字节，因此纯 `Comp.Face` 可以触发短句反应，但 `/收藏表情` 会提示改用图片/贴纸形式。没有实现破坏性删除命令；需要清理时由管理员直接管理插件数据目录。
 
 ## 依赖
 

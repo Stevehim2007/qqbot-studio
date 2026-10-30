@@ -15,6 +15,8 @@ No third-party dependency and no API key is stored in this plugin.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import html as html_lib
 import ipaddress
 import json
@@ -33,7 +35,7 @@ from typing import Any
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star
+from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 STICKER_DIR = PLUGIN_DIR / "stickers"
@@ -42,7 +44,15 @@ STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 SONG_SUFFIXES = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.4.1"
+PLUGIN_FALLBACK_VERSION = "1.5.0"
+COLLECTED_STICKER_DIR_NAME = "collected_stickers"
+COLLECTED_INDEX_FILENAME = "index.json"
+DEFAULT_COLLECTED_CATEGORY = "未分类"
+COLLECTED_CATEGORY_MAX_CHARS = 32
+COLLECTED_CATEGORY_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]{1,32}$")
+COLLECTED_FILENAME_RE = re.compile(
+    r"^[a-f0-9]{64}\.(?:jpg|png|gif|webp|bmp|avif)$"
+)
 
 BING_IMAGES_ENDPOINT = "https://www.bing.com/images/search"
 BING_IMAGES_REFERER = "https://www.bing.com/images/search"
@@ -150,6 +160,51 @@ DEFAULTS: dict[str, Any] = {
     "option_include_other_plugins": True,
     "option_max_plugins": 20,
     "option_max_chars": 1800,
+    "user_sticker_reaction_enabled": True,
+    "user_sticker_reaction_probability": 0.85,
+    "user_sticker_reaction_replies": [
+        "收到这张表情啦～",
+        "这个表情我收下啦！",
+        "好可爱，回你一张～",
+        "表情包已收到，嘿嘿～",
+    ],
+    "user_sticker_reaction_attach_sticker": True,
+    "collected_sticker_enabled": True,
+    "collected_sticker_disabled_reply": "用户表情收藏/使用功能当前未启用。",
+    "collected_sticker_max_count": 200,
+    "collected_sticker_max_file_bytes": 8_388_608,
+    "collected_sticker_use_probability": 0.5,
+    "collected_sticker_category_max_chars": COLLECTED_CATEGORY_MAX_CHARS,
+    "collected_sticker_list_limit": 30,
+    "collected_sticker_storage_unavailable_reply": (
+        "收藏存储目录不可用，请检查 AstrBot 的 data/plugin_data 权限。"
+    ),
+    "collected_sticker_no_image_reply": (
+        "这条消息里没有可收藏的图片。请发送图片/表情包并同时使用 /收藏表情。"
+    ),
+    "collected_sticker_face_unsupported_reply": (
+        "QQ 原生 Face 表情没有可保存的图片文件，无法收藏；"
+        "请发送图片/贴纸形式的 Image。"
+    ),
+    "collected_sticker_invalid_category_reply": (
+        "分类名不合法，只允许中文、字母、数字、-、_，且不超过 {max_chars} 个字符。"
+    ),
+    "collected_sticker_invalid_image_reply": (
+        "无法识别这张图片的格式，未收藏。支持 JPEG/PNG/GIF/WebP/BMP/AVIF。"
+    ),
+    "collected_sticker_too_large_reply": "图片超过收藏大小限制，未收藏。",
+    "collected_sticker_duplicate_reply": "这张表情已经收藏过（分类：{category}）。",
+    "collected_sticker_limit_reply": (
+        "收藏数量已达上限 {max_count} 张，请先清理数据目录。"
+    ),
+    "collected_sticker_saved_reply": "已收藏到「{category}」：{filename}",
+    "collected_sticker_empty_reply": "还没有收藏任何表情。",
+    "collected_sticker_not_found_reply": "没有找到符合条件的收藏表情。",
+    "collected_sticker_send_prefix": "送你一张收藏表情（{category}）：{filename}",
+    "collected_sticker_list_header": "收藏表情共 {count} 张：",
+    "collected_sticker_category_header": "分类「{category}」共 {count} 张：",
+    "collected_sticker_list_more": "……另有 {count} 张未展开。",
+    "collected_sticker_command_error_reply": "表情收藏命令处理失败，请稍后再试。",
     "reply_probability": 0.12,
     "group_cooldown_seconds": 30,
     "user_cooldown_seconds": 90,
@@ -212,6 +267,13 @@ class QQBotEnhancerPlugin(Star):
         self._sticker_entries: list[dict[str, Any]] = []
         self._emotion_keywords: dict[str, tuple[str, ...]] = {}
         self._load_sticker_entries()
+
+        # 用户收藏表情：官方 StarTools.get_data_dir() 返回
+        # data/plugin_data/<plugin_name>/，绝不写回插件源码目录。
+        self._collected_lock = asyncio.Lock()
+        self._collected_root = self._resolve_collected_sticker_root()
+        self._collected_entries: list[dict[str, Any]] = []
+        self._load_collected_sticker_index()
 
     # ------------------------------------------------------------------
     # Configuration helpers
@@ -297,6 +359,7 @@ class QQBotEnhancerPlugin(Star):
             components = event.get_messages()
             message_text = self._message_text(event)
             has_face = any(isinstance(comp, Comp.Face) for comp in components)
+            has_image = any(isinstance(comp, Comp.Image) for comp in components)
 
             # 不抢占 AstrBot 的指令处理。自定义 wake_prefix 也会在这里被识别，
             # 防止概率回复把 /help 之类的指令吞掉。
@@ -322,6 +385,37 @@ class QQBotEnhancerPlugin(Star):
                 mode = "random"
             else:
                 mode = "explicit"
+
+            # Explicit @/private image or QQ Face without text: treat it as a
+            # user sticker reaction and answer in natural language without an
+            # LLM call. A local sticker may be attached by the normal sticker
+            # probability/cooldown path.
+            if (
+                explicit
+                and (has_image or has_face)
+                and not message_text.strip()
+                and self._cfg_bool("user_sticker_reaction_enabled")
+            ):
+                reaction_probability = self._cfg_float(
+                    "user_sticker_reaction_probability",
+                    0.0,
+                    1.0,
+                )
+                if self._rng.random() < reaction_probability:
+                    should_stop = True
+                    event.should_call_llm(True)
+                    reaction_reply = self._pick_user_sticker_reaction_reply()
+                    if self._cfg_bool("user_sticker_reaction_attach_sticker"):
+                        result = self._build_result(
+                            event,
+                            reaction_reply,
+                            message_text,
+                        )
+                    else:
+                        result = event.plain_result(reaction_reply)
+                    yield result
+                    yielded = True
+                    return
 
             # Explicit @/private natural-language image search. This intentionally
             # runs before memory_mode=astrbot so the plugin executes the search
@@ -567,6 +661,312 @@ class QQBotEnhancerPlugin(Star):
         finally:
             event.stop_event()
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("收藏表情", priority=110)
+    async def collect_sticker_command(self, event: AstrMessageEvent):
+        """把当前消息中的 Comp.Image 收藏到插件数据目录。"""
+
+        event.should_call_llm(True)
+        try:
+            if not self._cfg_bool("collected_sticker_enabled"):
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_disabled_reply")
+                )
+                return
+            raw_category = self._collect_command_argument(
+                event,
+                ("收藏表情",),
+            )
+            category = self._normalize_collected_category(raw_category)
+            if category is None:
+                max_chars = min(
+                    COLLECTED_CATEGORY_MAX_CHARS,
+                    max(
+                        1,
+                        self._cfg_int(
+                            "collected_sticker_category_max_chars",
+                            1,
+                        ),
+                    ),
+                )
+                yield event.plain_result(
+                    self._format_collected_reply(
+                        self._cfg_str(
+                            "collected_sticker_invalid_category_reply"
+                        ),
+                        max_chars=max_chars,
+                    )
+                )
+                return
+            reply = await self._collect_user_sticker(event, category)
+            yield event.plain_result(reply)
+        except Exception:
+            logger.exception("qqbot_enhancer /收藏表情 命令处理失败")
+            try:
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_command_error_reply")
+                )
+            except Exception:
+                logger.exception("qqbot_enhancer 收藏表情错误回复发送失败")
+        finally:
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("表情分类", priority=110)
+    async def collected_categories_command(self, event: AstrMessageEvent):
+        """列出收藏表情分类与数量。"""
+
+        event.should_call_llm(True)
+        try:
+            if not self._cfg_bool("collected_sticker_enabled"):
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_disabled_reply")
+                )
+                return
+            counts = self._collected_category_counts()
+            total = sum(counts.values())
+            if total <= 0:
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_empty_reply")
+                )
+                return
+            lines = [f"收藏表情共 {total} 张，分类 {len(counts)} 个："]
+            list_limit = max(1, self._cfg_int("collected_sticker_list_limit", 1))
+            ordered_categories = sorted(counts)
+            for category in ordered_categories[:list_limit]:
+                lines.append(f"- {category}: {counts[category]} 张")
+            if len(ordered_categories) > list_limit:
+                lines.append(
+                    self._format_collected_reply(
+                        self._cfg_str("collected_sticker_list_more"),
+                        count=len(ordered_categories) - list_limit,
+                    )
+                )
+            yield event.plain_result("\n".join(lines))
+        except Exception:
+            logger.exception("qqbot_enhancer /表情分类 命令处理失败")
+            try:
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_command_error_reply")
+                )
+            except Exception:
+                logger.exception("qqbot_enhancer 表情分类错误回复发送失败")
+        finally:
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("表情列表", priority=110)
+    async def collected_list_command(self, event: AstrMessageEvent):
+        """列出收藏表情文件名，不输出绝对路径。"""
+
+        event.should_call_llm(True)
+        try:
+            if not self._cfg_bool("collected_sticker_enabled"):
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_disabled_reply")
+                )
+                return
+            raw_category = self._collect_command_argument(
+                event,
+                ("表情列表",),
+            )
+            category = (
+                None
+                if not raw_category
+                else self._normalize_collected_category(raw_category)
+            )
+            if raw_category and category is None:
+                yield event.plain_result(
+                    self._format_collected_reply(
+                        self._cfg_str(
+                            "collected_sticker_invalid_category_reply"
+                        ),
+                        max_chars=min(
+                            COLLECTED_CATEGORY_MAX_CHARS,
+                            max(
+                                1,
+                                self._cfg_int(
+                                    "collected_sticker_category_max_chars",
+                                    1,
+                                ),
+                            ),
+                        ),
+                    )
+                )
+                return
+            entries = self._valid_collected_entries()
+            if category is not None:
+                entries = [
+                    entry for entry in entries if entry.get("category") == category
+                ]
+            if not entries:
+                reply_key = (
+                    "collected_sticker_not_found_reply"
+                    if category is not None
+                    else "collected_sticker_empty_reply"
+                )
+                yield event.plain_result(self._cfg_str(reply_key))
+                return
+            list_limit = max(1, self._cfg_int("collected_sticker_list_limit", 1))
+            if category is None:
+                header = self._format_collected_reply(
+                    self._cfg_str("collected_sticker_list_header"),
+                    count=len(entries),
+                )
+            else:
+                header = self._format_collected_reply(
+                    self._cfg_str("collected_sticker_category_header"),
+                    category=category,
+                    count=len(entries),
+                )
+            lines = [header]
+            for entry in entries[:list_limit]:
+                filename = str(entry.get("filename", ""))
+                if category is None:
+                    lines.append(
+                        f"- [{entry.get('category', DEFAULT_COLLECTED_CATEGORY)}] "
+                        f"{filename}"
+                    )
+                else:
+                    lines.append(f"- {filename}")
+            if len(entries) > list_limit:
+                lines.append(
+                    self._format_collected_reply(
+                        self._cfg_str("collected_sticker_list_more"),
+                        count=len(entries) - list_limit,
+                    )
+                )
+            yield event.plain_result("\n".join(lines))
+        except Exception:
+            logger.exception("qqbot_enhancer /表情列表 命令处理失败")
+            try:
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_command_error_reply")
+                )
+            except Exception:
+                logger.exception("qqbot_enhancer 表情列表错误回复发送失败")
+        finally:
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("发表情", priority=110)
+    async def send_collected_sticker_command(self, event: AstrMessageEvent):
+        """随机发送一张已收藏表情。"""
+
+        event.should_call_llm(True)
+        try:
+            if not self._cfg_bool("collected_sticker_enabled"):
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_disabled_reply")
+                )
+                return
+            raw_category = self._collect_command_argument(
+                event,
+                ("发表情",),
+            )
+            category = (
+                None
+                if not raw_category
+                else self._normalize_collected_category(raw_category)
+            )
+            if raw_category and category is None:
+                yield event.plain_result(
+                    self._format_collected_reply(
+                        self._cfg_str(
+                            "collected_sticker_invalid_category_reply"
+                        ),
+                        max_chars=min(
+                            COLLECTED_CATEGORY_MAX_CHARS,
+                            max(
+                                1,
+                                self._cfg_int(
+                                    "collected_sticker_category_max_chars",
+                                    1,
+                                ),
+                            ),
+                        ),
+                    )
+                )
+                return
+            chosen_path = self._select_collected_sticker(
+                "",
+                event.unified_msg_origin,
+                category=category,
+            )
+            if chosen_path is None:
+                reply_key = (
+                    "collected_sticker_not_found_reply"
+                    if category is not None
+                    else "collected_sticker_empty_reply"
+                )
+                yield event.plain_result(self._cfg_str(reply_key))
+                return
+            chosen_entry = next(
+                (
+                    entry
+                    for entry in self._valid_collected_entries()
+                    if entry.get("path") == chosen_path
+                ),
+                None,
+            )
+            if chosen_entry is None:
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_not_found_reply")
+                )
+                return
+            try:
+                image_component = Comp.Image.fromFileSystem(str(chosen_path))
+            except Exception:
+                logger.warning(
+                    "qqbot_enhancer 构造收藏表情发送组件失败: %s",
+                    chosen_path,
+                    exc_info=True,
+                )
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_command_error_reply")
+                )
+                return
+            prefix = self._format_collected_reply(
+                self._cfg_str("collected_sticker_send_prefix"),
+                category=chosen_entry.get("category", DEFAULT_COLLECTED_CATEGORY),
+                filename=chosen_entry.get("filename", ""),
+            )
+            self._last_sticker_at[event.unified_msg_origin] = self._clock()
+            self._last_sticker_file[event.unified_msg_origin] = str(
+                chosen_entry.get("filename", "")
+            )
+            yield event.chain_result([Comp.Plain(prefix), image_component])
+        except Exception:
+            logger.exception("qqbot_enhancer /发表情 命令处理失败")
+            try:
+                yield event.plain_result(
+                    self._cfg_str("collected_sticker_command_error_reply")
+                )
+            except Exception:
+                logger.exception("qqbot_enhancer 发表情错误回复发送失败")
+        finally:
+            event.stop_event()
+
     @filter.on_decorating_result()
     async def attach_memory_mode_sticker(self, event: AstrMessageEvent):
         """Add a local sticker after AstrBot default Agent replies in memory mode."""
@@ -651,6 +1051,10 @@ class QQBotEnhancerPlugin(Star):
             "本插件命令：",
             "/找图 <关键词>（别名 /搜图）",
             "/唱歌 [文件名关键词]（别名 /点歌）",
+            "/收藏表情 [分类]",
+            "/表情分类",
+            "/表情列表 [分类]",
+            "/发表情 [分类]",
             "/option（别名 /插件用法、/用法）",
             "",
             (
@@ -666,6 +1070,10 @@ class QQBotEnhancerPlugin(Star):
             (
                 "找图说明：/找图 和 /搜图 会下载并校验图片后发本地文件；"
                 "@ 或私聊的自然语言找图也复用同一流程。"
+            ),
+            (
+                "表情收藏：/收藏表情 保存当前消息中的图片到插件数据目录；"
+                "内置 stickers 与用户收藏表情都会参与正常回复。"
             ),
         ]
 
@@ -2321,6 +2729,12 @@ class QQBotEnhancerPlugin(Star):
         except (OSError, ValueError):
             return None
 
+    def _pick_user_sticker_reaction_reply(self) -> str:
+        replies = self._cfg_list("user_sticker_reaction_replies")
+        if not replies:
+            replies = list(DEFAULTS["user_sticker_reaction_replies"])
+        return str(self._rng.choice(replies))
+
     def _build_result(
         self,
         event: AstrMessageEvent,
@@ -2345,7 +2759,12 @@ class QQBotEnhancerPlugin(Star):
     def _maybe_pick_sticker(self, event: AstrMessageEvent, message_text: str) -> Path | None:
         if not self._cfg_bool("sticker_enabled"):
             return None
-        if not self._sticker_entries:
+
+        collected_available = (
+            self._cfg_bool("collected_sticker_enabled")
+            and bool(self._valid_collected_entries())
+        )
+        if not self._sticker_entries and not collected_available:
             return None
 
         session_key = event.unified_msg_origin
@@ -2358,7 +2777,27 @@ class QQBotEnhancerPlugin(Star):
             return None
 
         try:
-            chosen = self._select_sticker(message_text, session_key)
+            chosen: Path | None = None
+            use_collected = collected_available and (
+                self._rng.random()
+                < self._cfg_float(
+                    "collected_sticker_use_probability",
+                    0.0,
+                    1.0,
+                )
+            )
+            if use_collected:
+                chosen = self._select_collected_sticker(
+                    message_text,
+                    session_key,
+                )
+            if chosen is None:
+                chosen = self._select_sticker(message_text, session_key)
+            if chosen is None and collected_available:
+                chosen = self._select_collected_sticker(
+                    message_text,
+                    session_key,
+                )
         except Exception:
             logger.warning("qqbot_enhancer 选择本地表情包失败", exc_info=True)
             return None
@@ -2416,6 +2855,475 @@ class QQBotEnhancerPlugin(Star):
         if not candidates:
             return None
         return self._rng.choice(candidates)["path"]
+
+    # ------------------------------------------------------------------
+    # Collected user stickers
+    # ------------------------------------------------------------------
+    def _resolve_collected_sticker_root(self) -> Path | None:
+        try:
+            plugin_name = str(getattr(self, "name", "") or "qqbot_enhancer")
+            data_dir = Path(StarTools.get_data_dir(plugin_name=plugin_name)).resolve()
+            raw_root = data_dir / COLLECTED_STICKER_DIR_NAME
+            if raw_root.is_symlink():
+                logger.warning("qqbot_enhancer 收藏目录不能是符号链接")
+                return None
+            raw_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            root = raw_root.resolve()
+            if root.parent != data_dir:
+                logger.warning("qqbot_enhancer 收藏目录越出插件数据目录")
+                return None
+            return root
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 无法创建用户收藏表情数据目录",
+                exc_info=True,
+            )
+            return None
+
+    def _collected_index_path(self) -> Path | None:
+        if self._collected_root is None:
+            return None
+        return self._collected_root / COLLECTED_INDEX_FILENAME
+
+    @staticmethod
+    def _atomic_write_bytes(path: Path, data: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix=".tmp-",
+                dir=str(path.parent),
+                delete=False,
+            ) as temporary:
+                temp_path = temporary.name
+                temporary.write(data)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temp_path, path)
+        except Exception:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
+
+    def _save_collected_sticker_index(self) -> None:
+        index_path = self._collected_index_path()
+        if index_path is None:
+            raise RuntimeError("收藏数据目录不可用")
+        serializable = []
+        for entry in self._collected_entries:
+            serializable.append(
+                {
+                    "sha256": str(entry.get("sha256", "")),
+                    "filename": str(entry.get("filename", "")),
+                    "category": str(entry.get("category", DEFAULT_COLLECTED_CATEGORY)),
+                    "size": int(entry.get("size", 0)),
+                    "created_at": int(entry.get("created_at", 0)),
+                    "source": str(entry.get("source", "")),
+                }
+            )
+        payload = {
+            "version": 1,
+            "saved_at": int(time.time()),
+            "stickers": serializable,
+        }
+        self._atomic_write_bytes(
+            index_path,
+            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+
+    def _normalize_collected_category(self, raw: Any) -> str | None:
+        value = str(raw or "").strip()
+        if not value:
+            return DEFAULT_COLLECTED_CATEGORY
+        max_chars = min(
+            COLLECTED_CATEGORY_MAX_CHARS,
+            max(1, self._cfg_int("collected_sticker_category_max_chars", 1)),
+        )
+        if len(value) > max_chars:
+            return None
+        if value in {".", ".."}:
+            return None
+        if not COLLECTED_CATEGORY_RE.fullmatch(value):
+            return None
+        return value
+
+    def _collected_category_dir(
+        self,
+        category: str,
+        *,
+        create: bool = False,
+    ) -> Path | None:
+        if self._collected_root is None or not category:
+            return None
+        try:
+            base = self._collected_root.resolve()
+            raw_dir = base / category
+            if raw_dir.is_symlink():
+                return None
+            if create:
+                raw_dir.mkdir(parents=False, exist_ok=True, mode=0o700)
+            if not raw_dir.is_dir():
+                return None
+            resolved = raw_dir.resolve()
+            if resolved.parent != base:
+                return None
+            return resolved
+        except (OSError, ValueError):
+            return None
+
+    def _collected_file_path_for(
+        self,
+        category: str,
+        filename: str,
+    ) -> Path | None:
+        if not COLLECTED_FILENAME_RE.fullmatch(filename):
+            return None
+        category_dir = self._collected_category_dir(category)
+        if category_dir is None:
+            return None
+        candidate = category_dir / filename
+        if candidate.is_symlink():
+            return None
+        try:
+            resolved = candidate.resolve()
+            if resolved.parent != category_dir or not resolved.is_file():
+                return None
+            return resolved
+        except (OSError, ValueError):
+            return None
+
+    def _valid_collected_entries(self) -> list[dict[str, Any]]:
+        max_bytes = self._cfg_int("collected_sticker_max_file_bytes", 1)
+        valid: list[dict[str, Any]] = []
+        for entry in self._collected_entries:
+            category = self._normalize_collected_category(entry.get("category"))
+            filename = str(entry.get("filename", ""))
+            if category is None or category != entry.get("category"):
+                continue
+            path = self._collected_file_path_for(category, filename)
+            if path is None:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size <= 0 or size > max_bytes:
+                continue
+            normalized = dict(entry)
+            normalized["path"] = path
+            normalized["size"] = size
+            valid.append(normalized)
+        return valid
+
+    def _load_collected_sticker_index(self) -> None:
+        self._collected_entries = []
+        index_path = self._collected_index_path()
+        if index_path is None or not index_path.is_file():
+            return
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 收藏表情 index.json 无法解析，本次从空列表启动",
+                exc_info=True,
+            )
+            return
+        raw_entries = payload.get("stickers", []) if isinstance(payload, dict) else []
+        if not isinstance(raw_entries, list):
+            return
+        max_bytes = self._cfg_int("collected_sticker_max_file_bytes", 1)
+        loaded: list[dict[str, Any]] = []
+        seen_sha: set[str] = set()
+        for item in raw_entries:
+            if not isinstance(item, dict):
+                continue
+            sha256 = str(item.get("sha256", "") or "").lower()
+            filename = str(item.get("filename", "") or "")
+            category = self._normalize_collected_category(item.get("category"))
+            if (
+                not re.fullmatch(r"[a-f0-9]{64}", sha256)
+                or category is None
+                or not COLLECTED_FILENAME_RE.fullmatch(filename)
+                or not filename.startswith(sha256 + ".")
+                or sha256 in seen_sha
+            ):
+                continue
+            path = self._collected_file_path_for(category, filename)
+            if path is None:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size <= 0 or size > max_bytes:
+                continue
+            seen_sha.add(sha256)
+            try:
+                created_at = int(item.get("created_at", 0) or 0)
+            except (TypeError, ValueError):
+                created_at = 0
+            loaded.append(
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": category,
+                    "size": size,
+                    "created_at": created_at,
+                    "source": str(item.get("source", "") or ""),
+                    "path": path,
+                }
+            )
+        self._collected_entries = loaded
+
+    def _format_collected_reply(self, template: str, **kwargs: Any) -> str:
+        try:
+            return str(template).format(**kwargs)
+        except (KeyError, ValueError):
+            return str(template)
+
+    def _local_image_ref_path(self, ref: Any) -> Path | None:
+        if not isinstance(ref, str) or not ref.strip():
+            return None
+        value = html_lib.unescape(ref).strip()
+        if value.startswith("file://"):
+            try:
+                parsed = urllib.parse.urlsplit(value)
+            except ValueError:
+                return None
+            if parsed.scheme != "file":
+                return None
+            return Path(urllib.parse.unquote(parsed.path))
+        try:
+            scheme = urllib.parse.urlsplit(value).scheme.lower()
+        except ValueError:
+            return None
+        if scheme in {"http", "https", "data", "base64"}:
+            return None
+        return Path(value)
+
+    async def _extract_collectible_image_payload(
+        self,
+        event: AstrMessageEvent,
+    ) -> tuple[str, dict[str, Any] | None]:
+        components = event.get_messages()
+        images = [comp for comp in components if isinstance(comp, Comp.Image)]
+        if not images:
+            has_face = any(isinstance(comp, Comp.Face) for comp in components)
+            return ("face" if has_face else "no_image"), None
+
+        max_bytes = self._cfg_int("collected_sticker_max_file_bytes", 1)
+        image = images[0]
+        for ref in (
+            getattr(image, "path", None),
+            getattr(image, "file", None),
+            getattr(image, "url", None),
+        ):
+            local_path = self._local_image_ref_path(ref)
+            if local_path is None:
+                continue
+            try:
+                if local_path.is_file() and local_path.stat().st_size > max_bytes:
+                    return "too_large", None
+            except OSError:
+                pass
+
+        try:
+            raw_base64 = await image.convert_to_base64()
+        except Exception:
+            logger.warning("qqbot_enhancer 收藏图片读取失败", exc_info=True)
+            return "invalid_image", None
+        if isinstance(raw_base64, bytes):
+            data = raw_base64
+        elif isinstance(raw_base64, str) and raw_base64.strip():
+            encoded = raw_base64.strip()
+            if encoded.startswith("data:"):
+                encoded = encoded.split(",", 1)[-1]
+            encoded = encoded.removeprefix("base64://")
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except Exception:
+                try:
+                    data = base64.b64decode(encoded)
+                except Exception:
+                    return "invalid_image", None
+        else:
+            return "invalid_image", None
+
+        if not data:
+            return "invalid_image", None
+        if len(data) > max_bytes:
+            return "too_large", None
+        detected = self._detect_image_magic(data)
+        if detected is None:
+            return "invalid_image", None
+        mime, extension = detected
+        return (
+            "ok",
+            {
+                "data": data,
+                "mime": mime,
+                "extension": extension,
+                "sha256": hashlib.sha256(data).hexdigest(),
+            },
+        )
+
+    async def _collect_user_sticker(
+        self,
+        event: AstrMessageEvent,
+        category: str,
+    ) -> str:
+        if self._collected_root is None:
+            return self._cfg_str("collected_sticker_storage_unavailable_reply")
+        if not self._cfg_bool("collected_sticker_enabled"):
+            return self._cfg_str("collected_sticker_disabled_reply")
+
+        status, payload = await self._extract_collectible_image_payload(event)
+        if status == "no_image":
+            return self._cfg_str("collected_sticker_no_image_reply")
+        if status == "face":
+            return self._cfg_str("collected_sticker_face_unsupported_reply")
+        if status == "too_large":
+            return self._cfg_str("collected_sticker_too_large_reply")
+        if status != "ok" or payload is None:
+            return self._cfg_str("collected_sticker_invalid_image_reply")
+
+        max_count = self._cfg_int("collected_sticker_max_count", 1)
+        async with self._collected_lock:
+            self._collected_entries = self._valid_collected_entries()
+            duplicate = next(
+                (
+                    entry
+                    for entry in self._collected_entries
+                    if entry.get("sha256") == payload["sha256"]
+                ),
+                None,
+            )
+            if duplicate is not None:
+                return self._format_collected_reply(
+                    self._cfg_str("collected_sticker_duplicate_reply"),
+                    category=duplicate.get("category", DEFAULT_COLLECTED_CATEGORY),
+                )
+            if len(self._collected_entries) >= max_count:
+                return self._format_collected_reply(
+                    self._cfg_str("collected_sticker_limit_reply"),
+                    max_count=max_count,
+                )
+
+            category_dir = self._collected_category_dir(category, create=True)
+            if category_dir is None:
+                return self._cfg_str("collected_sticker_storage_unavailable_reply")
+            filename = f"{payload['sha256']}{payload['extension']}"
+            final_path = category_dir / filename
+            if final_path.is_symlink():
+                return self._cfg_str("collected_sticker_storage_unavailable_reply")
+            if final_path.exists():
+                return self._format_collected_reply(
+                    self._cfg_str("collected_sticker_duplicate_reply"),
+                    category=category,
+                )
+
+            source = ""
+            try:
+                get_platform_name = getattr(event, "get_platform_name", None)
+                if callable(get_platform_name):
+                    source = str(get_platform_name() or "")
+            except Exception:
+                source = ""
+            entry = {
+                "sha256": payload["sha256"],
+                "filename": filename,
+                "category": category,
+                "size": len(payload["data"]),
+                "created_at": int(time.time()),
+                "source": source,
+                "path": final_path,
+            }
+            old_entries = list(self._collected_entries)
+            self._atomic_write_bytes(final_path, payload["data"])
+            self._collected_entries = old_entries + [entry]
+            try:
+                self._save_collected_sticker_index()
+            except Exception:
+                self._collected_entries = old_entries
+                try:
+                    final_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+            return self._format_collected_reply(
+                self._cfg_str("collected_sticker_saved_reply"),
+                category=category,
+                filename=filename,
+            )
+
+    def _collected_category_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for entry in self._valid_collected_entries():
+            category = str(entry.get("category", DEFAULT_COLLECTED_CATEGORY))
+            counts[category] = counts.get(category, 0) + 1
+        return counts
+
+    def _select_collected_sticker(
+        self,
+        message_text: str,
+        session_key: str,
+        *,
+        category: str | None = None,
+    ) -> Path | None:
+        entries = self._valid_collected_entries()
+        if category is not None:
+            entries = [entry for entry in entries if entry.get("category") == category]
+        if not entries:
+            return None
+
+        if category is None and message_text.strip():
+            text = message_text.casefold()
+            category_matches = [
+                entry
+                for entry in entries
+                if str(entry.get("category", "")).casefold() in text
+            ]
+            if category_matches:
+                entries = category_matches
+
+        if self._cfg_bool("sticker_prevent_repeat"):
+            last_file = self._last_sticker_file.get(session_key)
+            if last_file and len(entries) > 1:
+                non_repeating = [
+                    entry for entry in entries if entry.get("filename") != last_file
+                ]
+                if non_repeating:
+                    entries = non_repeating
+        if not entries:
+            return None
+        chosen = self._rng.choice(entries)
+        path = chosen.get("path")
+        return path if isinstance(path, Path) else None
+
+    def _collect_command_argument(
+        self,
+        event: AstrMessageEvent,
+        command_names: tuple[str, ...],
+    ) -> str:
+        text = str(getattr(event, "message_str", "") or "").strip()
+        for prefix in self._command_prefixes(event):
+            if prefix and text.startswith(prefix):
+                text = text[len(prefix) :].strip()
+                break
+        for command_name in command_names:
+            if text == command_name:
+                return ""
+            if text.startswith(command_name):
+                rest = text[len(command_name) :]
+                if rest and rest[0].isspace():
+                    argument = re.sub(r"\s+", " ", rest).strip()
+                    return "".join(
+                        char for char in argument if char.isprintable()
+                    ).strip()
+        return ""
 
     async def terminate(self) -> None:
         """插件被停用/卸载时调用；此插件没有后台任务需要清理。"""

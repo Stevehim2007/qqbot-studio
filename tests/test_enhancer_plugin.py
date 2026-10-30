@@ -7,6 +7,7 @@ small subset of AstrBot v4.29 APIs used by the plugin is stubbed in sys.modules.
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.util
 import inspect
 import json as json_module
@@ -71,6 +72,18 @@ class FakeStar:
         self.context = context
 
 
+class FakeStarTools:
+    data_dir = None
+
+    @classmethod
+    def get_data_dir(cls, plugin_name=None):
+        if cls.data_dir is None:
+            cls.data_dir = Path(tempfile.mkdtemp(prefix="qqbot_enhancer_test_data_"))
+        path = Path(cls.data_dir) / str(plugin_name or "qqbot_enhancer")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+
 class FakeContext:
     pass
 
@@ -118,10 +131,11 @@ class Record:
 
 
 class Image:
-    def __init__(self, file=None, url=None, path=None, **kwargs):
+    def __init__(self, file=None, url=None, path=None, data=None, **kwargs):
         self.file = file
         self.url = url
         self.path = path
+        self.data = data
 
     @staticmethod
     def fromFileSystem(path, **kwargs):
@@ -134,7 +148,9 @@ class Image:
         return Image(file=str(url), url=str(url), **kwargs)
 
     async def convert_to_base64(self):
-        # Deterministic tiny fake payload; tests only verify the wrapper.
+        if self.data is not None:
+            return base64.b64encode(self.data).decode("ascii")
+        # Deterministic tiny fake payload for tests that only verify wrapping.
         return "ZmFrZV9pbWFnZQ=="
 
 
@@ -152,6 +168,7 @@ def _install_astrbot_stubs():
     star.__path__ = []
     star.Star = FakeStar
     star.Context = FakeContext
+    star.StarTools = FakeStarTools
     components = types.ModuleType("astrbot.api.message_components")
     components.__path__ = []
     for cls in (Plain, At, AtAll, Face, Image, Record):
@@ -422,6 +439,7 @@ def make_plugin(context, *, clock=None, **overrides):
             "group_cooldown_seconds": 0,
             "user_cooldown_seconds": 0,
             "sticker_enabled": False,
+            "user_sticker_reaction_enabled": False,
             "llm_timeout_seconds": 5,
         }
     )
@@ -458,6 +476,42 @@ async def run_option_command(plugin, event):
     async for result in plugin.option_command(event):
         results.append(result)
     return results
+
+
+async def run_collect_sticker_command(plugin, event):
+    results = []
+    async for result in plugin.collect_sticker_command(event):
+        results.append(result)
+    return results
+
+
+async def run_categories_command(plugin, event):
+    results = []
+    async for result in plugin.collected_categories_command(event):
+        results.append(result)
+    return results
+
+
+async def run_list_command(plugin, event):
+    results = []
+    async for result in plugin.collected_list_command(event):
+        results.append(result)
+    return results
+
+
+async def run_send_sticker_command(plugin, event):
+    results = []
+    async for result in plugin.send_collected_sticker_command(event):
+        results.append(result)
+    return results
+
+
+def install_temp_collected_root(plugin, temp_dir):
+    root = Path(temp_dir) / "collected_stickers"
+    root.mkdir(parents=True, exist_ok=True)
+    plugin._collected_root = root
+    plugin._collected_entries = []
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -1709,6 +1763,10 @@ class TestOptionCommand(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/搜图", text)
         self.assertIn("/唱歌", text)
         self.assertIn("/点歌", text)
+        self.assertIn("/收藏表情", text)
+        self.assertIn("/表情分类", text)
+        self.assertIn("/表情列表", text)
+        self.assertIn("/发表情", text)
         self.assertIn("/option", text)
         self.assertIn("配置入口", text)
         self.assertIn("memory_mode=", text)
@@ -1749,6 +1807,313 @@ class TestOptionCommand(unittest.IsolatedAsyncioTestCase):
         aliases = matching[0].get("alias", set())
         self.assertIn("插件用法", aliases)
         self.assertIn("用法", aliases)
+
+
+class TestUserStickerReaction(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_face_reaction_can_attach_local_sticker(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            user_sticker_reaction_enabled=True,
+            user_sticker_reaction_probability=1.0,
+            user_sticker_reaction_attach_sticker=True,
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            collected_sticker_enabled=False,
+        )
+        event = FakeEvent([Face(21)], message_str="", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertGreaterEqual(len(results[0].chain), 1)
+        self.assertIsInstance(results[0].chain[0], Plain)
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_explicit_image_reaction_without_sticker_attachment(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            user_sticker_reaction_enabled=True,
+            user_sticker_reaction_probability=1.0,
+            user_sticker_reaction_attach_sticker=False,
+        )
+        event = FakeEvent(
+            [Image(data=PNG_MAGIC_BYTES)],
+            message_str="",
+            private=True,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertIn(
+            results[0].text,
+            MODULE.DEFAULTS["user_sticker_reaction_replies"],
+        )
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_non_at_group_face_does_not_trigger_reaction(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            user_sticker_reaction_enabled=True,
+            user_sticker_reaction_probability=1.0,
+            reply_probability=0.0,
+        )
+        event = FakeEvent([Face(21)], message_str="", private=False)
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+        self.assertFalse(event.stopped)
+
+
+class TestCollectedStickers(unittest.IsolatedAsyncioTestCase):
+    async def _collect(self, plugin, category, data=PNG_MAGIC_BYTES):
+        event = FakeEvent(
+            [
+                Image(data=data),
+                Plain(f"/收藏表情 {category}"),
+            ],
+            message_str=f"/收藏表情 {category}",
+            private=True,
+        )
+        results = await run_collect_sticker_command(plugin, event)
+        return event, results
+
+    async def test_collect_category_dedup_and_atomic_index(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            event, results = await self._collect(plugin, "开心")
+            self.assertEqual(len(results), 1)
+            self.assertIn("已收藏到「开心」", results[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            stored_path = plugin._collected_entries[0]["path"]
+            self.assertTrue(stored_path.is_file())
+            self.assertTrue((root / "index.json").is_file())
+            index_data = json_module.loads(
+                (root / "index.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(index_data["version"], 1)
+            self.assertEqual(len(index_data["stickers"]), 1)
+            self.assertNotIn("path", index_data["stickers"][0])
+            self.assertTrue(event.stopped)
+
+            duplicate_event, duplicate_results = await self._collect(
+                plugin,
+                "其它",
+            )
+            self.assertIn("已经收藏过", duplicate_results[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertTrue(duplicate_event.stopped)
+
+    async def test_invalid_category_is_rejected(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [
+                    Image(data=PNG_MAGIC_BYTES),
+                    Plain("/收藏表情 ../evil"),
+                ],
+                message_str="/收藏表情 ../evil",
+                private=True,
+            )
+            results = await run_collect_sticker_command(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertIn("分类名不合法", results[0].text)
+            self.assertEqual(plugin._collected_entries, [])
+
+    async def test_collection_size_limit(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            collected_sticker_max_file_bytes=16,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            _, results = await self._collect(plugin, "大图")
+            self.assertIn("超过收藏大小限制", results[0].text)
+            self.assertEqual(plugin._collected_entries, [])
+
+    async def test_collection_count_limit(self):
+        context = FakeContext()
+        plugin = make_plugin(context, collected_sticker_max_count=1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            _, first = await self._collect(plugin, "开心")
+            self.assertIn("已收藏", first[0].text)
+            _, second = await self._collect(
+                plugin,
+                "其它",
+                PNG_MAGIC_BYTES + b"a",
+            )
+            self.assertIn("收藏数量已达上限", second[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+
+    async def test_no_image_and_face_only_have_friendly_replies(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            no_image_event = FakeEvent(
+                [Plain("/收藏表情")],
+                message_str="/收藏表情",
+                private=True,
+            )
+            no_image_results = await run_collect_sticker_command(
+                plugin,
+                no_image_event,
+            )
+            self.assertIn("没有可收藏的图片", no_image_results[0].text)
+
+            face_event = FakeEvent(
+                [Face(21), Plain("/收藏表情")],
+                message_str="/收藏表情",
+                private=True,
+            )
+            face_results = await run_collect_sticker_command(plugin, face_event)
+            self.assertIn("QQ 原生 Face", face_results[0].text)
+            self.assertEqual(plugin._collected_entries, [])
+
+    async def test_categories_list_and_send_collected(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(context)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            await self._collect(plugin, "开心", PNG_MAGIC_BYTES)
+            await self._collect(plugin, "日常", PNG_MAGIC_BYTES + b"b")
+
+            categories_event = FakeEvent(
+                [Plain("/表情分类")],
+                message_str="/表情分类",
+                private=True,
+            )
+            categories_results = await run_categories_command(
+                plugin,
+                categories_event,
+            )
+            category_text = categories_results[0].text
+            self.assertIn("开心", category_text)
+            self.assertIn("日常", category_text)
+            self.assertIn("共 2 张", category_text)
+
+            filename = plugin._collected_entries[0]["filename"]
+            list_event = FakeEvent(
+                [Plain("/表情列表 开心")],
+                message_str="/表情列表 开心",
+                private=True,
+            )
+            list_results = await run_list_command(plugin, list_event)
+            list_text = list_results[0].text
+            self.assertIn(filename, list_text)
+            self.assertNotIn(str(root), list_text)
+
+            send_event = FakeEvent(
+                [Plain("/发表情 开心")],
+                message_str="/发表情 开心",
+                private=True,
+            )
+            send_results = await run_send_sticker_command(plugin, send_event)
+            self.assertEqual(len(send_results), 1)
+            self.assertEqual(len(send_results[0].chain), 2)
+            self.assertIsInstance(send_results[0].chain[1], Image)
+            self.assertTrue(Path(send_results[0].chain[1].path).is_file())
+            self.assertEqual(context.calls, [])
+            self.assertTrue(send_event.call_llm)
+            self.assertTrue(send_event.stopped)
+
+    async def test_collected_sticker_joins_normal_chat_reply(self):
+        context = FakeContext(responder=lambda kwargs: "正常回复")
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            collected_sticker_enabled=True,
+            collected_sticker_use_probability=1.0,
+            user_sticker_reaction_enabled=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            category_dir = root / "开心"
+            category_dir.mkdir()
+            data = PNG_MAGIC_BYTES + b"normal"
+            sha256 = __import__("hashlib").sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            path = category_dir / filename
+            path.write_bytes(data)
+            plugin._collected_entries = [
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": "开心",
+                    "size": len(data),
+                    "created_at": 1,
+                    "source": "test",
+                    "path": path,
+                }
+            ]
+            event = FakeEvent([Plain("你好呀")], message_str="你好呀", private=True)
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(results[0].chain), 2)
+            self.assertEqual(results[0].chain[1].path, str(path))
+            self.assertEqual(context.calls[0]["chat_provider_id"], "deepseek-flash")
+            self.assertGreaterEqual(len(plugin._sticker_entries), 8)
+
+    async def test_cold_start_loads_existing_index(self):
+        old_data_dir = FakeStarTools.data_dir
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            root = data_dir / "qqbot_enhancer" / "collected_stickers"
+            category_dir = root / "开心"
+            category_dir.mkdir(parents=True)
+            data = PNG_MAGIC_BYTES + b"cold"
+            sha256 = __import__("hashlib").sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            (category_dir / filename).write_bytes(data)
+            index = {
+                "version": 1,
+                "stickers": [
+                    {
+                        "sha256": sha256,
+                        "filename": filename,
+                        "category": "开心",
+                        "size": len(data),
+                        "created_at": 10,
+                        "source": "test",
+                    }
+                ],
+            }
+            (root / "index.json").write_text(
+                json_module.dumps(index, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            FakeStarTools.data_dir = data_dir
+            try:
+                plugin = make_plugin(FakeContext())
+                self.assertEqual(len(plugin._collected_entries), 1)
+                self.assertEqual(
+                    plugin._collected_entries[0]["category"],
+                    "开心",
+                )
+                self.assertTrue(plugin._collected_entries[0]["path"].is_file())
+                self.assertGreaterEqual(len(plugin._sticker_entries), 8)
+            finally:
+                FakeStarTools.data_dir = old_data_dir
+
+    def test_collection_commands_are_registered(self):
+        registered = {
+            args[0] for args, _kwargs in FakeFilter.command_registrations if args
+        }
+        for command_name in ("收藏表情", "表情分类", "表情列表", "发表情"):
+            self.assertIn(command_name, registered)
 
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):

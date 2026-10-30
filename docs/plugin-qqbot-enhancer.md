@@ -14,6 +14,8 @@
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的本地授权音频，用 `Comp.Record.fromFileSystem` 发送；不调用 LLM/TTS/音乐生成，不消耗 token。
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式和配置入口；通过公开 `Context.get_all_stars()` 列出可可靠读取的已加载插件元数据，不暴露配置值/API Key，不枚举不稳定的内部 handler 命令。
 - 从插件的 `stickers/` 目录发送本地表情包；支持关键词、情绪和随机选择，并带会话冷却、防连续重复、文件缺失降级。
+- @/私聊收到无文字纯图片/表情包或 `Comp.Face` 时，优先用自然短句反应，不调用 LLM；可按概率附加内置/收藏表情。
+- 支持 `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]`，收藏表情持久化到 AstrBot 插件数据目录并参与正常回复。
 - 指令前缀消息不参与概率回复，避免抢占 AstrBot 指令。
 - 回复成功后阻止 AstrBot 默认 LLM 再回复一次，避免重复。
 
@@ -187,6 +189,16 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `sticker_cooldown_seconds` | int | `120` | 同一会话表情包冷却 |
 | `sticker_prevent_repeat` | bool | `true` | 避免连续发同一张 |
 | `max_images_per_message` | int | `4` | 单条消息最多送入 provider 的图片数 |
+| `user_sticker_reaction_enabled` | bool | `true` | @/私聊纯图片/Face 自动短句反应 |
+| `user_sticker_reaction_probability` | float | `0.85` | 自动表情反应概率 |
+| `user_sticker_reaction_replies` | list[str] | 内置 4 条 | 随机自然短句列表 |
+| `user_sticker_reaction_attach_sticker` | bool | `true` | 短句反应是否可附加本地表情 |
+| `collected_sticker_enabled` | bool | `true` | 启用收藏表情保存/管理/使用 |
+| `collected_sticker_max_count` | int | `200` | 收藏表情最大数量 |
+| `collected_sticker_max_file_bytes` | int | `8388608` | 单张收藏表情最大字节数 |
+| `collected_sticker_use_probability` | float | `0.5` | 正常回复时优先使用收藏表情的概率 |
+| `collected_sticker_category_max_chars` | int | `32` | 收藏分类最大长度 |
+| `collected_sticker_list_limit` | int | `30` | `/表情列表` 最多展示条数 |
 
 ### 4.4 长期对话记忆模式
 
@@ -288,7 +300,7 @@ v4.29 确实提供 `@filter.llm_tool(...)` 官方装饰器，但本版本**没�
 命令由 `@filter.command("option", alias={"插件用法", "用法"}, priority=110)` 注册，使用 `should_call_llm(True)` + `yield` + `finally stop_event()`，避免默认 LLM 再回复一遍。输出为中文纯文本，至少包含：
 
 - 本插件展示名与版本；
-- `/找图`、`/搜图`、`/唱歌`、`/点歌`、`/option` 命令；
+- `/找图`、`/搜图`、`/唱歌`、`/点歌`、`/收藏表情`、`/表情分类`、`/表情列表`、`/发表情`、`/option` 命令；
 - 当前 `memory_mode`、@/私聊必回、非 @ 概率、群/用户冷却和自然语言找图开关；
 - 配置入口：AstrBot WebUI → 插件 → QQ Bot 增强回复 → 配置。
 
@@ -306,6 +318,61 @@ stars = self.context.get_all_stars()  # list[StarMetadata]
 `StarMetadata` 的公开字段包括 `name`、`display_name`、`version`、`desc`、`activated`、`root_dir_name` 等。`/option` 只使用这些元数据字段，并受 `option_include_other_plugins`、`option_max_plugins`、`option_max_chars` 限制。
 
 **覆盖范围限制：** AstrBot v4.29 没有稳定的公开 API 能把 handler 全名映射为用户命令名；本插件不访问内部 `star_handlers_registry`，也不会为其他插件猜测或伪造 `/命令`。因此其他插件只列可利用公开 `get_all_stars()` 可靠取得的名称/版本/描述/激活状态，不列 handler/子命令。如果 `get_all_stars()` 不可用，输出明确说明“仅列本插件”。输出不读取插件配置值，不暴露 API Key。
+
+### 4.9 用户表情反应、收藏与分类
+
+#### 自动反应
+
+对 @ 机器人或私聊发来的**无文字纯图片/表情包**、或纯 `Comp.Face`：
+
+1. 先检查 `user_sticker_reaction_enabled` 和 `user_sticker_reaction_probability`；
+2. 命中后从 `user_sticker_reaction_replies` 随机选择一条中文短句；
+3. 不调用 LLM，设置 `should_call_llm(True)` 并 yield；
+4. `user_sticker_reaction_attach_sticker=true` 时，可能通过正常贴纸路径附赠一个内置或收藏表情，仍受 `sticker_probability`、`sticker_cooldown_seconds`、`collected_sticker_use_probability` 控制；
+5. 非 @ 群消息不进入该自动反应分支，继续走原有概率/冷却逻辑。
+
+带文字的图片仍按原识图/聊天逻辑处理，避免把带问题或说明内容的图片误判成纯表情包。
+
+#### 收藏命令
+
+```text
+/收藏表情 [分类]
+/表情分类
+/表情列表 [分类]
+/发表情 [分类]
+```
+
+- `/收藏表情` 必须同一条消息带有 `Comp.Image`；不带分类时默认 `未分类`。QQ 原生 `Comp.Face` 只有 id、没有可保存的图片字节，因此不能收藏，会中文提示改用图片/贴纸形式。
+- `/表情分类` 输出分类与数量；`/表情列表 [分类]` 输出文件名（不含绝对路径）；`/发表情 [分类]` 随机发送一张收藏图片。
+- 没有实现删除命令；管理员需要清理时手动管理插件数据目录。
+
+#### 数据目录与安全
+
+使用 AstrBot v4.29 公开的 `StarTools.get_data_dir(plugin_name=...)`，不会写回插件源码目录：
+
+```text
+data/plugin_data/qqbot_enhancer/collected_stickers/<分类>/<sha256>.<ext>
+data/plugin_data/qqbot_enhancer/collected_stickers/index.json
+```
+
+依据：
+
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/astrbot/core/star/star_tools.py>
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/guides/storage.md>
+
+安全与一致性：
+
+- 分类只允许中文、字母、数字、`-`、`_`，有最大长度；拒绝 `../`、`/`、绝对路径等。
+- 文件名完全由服务端生成：SHA-256 + 由 magic 判定的扩展名；不使用用户输入拼路径。
+- 分类目录、文件、`index.json` 均做符号链接/目录边界检查；所有写入使用同目录临时文件 + `os.replace`，index 更新为原子写。
+- 全局 SHA-256 去重；重复收藏不会新增文件，并提示已有分类。
+- 写入前检查 `collected_sticker_max_file_bytes`，保存前检查 `collected_sticker_max_count`；图片格式通过 magic 校验。
+- `index.json` 只保存 sha256、文件名、分类、大小、创建时间、来源适配器名；不保存用户文字、用户 ID 或其他隐私。
+- 冷启动时加载 `index.json`；缺失文件、非法分类/文件名、超限/损坏条目会跳过。旧内置 8 张 stickers 不受影响。
+
+收藏表情会参与 `_maybe_pick_sticker`：当 `collected_sticker_use_probability` 命中且收藏可用时，优先从收藏池（可按消息中出现的分类名筛选）选择；否则继续使用内置 stickers。已有冷却和防重复逻辑同时生效。
+
+**限制：** 数据目录写权限、index 手工损坏、收藏图片跨容器/协议端可读性均未做真实部署验证；插件不会自动把用户发送过的图片全部收藏，必须显式使用 `/收藏表情`。
 
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
@@ -460,6 +527,10 @@ yield event.chain_result(chain)
 15. **本地点歌未内置任何歌曲，也不生成音乐/TTS。** 必须由管理员把有授权的本地音频放入 `songs/`。真实 QQ/协议端对 mp3/wav 等格式的播放支持未验证，部分适配器可能只可靠支持 WAV；本地文件是否能被容器/协议端读取也取决于部署路径。
 16. **点歌只做名字关键词匹配，不解析标签/歌手/歌词。** 文件缺失、空文件、超限、符号链接和路径穿越会被跳过或提示，不会从网络下载歌曲。
 17. **`/option` 不能可靠枚举其他插件的具体命令。** AstrBot v4.29 的 `Context.get_all_stars()` 能返回插件元数据，但没有稳定的公开 API 把 handler 返回为用户命令；因此 `/option` 只列其他插件的名称/版本/描述/激活状态，不读取内部 handler registry、不猜测命令，也不展示任何插件配置值或 API Key。
+18. **纯 `Comp.Face` 不能收藏。** QQ Face 段只有表情 id，没有可保存的图片文件；可以触发自然短句反应，但 `/收藏表情` 只能保存带 `Comp.Image` 的消息，并会明确提示。
+19. **自动表情反应只针对无文字图片/Face。** 带文字的图片仍按识图/聊天逻辑处理。默认 `user_sticker_reaction_enabled=true` 时，@/私聊中的无文字纯图片会优先走短句反应而不是原生视觉理解；需要视觉理解时应带文字、关闭该开关，或显式调整概率。
+20. **收藏表情数据目录/权限/index 损坏未做真实部署验证。** 使用公开 `StarTools.get_data_dir()` 和原子写入，但磁盘写满、权限变化、手工破坏 index、跨容器读取等仍可能导致收藏不可用；插件会降级提示，不会主动删除用户文件。没有实现破坏性删除命令。
+21. **收藏表情不会自动收集所有用户图片。** 只有显式执行 `/收藏表情` 才会保存；不会保存朋友圈/聊天原文、用户 ID 或敏感路径。收藏文件跨 QQ/协议端可读性仍取决于部署与文件服务。
 
 ## 9. 校验记录
 
@@ -471,7 +542,7 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-当前增强插件测试为 **60 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、百度 JSON 解析、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级。单测本身**不访问真实网络**。
+当前增强插件测试为 **72 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、百度 JSON 解析、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容。单测本身**不访问真实网络**。
 
 非单测在线冒烟（不代表 AstrBot/QQ 端到端）：
 
@@ -484,3 +555,5 @@ python3 -m unittest tests.test_enhancer_plugin -v
 - 以上临时文件已在冒烟后删除，未发送到真实 QQ。
 
 第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
+
+本次还执行了全仓回归：`python3 -m unittest discover -s tests -q`，当前 **212 tests OK**。全仓测试数量会随其他模块开发变化；以实际运行结果为准。
