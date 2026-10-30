@@ -454,6 +454,8 @@ def make_plugin(context, *, clock=None, **overrides):
             "sticker_enabled": False,
             "user_sticker_reaction_enabled": False,
             "sticker_ai_select_enabled": False,
+            "ai_unified_tool_protocol_enabled": False,
+            "sticker_random_fallback_enabled": True,
             "llm_timeout_seconds": 5,
         }
     )
@@ -481,6 +483,13 @@ async def run_image_search_command(plugin, event):
 async def run_song_command(plugin, event):
     results = []
     async for result in plugin.local_song_command(event):
+        results.append(result)
+    return results
+
+
+async def run_food_command(plugin, event):
+    results = []
+    async for result in plugin.food_command(event):
         results.append(result)
     return results
 
@@ -3377,6 +3386,61 @@ class TestModuleArchitecture(unittest.TestCase):
             )
         )
 
+    def test_group_persona_parser_limits_and_resolution(self):
+        personas = importlib.import_module("personas")
+        raw = json_module.dumps(
+            {
+                "default": {"name": "默认", "prompt": "你是默认群人格"},
+                "groups": {
+                    "123456": {"name": "A", "prompt": "你是A群人格"},
+                    "987654": "你是B群人格",
+                    "bad id": "非法",
+                },
+            },
+            ensure_ascii=False,
+        )
+        parsed = personas.parse_group_personas(
+            raw,
+            max_groups=10,
+            max_prompt_chars=100,
+            max_name_chars=20,
+        )
+        self.assertEqual(parsed.default.prompt, "你是默认群人格")
+        self.assertEqual(parsed.groups["123456"].name, "A")
+        self.assertEqual(parsed.groups["987654"].prompt, "你是B群人格")
+        self.assertNotIn("bad id", parsed.groups)
+        self.assertGreaterEqual(parsed.errors, 1)
+        self.assertEqual(
+            personas.resolve_persona(parsed, group_id="123456"),
+            ("你是A群人格", "A", "group"),
+        )
+        self.assertEqual(
+            personas.resolve_persona(parsed, group_id="000000"),
+            ("你是默认群人格", "默认", "default"),
+        )
+        self.assertEqual(
+            personas.resolve_persona(parsed, is_private=True),
+            ("你是默认群人格", "默认", "default"),
+        )
+
+        too_long = json_module.dumps(
+            {
+                "groups": {
+                    "1": "x" * 20,
+                    "2": "y" * 20,
+                    "3": "z" * 20,
+                }
+            }
+        )
+        limited = personas.parse_group_personas(
+            too_long,
+            max_groups=2,
+            max_prompt_chars=10,
+        )
+        self.assertEqual(limited.groups, {})
+        self.assertGreaterEqual(limited.errors, 3)
+        self.assertFalse(personas.parse_group_personas("{bad json").groups)
+
     def test_protocol_interfaces_are_exposed(self):
         interfaces = importlib.import_module("interfaces")
         for name in (
@@ -4830,6 +4894,534 @@ class TestMultiCategoryAndGlobalPool(unittest.IsolatedAsyncioTestCase):
                 stat.S_IMODE((root / "嘲讽" / filename).stat().st_mode),
                 0o644,
             )
+
+class TestUnifiedAIProtocol(unittest.IsolatedAsyncioTestCase):
+    async def test_unified_direct_prompt_uses_one_tool_protocol(self):
+        context = FakeContext(responder=lambda kwargs: "普通回复")
+        plugin = make_plugin(
+            context,
+            ai_unified_tool_protocol_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            sticker_enabled=True,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_random_fallback_enabled=False,
+        )
+        event = FakeEvent([Plain("你好")], message_str="你好", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 1)
+        system_prompt = context.calls[0]["system_prompt"]
+        self.assertIn("可选安全工具", system_prompt)
+        self.assertIn("send_sticker", system_prompt)
+        self.assertNotIn("可选表情标签", system_prompt)
+        self.assertNotIn("[[sticker:标签]]", system_prompt)
+
+    async def test_two_marker_protocols_execute_only_one_attachment(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '好呀 [[tool:send_sticker emotion="happy"]] '
+                "[[sticker:sad]]"
+            )
+        )
+        plugin = make_plugin(
+            context,
+            ai_unified_tool_protocol_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            sticker_enabled=True,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+            sticker_random_fallback_enabled=False,
+        )
+        event = FakeEvent([Plain("你好")], message_str="你好", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 2)
+        self.assertEqual(len([c for c in results[0].chain if isinstance(c, Image)]), 1)
+        self.assertEqual(
+            Path(results[0].chain[1].path).name,
+            "happy.png",
+        )
+        self.assertNotIn("[[tool:", results[0].text)
+        self.assertNotIn("[[sticker:", results[0].text)
+
+    async def test_no_marker_does_not_add_random_sticker(self):
+        context = FakeContext(responder=lambda kwargs: "普通回复")
+        plugin = make_plugin(
+            context,
+            ai_unified_tool_protocol_enabled=True,
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_random_fallback_enabled=True,
+        )
+        event = FakeEvent([Plain("今天真开心")], message_str="今天真开心", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertFalse(any(isinstance(c, Image) for c in results[0].chain))
+
+    async def test_memory_mode_semantic_only_never_appends_random_or_double_text(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            ai_unified_tool_protocol_enabled=True,
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        event = FakeEvent([Plain("今天天气真好")], message_str="今天天气真好")
+        event.set_extra("qqbot_enhancer_memory_reply", True)
+        event.set_extra("qqbot_enhancer_sticker_text", "今天天气真好")
+        event.result = FakeResult([Plain("天气不错")])
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertEqual(len(event.result.chain), 1)
+        self.assertIsInstance(event.result.chain[0], Plain)
+        self.assertFalse(any(isinstance(c, Image) for c in event.result.chain))
+
+    async def test_legacy_sticker_marker_still_compatible_in_unified_mode(self):
+        context = FakeContext(
+            responder=lambda kwargs: "好呀 [[sticker:happy]]"
+        )
+        plugin = make_plugin(
+            context,
+            ai_unified_tool_protocol_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            sticker_enabled=True,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+            sticker_random_fallback_enabled=False,
+        )
+        event = FakeEvent([Plain("你好")], message_str="你好", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].chain), 2)
+        self.assertEqual(Path(results[0].chain[1].path).name, "happy.png")
+        self.assertNotIn("[[sticker:", results[0].text)
+
+    async def test_invalid_tool_marker_keeps_text_and_no_sticker(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '普通回复 [[tool:send_sticker category="../../etc/passwd"]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            ai_unified_tool_protocol_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            sticker_enabled=True,
+            sticker_random_fallback_enabled=False,
+        )
+        event = FakeEvent([Plain("你好")], message_str="你好", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "普通回复")
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertNotIn("passwd", results[0].text)
+        self.assertFalse(any(isinstance(c, Image) for c in results[0].chain))
+
+class TestFoodCommand(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _restaurant(index: int) -> dict:
+        return {
+            "id": index,
+            "name": f"测试火锅店{index}",
+            "location_name": "南关区" if index == 1 else "长春市",
+            "tags": ["火锅", "实惠"] if index == 1 else ["火锅"],
+            "taste_avg": 4.0,
+            "total_avg": 4.5,
+            "value_avg": 4.2,
+            "review_count": index,
+            "latest_review_date": "2026-05-01",
+        }
+
+    async def test_food_keyword_lookup_formats_results_without_llm(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            food_cooldown_seconds=0,
+            food_max_results=5,
+        )
+        calls = []
+
+        async def fake_fetch(url):
+            calls.append(url)
+            self.assertIn("/api/restaurants?", url)
+            self.assertIn("q=%E7%81%AB%E9%94%85", url)
+            return [self._restaurant(1)]
+
+        plugin._fetch_food_json = fake_fetch
+        event = FakeEvent(
+            [Plain("/food 火锅")],
+            message_str="/food 火锅",
+            private=True,
+        )
+        results = await run_food_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        text = results[0].text
+        self.assertIn("测试火锅店1", text)
+        self.assertIn("地点：南关区", text)
+        self.assertIn("标签：火锅、实惠", text)
+        self.assertIn("均分 4.5", text)
+        self.assertIn("口味 4", text)
+        self.assertIn("性价比 4.2", text)
+        self.assertIn("评价：1 条", text)
+        self.assertIn("更多：https://food.dlsz.top", text)
+        self.assertNotIn("{", text)
+        self.assertEqual(context.calls, [])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_food_location_both_argument_orders_use_location_id(self):
+        context = FakeContext()
+        plugin = make_plugin(context, food_cooldown_seconds=0)
+        seen_urls = []
+
+        async def fake_fetch(url):
+            seen_urls.append(url)
+            if "/api/locations/search?" in url:
+                if "q=%E7%81%AB%E9%94%85" in url:
+                    return []
+                self.assertIn("q=%E5%8D%97%E5%85%B3%E5%8C%BA", url)
+                return [{"id": 7632, "name": "南关区", "path": "中国/吉林省/长春市/南关区"}]
+            if "/api/restaurants?" in url:
+                self.assertIn("location_id=7632", url)
+                self.assertIn("q=%E7%81%AB%E9%94%85", url)
+                return [self._restaurant(1)]
+            self.fail(url)
+
+        plugin._fetch_food_json = fake_fetch
+        for args in ("南关区 火锅", "火锅 南关区"):
+            event = FakeEvent(
+                [Plain(f"/food {args}")],
+                message_str=f"/food {args}",
+                private=True,
+                session_id=f"food-location-{args}",
+            )
+            results = await run_food_command(plugin, event)
+            self.assertIn("测试火锅店1", results[0].text)
+        self.assertEqual(len(seen_urls), 5)
+        self.assertEqual(context.calls, [])
+
+    async def test_food_location_not_found_no_result_and_error_paths(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            food_cooldown_seconds=0,
+            food_location_not_found_reply="地点没找到：{location}",
+            food_empty_reply="没有餐厅。",
+            food_timeout_reply="超时了。",
+            food_error_reply="接口坏了。",
+        )
+        calls = []
+
+        async def no_locations(url):
+            calls.append(url)
+            if "/api/locations/search?" in url:
+                return []
+            self.fail("stations should not be queried for missing location")
+
+        plugin._fetch_food_json = no_locations
+        event = FakeEvent(
+            [Plain("/food 南关区 火锅")],
+            message_str="/food 南关区 火锅",
+            private=True,
+        )
+        results = await run_food_command(plugin, event)
+        self.assertIn("地点没找到：南关区", results[0].text)
+        self.assertEqual(len(calls), 2)
+
+        async def empty_restaurants(url):
+            if "/api/restaurants?" in url:
+                return []
+            self.fail(url)
+
+        plugin._fetch_food_json = empty_restaurants
+        empty_event = FakeEvent(
+            [Plain("/food 火锅")],
+            message_str="/food 火锅",
+            private=True,
+            session_id="food-empty",
+        )
+        empty_results = await run_food_command(plugin, empty_event)
+        self.assertEqual(empty_results[0].text, "没有餐厅。")
+
+        async def timeout_restaurant(url):
+            raise asyncio.TimeoutError()
+
+        plugin._fetch_food_json = timeout_restaurant
+        timeout_event = FakeEvent(
+            [Plain("/food 火锅")],
+            message_str="/food 火锅",
+            private=True,
+            session_id="food-timeout",
+        )
+        timeout_results = await run_food_command(plugin, timeout_event)
+        self.assertEqual(timeout_results[0].text, "超时了。")
+
+        async def bad_api(url):
+            raise MODULE.food_engine.FoodAPIError("non-json")
+
+        plugin._fetch_food_json = bad_api
+        bad_event = FakeEvent(
+            [Plain("/food 火锅")],
+            message_str="/food 火锅",
+            private=True,
+            session_id="food-error",
+        )
+        bad_results = await run_food_command(plugin, bad_event)
+        self.assertEqual(bad_results[0].text, "接口坏了。")
+        self.assertEqual(context.calls, [])
+
+    async def test_food_max_results_and_cooldown(self):
+        context = FakeContext()
+        clock = FakeClock(100.0)
+        plugin = make_plugin(
+            context,
+            clock=clock,
+            food_cooldown_seconds=60,
+            food_max_results=3,
+        )
+        call_count = 0
+
+        async def many_restaurants(url):
+            nonlocal call_count
+            call_count += 1
+            return [self._restaurant(i) for i in range(1, 8)]
+
+        plugin._fetch_food_json = many_restaurants
+        event = FakeEvent(
+            [Plain("/food 火锅")],
+            message_str="/food 火锅",
+            private=True,
+            session_id="food-cooldown",
+        )
+        results = await run_food_command(plugin, event)
+        text = results[0].text
+        self.assertIn("找到 3 家", text)
+        self.assertIn("测试火锅店3", text)
+        self.assertNotIn("测试火锅店4", text)
+
+        clock.value = 110.0
+        second = FakeEvent(
+            [Plain("/food 火锅")],
+            message_str="/food 火锅",
+            private=True,
+            session_id="food-cooldown",
+        )
+        second_results = await run_food_command(plugin, second)
+        self.assertIn("太频繁", second_results[0].text)
+        self.assertEqual(call_count, 1)
+        self.assertEqual(context.calls, [])
+
+    def test_food_module_fixed_host_url_and_non_json_parser(self):
+        food_module = importlib.import_module("food")
+        valid = food_module.build_food_url(
+            food_module.FOOD_RESTAURANTS_PATH,
+            {"q": "火锅", "location_id": 7632},
+        )
+        self.assertTrue(valid.startswith("https://food.dlsz.top/api/restaurants?"))
+        self.assertTrue(food_module.validate_food_final_url(valid))
+        self.assertFalse(
+            food_module.validate_food_final_url(
+                "https://evil.example/api/restaurants?q=x"
+            )
+        )
+        self.assertFalse(
+            food_module.validate_food_final_url(
+                "http://food.dlsz.top/api/restaurants?q=x"
+            )
+        )
+        self.assertIsNone(food_module.sanitize_food_query("../../etc/passwd"))
+        self.assertIsNone(food_module.sanitize_food_query("https://evil"))
+        with self.assertRaises(food_module.FoodAPIError):
+            food_module.decode_food_payload(b"<html>not json</html>")
+
+    async def test_food_rejects_user_url_and_registers_aliases(self):
+        context = FakeContext()
+        plugin = make_plugin(context, food_cooldown_seconds=0)
+        fetch_calls = []
+
+        async def should_not_fetch(url):
+            fetch_calls.append(url)
+            self.fail("user URL must not reach network")
+
+        plugin._fetch_food_json = should_not_fetch
+        event = FakeEvent(
+            [Plain("/food https://evil.example/path")],
+            message_str="/food https://evil.example/path",
+            private=True,
+        )
+        results = await run_food_command(plugin, event)
+        self.assertIn("不合法", results[0].text)
+        self.assertEqual(fetch_calls, [])
+        self.assertEqual(context.calls, [])
+
+        registered = {
+            args[0] for args, _kwargs in FakeFilter.command_registrations if args
+        }
+        self.assertIn("food", registered)
+        matching = [
+            kwargs
+            for args, kwargs in FakeFilter.command_registrations
+            if args and args[0] == "food"
+        ]
+        self.assertTrue(matching)
+        aliases = matching[0].get("alias", set())
+        self.assertIn("吃什么", aliases)
+        self.assertIn("饭店", aliases)
+
+class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
+    def _persona_json(self):
+        return json_module.dumps(
+            {
+                "default": {
+                    "name": "默认",
+                    "prompt": "你是默认群人格，请正常回复。",
+                },
+                "groups": {
+                    "111111": {
+                        "name": "群A",
+                        "prompt": "你是A群专属人格，只谈A群话题。",
+                    },
+                    "222222": {
+                        "name": "群B",
+                        "prompt": "你是B群专属人格，只谈B群话题。",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    async def test_two_groups_isolated_private_and_unknown_fallback(self):
+        context = FakeContext(responder=lambda kwargs: "回复")
+        plugin = make_plugin(
+            context,
+            group_persona_enabled=True,
+            group_personas=self._persona_json(),
+            system_prompt="旧默认人格",
+        )
+        group_a = FakeEvent(
+            [At("10001"), Plain("你好呀")],
+            message_str="你好呀",
+            private=False,
+            self_id="10001",
+            group_id="111111",
+            session_id="persona-a",
+        )
+        await run_handler(plugin, group_a)
+        group_b = FakeEvent(
+            [At("10001"), Plain("你好呀")],
+            message_str="你好呀",
+            private=False,
+            self_id="10001",
+            group_id="222222",
+            session_id="persona-b",
+        )
+        await run_handler(plugin, group_b)
+        private_event = FakeEvent(
+            [Plain("你好呀")],
+            message_str="你好呀",
+            private=True,
+            session_id="persona-private",
+        )
+        await run_handler(plugin, private_event)
+        unknown_group = FakeEvent(
+            [At("10001"), Plain("你好呀")],
+            message_str="你好呀",
+            private=False,
+            self_id="10001",
+            group_id="999999",
+            session_id="persona-unknown",
+        )
+        await run_handler(plugin, unknown_group)
+
+        prompts = [call["system_prompt"] for call in context.calls]
+        self.assertEqual(len(prompts), 4)
+        self.assertIn("A群专属人格", prompts[0])
+        self.assertNotIn("B群专属人格", prompts[0])
+        self.assertIn("B群专属人格", prompts[1])
+        self.assertNotIn("A群专属人格", prompts[1])
+        self.assertIn("默认群人格", prompts[2])
+        self.assertNotIn("A群专属人格", prompts[2])
+        self.assertIn("默认群人格", prompts[3])
+        self.assertNotIn("B群专属人格", prompts[3])
+
+    async def test_invalid_or_overlong_mapping_falls_back_to_legacy(self):
+        context = FakeContext(responder=lambda kwargs: "回复")
+        plugin = make_plugin(
+            context,
+            group_persona_enabled=True,
+            group_personas=json_module.dumps(
+                {
+                    "groups": {
+                        "not-a-group": "不应生效",
+                        "111111": "x" * 20,
+                    }
+                }
+            ),
+            group_persona_max_prompt_chars=10,
+            system_prompt="旧默认人格保持不变",
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("你好呀")],
+            message_str="你好呀",
+            private=False,
+            self_id="10001",
+            group_id="111111",
+            session_id="persona-invalid",
+        )
+        await run_handler(plugin, event)
+        prompt = context.calls[0]["system_prompt"]
+        self.assertIn("旧默认人格保持不变", prompt)
+        self.assertNotIn("不应生效", prompt)
+        self.assertNotIn("xxxxxxxx", prompt)
+
+    def test_memory_mode_is_safe_degradation_without_prompt_leak(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas=self._persona_json(),
+            system_prompt="旧默认人格",
+        )
+        option_event = FakeEvent(
+            [Plain("/option")],
+            message_str="/option",
+            private=True,
+        )
+        # Use the async command through a tiny inline runner to avoid adding a
+        # dependency on a particular command helper ordering.
+        async def collect():
+            return [
+                result
+                async for result in plugin.option_command(option_event)
+            ]
+        results = asyncio.run(collect())
+        text = results[0].text
+        self.assertIn("memory_mode=astrbot", text)
+        self.assertIn("安全降级", text)
+        self.assertNotIn("A群专属人格", text)
+        self.assertNotIn("B群专属人格", text)
+        self.assertEqual(context.calls, [])
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):

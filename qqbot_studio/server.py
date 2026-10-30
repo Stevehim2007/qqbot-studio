@@ -301,6 +301,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "plugin_id": str(plugin_id or ""),
             "schema": {},
             "values": {},
+            "schema_source": "",
+            "schema_path": "",
             "config_path": "",
             "source": "none",
             "api_available": False,

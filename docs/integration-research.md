@@ -196,7 +196,7 @@ SnowLuma 当前配置分层在 `networks` 下，包含 `httpServers`、`httpClie
     ]
   },
   "statusCommand": {
-    "enabled": true,
+    "enabled": false,
     "swallow": false,
     "cooldownSeconds": 5,
     "trigger": "#sl"
@@ -213,6 +213,10 @@ SnowLuma 当前配置分层在 `networks` 下，包含 `httpServers`、`httpClie
   `Authorization: Bearer <token>` 或 `?access_token=<token>`。
 - SnowLuma 首次运行会自动生成 `config/onebot.json` 和账号级 `onebot_<uin>.json`。账号级文件在 QQ 登录后生成；
   自动部署器可在 QQ 登录前预写全局 `onebot.json`，SnowLuma 会将它作为全局默认继承。
+- `statusCommand.enabled` 默认 `false`，`#sl` **不再注册为聊天命令**，避免与普通聊天/机器人指令冲突。
+  旧实例的 `onebot.json` / `onebot_<uin>.json` 在 DeployManager 初始化时迁移为 disabled，只修改
+  `statusCommand.enabled`，保留 trigger/cooldown/swallow/custom 字段和其它命令。用户如确需启用，
+  必须自行显式改回 `true` 并知悉命令冲突风险。
 - 本项目只使用反向 WebSocket；生成的全局配置会把未使用的 HTTP/WS 正向监听器设为 `enabled:false`，
   并把唯一启用的 `wsClients` 指向 `ws://astrbot:6199/ws`。
 - 来源：<https://snowluma.github.io/zh/docs/guide/connect-bot>、

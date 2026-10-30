@@ -211,6 +211,7 @@ class DeployManager:
             pass
         self._last_persist_at: dict[str, float] = {}
         self._recover_interrupted_jobs()
+        self._refresh_snowluma_status_migration()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -224,8 +225,11 @@ class DeployManager:
 
     @staticmethod
     def _validate_prompt(prompt: str) -> str:
-        value = str(prompt or "").strip()
-        if not value:
+        # Validate non-empty/limits without collapsing internal newlines.
+        # Leading/trailing whitespace is deliberately preserved for API
+        # round-trips; callers that render prompts should display it verbatim.
+        value = str(prompt or "")
+        if not value.strip():
             raise DeploymentError("提示词不能为空。")
         if len(value) > MAX_PROMPT_LENGTH:
             raise DeploymentError(f"提示词不能超过 {MAX_PROMPT_LENGTH} 个字符。")
@@ -897,6 +901,74 @@ class DeployManager:
             log("SnowLuma 初始密码尚未出现在日志中；可在完成页刷新状态，或查看 SnowLuma 日志。")
         return ""
 
+    def _refresh_snowluma_status_migration(self) -> dict[str, Any]:
+        try:
+            result = self._migrate_snowluma_status_commands()
+        except (OSError, ValueError) as exc:
+            result = {
+                "changed": [],
+                "errors": [f"SnowLuma #sl 迁移失败：{exc}"],
+            }
+        self.snowluma_status_migration = result
+        return result
+
+    def _migrate_snowluma_status_commands(self) -> dict[str, Any]:
+        """Disable the legacy SnowLuma ``#sl`` status command in old instances.
+
+        SnowLuma stores global/account config in ``data/snowluma/config``.
+        Only ``statusCommand.enabled`` is changed; every other field and every
+        other top-level setting is preserved.  Unreadable or malformed files are
+        skipped and reported instead of crashing instance loading.
+        """
+
+        config_dir = self.data_dir / "data" / "snowluma" / "config"
+        changed: list[str] = []
+        errors: list[str] = []
+        if not config_dir.is_dir():
+            return {"changed": changed, "errors": errors}
+        try:
+            candidates = sorted(
+                (
+                    path
+                    for path in config_dir.iterdir()
+                    if path.is_file()
+                    and not path.is_symlink()
+                    and re.fullmatch(r"onebot(?:_\d+)?\.json", path.name)
+                ),
+                key=lambda path: path.name,
+            )
+        except OSError as exc:
+            return {"changed": changed, "errors": [f"无法读取 SnowLuma 配置目录：{exc}"]}
+        for path in candidates:
+            data, read_error = self._read_json_object_with_error(path)
+            if read_error:
+                errors.append(f"{path.name}: {read_error}")
+                continue
+            if data is None:
+                errors.append(f"{path.name}: 配置不是 JSON object")
+                continue
+            status_command = data.get("statusCommand")
+            if status_command is None:
+                # No command was configured; nothing to migrate.
+                continue
+            changed_file = False
+            if isinstance(status_command, dict):
+                if status_command.get("enabled") is not False:
+                    status_command["enabled"] = False
+                    changed_file = True
+            else:
+                data["statusCommand"] = {"enabled": False}
+                changed_file = True
+            if not changed_file:
+                continue
+            try:
+                self._write_private_json(path, data)
+            except OSError as exc:
+                errors.append(f"{path.name}: 无法写入迁移后的 SnowLuma 配置：{exc}")
+                continue
+            changed.append(str(path))
+        return {"changed": changed, "errors": errors}
+
     def _detect_onebot_connection(self, lines: int = 400) -> bool | None:
         try:
             logs = self.docker.logs("astrbot", lines)
@@ -1088,7 +1160,7 @@ class DeployManager:
         target = config_dir / f"{ENHANCER_PLUGIN_ID}_config.json"
         loaded = DeployManager._read_json_object(target)
         config = DeployManager._merged_enhancer_config(loaded)
-        config["system_prompt"] = str(prompt or "").strip()
+        config["system_prompt"] = str(prompt or "")
         DeployManager._write_private_json(target, config)
 
     # ------------------------------------------------------------------
@@ -1140,8 +1212,8 @@ class DeployManager:
         loaded = self._read_json_object(config_path)
         merged = self._merged_enhancer_config(loaded)
         if not loaded:
-            prompt = str(self.store.load_config().get("prompt") or "").strip()
-            if prompt:
+            prompt = str(self.store.load_config().get("prompt") or "")
+            if prompt.strip():
                 merged["system_prompt"] = prompt
         if loaded != merged:
             self._write_private_json(config_path, merged)
@@ -1894,12 +1966,16 @@ class DeployManager:
         source: str = "none",
         api_available: bool = False,
         restart_required: bool = False,
+        schema_source: str = "",
+        schema_path: str = "",
     ) -> dict[str, Any]:
         return {
             "ok": False,
             "plugin_id": str(plugin_id or ""),
             "schema": schema or {},
             "values": values or {},
+            "schema_source": schema_source,
+            "schema_path": schema_path,
             "config_path": config_path,
             "source": source,
             "api_available": bool(api_available),
@@ -1908,33 +1984,83 @@ class DeployManager:
             "error": str(detail or message or "插件配置操作失败。"),
         }
 
-    def _load_plugin_schema(self, plugin_id: str) -> tuple[dict[str, Any], str]:
-        """Load a plugin's local _conf_schema.json without third-party YAML."""
+    @staticmethod
+    def _bundled_plugin_schema_path(plugin_id: str) -> Path:
+        return (
+            Path(__file__).resolve().parent.parent
+            / "plugins"
+            / plugin_id
+            / "_conf_schema.json"
+        )
 
-        if not PLUGIN_ID_RE.fullmatch(str(plugin_id or "")):
-            return {}, "plugin_id 无效，只允许字母、数字、点、下划线和连字符。"
-        plugin_dir = self.astrbot_data_dir / "plugins" / plugin_id
-        if plugin_dir.is_symlink():
-            return {}, "插件目录不能是符号链接。"
-        schema_path = self._plugin_schema_path(plugin_id)
+    @staticmethod
+    def _parse_plugin_schema(
+        schema_path: Path,
+        plugin_id: str,
+        source: str,
+    ) -> tuple[dict[str, Any], str]:
         try:
             parsed = json.loads(schema_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return {}, f"找不到插件 {plugin_id} 的 _conf_schema.json。"
+            return {}, "missing"
         except OSError as exc:
-            return {}, f"无法读取插件 {plugin_id} 的配置 schema：{exc}"
+            return {}, f"无法读取{source}插件 {plugin_id} 的配置 schema：{exc}"
         except ValueError as exc:
-            return {}, f"插件 {plugin_id} 的配置 schema 不是有效 JSON：{exc}"
+            return {}, f"{source}插件 {plugin_id} 的配置 schema 不是有效 JSON：{exc}"
         if not isinstance(parsed, dict) or not parsed:
-            return {}, f"插件 {plugin_id} 的配置 schema 必须是非空 JSON object。"
+            return {}, f"{source}插件 {plugin_id} 的配置 schema 必须是非空 JSON object。"
         schema = {
             str(key): dict(item)
             for key, item in parsed.items()
             if isinstance(item, dict)
         }
         if not schema:
-            return {}, f"插件 {plugin_id} 的配置 schema 没有可用字段。"
+            return {}, f"{source}插件 {plugin_id} 的配置 schema 没有可用字段。"
         return schema, ""
+
+    def _load_plugin_schema_with_source(
+        self,
+        plugin_id: str,
+    ) -> tuple[dict[str, Any], str, str, str]:
+        """Load local schema, falling back to the read-only bundled schema.
+
+        Older instances may not have the plugin directory copied yet.  The
+        bundled fallback is never copied into the instance and never replaces
+        instance-owned files.
+        """
+
+        if not PLUGIN_ID_RE.fullmatch(str(plugin_id or "")):
+            return {}, "plugin_id 无效，只允许字母、数字、点、下划线和连字符。", "", ""
+        plugin_dir = self.astrbot_data_dir / "plugins" / plugin_id
+        if plugin_dir.is_symlink():
+            return {}, "插件目录不能是符号链接。", "", ""
+        local_path = self._plugin_schema_path(plugin_id)
+        schema, local_error = self._parse_plugin_schema(local_path, plugin_id, "实例")
+        if local_error != "missing":
+            return schema, local_error, "local", str(local_path)
+
+        bundled_path = self._bundled_plugin_schema_path(plugin_id)
+        schema, bundled_error = self._parse_plugin_schema(
+            bundled_path, plugin_id, "主项目内置"
+        )
+        if bundled_error != "missing":
+            return schema, bundled_error, "bundled", str(bundled_path)
+        return (
+            {},
+            (
+                f"找不到插件 {plugin_id} 的配置 schema：实例路径 {local_path} "
+                f"和主项目内置路径 {bundled_path} 均不存在。请确认插件已安装，"
+                "或重新部署/同步插件；旧实例可更新主项目后重试。"
+            ),
+            "",
+            "",
+        )
+
+    def _load_plugin_schema(self, plugin_id: str) -> tuple[dict[str, Any], str]:
+        """Backward-compatible schema loader returning ``(schema, error)``."""
+
+        schema, error, _source, _path = self._load_plugin_schema_with_source(plugin_id)
+        return schema, error
 
     def _read_local_plugin_config(self, plugin_id: str) -> tuple[dict[str, Any], str, bool]:
         path = self._plugin_config_path(plugin_id)
@@ -2067,12 +2193,14 @@ class DeployManager:
         requested_id = str(plugin_id or "").strip()
         with self._lock:
             try:
-                schema, schema_error = self._load_plugin_schema(requested_id)
+                schema, schema_error, schema_source, schema_path = self._load_plugin_schema_with_source(requested_id)
                 if schema_error:
                     return self._plugin_config_failure(
                         requested_id,
                         "无法读取插件配置 schema。",
                         detail=schema_error,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
                 config_path = str(self._plugin_config_path(requested_id))
                 local_config, local_error, local_exists = self._read_local_plugin_config(requested_id)
@@ -2083,6 +2211,8 @@ class DeployManager:
                         detail=local_error,
                         schema=_public_plugin_schema(schema),
                         config_path=config_path,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
 
                 merged = self._plugin_defaults(schema)
@@ -2103,6 +2233,8 @@ class DeployManager:
                     "plugin_id": requested_id,
                     "schema": public_schema,
                     "values": public_values,
+                    "schema_source": schema_source,
+                    "schema_path": schema_path,
                     "config_path": config_path,
                     "source": source,
                     "api_available": bool(api_available),
@@ -2130,7 +2262,7 @@ class DeployManager:
         requested_id = str(plugin_id or "").strip()
         with self._lock:
             try:
-                schema, schema_error = self._load_plugin_schema(requested_id)
+                schema, schema_error, schema_source, schema_path = self._load_plugin_schema_with_source(requested_id)
                 config_path_obj = self._plugin_config_path(requested_id)
                 config_path = str(config_path_obj)
                 public_schema = _public_plugin_schema(schema)
@@ -2139,6 +2271,8 @@ class DeployManager:
                         requested_id,
                         "无法读取插件配置 schema。",
                         detail=schema_error,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
                 if not isinstance(values, dict):
                     return self._plugin_config_failure(
@@ -2147,6 +2281,8 @@ class DeployManager:
                         detail="请求体 values 必须是 JSON object。",
                         schema=public_schema,
                         config_path=config_path,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
                 if len(values) > PLUGIN_CONFIG_MAX_FIELDS:
                     return self._plugin_config_failure(
@@ -2154,6 +2290,8 @@ class DeployManager:
                         f"一次最多保存 {PLUGIN_CONFIG_MAX_FIELDS} 个插件字段。",
                         schema=public_schema,
                         config_path=config_path,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
                 try:
                     encoded_size = len(
@@ -2165,6 +2303,8 @@ class DeployManager:
                         "values 包含无法序列化的值。",
                         schema=public_schema,
                         config_path=config_path,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
                 if encoded_size > PLUGIN_CONFIG_MAX_REQUEST_BYTES:
                     return self._plugin_config_failure(
@@ -2172,6 +2312,8 @@ class DeployManager:
                         "插件配置请求体过大，请减少保存的字段或文本长度。",
                         schema=public_schema,
                         config_path=config_path,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
 
                 validated_values: dict[str, Any] = {}
@@ -2185,6 +2327,8 @@ class DeployManager:
                             detail="敏感字段不允许通过插件参数接口读写。",
                             schema=public_schema,
                             config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
                         )
                     if not isinstance(item, dict):
                         return self._plugin_config_failure(
@@ -2192,6 +2336,8 @@ class DeployManager:
                             f"字段 {field_name} 不在插件 schema 中，拒绝保存。",
                             schema=public_schema,
                             config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
                         )
                     try:
                         validated_values[field_name] = self._validate_plugin_config_value(
@@ -2204,6 +2350,8 @@ class DeployManager:
                             detail=self.redact_sensitive_text(str(exc)),
                             schema=public_schema,
                             config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
                         )
 
                 local_config, local_error, _local_exists = self._read_local_plugin_config(requested_id)
@@ -2214,6 +2362,8 @@ class DeployManager:
                         detail=local_error,
                         schema=public_schema,
                         config_path=config_path,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
                 # Keep unknown user fields from the existing local config.
                 local_merged = self._plugin_defaults(schema)
@@ -2228,6 +2378,8 @@ class DeployManager:
                         detail=self.redact_sensitive_text(str(exc)),
                         schema=public_schema,
                         config_path=config_path,
+                        schema_source=schema_source,
+                        schema_path=schema_path,
                     )
 
                 api_available = False
@@ -2279,6 +2431,8 @@ class DeployManager:
                     "plugin_id": requested_id,
                     "schema": public_schema,
                     "values": public_values,
+                    "schema_source": schema_source,
+                    "schema_path": schema_path,
                     "config_path": config_path,
                     "source": source,
                     "api_available": bool(api_available),
@@ -2296,6 +2450,9 @@ class DeployManager:
                 )
 
     def get_status(self) -> dict[str, Any]:
+        # Old instances may have been created before statusCommand was disabled;
+        # migrate lazily as well so opening the console is sufficient.
+        self._refresh_snowluma_status_migration()
         config = self.store.load_config()
         secrets_data = self.store.load_secrets()
         state = self.store.load_state()

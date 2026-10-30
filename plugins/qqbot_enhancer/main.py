@@ -48,6 +48,8 @@ try:  # Loaded as a package by AstrBot.
         sanitize_http_url as media_sanitize_http_url,
     )
     from .songs import SONG_SUFFIXES, list_song_files, resolve_song_file
+    from . import food as food_engine
+    from . import personas as persona_engine
     from . import safe_tools as safe_tools_engine
     from . import sticker_intent as sticker_intent_engine
     from . import sticker_reclassify as sticker_reclassify_engine
@@ -83,6 +85,8 @@ except ImportError:  # Loaded directly by a test harness.
         sanitize_http_url as media_sanitize_http_url,
     )
     from songs import SONG_SUFFIXES, list_song_files, resolve_song_file
+    import food as food_engine
+    import personas as persona_engine
     import safe_tools as safe_tools_engine
     import sticker_intent as sticker_intent_engine
     import sticker_reclassify as sticker_reclassify_engine
@@ -107,7 +111,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.12.0"
+PLUGIN_FALLBACK_VERSION = "1.15.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PENDING_USER_MEDIA_MAX_SESSIONS = 128
@@ -209,6 +213,7 @@ class QQBotEnhancerPlugin(Star):
         self._last_song_user: dict[str, float] = {}
         self._last_auto_collect_at: dict[str, float] = {}
         self._last_safe_tool_collect_at: dict[str, float] = {}
+        self._last_food_at: dict[str, float] = {}
         self._last_collected_by_session: dict[str, dict[str, Any]] = {}
         self._sticker_ai_auto_collect_times: dict[str, list[float]] = {}
         self._pending_user_media: dict[str, dict[str, Any]] = {}
@@ -225,6 +230,20 @@ class QQBotEnhancerPlugin(Star):
         self._collected_root = self._resolve_collected_sticker_root()
         self._collected_entries: list[dict[str, Any]] = []
         self._load_collected_sticker_index()
+        try:
+            if self._memory_mode() == "astrbot":
+                parsed_personas = self._parse_group_personas_config()
+                if parsed_personas.has_group_overrides:
+                    logger.warning(
+                        "qqbot_enhancer 已配置 group_personas，但 "
+                        "memory_mode=astrbot 没有稳定的会话级 persona "
+                        "注入 API；已安全降级，不会修改全局人格。"
+                        "如需按群人格请使用 memory_mode=direct。"
+                    )
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 群人格配置无法解析，已安全回退旧配置"
+            )
 
     # ------------------------------------------------------------------
     # Configuration helpers
@@ -549,7 +568,10 @@ class QQBotEnhancerPlugin(Star):
                 event,
                 reply_text,
                 message_text,
-                allow_random_sticker=not self._ai_marker_mode_active(),
+                allow_random_sticker=(
+                    self._cfg_bool("sticker_random_fallback_enabled")
+                    and not self._ai_tool_protocol_active()
+                ),
             )
             yield result
             yielded = True
@@ -710,6 +732,277 @@ class QQBotEnhancerPlugin(Star):
                     logger.exception("qqbot_enhancer 点歌错误回复发送失败")
         finally:
             event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("food", alias={"吃什么", "饭店"}, priority=110)
+    async def food_command(self, event: AstrMessageEvent):
+        """查询 food.dlsz.top 的餐厅信息，不调用 LLM。"""
+
+        event.should_call_llm(True)
+        try:
+            if not self._cfg_bool("food_enabled"):
+                yield event.plain_result(
+                    self._cfg_str("food_disabled_reply")
+                )
+                return
+            raw_args = self._collect_command_argument(
+                event,
+                ("food", "吃什么", "饭店"),
+            )
+            if not raw_args.strip():
+                yield event.plain_result(
+                    self._cfg_str("food_usage_reply")
+                )
+                return
+            remaining = self._food_cooldown_remaining(event)
+            if remaining > 0:
+                yield event.plain_result(
+                    self._format_collected_reply(
+                        self._cfg_str("food_cooldown_reply"),
+                        seconds=remaining,
+                    )
+                )
+                return
+            yield await self._build_food_result(event, raw_args)
+        except asyncio.TimeoutError:
+            yield event.plain_result(
+                self._cfg_str("food_timeout_reply")
+            )
+        except Exception:
+            logger.info("qqbot_enhancer /food 查询失败")
+            try:
+                yield event.plain_result(
+                    self._cfg_str("food_error_reply")
+                )
+            except Exception:
+                logger.info("qqbot_enhancer /food 错误回复发送失败")
+        finally:
+            event.stop_event()
+
+    def _food_cooldown_remaining(self, event: AstrMessageEvent) -> int:
+        now = self._clock()
+        self._prune_state(now)
+        key = (
+            f"{event.unified_msg_origin}:"
+            f"{event.get_sender_id()}"
+        )
+        cooldown = self._cfg_int("food_cooldown_seconds", 0)
+        last = self._last_food_at.get(key)
+        remaining = 0.0
+        if last is not None:
+            remaining = cooldown - (now - last)
+        if remaining > 0:
+            return max(1, int(math.ceil(remaining)))
+        self._last_food_at[key] = now
+        return 0
+
+    def _read_food_response(self, response: Any) -> str:
+        max_bytes = self._cfg_int("food_max_response_bytes", 1)
+        headers = getattr(response, "headers", None)
+        content_length = ""
+        content_type = ""
+        if headers is not None and hasattr(headers, "get"):
+            content_length = str(headers.get("Content-Length", "") or "")
+            content_type = str(headers.get("Content-Type", "") or "")
+        if content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    raise food_engine.FoodAPIError("food response too large")
+            except ValueError:
+                pass
+        data = response.read(max_bytes + 1)
+        if data is None:
+            data = b""
+        if len(data) > max_bytes:
+            raise food_engine.FoodAPIError("food response too large")
+        if content_type:
+            lowered = content_type.lower()
+            if "json" not in lowered and not lowered.startswith("text/"):
+                raise food_engine.FoodAPIError(
+                    "food response content-type is not JSON"
+                )
+        charset = "utf-8"
+        match = re.search(
+            r"charset=([\w.+-]+)",
+            content_type,
+            re.IGNORECASE,
+        )
+        if match:
+            charset = match.group(1)
+        try:
+            return data.decode(charset, errors="replace")
+        except LookupError:
+            return data.decode("utf-8", errors="replace")
+
+    def _fetch_food_json_sync(self, url: str) -> Any:
+        if not food_engine.validate_food_final_url(url):
+            raise food_engine.FoodAPIError("invalid food API URL")
+        timeout = self._cfg_int("food_timeout_seconds", 1)
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": IMAGE_SEARCH_USER_AGENT,
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Cache-Control": "no-cache",
+                "Accept-Encoding": "identity",
+            },
+            method="GET",
+        )
+        with self._open_bounded_http(request, timeout) as response:
+            final_url = response.geturl()
+            if not food_engine.validate_food_final_url(final_url):
+                raise food_engine.FoodAPIError(
+                    "food API redirect left fixed host"
+                )
+            text = self._read_food_response(response)
+        return food_engine.decode_food_payload(text.encode("utf-8"))
+
+    async def _fetch_food_json(self, url: str) -> Any:
+        timeout = self._cfg_int("food_timeout_seconds", 1)
+        return await asyncio.wait_for(
+            asyncio.to_thread(self._fetch_food_json_sync, url),
+            timeout=timeout,
+        )
+
+    async def _search_food_location(
+        self,
+        query: str,
+    ) -> dict[str, Any] | None:
+        url = food_engine.build_food_url(
+            food_engine.FOOD_LOCATIONS_PATH,
+            {"q": query},
+        )
+        payload = await self._fetch_food_json(url)
+        items = food_engine.extract_food_items(payload)
+        return food_engine.select_food_location(items, query)
+
+    async def _resolve_food_args(
+        self,
+        raw_args: str,
+    ) -> dict[str, Any]:
+        tokens = food_engine.split_food_args(raw_args)
+        keyword_max = max(
+            1,
+            self._cfg_int("food_keyword_max_chars", 1),
+        )
+        location_max = max(
+            1,
+            self._cfg_int("food_location_max_chars", 1),
+        )
+        sanitized = [
+            food_engine.sanitize_food_query(token, max_chars=keyword_max)
+            for token in tokens
+        ]
+        if not sanitized or any(token is None for token in sanitized):
+            return {"error": "invalid"}
+        tokens = [str(token) for token in sanitized]
+        if len(tokens) == 1:
+            return {"keyword": tokens[0], "location": None}
+
+        candidate_indexes = []
+        for index in (0, len(tokens) - 1):
+            if index not in candidate_indexes:
+                candidate_indexes.append(index)
+        for index in candidate_indexes:
+            candidate = tokens[index]
+            location_query = food_engine.sanitize_food_query(
+                candidate,
+                max_chars=location_max,
+            )
+            if location_query is None:
+                continue
+            location = await self._search_food_location(location_query)
+            if location is not None:
+                keyword_tokens = [
+                    token
+                    for token_index, token in enumerate(tokens)
+                    if token_index != index
+                ]
+                keyword = " ".join(keyword_tokens).strip()
+                if not keyword or len(keyword) > keyword_max:
+                    return {"error": "invalid"}
+                return {"keyword": keyword, "location": location}
+
+        for token in tokens:
+            if food_engine.likely_location_token(token):
+                return {
+                    "error": "location_not_found",
+                    "location": token,
+                }
+        keyword = " ".join(tokens).strip()
+        if not keyword or len(keyword) > keyword_max:
+            return {"error": "invalid"}
+        return {"keyword": keyword, "location": None}
+
+    async def _build_food_result(
+        self,
+        event: AstrMessageEvent,
+        raw_args: str,
+    ):
+        try:
+            resolved = await self._resolve_food_args(raw_args)
+            if resolved.get("error") == "invalid":
+                return event.plain_result(
+                    self._cfg_str("food_invalid_query_reply")
+                )
+            if resolved.get("error") == "location_not_found":
+                return event.plain_result(
+                    self._format_collected_reply(
+                        self._cfg_str(
+                            "food_location_not_found_reply"
+                        ),
+                        location=str(resolved.get("location", "")),
+                    )
+                )
+            keyword = str(resolved.get("keyword", "")).strip()
+            location = resolved.get("location")
+            params = {"q": keyword}
+            location_name = ""
+            if isinstance(location, dict):
+                location_id = location.get("id")
+                if location_id is not None:
+                    params["location_id"] = str(location_id)
+                location_name = str(location.get("name", "") or "")
+            url = food_engine.build_food_url(
+                food_engine.FOOD_RESTAURANTS_PATH,
+                params,
+            )
+            payload = await self._fetch_food_json(url)
+            items = food_engine.extract_food_items(payload)
+            if not items:
+                return event.plain_result(
+                    self._cfg_str("food_empty_reply")
+                )
+            max_results = max(
+                1,
+                min(
+                    food_engine.FOOD_MAX_RESULTS_HARD_LIMIT,
+                    self._cfg_int("food_max_results", 1),
+                ),
+            )
+            text = food_engine.format_food_results(
+                items,
+                keyword=keyword,
+                location_name=location_name,
+                max_results=max_results,
+                footer=f"更多：{food_engine.FOOD_BASE_URL}",
+            )
+            return event.plain_result(text)
+        except asyncio.TimeoutError:
+            return event.plain_result(
+                self._cfg_str("food_timeout_reply")
+            )
+        except Exception:
+            logger.info("qqbot_enhancer /food 查询失败")
+            return event.plain_result(
+                self._cfg_str("food_error_reply")
+            )
 
     @filter.platform_adapter_type(
         filter.PlatformAdapterType.AIOCQHTTP
@@ -1120,7 +1413,11 @@ class QQBotEnhancerPlugin(Star):
             or getattr(event, "message_str", "")
             or ""
         )
-        sticker = self._maybe_pick_sticker(event, message_text)
+        sticker = self._maybe_pick_sticker(
+            event,
+            message_text,
+            require_semantic_match=True,
+        )
         if sticker is None:
             return
         try:
@@ -1149,6 +1446,19 @@ class QQBotEnhancerPlugin(Star):
         if not isinstance(stars, (list, tuple)):
             return []
         return [star for star in stars if star is not None]
+
+    def _persona_option_line(self) -> str:
+        try:
+            parsed = self._parse_group_personas_config()
+        except Exception:
+            return "群人格：配置解析失败，已回退旧 system_prompt。"
+        if self._memory_mode() == "astrbot" and parsed.has_group_overrides:
+            return (
+                "群人格：已配置映射，但 memory_mode=astrbot 无稳定"
+                "会话级 persona API；已安全降级，不会串改其它群。"
+                "建议 memory_mode=direct。"
+            )
+        return persona_engine.persona_summary(parsed)
 
     def _build_option_text(self) -> str:
         stars = self._loaded_star_metadata()
@@ -1187,6 +1497,7 @@ class QQBotEnhancerPlugin(Star):
             "本插件命令：",
             "/找图 <关键词>（别名 /搜图）",
             "/唱歌 [文件名关键词]（别名 /点歌）",
+            "/food <关键词> [地点]（别名 /吃什么、/饭店）",
             "/收藏表情 [分类]",
             "/表情分类",
             "/表情列表 [分类]",
@@ -1207,6 +1518,7 @@ class QQBotEnhancerPlugin(Star):
                 "找图说明：/找图 和 /搜图 会下载并校验图片后发本地文件；"
                 "@ 或私聊的自然语言找图也复用同一流程。"
             ),
+            self._persona_option_line(),
             (
                 "表情收藏：/收藏表情 保存当前消息中的图片到插件数据目录；"
                 "内置 stickers 与用户收藏表情都会参与正常回复。"
@@ -1355,6 +1667,7 @@ class QQBotEnhancerPlugin(Star):
             + len(self._last_song_user)
             + len(self._last_auto_collect_at)
             + len(self._last_safe_tool_collect_at)
+            + len(self._last_food_at)
             + len(self._sticker_ai_auto_collect_times)
             + len(self._pending_user_media)
             < 4096
@@ -1371,6 +1684,7 @@ class QQBotEnhancerPlugin(Star):
             self._last_song_user,
             self._last_auto_collect_at,
             self._last_safe_tool_collect_at,
+            self._last_food_at,
         ):
             for key, timestamp in list(mapping.items()):
                 if timestamp < cutoff:
@@ -1594,7 +1908,7 @@ class QQBotEnhancerPlugin(Star):
             reply = await self._llm_generate(
                 chat_provider_id=provider_id,
                 prompt=prompt,
-                system_prompt=self._effective_system_prompt(),
+                system_prompt=self._effective_system_prompt(event),
             )
         except Exception:
             logger.warning("qqbot_enhancer 文本 LLM 调用失败", exc_info=True)
@@ -1634,7 +1948,7 @@ class QQBotEnhancerPlugin(Star):
                         chat_provider_id=provider_id,
                         prompt=prompt,
                         image_urls=image_refs,
-                        system_prompt=self._effective_system_prompt(),
+                        system_prompt=self._effective_system_prompt(event),
                     )
                     if reply:
                         return reply
@@ -1663,7 +1977,7 @@ class QQBotEnhancerPlugin(Star):
                     reply = await self._llm_generate(
                         chat_provider_id=provider_id,
                         prompt=caption_prompt,
-                        system_prompt=self._effective_system_prompt(),
+                        system_prompt=self._effective_system_prompt(event),
                     )
                     if reply:
                         return reply
@@ -2981,6 +3295,16 @@ class QQBotEnhancerPlugin(Star):
             and self._cfg_bool("sticker_ai_marker_enabled")
         ):
             return ""
+        # In unified mode send_sticker is the single AI sticker protocol.
+        # Keep parsing the legacy marker for compatibility, but do not inject
+        # two competing instructions into one system prompt.
+        if (
+            self._cfg_bool("ai_unified_tool_protocol_enabled")
+            and self._cfg_bool("safe_tools_enabled")
+            and self._cfg_bool("safe_tools_marker_enabled")
+            and self._cfg_bool("safe_tools_allow_send_sticker")
+        ):
+            return ""
         return sticker_ai_system_instruction(
             sorted(self._sticker_ai_available_tags())
         )
@@ -3008,8 +3332,55 @@ class QQBotEnhancerPlugin(Star):
             self._enabled_safe_tool_names()
         )
 
-    def _effective_system_prompt(self) -> str:
-        prompt = self._cfg_str("system_prompt")
+    def _parse_group_personas_config(self):
+        raw = self._config_value("group_personas")
+        return persona_engine.parse_group_personas(
+            raw,
+            max_groups=self._cfg_int("group_persona_max_groups", 0),
+            max_prompt_chars=self._cfg_int(
+                "group_persona_max_prompt_chars",
+                1,
+            ),
+            max_name_chars=self._cfg_int(
+                "group_persona_max_name_chars",
+                1,
+            ),
+        )
+
+    def _resolve_event_persona(
+        self,
+        event: AstrMessageEvent,
+    ) -> tuple[str, str, str]:
+        legacy_prompt = self._cfg_str("system_prompt")
+        if not self._cfg_bool("group_persona_enabled"):
+            return legacy_prompt, "", "legacy"
+        try:
+            parsed = self._parse_group_personas_config()
+            group_id = (
+                ""
+                if event.is_private_chat()
+                else str(event.get_group_id() or "")
+            )
+            return persona_engine.resolve_persona(
+                parsed,
+                group_id=group_id,
+                is_private=event.is_private_chat(),
+                legacy_prompt=legacy_prompt,
+            )
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 群人格配置解析失败，安全回退旧 system_prompt"
+            )
+            return legacy_prompt, "", "legacy"
+
+    def _effective_system_prompt(
+        self,
+        event: AstrMessageEvent | None = None,
+    ) -> str:
+        if event is None:
+            prompt = self._cfg_str("system_prompt")
+        else:
+            prompt, _persona_name, _source = self._resolve_event_persona(event)
         instructions = [
             instruction
             for instruction in (
@@ -3028,6 +3399,14 @@ class QQBotEnhancerPlugin(Star):
             and self._cfg_bool("sticker_ai_select_enabled")
             and self._cfg_bool("sticker_ai_marker_enabled")
             and self._sticker_ai_available_tags()
+        )
+
+    def _ai_tool_protocol_active(self) -> bool:
+        if not self._cfg_bool("ai_unified_tool_protocol_enabled"):
+            return self._ai_marker_mode_active()
+        return bool(
+            self._safe_tool_system_instruction()
+            or self._sticker_ai_system_instruction()
         )
 
     def _extract_sticker_ai_marker(
@@ -3906,13 +4285,26 @@ class QQBotEnhancerPlugin(Star):
             return text, None, False
         clean_text, _, _ = self._extract_sticker_ai_marker(parsed.clean_text)
         if not self._cfg_bool("safe_tools_enabled"):
+            logger.info(
+                "qqbot_enhancer safe_tool marker tool=%s success=False "
+                "reason=disabled",
+                parsed.intents[0].name if parsed.intents else "invalid",
+            )
             return clean_text, None, True
         enabled = self._enabled_safe_tool_names()
         max_actions = self._cfg_int("safe_tools_max_actions_per_reply", 1)
         if max_actions < 1 or len(parsed.intents) != 1:
+            logger.info(
+                "qqbot_enhancer safe_tool marker rejected reason=count_or_limit"
+            )
             return clean_text, None, True
         intent = parsed.intents[0]
         if not intent.valid or intent.name not in enabled:
+            logger.info(
+                "qqbot_enhancer safe_tool marker tool=%s success=False "
+                "reason=invalid_or_denied",
+                intent.name,
+            )
             return clean_text, None, True
         try:
             result = await self._execute_safe_tool(
@@ -3926,6 +4318,11 @@ class QQBotEnhancerPlugin(Star):
                 exc_info=True,
             )
             result = None
+        logger.info(
+            "qqbot_enhancer safe_tool tool=%s success=%s",
+            intent.name,
+            result is not None,
+        )
         return clean_text, result, True
 
     def _pick_user_sticker_reaction_reply(self) -> str:
@@ -3997,7 +4394,47 @@ class QQBotEnhancerPlugin(Star):
                 )
         return event.plain_result(reply_text)
 
-    def _maybe_pick_sticker(self, event: AstrMessageEvent, message_text: str) -> Path | None:
+    def _has_sticker_semantic_match(self, message_text: str) -> bool:
+        text = str(message_text or "").casefold()
+        if not text:
+            return False
+        for entry in self._sticker_entries:
+            path = entry.get("path")
+            if not isinstance(path, Path) or not path.is_file():
+                continue
+            if any(
+                keyword and keyword.casefold() in text
+                for keyword in entry.get("keywords", [])
+            ):
+                return True
+        for keywords in self._emotion_keywords.values():
+            if any(keyword.casefold() in text for keyword in keywords):
+                return True
+        if self._cfg_bool("collected_sticker_enabled"):
+            for entry in self._valid_collected_entries():
+                if any(
+                    category.casefold() in text
+                    for category in self._entry_categories(entry)
+                ):
+                    return True
+                if any(
+                    str(tag or "").strip()
+                    and str(tag).strip().casefold() in text
+                    for tag in entry.get("tags", [])
+                ):
+                    return True
+                meaning = str(entry.get("meaning", "") or "").casefold()
+                if meaning and meaning in text:
+                    return True
+        return False
+
+    def _maybe_pick_sticker(
+        self,
+        event: AstrMessageEvent,
+        message_text: str,
+        *,
+        require_semantic_match: bool = False,
+    ) -> Path | None:
         if not self._cfg_bool("sticker_enabled"):
             return None
 
@@ -4013,6 +4450,10 @@ class QQBotEnhancerPlugin(Star):
         cooldown = self._cfg_int("sticker_cooldown_seconds", 0)
         last_sent = self._last_sticker_at.get(session_key)
         if last_sent is not None and now - last_sent < cooldown:
+            return None
+        if require_semantic_match and not self._has_sticker_semantic_match(
+            message_text
+        ):
             return None
         if self._rng.random() >= self._cfg_float("sticker_probability", 0.0, 1.0):
             return None

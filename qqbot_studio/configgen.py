@@ -515,8 +515,11 @@ def _snowluma_config(
                 }
             ],
         },
+        # Disabled by default because "#sl" collides with ordinary chat
+        # commands.  The object remains for old SnowLuma schemas and manual
+        # opt-in, but it is not registered unless a user explicitly enables it.
         "statusCommand": {
-            "enabled": True,
+            "enabled": False,
             "swallow": False,
             "cooldownSeconds": 5,
             "trigger": "#sl",

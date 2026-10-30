@@ -9,6 +9,8 @@ AstrBot v4.29 自动加载插件，提供：
 - `/找图 关键词`（别名 `/搜图`）默认只用纯标准库 + 免 API Key 的 Bing Images HTML 搜索，并做中/日/英文标题描述相关性过滤；下载校验图片后发本地文件，失败保留远程 URL 兜底。百度旧第二源默认关闭，只有显式开启才可选；
 - @/私聊支持保守自然语言找图，如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，命中后复用同一搜索下载流程并阻断默认 LLM；
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的授权音频并用 `Comp.Record` 发送，不调用 LLM，不烧 token；
+- `/food 火锅`、`/food 南关区 火锅`（别名 `/吃什么`、`/饭店`）通过固定 HTTPS host `food.dlsz.top` 公开只读 API 查询最多 5 家餐厅，格式化店名/地点/标签/均分/口味/性价比/评价数/最新日期，带超时、大小、冷却和中文降级，不调用 LLM；
+- `group_personas` 实例级群人格映射：direct 模式按群 ID 注入不同 system prompt，私聊/未知群 fallback default，旧 `system_prompt` 兼容；astrbot memory 模式无稳定会话级 persona API 时安全降级，不串群。
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式与配置入口，并用 AstrBot 公开的 `Context.get_all_stars()` 列出已加载插件元数据；不暴露 Key，不枚举不稳定的内部 handler。
 - 从 `stickers/` 读取本地图片，按关键词、情绪或随机方式附加到回复，带冷却和防重复；
 - @/私聊收到纯 `Comp.Image`/`Comp.Face` 时优先用自然短句反应，可按概率附加内置或收藏表情；
@@ -105,6 +107,23 @@ Bing/Baidu 页面/JSON 结构变化、网络限制或反爬都可能导致无结
 ```
 
 插件只扫描 `songs/` 直属文件，支持 `.mp3`、`.wav`、`.ogg`、`.flac`、`.m4a`、`.aac`，拒绝路径穿越、符号链接和超过 `song_max_file_bytes` 的文件。发送使用 AstrBot 官方 `Comp.Record.fromFileSystem(...)`；**不调用 LLM、不调用 TTS/音乐生成接口，因此不消耗 token**。仓库不含任何版权歌曲。能否在 QQ/协议端播放取决于适配器对音频格式的支持，建议优先 WAV。
+
+## 餐厅查询 `/food`
+
+```text
+/food 火锅
+/food 南关区 火锅
+/food 火锅 南关区
+```
+
+- 固定 `https://food.dlsz.top`，只读公开接口：
+  - `/api/locations/search?q=...`
+  - `/api/restaurants?q=...&location_id=...`（无地点直接 q）
+- 使用标准库 HTTPS、超时、响应大小限制、固定 host 重定向校验；用户参数只做 `urlencode`，拒绝 URL/路径/控制字符，不拼 shell、不调用 LLM。
+- 回复最多 5 家（`food_max_results`，硬上限 5），格式化店名、地点、标签、均分/口味/性价比、评价数、最新评价日期，附 `https://food.dlsz.top`。
+- 无结果/地点无匹配/超时/接口非 JSON/网络错误均中文降级；每次用户会话冷却 `food_cooldown_seconds`；`should_call_llm(True)` + yield + stop_event，不额外调用 LLM。
+- 相关配置：`food_enabled`、`food_timeout_seconds`、`food_max_response_bytes`、`food_max_results`、`food_cooldown_seconds`、关键词/地点长度限制及回复模板。
+- 真实 QQ 展示和站点数据长期稳定性未验证；API Key、用户 ID 不写日志，不输出原始 JSON/路径。
 
 ## 插件用法 `/option`
 
@@ -257,12 +276,45 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `update_categories/add_categories/remove_categories` 原子 index 更新，目录 0755/文件 0644，路径/符号链接/分类/文件名安全校验；不删除用户数据。
 - tags/meaning/tone 与 categories 同条目保存，选择可按分类/tags/meaning/情绪匹配。真实 QQ/AstrBot 多分类展示未验证。
 
-## 代码架构（1.12.0）
+## 统一 AI 工具/表情调用协议
+
+- `ai_unified_tool_protocol_enabled=true` 时，direct 模式只注入一套安全 `[[tool:...]]` 说明；`send_sticker(category|emotion|tag)` 是 AI 主动发表情的唯一推荐路径。
+- 旧 `[[sticker:...]]` 仍解析兼容，但同一回复不会同时执行两套；若同时出现 safe_tools 与旧 sticker marker，优先按 safe_tools 路由，失败只清理 marker 回退文字。
+- 一次事件最多一条文字 + 一个图片/表情附件；memory 模式只解析 Agent 已输出的工具 marker，或按本地语义匹配追加一张，不再随机补第二张；已有图片不再追加。
+- `sticker_random_fallback_enabled` 默认 false：无 marker 时默认不随机补发（旧行为仅在显式兼容开关/旧非统一模式路径下可用）。
+- safe_tools 白名单、权限、冷却、防重复、搜索/收藏限制不变；日志只记录工具名和成功/失败，不输出参数值、路径或 Key。
+- 旧配置 `sticker_ai_marker_enabled`、`sticker_ai_select_enabled`、`sticker_ai_select_probability`、safe_tools 配置继续兼容。
+
+## 按群人格 `group_personas`
+
+实例级配置 `group_personas` 是一个 JSON 字符串（由 AstrBot/Studio 的 token 保护插件配置 API 管理）：
+
+```json
+{
+  "default": {"name": "默认", "prompt": "你是默认人格"},
+  "groups": {
+    "123456789": {"name": "群A", "prompt": "你是A群专属人格"},
+    "987654321": "你是B群专属人格"
+  }
+}
+```
+
+- `memory_mode=direct`：插件根据 `event.unified_msg_origin` 对应的群 ID 选择 prompt；私聊和未知群使用 `default`；无 `default` 时回退旧 `system_prompt`。
+- `memory_mode=astrbot`：**不伪造会话级 persona API**。当前未核实到 AstrBot v4.29 稳定的按会话切换 Agent persona API，因此不会修改全局人格；插件只安全降级为默认 Agent 行为，并在 `/option`/启动日志提示建议 direct 模式。不会串群。
+- 安全限制：群 ID 仅数字 1–20 位；默认/群 prompt 长度、数量、名称长度由 `group_persona_*` 限制；非法 JSON/非法群 ID/超长 prompt 被忽略并回退旧配置；不记录 prompt 到日志。
+- 旧的 `system_prompt` 配置继续有效；`group_personas={}` 时不改变任何行为。direct 模式不携带跨群会话历史，避免记忆污染。
+- 配置 API（已有 Studio/AstrBot token 保护，不新增无鉴权接口）：
+  - `GET /api/instances/<instance>/plugins/qqbot_enhancer/config`
+  - `POST /api/instances/<instance>/plugins/qqbot_enhancer/config`，body `{"values":{"group_personas":"{...}"},"restart":false}`
+  - 请求头 `X-QB-Token: <管理服务 token>`；不要使用用户输入/cookie 作为 token。
+- 真实 AstrBot 多群人格 E2E 未验证；Agent 模式只能在宿主 AstrBot 支持时另行实现，当前明确降级。
+
+## 代码架构（1.15.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 
 - `interfaces.py`：`StickerRepository`、`MediaDecoder`、`ImageSearchProvider`、`SongRepository`、`LLMService` 等 Protocol 和 `MediaPayload`/`StickerRecord`/`ImageCandidate` 数据对象。
-- `config.py`：147 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
+- `config.py`：169 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
 - `media.py`：图片 magic/尺寸、base64、媒体引用和公网 HTTP(S) URL 安全过滤。
 - `image_search.py`：中/日/英文相关性规范化、别名/阈值过滤。
 - `songs.py`：本地授权音频的安全路径解析/列表仓库。
@@ -273,7 +325,7 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `safe_tools.py`：白名单工具 marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成。
 - `__init__.py`：让插件目录可作为 Python package 部署，`main.py` 优先相对导入；测试 harness 也支持同目录模块 fallback。
 
-未变：所有配置键、schema 147 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
+未变：所有配置键、schema 169 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
 
 ## 依赖
 

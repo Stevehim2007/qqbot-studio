@@ -84,6 +84,8 @@ class FakeManager:
                 },
             },
             "values": dict(self.plugin_config_values),
+            "schema_source": "local",
+            "schema_path": "/tmp/qqbot-studio/plugins/qqbot_enhancer/_conf_schema.json",
             "config_path": "/tmp/qqbot-studio/qqbot_enhancer_config.json",
             "source": "local",
             "api_available": False,
@@ -108,6 +110,8 @@ class FakeManager:
             "plugin_id": plugin_id,
             "schema": self.get_plugin_config(plugin_id)["schema"],
             "values": safe_values,
+            "schema_source": "local",
+            "schema_path": "/tmp/qqbot-studio/plugins/qqbot_enhancer/_conf_schema.json",
             "config_path": "/tmp/qqbot-studio/qqbot_enhancer_config.json",
             "source": "local",
             "api_available": False,
@@ -790,6 +794,8 @@ class ServerTests(unittest.TestCase):
             self.assertIn(field, payload)
         self.assertIn("reply_probability", payload["schema"])
         self.assertEqual(payload["values"]["reply_probability"], 0.12)
+        self.assertEqual(payload["schema_source"], "local")
+        self.assertIn("_conf_schema.json", payload["schema_path"])
 
         secret = "sk-plugin-config-request-secret"
         status, body = self._post(
@@ -999,6 +1005,18 @@ class ServerTests(unittest.TestCase):
             payload = json.loads(exc.read().decode("utf-8"))
             self.assertFalse(payload["ok"])
 
+
+    def test_persona_update_preserves_internal_newlines(self):
+        prompt = "第一行\n第二行\n\n第四行  \n"
+        with mock.patch.object(
+            self.studio.manager,
+            "update_persona",
+            return_value="提示词已更新",
+        ) as updater:
+            status, body = self._post("/api/persona", {"prompt": prompt})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        updater.assert_called_once_with(prompt)
 
     def test_delete_instance_contract(self):
         status, body = self._delete("/api/instances/bot-1")

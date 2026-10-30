@@ -193,6 +193,10 @@ v2 请求体不包含 `use_mirror`；镜像节点由服务端按已选节点决�
 
 响应 `{ "ok": true, "message": "..." }`。成功后前端重新读取该实例 state。
 
+`prompt` 按字符串原样传给后端；服务端只校验非空和长度，不折叠、不 `splitlines`、不删除内部
+`\n`/空行。API 会保留内部换行及首尾空白，AstrBot persona 和插件 `system_prompt` 使用同一
+原始文本。前端提示词预览使用 `white-space: pre-wrap` 显示多行。
+
 ### GET `/api/logs?service=astrbot&lines=200&instance=<id>`
 
 ```json
@@ -1236,6 +1240,8 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
     "reply_probability": 0.12,
     "image_search_enabled": true
   },
+  "schema_source": "local",
+  "schema_path": "/home/user/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugins/qqbot_enhancer/_conf_schema.json",
   "config_path": "/home/user/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_enhancer_config.json",
   "source": "astrbot",
   "api_available": true,
@@ -1248,6 +1254,9 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
 读取规则：
 
 - 先读取 `<astrbot_data>/plugins/<plugin_id>/_conf_schema.json` 的默认值；
+- 如果实例插件目录缺少 schema，只读回退到主项目 `plugins/<plugin_id>/_conf_schema.json`，
+  不会复制或覆盖实例文件；响应新增 `schema_source` 为 `local` / `bundled`，
+  `schema_path` 为实际读取路径。两条路径都不存在时返回可操作错误，不返回 500；
 - 合并本地 `<astrbot_data>/config/<plugin_id>_config.json`；
 - AstrBot 在线时再以真实 `GET /api/v1/plugins/config` 返回的当前配置为准；
 - AstrBot 离线时仍返回 HTTP 200 + `ok:true`，`api_available:false`、`source:"local"` 或

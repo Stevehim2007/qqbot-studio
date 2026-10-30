@@ -160,6 +160,8 @@ class ConfigGenerationTests(unittest.TestCase):
             self.assertEqual(clients[0]["role"], "Universal")
             self.assertEqual(clients[0]["accessToken"], secrets_data["onebot_token"])
             self.assertEqual(clients[0]["messageFormat"], "array")
+            self.assertIs(snow["statusCommand"]["enabled"], False)
+            self.assertEqual(snow["statusCommand"]["trigger"], "#sl")
 
             compose = result["compose"].read_text(encoding="utf-8")
             for fragment in ("SYS_PTRACE", "seccomp=unconfined", "shm_size: 1gb", "127.0.0.1:"):

@@ -272,6 +272,111 @@
     "default": true,
     "hint": "使用公开 Context.get_all_stars() 读取名称/版本/描述；不枚举其他插件命令。"
   },
+  "food_enabled": {
+    "description": "启用 /food 餐厅查询",
+    "type": "bool",
+    "default": true
+  },
+  "food_timeout_seconds": {
+    "description": "餐厅 API 单次请求超时秒数",
+    "type": "int",
+    "default": 12,
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    }
+  },
+  "food_max_response_bytes": {
+    "description": "餐厅 API 响应最大字节数",
+    "type": "int",
+    "default": 500000,
+    "slider": {
+      "min": 1000,
+      "max": 5000000,
+      "step": 1000
+    }
+  },
+  "food_max_results": {
+    "description": "/food 最多展示餐厅数",
+    "type": "int",
+    "default": 5,
+    "slider": {
+      "min": 1,
+      "max": 5,
+      "step": 1
+    }
+  },
+  "food_cooldown_seconds": {
+    "description": "/food 每用户会话冷却秒数",
+    "type": "int",
+    "default": 30,
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 1
+    }
+  },
+  "food_keyword_max_chars": {
+    "description": "餐厅关键词最大长度",
+    "type": "int",
+    "default": 50,
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "food_location_max_chars": {
+    "description": "地点关键词最大长度",
+    "type": "int",
+    "default": 30,
+    "slider": {
+      "min": 1,
+      "max": 80,
+      "step": 1
+    }
+  },
+  "food_usage_reply": {
+    "description": "/food 用法提示",
+    "type": "text",
+    "default": "用法：/food 火锅 或 /food 南关区 火锅"
+  },
+  "food_disabled_reply": {
+    "description": "餐厅功能关闭回复",
+    "type": "text",
+    "default": "餐厅查询功能当前未启用。"
+  },
+  "food_empty_reply": {
+    "description": "无餐厅结果回复",
+    "type": "text",
+    "default": "没有找到相关餐厅，换个关键词或地点试试吧。"
+  },
+  "food_location_not_found_reply": {
+    "description": "地点无匹配回复",
+    "type": "text",
+    "default": "没有找到地点「{location}」，可以只发关键词试试。"
+  },
+  "food_timeout_reply": {
+    "description": "餐厅查询超时回复",
+    "type": "text",
+    "default": "餐厅查询超时，请稍后再试。"
+  },
+  "food_error_reply": {
+    "description": "餐厅查询错误回复",
+    "type": "text",
+    "default": "餐厅查询暂时失败，请稍后再试。"
+  },
+  "food_cooldown_reply": {
+    "description": "餐厅查询冷却回复",
+    "type": "text",
+    "default": "餐厅查询太频繁，请 {seconds} 秒后再试。"
+  },
+  "food_invalid_query_reply": {
+    "description": "餐厅查询关键词非法回复",
+    "type": "text",
+    "default": "关键词不合法，只允许普通文字，不要输入 URL 或路径。"
+  },
   "option_max_plugins": {
     "description": "/option 最多显示的插件数",
     "type": "int",
@@ -417,6 +522,48 @@
     "description": "同时使用 AstrBot 配置的 wake_prefix 作为指令前缀",
     "type": "bool",
     "default": true
+  },
+  "group_personas": {
+    "description": "实例级群人格映射 JSON（direct 模式按群 ID 注入）",
+    "type": "text",
+    "default": "{}",
+    "max_length": 100000,
+    "hint": "例：{\"default\":{\"name\":\"默认\",\"prompt\":\"你是默认人格\"},\"groups\":{\"123456789\":{\"name\":\"群A\",\"prompt\":\"你是群A专属人格\"}}}；旧配置无此键时回退 system_prompt。"
+  },
+  "group_persona_enabled": {
+    "description": "启用按群人格映射",
+    "type": "bool",
+    "default": true
+  },
+  "group_persona_max_groups": {
+    "description": "最多群人格映射数量",
+    "type": "int",
+    "default": 50,
+    "slider": {
+      "min": 0,
+      "max": 200,
+      "step": 1
+    }
+  },
+  "group_persona_max_prompt_chars": {
+    "description": "单个人格 prompt 最大字符数",
+    "type": "int",
+    "default": 4000,
+    "slider": {
+      "min": 100,
+      "max": 10000,
+      "step": 100
+    }
+  },
+  "group_persona_max_name_chars": {
+    "description": "人格名称最大字符数",
+    "type": "int",
+    "default": 64,
+    "slider": {
+      "min": 1,
+      "max": 128,
+      "step": 1
+    }
   },
   "system_prompt": {
     "description": "直连 provider 时使用的系统提示词",
@@ -619,6 +766,18 @@
     "description": "自然语言发表情冷却中回复",
     "type": "text",
     "default": "表情刚发过，稍等一下再试吧。"
+  },
+  "ai_unified_tool_protocol_enabled": {
+    "description": "统一 AI 工具/表情调用协议",
+    "type": "bool",
+    "default": true,
+    "hint": "direct 只注入一套安全 [[tool:...]] 说明；旧 [[sticker:...]] 继续兼容解析，但同一回复最多执行一个附件。"
+  },
+  "sticker_random_fallback_enabled": {
+    "description": "无 AI marker 时是否允许旧随机 sticker 兜底",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭；AI 模式下没有 marker 不随机补发。旧随机路径可在明确开启后用于兼容。"
   },
   "sticker_natural_language_reclassify_enabled": {
     "description": "启用显式 @/私聊自然语言重分类最近收藏",

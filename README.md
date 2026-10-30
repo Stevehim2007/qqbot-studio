@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**3.8.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**3.9.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
 
@@ -285,6 +285,7 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 | 本地表情包 | 回复时按概率附带内置 8 张 PNG 或用户收藏表情 | `sticker_probability=0.35`、`collected_sticker_use_probability`，不额外消耗 LLM token |
 | 本地点歌/唱歌 | `/唱歌`、`/唱歌 关键词`、`/点歌 关键词` | 读取 `songs/` 本地授权音频；不调用 LLM/TTS；默认上限 20 MB |
 | 插件用法 | `/option`、`/插件用法`、`/用法` | 显示本插件用法和已加载插件元数据 |
+| 饭店查询 | `/food 火锅`、`/food 南关区 火锅`、`/吃什么` | 固定 food.dlsz.top 公开 API；最多5家；不调用 LLM |
 
 配置入口（推荐）：
 
