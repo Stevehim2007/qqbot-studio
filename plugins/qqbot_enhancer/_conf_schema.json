@@ -615,6 +615,16 @@
     "type": "bool",
     "default": true
   },
+  "group_identity_agent_prompt_max_chars": {
+    "description": "astrbot memory 当前发送者身份注入最大字符数",
+    "type": "int",
+    "default": 500,
+    "slider": {
+      "min": 100,
+      "max": 2000,
+      "step": 50
+    }
+  },
   "system_prompt": {
     "description": "直连 provider 时使用的系统提示词",
     "type": "text",

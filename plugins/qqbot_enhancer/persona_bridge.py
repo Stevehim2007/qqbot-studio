@@ -147,3 +147,55 @@ class AgentPersonaBridge:
         )
         req.system_prompt = existing.rstrip() + block
         return True
+
+
+CURRENT_SENDER_MARKER = "# Current Sender Identity"
+
+
+def inject_current_sender_identity(
+    req: Any,
+    *,
+    group_id: str = "",
+    nickname: str = "",
+    qq: str = "",
+    max_chars: int = 500,
+) -> bool:
+    """Append current-turn sender metadata for AstrBot memory mode.
+
+    Only ``req.system_prompt`` is touched. Conversation history, event text,
+    provider/model/key settings are never modified. Historical messages still
+    have no per-message identity prefix; this is only the current request.
+    """
+
+    if req is None:
+        return False
+    existing = str(getattr(req, "system_prompt", "") or "")
+    if CURRENT_SENDER_MARKER in existing:
+        existing = existing.split(CURRENT_SENDER_MARKER, 1)[0].rstrip()
+    safe_group = "".join(
+        char for char in str(group_id or "") if char.isdigit()
+    )[:20]
+    safe_nickname = "".join(
+        char
+        for char in str(nickname or "")
+        if ord(char) >= 32 and ord(char) != 127
+    )[:32].strip() or "未知"
+    safe_qq = "".join(char for char in str(qq or "") if char.isdigit())[:20]
+    lines = [
+        CURRENT_SENDER_MARKER,
+        "This metadata applies only to the current incoming message.",
+    ]
+    if safe_group:
+        lines.append(f"Current group: {safe_group}")
+    lines.append(f"Current sender nickname: {safe_nickname}")
+    if safe_qq:
+        lines.append(f"Current sender QQ: {safe_qq}")
+    lines.append(
+        "Use this only to distinguish the current group member. "
+        "Do not output the QQ, group id, or nickname to the user."
+    )
+    block = "\n".join(lines)
+    if len(block) > max(1, int(max_chars)):
+        block = block[: max(1, int(max_chars)) - 1].rstrip() + "…"
+    req.system_prompt = existing.rstrip() + "\n\n" + block + "\n"
+    return True

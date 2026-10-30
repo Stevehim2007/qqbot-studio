@@ -109,7 +109,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.16.0"
+PLUGIN_FALLBACK_VERSION = "1.17.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PENDING_USER_MEDIA_MAX_SESSIONS = 128
@@ -226,9 +226,9 @@ class QQBotEnhancerPlugin(Star):
                 and self._cfg_bool("group_identity_context_enabled")
             ):
                 logger.warning(
-                    "qqbot_enhancer 群聊身份上下文在 memory_mode=astrbot "
-                    "下没有稳定的每条消息元数据注入 hook；已安全降级，"
-                    "不会修改或串用其它群会话。"
+                    "qqbot_enhancer memory_mode=astrbot 通过官方 "
+                    "on_llm_request 注入当前发送者身份；AstrBot 历史消息"
+                    "仍没有逐消息身份前缀，且不会修改历史/全局人格。"
                 )
         except Exception:
             pass
@@ -1451,9 +1451,9 @@ class QQBotEnhancerPlugin(Star):
             return "群聊身份上下文：关闭。"
         if self._memory_mode() == "astrbot":
             return (
-                "群聊身份上下文：direct 模式按群号/昵称/QQ 注入；"
-                "memory_mode=astrbot 无稳定每条消息元数据 hook，"
-                "已安全降级且不会串群。"
+                "群聊身份上下文：当前发送者通过官方 on_llm_request "
+                "注入 system prompt；历史消息仍无逐消息身份前缀，"
+                "这是当前轮安全降级，不会修改历史或串群。"
             )
         return (
             "群聊身份上下文：direct 已启用，最近消息带 "
@@ -3647,6 +3647,35 @@ class QQBotEnhancerPlugin(Star):
             )
         except Exception:
             logger.warning("qqbot_enhancer 请求 persona 注入失败，保留全局人格")
+
+    @filter.on_llm_request()
+    async def inject_agent_current_sender_identity(
+        self,
+        event: AstrMessageEvent,
+        req: Any,
+    ) -> None:
+        """Inject current-turn sender identity for astrbot memory mode only."""
+
+        if self._memory_mode() != "astrbot":
+            return
+        if not self._cfg_bool("group_identity_context_enabled"):
+            return
+        try:
+            persona_bridge_engine.inject_current_sender_identity(
+                req,
+                group_id=self._safe_group_id(event),
+                nickname=self._safe_identity_nickname(event),
+                qq=self._safe_identity_qq(event.get_sender_id()),
+                max_chars=self._cfg_int(
+                    "group_identity_agent_prompt_max_chars",
+                    1,
+                ),
+            )
+        except Exception:
+            # Never include nickname/QQ/group id in this log.
+            logger.warning(
+                "qqbot_enhancer 当前发送者身份注入失败，保留原 system prompt"
+            )
 
     def _effective_system_prompt(
         self,

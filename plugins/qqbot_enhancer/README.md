@@ -328,15 +328,15 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - 最近消息历史按 `unified_msg_origin` 仅保存在内存，限制 `group_identity_history_limit`、TTL、单条消息长度；不写盘。
 - 群号、昵称、QQ 仅用于本次 LLM 上下文；不输出到日志；模型回复中的当前/历史昵称、QQ、群号会按 `group_identity_redact_in_reply` 做脱敏。
 - 无昵称显示 `未知`/`未知(QQ)`；私聊显示 `群号：无（私聊）`；旧配置 `group_identity_context_enabled=false` 时保持旧 prompt 结构。
-- `memory_mode=astrbot`：未核实到 AstrBot v4.29 稳定公开的“逐消息发送者元数据注入”hook，不修改 event/全局 Agent 文本，明确安全降级；`/option` 提示建议 direct。
+- `memory_mode=astrbot`：通过 AstrBot 官方 `on_llm_request(event, req)` 只向**当前轮** `req.system_prompt` 追加群号/昵称/QQ 和“不要输出身份”的短说明；不修改 event 文本、conversation history、provider/model/key。历史消息仍没有逐消息身份前缀，这是当前轮安全增强，不是彻底修复。
 - 不新增 LLM tool/电脑控制；QQ 号不能作为工具参数或文件路径。真实 AstrBot/QQ 多群身份 E2E 未验证。
 
-## 代码架构（1.16.0）
+## 代码架构（1.17.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 
 - `interfaces.py`：`StickerRepository`、`MediaDecoder`、`ImageSearchProvider`、`SongRepository`、`LLMService` 等 Protocol 和 `MediaPayload`/`StickerRecord`/`ImageCandidate` 数据对象。
-- `config.py`：175 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
+- `config.py`：176 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
 - `media.py`：图片 magic/尺寸、base64、媒体引用和公网 HTTP(S) URL 安全过滤。
 - `image_search.py`：中/日/英文相关性规范化、别名/阈值过滤。
 - `songs.py`：本地授权音频的安全路径解析/列表仓库。
@@ -347,7 +347,7 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `safe_tools.py`：白名单工具 marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成。
 - `__init__.py`：让插件目录可作为 Python package 部署，`main.py` 优先相对导入；测试 harness 也支持同目录模块 fallback。
 
-未变：所有配置键、schema 175 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
+未变：所有配置键、schema 176 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
 
 ## 依赖
 

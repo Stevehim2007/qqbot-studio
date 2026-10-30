@@ -5777,6 +5777,89 @@ class TestGroupIdentityContext(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("发送者QQ", legacy_prompt)
         self.assertNotIn("群号：", legacy_prompt)
 
+    async def test_astrbot_llm_request_injects_current_sender_without_provider_change(self):
+        context = FakeContext(provider_id="deepseek-flash")
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_identity_context_enabled=True,
+            group_identity_agent_prompt_max_chars=500,
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            self_id="10001",
+            group_id="666666",
+            sender_id="20066",
+            sender_name="发送者甲",
+            session_id="agent-identity-group",
+        )
+        req = SimpleNamespace(
+            system_prompt="AstrBot global persona",
+            provider_id="deepseek-flash",
+            model="deepseek-chat",
+        )
+        await plugin.inject_agent_current_sender_identity(event, req)
+        prompt = req.system_prompt
+        self.assertIn("Current Sender Identity", prompt)
+        self.assertIn("Current group: 666666", prompt)
+        self.assertIn("Current sender nickname: 发送者甲", prompt)
+        self.assertIn("Current sender QQ: 20066", prompt)
+        self.assertIn("Do not output", prompt)
+        self.assertIn("AstrBot global persona", prompt)
+        self.assertEqual(req.provider_id, "deepseek-flash")
+        self.assertEqual(req.model, "deepseek-chat")
+        self.assertEqual(plugin.context.provider_id, "deepseek-flash")
+        self.assertEqual(context.calls, [])
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertEqual(req.system_prompt.count("Current Sender Identity"), 1)
+
+    async def test_astrbot_llm_request_private_missing_nickname_and_exception(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_identity_context_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("你好")],
+            message_str="你好",
+            private=True,
+            sender_id="20067",
+            sender_name="",
+            session_id="agent-identity-private",
+        )
+        req = SimpleNamespace(system_prompt="base")
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertNotIn("Current group:", req.system_prompt)
+        self.assertIn("Current sender nickname: 未知", req.system_prompt)
+        self.assertIn("Current sender QQ: 20067", req.system_prompt)
+
+        broken_req = SimpleNamespace(system_prompt="unchanged")
+        with mock.patch.object(
+            MODULE.persona_bridge_engine,
+            "inject_current_sender_identity",
+            side_effect=RuntimeError("denied"),
+        ):
+            await plugin.inject_agent_current_sender_identity(
+                event,
+                broken_req,
+            )
+        self.assertEqual(broken_req.system_prompt, "unchanged")
+
+        direct_plugin = make_plugin(
+            context,
+            memory_mode="direct",
+            group_identity_context_enabled=True,
+        )
+        direct_req = SimpleNamespace(system_prompt="direct unchanged")
+        await direct_plugin.inject_agent_current_sender_identity(
+            event,
+            direct_req,
+        )
+        self.assertEqual(direct_req.system_prompt, "direct unchanged")
+
     async def test_memory_mode_degrades_and_option_does_not_leak_identity(self):
         context = FakeContext()
         plugin = make_plugin(
