@@ -62,6 +62,7 @@
 
   const app = {
     currentStep: 'env',
+    platform: { kind: 'unknown', display: '', label: '未知系统' },
     state: normaliseState({}),
     stateLoaded: false,
     stateLoading: false,
@@ -618,17 +619,211 @@
     }
   }
 
+  function getPlatformInfo(osValue) {
+    const display = textValue(osValue, '').trim();
+    const lower = display.toLowerCase();
+    if (lower.includes('windows')) {
+      return { kind: 'windows', display, label: 'Windows' };
+    }
+    if (lower.includes('ubuntu')) {
+      return { kind: 'ubuntu', display, label: 'Ubuntu' };
+    }
+    if (!display || /未知系统|unknown/.test(lower)) {
+      return { kind: 'unknown', display: display || '未知系统', label: '未知系统' };
+    }
+    if (/(?:^|\s)(?:linux|gnu\/linux)(?:\s|$)|debian|fedora|centos|red hat|rocky|almalinux|alma linux|arch linux|opensuse|suse|manjaro|alpine/.test(lower)) {
+      return { kind: 'linux-other', display, label: '其它 Linux' };
+    }
+    return { kind: 'unknown', display, label: '未知系统' };
+  }
+
+  function getOsRequirementConfig(platform, osValue) {
+    if (platform.kind === 'windows') {
+      return {
+        title: 'Windows 10/11 桌面系统',
+        icon: 'i-server',
+        tone: 'ready',
+        statusText: '已识别',
+        description: `检测到当前系统：${osValue}。本向导使用 Docker Desktop，并必须选择 Linux containers。`,
+        copySuccess: '命令已复制，请在 Windows PowerShell 中执行。'
+      };
+    }
+    if (platform.kind === 'ubuntu') {
+      return {
+        title: 'Ubuntu 系统',
+        icon: 'i-server',
+        tone: 'ready',
+        statusText: '已就绪',
+        description: `检测到当前系统：${osValue}。`,
+        copySuccess: '修复命令已复制，请在 Ubuntu 终端中执行。'
+      };
+    }
+    if (platform.kind === 'linux-other') {
+      return {
+        title: 'Ubuntu（当前为其它 Linux）',
+        icon: 'i-server',
+        tone: 'warning',
+        statusText: '需要处理',
+        description: `当前系统为“${osValue}”。Linux 向导仅支持 Ubuntu；请在 Ubuntu 上运行，或改用 Windows 版启动器。`,
+        command: 'lsb_release -a',
+        commandLabel: '复制查看系统命令',
+        copySuccess: '修复命令已复制，请在 Linux 终端中执行。'
+      };
+    }
+    return {
+      title: '操作系统未识别',
+      icon: 'i-server',
+      tone: 'unknown',
+      statusText: '状态未知',
+      description: '本地服务未返回可识别的操作系统信息。如果 Docker 检查已确认就绪，仍可继续配置；部署时本地服务会再次校验。',
+      copySuccess: '命令已复制，请在当前系统的终端中执行。'
+    };
+  }
+
+  function getRequirementCopy(platform) {
+    const windows = platform.kind === 'windows';
+    const unknown = platform.kind === 'unknown';
+    const copySuccess = windows
+      ? '命令已复制，请在 Windows PowerShell 中执行。'
+      : unknown
+        ? '命令已复制，请在当前系统的终端中执行。'
+        : '修复命令已复制，请在 Ubuntu 终端中执行。';
+    const commands = windows
+      ? {
+        docker: 'winget install --id Docker.DockerDesktop -e --accept-source-agreements --accept-package-agreements',
+        compose: 'docker compose version',
+        start: 'Start-Process "$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"',
+        permission: 'net localgroup docker-users "$env:USERNAME" /add'
+      }
+      : unknown
+        ? {
+          docker: 'docker version',
+          compose: 'docker compose version',
+          start: 'docker info',
+          permission: 'docker info'
+        }
+        : {
+          docker: 'sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2',
+          compose: 'sudo apt-get update && sudo apt-get install -y docker-compose-v2',
+          start: 'sudo systemctl enable --now docker',
+          permission: 'sudo usermod -aG docker "$USER" && newgrp docker'
+        };
+
+    return {
+      copySuccess,
+      docker: {
+        title: windows ? 'Docker Desktop 已安装' : 'Docker 已安装',
+        readyText: windows
+          ? '已检测到 Docker CLI；请继续确认 Docker Desktop Engine 已启动并使用 Linux containers。'
+          : '已检测到 Docker CLI，可以继续。',
+        warningText: windows
+          ? '未检测到 Docker CLI。请安装 Docker Desktop for Windows，并启用 WSL 2 或 Hyper-V 后端。'
+          : unknown
+            ? '未检测到 Docker。请按当前操作系统安装 Docker 后重新检测。'
+            : '未检测到 Docker。请复制右侧命令安装后重新检测。',
+        unknownText: windows ? '本地服务未返回 Docker Desktop 状态。' : '本地服务未返回 Docker 安装状态。',
+        command: commands.docker,
+        commandLabel: windows ? '复制安装 Docker Desktop 命令' : unknown ? '复制检查命令' : '复制安装命令'
+      },
+      running: {
+        title: windows ? 'Docker Desktop Linux engine' : 'Docker 服务运行中',
+        readyText: windows ? 'Docker Desktop Engine 正在运行；请确认使用 Linux containers。' : 'Docker 守护进程正在运行。',
+        warningText: windows
+          ? 'Docker Desktop Engine 未就绪。请启动 Docker Desktop，等待 Engine running，并在设置中切换到 Linux containers；不要使用 Linux 发行版的包管理命令。'
+          : unknown
+            ? 'Docker Engine 未被确认可访问。请启动当前系统的 Docker 后重新检测。'
+            : 'Docker 服务未运行。复制命令启动，并为当前用户授予权限。',
+        unknownText: windows ? '本地服务未返回 Docker Desktop Engine 状态。' : '本地服务未返回 Docker 运行状态。',
+        command: commands.start,
+        commandLabel: windows ? '复制启动 Docker Desktop 命令' : unknown ? '复制检查命令' : '复制启动命令'
+      },
+      compose: {
+        title: 'Docker Compose 可用',
+        readyText: 'Docker Compose 已就绪。',
+        warningText: windows
+          ? 'Docker Desktop 的 Compose v2 不可用。请启动 Docker Desktop、确认使用 Linux containers，必要时重新安装 Docker Desktop。'
+          : unknown
+            ? 'Docker Compose 未被确认可用。请检查当前系统的 Docker Compose 安装。'
+            : '未检测到 Docker Compose。请复制命令安装 compose 插件。',
+        unknownText: '本地服务未返回 Compose 状态。',
+        command: commands.compose,
+        commandLabel: windows ? '复制检查 Compose 命令' : unknown ? '复制检查命令' : '复制安装命令'
+      },
+      permission: {
+        title: windows ? 'Docker Desktop Engine 访问权限' : '当前用户 Docker 权限',
+        readyText: windows ? '当前用户可访问 Docker Desktop Engine。' : '当前用户无需 sudo 即可使用 Docker。',
+        warningText: windows
+          ? '当前 Windows 用户无法访问 Docker Desktop Engine。请确认 Docker Desktop 正在运行并使用 Linux containers；必要时以管理员 PowerShell 将用户加入 docker-users 组，然后重启 Docker Desktop。'
+          : unknown
+            ? '当前用户访问 Docker Engine 的权限未被确认。请按当前系统检查 Docker 权限后重新检测。'
+            : '当前用户没有 Docker 权限。执行命令后请注销并重新登录，再重新检测。',
+        unknownText: '本地服务未返回 Docker 权限检查结果。',
+        command: commands.permission,
+        commandLabel: windows ? '复制加入 docker-users 命令' : unknown ? '复制检查命令' : '复制授权命令'
+      }
+    };
+  }
+
+  function applyPlatformCopy(platform) {
+    app.platform = platform;
+    const windows = platform.kind === 'windows';
+    const unknown = platform.kind === 'unknown';
+    const linuxOther = platform.kind === 'linux-other';
+    const title = windows
+      ? '在 Windows 上搭建你的 QQ 智能助手'
+      : '开始搭建你的 QQ 智能助手';
+    const subtitle = windows
+      ? '先确认 Windows 10/11 与 Docker Desktop（Linux containers）已就绪，再填写账号与模型信息。'
+      : unknown
+        ? '先确认本机 Docker 环境已就绪，再填写账号与模型信息。'
+        : linuxOther
+          ? '当前 Linux 不是 Ubuntu；本机部署向导仅支持 Ubuntu，或请改用 Windows 版启动器。'
+          : '先确认这台 Ubuntu 已准备好 Docker 环境，再填写账号与模型信息。';
+    STEP_META.env.title = title;
+    STEP_META.env.subtitle = subtitle;
+    setText('env-step-hint', windows ? 'Windows 与 Docker Desktop' : unknown ? '系统与 Docker' : linuxOther ? 'Linux 与 Docker' : 'Ubuntu 与 Docker');
+    setText('env-heading', windows ? '准备 Windows 10/11 与 Docker Desktop' : unknown ? '准备本机 Docker 环境' : linuxOther ? '准备 Ubuntu 与 Docker' : '准备一台已安装 Docker 的 Ubuntu');
+    if (windows) {
+      setText('env-intro', '这个向导会帮助你在 Windows 10/11 上使用 Docker Desktop 启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。所有操作均在本机浏览器与本地服务之间完成。');
+      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。重复运行 windows\\start.ps1 会创建新实例并需要重新扫码；管理已有实例请使用 windows\\console.ps1。');
+      setText('env-help-title', 'Docker Desktop 未就绪？');
+      setText('env-help-text', '请使用 Windows PowerShell 执行检查卡中的命令。Docker Desktop 必须使用 Linux containers；如果刚安装 Docker Desktop，请注销或重启 Windows 后重新检测。');
+    } else if (unknown) {
+      setText('env-intro', '这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。请先确认当前系统的 Docker 环境可用。');
+      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。请使用当前操作系统对应的启动与控制脚本；如果系统未识别，控制台仍会在部署前再次校验 Docker。');
+      setText('env-help-title', '环境状态不完整？');
+      setText('env-help-text', '如果无法识别操作系统，但 Docker 已确认就绪，可继续配置。检查卡中的命令会按当前可识别平台显示。');
+    } else if (linuxOther) {
+      setText('env-intro', '这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。Linux 版当前仅面向 Ubuntu。');
+      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。重复运行 ./start.sh 会创建新实例并需要重新扫码；管理已有实例请使用 ./console.sh。');
+      setText('env-help-title', '不知道怎么安装？');
+      setText('env-help-text', '当前 Linux 不是 Ubuntu；建议改用 Ubuntu。若继续排错，请按检查卡中的命令并确认系统包管理器和发行版兼容。');
+    } else {
+      setText('env-intro', '这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。所有操作均在本机浏览器与本地服务之间完成。');
+      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。重复运行 ./start.sh 会创建新实例并需要重新扫码；管理已有实例请使用 ./console.sh。');
+      setText('env-help-title', '不知道怎么安装？');
+      setText('env-help-text', '每张未就绪的检查卡都会提供可复制的终端命令。打开 Ubuntu 终端，粘贴并执行即可；权限组变更后可能需要重新登录。');
+    }
+    if (app.currentStep === 'env') updatePageCopy('env');
+  }
+
   function evaluateRequirements(requirements) {
     const req = asRecord(requirements);
+    const platform = getPlatformInfo(req.os);
     const checks = [
-      { key: 'docker_installed', label: '已安装 Docker', value: req.docker_installed },
+      { key: 'docker_installed', label: 'Docker 已安装', value: req.docker_installed },
       { key: 'docker_running', label: 'Docker 服务运行中', value: req.docker_running },
       { key: 'compose_installed', label: 'Docker Compose 可用', value: req.compose_installed },
       { key: 'permission_ok', label: '当前用户有 Docker 权限', value: req.permission_ok }
     ];
-    const osValue = textValue(req.os, '').trim();
-    if (osValue) {
-      checks.push({ key: 'os', label: '操作系统为 Ubuntu', value: /ubuntu/i.test(osValue) });
+    if (platform.kind === 'ubuntu' || platform.kind === 'windows') {
+      checks.push({
+        key: 'os',
+        label: platform.kind === 'windows' ? 'Windows 10/11 与 Docker Desktop' : '操作系统为 Ubuntu',
+        value: true
+      });
+    } else if (platform.kind === 'linux-other') {
+      checks.push({ key: 'os', label: '操作系统为 Ubuntu', value: false });
     }
     const failedCount = checks.filter((item) => item.value === false).length;
     const knownCount = checks.filter((item) => typeof item.value === 'boolean').length;
@@ -638,6 +833,8 @@
       failedCount,
       unknownCount,
       knownCount,
+      platform,
+      platformUnknown: platform.kind === 'unknown',
       checks
     };
   }
@@ -670,7 +867,7 @@
         copyButton.appendChild(makeIcon('i-copy'));
         copyButton.appendChild(document.createTextNode(config.commandLabel || '复制修复命令'));
         copyButton.addEventListener('click', () => {
-          copyText(config.command, '修复命令已复制，请在 Ubuntu 终端中执行。');
+          copyText(config.command, config.copySuccess || '修复命令已复制，请在当前系统的终端中执行。');
         });
         actions.appendChild(copyButton);
       }
@@ -695,99 +892,50 @@
     if (!grid) return;
 
     const req = asRecord(requirements);
-    const osValue = textValue(req.os, '');
-    const commandDocker = 'sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2';
-    const commandCompose = 'sudo apt-get update && sudo apt-get install -y docker-compose-v2';
-    const commandStart = 'sudo systemctl enable --now docker';
-    const commandPermission = 'sudo usermod -aG docker "$USER" && newgrp docker';
-    const commandOs = 'lsb_release -a';
+    const platform = getPlatformInfo(req.os);
+    const platformCopy = getRequirementCopy(platform);
+    applyPlatformCopy(platform);
+    const osConfig = getOsRequirementConfig(platform, platform.display);
 
-    const makeBoolConfig = (value, title, icon, readyText, warningText, unknownText, command, commandLabel) => {
+    const makeBoolConfig = (value, item, icon) => {
       if (value === true) {
-        return { title, icon, tone: 'ready', statusText: '已就绪', description: readyText };
+        return {
+          title: item.title,
+          icon,
+          tone: 'ready',
+          statusText: '已就绪',
+          description: item.readyText,
+          copySuccess: platformCopy.copySuccess
+        };
       }
       if (value === false) {
-        return { title, icon, tone: 'warning', statusText: '需要处理', description: warningText, command, commandLabel };
+        return {
+          title: item.title,
+          icon,
+          tone: 'warning',
+          statusText: '需要处理',
+          description: item.warningText,
+          command: item.command,
+          commandLabel: item.commandLabel,
+          copySuccess: platformCopy.copySuccess
+        };
       }
       return {
-        title,
+        title: item.title,
         icon,
         tone: 'unknown',
         statusText: '状态未知',
-        description: `${unknownText}${options.forced ? ' 本地服务当前无法连接。' : ''}`
+        description: `${item.unknownText}${options.forced ? ' 本地服务当前无法连接。' : ''}`,
+        copySuccess: platformCopy.copySuccess
       };
     };
 
-    const osKnown = Boolean(osValue);
-    const osReady = osKnown ? /ubuntu/i.test(osValue) : false;
-    const osConfig = !osKnown
-      ? {
-        title: 'Ubuntu 系统',
-        icon: 'i-server',
-        tone: 'unknown',
-        statusText: '状态未知',
-        description: '本地服务未返回操作系统信息，无法确认是否为 Ubuntu。'
-      }
-      : osReady
-        ? {
-          title: 'Ubuntu 系统',
-          icon: 'i-server',
-          tone: 'ready',
-          statusText: '已就绪',
-          description: `检测到当前系统：${osValue}。`
-        }
-        : {
-          title: 'Ubuntu 系统',
-          icon: 'i-server',
-          tone: 'warning',
-          statusText: '需要处理',
-          description: `当前系统为“${osValue}”。本向导面向 Ubuntu，请使用受支持的 Ubuntu 版本。`,
-          command: commandOs,
-          commandLabel: '复制查看系统命令'
-        };
-
     const cardConfigs = [
       osConfig,
-      makeBoolConfig(
-        req.docker_installed,
-        'Docker 已安装',
-        'i-package',
-        '已检测到 Docker 命令，可以继续。',
-        '未检测到 Docker。请复制右侧命令安装后重新检测。',
-        '本地服务未返回 Docker 安装状态。',
-        commandDocker,
-        '复制安装命令'
-      ),
-      makeBoolConfig(
-        req.docker_running,
-        'Docker 服务运行中',
-        'i-play',
-        'Docker 守护进程正在运行。',
-        'Docker 服务未运行。复制命令启动，并为当前用户授予权限。',
-        '本地服务未返回 Docker 运行状态。',
-        commandStart,
-        '复制启动命令'
-      ),
-      makeBoolConfig(
-        req.compose_installed,
-        'Docker Compose 可用',
-        'i-server',
-        'Docker Compose 插件已就绪。',
-        '未检测到 Docker Compose。请复制命令安装 compose 插件。',
-        '本地服务未返回 Compose 状态。',
-        commandCompose,
-        '复制安装命令'
-      ),
-      makeBoolConfig(
-        req.permission_ok,
-        '当前用户 Docker 权限',
-        'i-user',
-        '当前用户无需 sudo 即可使用 Docker。',
-        '当前用户没有 Docker 权限。执行命令后请注销并重新登录，再重新检测。',
-        '本地服务未返回权限检查结果。',
-        commandPermission,
-        '复制授权命令'
-      )
+      makeBoolConfig(req.docker_installed, platformCopy.docker, 'i-package'),
+      makeBoolConfig(req.docker_running, platformCopy.running, 'i-play'),
+      makeBoolConfig(req.compose_installed, platformCopy.compose, 'i-server'),
+      makeBoolConfig(req.permission_ok, platformCopy.permission, 'i-user')
     ];
 
     grid.replaceChildren();
@@ -804,23 +952,35 @@
       }
       if (nextLabel) nextLabel.textContent = '继续配置（环境状态未知）';
     } else if (summary.ready) {
-      if (summaryElement) summaryElement.textContent = '环境已就绪，可以继续配置。';
+      if (summaryElement) {
+        summaryElement.textContent = summary.platformUnknown
+          ? 'Docker 检查已就绪；操作系统未识别，可继续配置，部署时本地服务会再次校验。'
+          : summary.platform.kind === 'windows'
+            ? 'Windows 10/11 与 Docker Desktop 环境已就绪；请确认 Docker Desktop 使用 Linux containers，然后继续配置。'
+            : '环境已就绪，可以继续配置。';
+      }
       if (nextButton) {
         nextButton.disabled = false;
-        nextButton.title = '';
+        nextButton.title = summary.platformUnknown ? '操作系统未识别，但 Docker 检查已就绪' : '';
       }
-      if (nextLabel) nextLabel.textContent = '下一步：账号与模型';
+      if (nextLabel) nextLabel.textContent = summary.platformUnknown ? '继续配置（系统未识别）' : '下一步：账号与模型';
     } else if (summary.failedCount > 0) {
       if (summaryElement) {
-        summaryElement.textContent = `发现 ${summary.failedCount} 项环境未就绪，请按卡片中的命令修复并重新检测。`;
+        summaryElement.textContent = summary.platform.kind === 'windows'
+          ? `发现 ${summary.failedCount} 项 Windows/Docker Desktop 环境未就绪，请按卡片使用 PowerShell 修复并重新检测。`
+          : `发现 ${summary.failedCount} 项环境未就绪，请按卡片中的命令修复并重新检测。`;
       }
       if (nextButton) {
         nextButton.disabled = true;
-        nextButton.title = '请先完成环境修复并重新检测';
+        nextButton.title = summary.platform.kind === 'windows' ? '请先完成 Docker Desktop 修复并重新检测' : '请先完成环境修复并重新检测';
       }
       if (nextLabel) nextLabel.textContent = '请先修复环境';
     } else {
-      if (summaryElement) summaryElement.textContent = '部分环境状态未知，本地服务可能会拒绝部署，建议先重新检测。';
+      if (summaryElement) {
+        summaryElement.textContent = summary.platformUnknown
+          ? '部分 Docker 状态未知；操作系统也未识别。建议重新检测，或确认 Docker 就绪后继续配置。'
+          : '部分环境状态未知，本地服务可能会拒绝部署，建议先重新检测。';
+      }
       if (nextButton) {
         nextButton.disabled = false;
         nextButton.title = '部分环境状态未知，仍可继续填写配置';

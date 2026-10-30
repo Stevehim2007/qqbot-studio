@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**3.5.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**3.5.1**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
 
@@ -134,6 +134,7 @@ Windows 版不是 Ubuntu 主项目的同一发行版、不是本仓库的自动�
 - EXE 构建产物：从 [windows-build workflow](https://github.com/Stevehim2007/qqbot-studio-windows/actions/workflows/windows-build.yml) 最新成功构建的 artifact 下载 `QQBotStudioWindows.exe`
 - Releases 页面：<https://github.com/Stevehim2007/qqbot-studio-windows/releases>（当前没有正式 EXE Release 资产；以后续实际发布为准）
 - 主仓库内的 [`windows/README.md`](windows/README.md) 是早期移植资料/开发记录，正式 Windows 入口以上面的独立仓库为准。
+- Windows 双发行版（原生/ Docker）的可行性、noVNC 取舍和限制见 [`docs/windows-editions-research.md`](docs/windows-editions-research.md)。
 
 Windows 版使用 Docker Desktop + WSL2 **Linux containers**，不是 Windows containers。当前尚未完成真实 Windows 10/11 + Docker Desktop + EXE 的完整 E2E 验收，请不要把它当作与 Ubuntu 主项目同等级的生产承诺。Windows 数据目录默认在 `%LOCALAPPDATA%\QQBotStudio\data`，不能直接复制 Linux 的 `~/.local/share/qqbot-studio` 混合使用。
 
