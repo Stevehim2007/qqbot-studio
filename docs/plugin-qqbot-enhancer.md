@@ -178,11 +178,17 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `ignore_command_prefixes` | list[str] | `["/"]` | 不参与概率回复的指令前缀 |
 | `inherit_astrbot_wake_prefix` | bool | `true` | 同时使用 AstrBot 全局 `wake_prefix` |
 | `system_prompt` | text | 内置简洁中文提示 | 直连 provider 时使用；无群人格映射时的旧默认 |
-| `group_personas` | text(JSON) | `{}` | 实例级群人格映射；direct 模式按群 ID 注入 |
+| `group_personas` | text(JSON) | `{}` | 实例级群人格映射；direct 按群注入，astrbot 模式绑定每 UMO 的 AstrBot Persona |
 | `group_persona_enabled` | bool | `true` | 启用群人格映射 |
 | `group_persona_max_groups` | int | `50` | 最多群映射数量 |
 | `group_persona_max_prompt_chars` | int | `4000` | 单个人格 prompt 最大长度 |
 | `group_persona_max_name_chars` | int | `64` | 人格名称最大长度 |
+| `group_identity_context_enabled` | bool | `true` | direct 群聊身份上下文 |
+| `group_identity_history_limit` | int | `8` | 最近用户消息条数 |
+| `group_identity_history_ttl_seconds` | int | `600` | 身份上下文内存 TTL |
+| `group_identity_message_max_chars` | int | `200` | 历史单条最大字符数 |
+| `group_identity_nickname_max_chars` | int | `32` | 昵称最大字符数 |
+| `group_identity_redact_in_reply` | bool | `true` | 回复中脱敏昵称/QQ/群号 |
 | `llm_timeout_seconds` | int | `45` | 单次 LLM/视觉请求超时 |
 | `native_vision_first` | bool | `true` | 先尝试当前 provider 原生视觉 |
 | `vision_provider_id` | string | `""` | 插件指定的视觉/图片转述 provider，WebUI 使用官方 `_special: select_provider` |
@@ -502,14 +508,14 @@ data/plugin_data/qqbot_enhancer/collected_stickers/index.json
 
 限制：真实视觉 provider 的图片识别准确性、DeepSeek Flash/Qwen 等实际视觉接口和 QQ 端展示均未验证；视觉判断会产生额外 token 消耗，默认关闭。AI 建议分类也只通过本地安全正则，非法分类回退默认分类。
 
-### 4.12 模块化接口与依赖装配（1.15.0）
+### 4.12 模块化接口与依赖装配（1.16.0）
 
 `main.py` 是 AstrBot 组合根：保留 `Star`、`filter` 装饰器、事件 hander、`Context`/`Comp` 适配和模块装配。业务能力拆分为：
 
 | 模块 | 职责 |
 |---|---|
 | `interfaces.py` | `StickerRepository` / `MediaDecoder` / `ImageSearchProvider` / `SongRepository` / `LLMService` Protocol；`MediaPayload` / `StickerRecord` / `ImageCandidate` 数据对象 |
-| `config.py` | 169 个默认配置集中定义、默认值兜底、旧 config 缺失键兼容、类型读取 |
+| `config.py` | 175 个默认配置集中定义、默认值兜底、旧 config 缺失键兼容、类型读取 |
 | `media.py` | 图片 magic/尺寸、base64 解码、媒体引用、公网 HTTP(S) URL 过滤 |
 | `image_search.py` | 中/日/英文相关性规范化、别名/阈值过滤纯函数 |
 | `songs.py` | 本地授权音频路径解析、超大文件检测、歌曲 repository |
@@ -522,7 +528,7 @@ data/plugin_data/qqbot_enhancer/collected_stickers/index.json
 
 兼容性：
 
-- 配置 schema 仍 169 项、`DEFAULTS` 与 schema 完全一致；
+- 配置 schema 仍 175 项、`DEFAULTS` 与 schema 完全一致；
 - 旧 config 只需提供已有字段，新字段通过 `ConfigReader` 默认值补齐；
 - 旧收藏 `index.json` 版本/字段仍可读取，旧内置 8 张贴纸保持不变；
 - `main.py` 优先 `from .config/...`，直接测试 harness 使用同目录绝对导入 fallback；新增 `__init__.py` 后插件目录可作为 package 部署；
@@ -731,12 +737,38 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - direct 模式无 AstrBot 持久会话历史，两个群的 prompt 不会互相污染；日志不输出 prompt。
 - 旧 `system_prompt`、AstrBot 默认人格和其它旧配置键继续兼容。
 
-#### astrbot memory 模式（明确降级）
+#### astrbot memory 模式（已实现，基于 AstrBot v4.29.3 官方 API）
 
-当前未核实到 AstrBot v4.29 稳定、公开的“按会话切换 Agent persona”API，因此本版本**不会**修改 Agent 全局人格或猜测注入路径：
-- `group_personas` 只在 direct 模式请求时按会话生效。
-- memory 模式若检测到群映射，只记录不含 prompt 的告警，并在 `/option` 提示建议 `memory_mode=direct`；不串改其它群、不伪造 API。
-- 如果未来 AstrBot 提供稳定会话级 persona API，可在官方依据下新增适配。
+已核实 AstrBot v4.29.3 官方文档和源码提供以下稳定插件能力：
+
+- `filter.on_waiting_llm_request()`：在请求构建前触发；
+- `filter.on_llm_request()`：可修改 `ProviderRequest.system_prompt`；
+- `Context.persona_manager` 的 `get_persona/create_persona/update_persona`；
+- `Context.conversation_manager` 的 `get_curr_conversation_id/get_conversation/new_conversation/update_conversation`，
+  且 `update_conversation(..., persona_id=...)` 是文档化用法。
+
+实现：
+
+- `memory_mode=astrbot` 且启用 `group_persona_enabled` 时，按 `event.unified_msg_origin`（群会话/私聊会话）解析 `group_personas`。
+- 为每个映射创建专用 AstrBot Persona：`qqbot_enhancer_group_<群号>`；`default` 使用
+  `qqbot_enhancer_group_default`。绝不修改 `default`/全局人格或其它群的人格。
+- `on_waiting_llm_request` 在 AstrBot 构建请求前把当前 UMO 的 conversation 绑定到该 Persona；
+  AstrBot 自己注入 Persona，同时保留该 UMO 的持久会话历史。不同群使用不同 conversation + persona。
+- 若 AstrBot 的 manager API 不完整，`on_llm_request` 仅对本轮请求追加“Group Persona Instructions”作为
+  per-request fallback，不修改全局人格；`/option` 会明确显示 fallback/降级状态。
+- 未映射群：有 `default` 时使用默认映射；没有 default 时保留 AstrBot 当前配置的全局人格，不伪造按群隔离。
+- Provider/model/API Key 完全沿用 AstrBot 当前会话的 DeepSeek 默认 provider；插件不新增 Key、不创建第二套 provider、
+  不直接调用 LLM。
+- AstrBot 中删除群映射不会自动删除旧的专用 Persona（避免误删），只是不再绑定。群 ID/prompt/名称限制继续沿用
+  `group_persona_*` 配置。
+
+官方依据：
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/plugin.md#llm-请求时>
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/plugin.md#人格设定管理器-personamanager>
+- <https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/plugin.md#update_conversation>
+
+限制：AstrBot 真实多群 E2E、真实 QQ 展示和 Persona DB 并发写入未在本环境验证；单测使用 mock
+PersonaManager/ConversationManager/Provider。两群必须分别发送消息才能创建并绑定各自会话。
 
 #### API/管理
 
@@ -750,6 +782,22 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 ```
 
 管理 API 只读写配置值，不记录 token/prompt 到日志。真实 AstrBot 多群人格 E2E、Agent 会话级 persona 能力均未验证。
+
+### 4.21 群聊身份识别上下文（1.16.0）
+
+direct 模式 `_build_prompt` 增加结构化身份信息：
+
+- 场景（群聊/私聊）、群号（有则）、发送者昵称、发送者 QQ（有则）。
+- 明确提示“QQ/群号/昵称仅用于区分当前会话成员，禁止在回复中输出”。
+- 最近用户消息按内存 `unified_msg_origin` 记录，prompt 每条前缀 `[昵称(QQ)]` 内容；当前消息同样前缀。
+- 无昵称时使用 `未知` 或 `未知(QQ)`；私聊群号为 `无（私聊）`；纯图片/表情/空消息使用安全占位。
+- 历史仅内存保存，受 `group_identity_history_limit`、`group_identity_history_ttl_seconds`、单条长度和会话上限限制；不写盘、不记录用户 ID/文字到日志。
+- 回复脱敏：当 `group_identity_redact_in_reply=true` 时，模型回复中的当前/历史昵称、QQ、群号会被移除，避免直接展示。错误/日志不输出 prompt 或身份标识。
+- 旧配置/关闭开关：`group_identity_context_enabled=false` 时保持旧 prompt 结构；旧 `system_prompt` 不受影响。
+
+AstrBot memory 模式：未核实到 v4.29 稳定公开的逐消息发送者元数据注入 hook，因此不伪造 event 字段或全局 Agent 消息，明确安全降级；`/option` 和启动日志只提示建议 direct，不输出昵称/QQ/群号。不会串群。
+
+真实 AstrBot/QQ 多群身份、记忆和展示 E2E 未验证。
 
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
@@ -922,7 +970,8 @@ yield event.chain_result(chain)
 33. **语义 tags/meaning/tone 和 AI 分类建议不保证语义准确。** 本地情绪映射与 AI JSON 都可能误判；只写入通过长度/字符/路径安全校验的元数据。AI 失败/低置信度不移动旧收藏；真实 DeepSeek/provider/QQ E2E 未验证。
 34. **统一协议依赖模型遵循安全 marker 格式。** 不输出 marker、marker 非法或 safe_tool 无权限时只回退文字；旧 `[[sticker:...]]` 仍兼容但不再和新 safe_tool 同时触发。真实 AstrBot/QQ 的人格一致性、图片展示和 provider 兼容性未做端到端验证。
 35. **`/food` 依赖第三方公开站点 `food.dlsz.top` 的当前接口/数据。** 站点路径、字段、位置映射、评价时间或可用性变化可能导致空结果/错误；当前环境真实冒烟火锅正常、南关区 location_id 当前无餐厅。真实 QQ 展示、长期 API 稳定性和站点权限策略未验证；不记录 Key/用户 ID，只读公开接口。
-36. **按群人格只在 direct 模式保证；astrbot memory 模式明确降级。** 未核实到 AstrBot v4.29 稳定公开的会话级 persona API，因此不会修改 Agent 全局人格，也不会靠猜测实现。真实 AstrBot 多群 session/persona 行为、Studio 配置 API 端到端和 QQ 展示未验证；不记录 prompt/token。
+36. **按群人格在 direct 与 astrbot memory 模式均实现。** astrbot 模式基于 AstrBot v4.29.3 官方 `PersonaManager`、`ConversationManager.update_conversation(persona_id=...)` 和 `on_waiting_llm_request/on_llm_request`：按 UMO 绑定专用 Persona，保留会话记忆和默认 DeepSeek provider，不新增 Key。manager API 不可用时仅做单轮 system prompt fallback，不改全局人格。真实 AstrBot 多群 session/persona 行为、Studio 配置 API 端到端和 QQ 展示未验证；不记录 prompt/token。
+37. **群聊身份上下文是 direct 插件内内存历史，不替代 AstrBot 完整会话。** 只保留最近有限条消息；多实例/重启/并发会丢失历史。QQ/昵称脱敏可能误删回复中的同名字词；真实 QQ 多群身份/记忆、Agent memory hook 和展示 E2E 未验证。不要把 QQ/昵称写入日志或发送给非 LLM 的下游。
 19. **自动表情反应只针对无文字图片/Face。** 带文字的图片仍按识图/聊天逻辑处理。默认 `user_sticker_reaction_enabled=true` 时，@/私聊中的无文字纯图片会优先走短句反应而不是原生视觉理解；需要视觉理解时应带文字、关闭该开关，或显式调整概率。
 20. **收藏表情数据目录/权限/index 损坏未做真实部署验证。** 使用公开 `StarTools.get_data_dir()` 和原子写入，但磁盘写满、权限变化、手工破坏 index、跨容器读取等仍可能导致收藏不可用；插件会降级提示，不会主动删除用户文件。没有实现破坏性删除命令。
 21. **收藏表情不会自动收集所有用户图片。** 只有显式执行 `/收藏表情` 才会保存；不会保存朋友圈/聊天原文、用户 ID 或敏感路径。收藏文件跨 QQ/协议端可读性仍取决于部署与文件服务。
@@ -937,7 +986,7 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-当前增强插件测试为 **161 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析（含 title/desc 元数据）、百度 JSON 解析、相关性中/日/英文规范化/阈值过滤/无相关候选不发图/百度第二源默认不调用、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用、AI 自动收藏默认关闭、任意群成员图片视觉判定收藏、AI 失败本地启发式降级、AI 非表情/大图/纯 Face 不收藏、每小时限频、provider overrides、恶意分类安全回退、无 tool/电脑控制、模块导入/package 相对导入/ConfigReader 旧配置/旧 index/媒体/歌曲/相关性/store/llm helper、安全工具白名单/参数 schema/路径/URL/命令拒绝、search_images/send_sticker/collect_sticker/list_sticker_categories mock、权限关闭回退、多 marker 拒绝、memory 模式工具链替换、无 eval/exec/subprocess、收藏目录 0755/文件 0644、已有树迁移、符号链接跳过、越界不 chmod、root 创建权限失败降级、旧 index/收藏读写回归、自然语言嘲讽/开心/收藏分类/通用表情/无匹配/非 @ 不触发/冷却/禁用降级、一次一张且不调用 LLM、最近收藏重分类本地/AI/缓存/无媒体/普通聊天/不完整指令、移动成功 0755/0644、store move/index 原子回滚/同分类/符号链接拒绝、AI 不可用保留旧分类、命令/marker 不误触发、tags/meaning/tone index 持久化与旧 index 缺省兼容、AI 语义分类、按 tags 触发自然语言/AI marker/safe_tools send_sticker、全局收藏跨会话查询/发送、多分类文件去重单份、多分类命令/计数/列表/发送、追加/移出/只放到分类、旧 index categories 迁移、store 分类原子更新/权限、统一 AI 协议单 prompt、双 marker 只执行一个附件、无 marker 不随机补发、legacy sticker marker 兼容、memory 语义 only/单附件、非法 tool marker 纯文本回退、/food 关键词/地点双顺序/location_id/无结果/地点无匹配/超时/接口错误/非 JSON/最多结果/冷却/URL/host 安全/命令别名/不调用 LLM、group_personas JSON 解析/长度数量限制、两个群 prompt 隔离、私聊/未知群 default fallback、非法映射旧配置回退、memory 模式安全降级且不泄漏 prompt。单测本身**不访问真实网络**。
+当前增强插件测试为 **166 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析（含 title/desc 元数据）、百度 JSON 解析、相关性中/日/英文规范化/阈值过滤/无相关候选不发图/百度第二源默认不调用、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用、AI 自动收藏默认关闭、任意群成员图片视觉判定收藏、AI 失败本地启发式降级、AI 非表情/大图/纯 Face 不收藏、每小时限频、provider overrides、恶意分类安全回退、无 tool/电脑控制、模块导入/package 相对导入/ConfigReader 旧配置/旧 index/媒体/歌曲/相关性/store/llm helper、安全工具白名单/参数 schema/路径/URL/命令拒绝、search_images/send_sticker/collect_sticker/list_sticker_categories mock、权限关闭回退、多 marker 拒绝、memory 模式工具链替换、无 eval/exec/subprocess、收藏目录 0755/文件 0644、已有树迁移、符号链接跳过、越界不 chmod、root 创建权限失败降级、旧 index/收藏读写回归、自然语言嘲讽/开心/收藏分类/通用表情/无匹配/非 @ 不触发/冷却/禁用降级、一次一张且不调用 LLM、最近收藏重分类本地/AI/缓存/无媒体/普通聊天/不完整指令、移动成功 0755/0644、store move/index 原子回滚/同分类/符号链接拒绝、AI 不可用保留旧分类、命令/marker 不误触发、tags/meaning/tone index 持久化与旧 index 缺省兼容、AI 语义分类、按 tags 触发自然语言/AI marker/safe_tools send_sticker、全局收藏跨会话查询/发送、多分类文件去重单份、多分类命令/计数/列表/发送、追加/移出/只放到分类、旧 index categories 迁移、store 分类原子更新/权限、统一 AI 协议单 prompt、双 marker 只执行一个附件、无 marker 不随机补发、legacy sticker marker 兼容、memory 语义 only/单附件、非法 tool marker 纯文本回退、/food 关键词/地点双顺序/location_id/无结果/地点无匹配/超时/接口错误/非 JSON/最多结果/冷却/URL/host 安全/命令别名/不调用 LLM、group_personas JSON 解析/长度数量限制、两个群 prompt 隔离、私聊/未知群 default fallback、非法映射旧配置回退、memory 模式安全降级且不泄漏 prompt、群聊身份上下文同群两昵称/QQ 区分、私聊/无昵称 fallback、历史条数限制、回复身份脱敏、关闭旧 prompt 兼容、memory 身份 hook 安全降级且 option 不泄漏身份。单测本身**不访问真实网络**。
 
 非单测在线冒烟（不代表 AstrBot/QQ 端到端）：
 
@@ -951,4 +1000,4 @@ python3 -m unittest tests.test_enhancer_plugin -v
 
 第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
 
-本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **357 tests OK**；其中本插件 161 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。
+本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **362 tests OK**；其中本插件 166 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。

@@ -1,7 +1,7 @@
 name: qqbot_enhancer
 display_name: QQ Bot 增强回复
 desc: QQ 群 @/私聊必回、概率回复、图片理解/搜索、本地唱歌、用户表情反应与收藏分类增强插件。
-version: 1.15.0
+version: 1.17.0
 author: QQ Bot Studio
 support_platforms:
   - aiocqhttp

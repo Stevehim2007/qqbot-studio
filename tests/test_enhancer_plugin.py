@@ -68,6 +68,14 @@ class FakeFilter:
         return lambda func: func
 
     @staticmethod
+    def on_waiting_llm_request(*args, **kwargs):
+        return lambda func: func
+
+    @staticmethod
+    def on_llm_request(*args, **kwargs):
+        return lambda func: func
+
+    @staticmethod
     def command(*args, **kwargs):
         FakeFilter.command_registrations.append((args, kwargs))
         return lambda func: func
@@ -329,6 +337,75 @@ class FakeProvider:
         return SimpleNamespace(id=self.provider_config["id"])
 
 
+class FakePersona:
+    def __init__(self, persona_id, system_prompt):
+        self.persona_id = str(persona_id)
+        self.system_prompt = str(system_prompt)
+
+
+class FakePersonaManager:
+    def __init__(self):
+        self.personas = {}
+        self.created = []
+        self.updated = []
+
+    async def get_persona(self, persona_id):
+        if persona_id not in self.personas:
+            raise ValueError("missing")
+        return self.personas[persona_id]
+
+    async def create_persona(self, persona_id, system_prompt):
+        if persona_id in self.personas:
+            raise ValueError("exists")
+        persona = FakePersona(persona_id, system_prompt)
+        self.personas[persona_id] = persona
+        self.created.append((persona_id, system_prompt))
+        return persona
+
+    async def update_persona(self, persona_id, system_prompt=None):
+        if persona_id not in self.personas:
+            raise ValueError("missing")
+        self.personas[persona_id].system_prompt = str(system_prompt or "")
+        self.updated.append((persona_id, system_prompt))
+        return self.personas[persona_id]
+
+
+class FakeConversation:
+    def __init__(self, cid, persona_id=None):
+        self.cid = cid
+        self.persona_id = persona_id
+
+
+class FakeConversationManager:
+    def __init__(self):
+        self.current = {}
+        self.conversations = {}
+        self.counter = 0
+        self.updates = []
+
+    async def get_curr_conversation_id(self, umo):
+        return self.current.get(umo)
+
+    async def get_conversation(self, umo, cid):
+        return self.conversations.get((umo, cid))
+
+    async def new_conversation(self, umo, platform_id=None, persona_id=None):
+        self.counter += 1
+        cid = f"conv-{self.counter}"
+        self.current[umo] = cid
+        self.conversations[(umo, cid)] = FakeConversation(cid, persona_id)
+        return cid
+
+    async def update_conversation(
+        self, umo, conversation_id=None, history=None, title=None, persona_id=None
+    ):
+        cid = conversation_id or self.current.get(umo)
+        conv = self.conversations.get((umo, cid))
+        if conv is not None and persona_id is not None:
+            conv.persona_id = persona_id
+            self.updates.append((umo, cid, persona_id))
+
+
 class FakeContext:
     def __init__(
         self,
@@ -339,6 +416,8 @@ class FakeContext:
         responder=None,
         global_provider_settings=None,
         stars=None,
+        persona_manager=None,
+        conversation_manager=None,
     ):
         self.provider_id = provider_id
         self.providers = {}
@@ -349,6 +428,8 @@ class FakeContext:
         self.responder = responder
         self.calls = []
         self.stars = [] if stars is None else stars
+        self.persona_manager = persona_manager
+        self.conversation_manager = conversation_manager
         self.global_config = {
             "wake_prefix": ["/"],
             "provider_settings": {
@@ -5422,6 +5503,313 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("A群专属人格", text)
         self.assertNotIn("B群专属人格", text)
         self.assertEqual(context.calls, [])
+
+    async def test_astrbot_mode_binds_group_personas_to_separate_sessions(self):
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        context = FakeContext(
+            persona_manager=persona_mgr,
+            conversation_manager=conv_mgr,
+        )
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas=self._persona_json(),
+            system_prompt="全局旧提示词",
+        )
+        event_a = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="111111",
+            session_id="agent-a",
+        )
+        event_b = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="222222",
+            session_id="agent-b",
+        )
+        await plugin.bind_agent_group_persona(event_a)
+        await plugin.bind_agent_group_persona(event_b)
+
+        self.assertEqual(
+            sorted(item[0] for item in persona_mgr.created),
+            ["qqbot_enhancer_group_111111", "qqbot_enhancer_group_222222"],
+        )
+        conv_a = conv_mgr.conversations[(event_a.unified_msg_origin, conv_mgr.current[event_a.unified_msg_origin])]
+        conv_b = conv_mgr.conversations[(event_b.unified_msg_origin, conv_mgr.current[event_b.unified_msg_origin])]
+        self.assertNotEqual(conv_a.cid, conv_b.cid)
+        self.assertEqual(conv_a.persona_id, "qqbot_enhancer_group_111111")
+        self.assertEqual(conv_b.persona_id, "qqbot_enhancer_group_222222")
+        self.assertIn("A群专属人格", persona_mgr.personas[conv_a.persona_id].system_prompt)
+        self.assertIn("B群专属人格", persona_mgr.personas[conv_b.persona_id].system_prompt)
+        self.assertEqual(context.provider_id, "deepseek-flash")
+        self.assertEqual(context.calls, [])
+        self.assertNotIn("api_key", plugin.config)
+
+        req_a = SimpleNamespace(
+            system_prompt="AstrBot global persona",
+            conversation=conv_a,
+        )
+        await plugin.inject_agent_group_persona_prompt(event_a, req_a)
+        self.assertNotIn("Group Persona Instructions", req_a.system_prompt)
+
+    async def test_astrbot_unknown_group_uses_default_or_keeps_global_persona(self):
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        context = FakeContext(
+            persona_manager=persona_mgr,
+            conversation_manager=conv_mgr,
+        )
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas=self._persona_json(),
+        )
+        unknown_with_default = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="999999",
+            session_id="agent-unknown-default",
+        )
+        await plugin.bind_agent_group_persona(unknown_with_default)
+        conv = conv_mgr.conversations[
+            (
+                unknown_with_default.unified_msg_origin,
+                conv_mgr.current[unknown_with_default.unified_msg_origin],
+            )
+        ]
+        self.assertEqual(conv.persona_id, "qqbot_enhancer_group_default")
+        self.assertIn(
+            "默认群人格",
+            persona_mgr.personas["qqbot_enhancer_group_default"].system_prompt,
+        )
+
+        no_default_mgr = FakePersonaManager()
+        no_default_conv_mgr = FakeConversationManager()
+        no_default_context = FakeContext(
+            persona_manager=no_default_mgr,
+            conversation_manager=no_default_conv_mgr,
+        )
+        no_default_plugin = make_plugin(
+            no_default_context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas=json_module.dumps(
+                {"groups": {"111111": "A群人格"}}
+            ),
+            system_prompt="插件旧提示词",
+        )
+        no_default_event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="999999",
+            session_id="agent-unknown-nodefault",
+        )
+        self.assertIsNone(
+            no_default_plugin._agent_group_persona_target(no_default_event)
+        )
+        await no_default_plugin.bind_agent_group_persona(no_default_event)
+        self.assertEqual(no_default_mgr.created, [])
+        self.assertEqual(no_default_conv_mgr.current, {})
+        req = SimpleNamespace(system_prompt="AstrBot global persona", conversation=None)
+        await no_default_plugin.inject_agent_group_persona_prompt(no_default_event, req)
+        self.assertEqual(req.system_prompt, "AstrBot global persona")
+
+    async def test_astrbot_llm_request_fallback_without_manager_api(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas=self._persona_json(),
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="111111",
+            session_id="agent-fallback",
+        )
+        await plugin.bind_agent_group_persona(event)
+        req = SimpleNamespace(system_prompt="AstrBot global persona", conversation=None)
+        await plugin.inject_agent_group_persona_prompt(event, req)
+        self.assertIn("AstrBot global persona", req.system_prompt)
+        self.assertIn("Group Persona Instructions", req.system_prompt)
+        self.assertIn("A群专属人格", req.system_prompt)
+        self.assertEqual(context.calls, [])
+        self.assertEqual(plugin.context.provider_id, "deepseek-flash")
+        option_text = plugin._build_option_text()
+        self.assertIn("缺少 PersonaManager", option_text)
+        self.assertIn("安全降级", option_text)
+        self.assertNotIn("A群专属人格", option_text)
+
+class TestGroupIdentityContext(unittest.IsolatedAsyncioTestCase):
+    async def test_two_users_in_same_group_are_distinguishable_in_prompt(self):
+        context = FakeContext(responder=lambda kwargs: "回复")
+        plugin = make_plugin(
+            context,
+            group_identity_context_enabled=True,
+            group_identity_history_limit=8,
+        )
+        first = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            self_id="10001",
+            group_id="333333",
+            sender_id="20001",
+            sender_name="小明",
+            session_id="identity-group",
+        )
+        await run_handler(plugin, first)
+        second = FakeEvent(
+            [At("10001"), Plain("在吗")],
+            message_str="在吗",
+            private=False,
+            self_id="10001",
+            group_id="333333",
+            sender_id="20002",
+            sender_name="小红",
+            session_id="identity-group",
+        )
+        await run_handler(plugin, second)
+        self.assertEqual(len(context.calls), 2)
+        first_prompt = context.calls[0]["prompt"]
+        second_prompt = context.calls[1]["prompt"]
+        self.assertIn("群号：333333", first_prompt)
+        self.assertIn("[小明(20001)] 你好", first_prompt)
+        self.assertNotIn("小红(20002)", first_prompt)
+        self.assertIn("群号：333333", second_prompt)
+        self.assertIn("[小明(20001)] 你好", second_prompt)
+        self.assertIn("[小红(20002)] 在吗", second_prompt)
+        self.assertIn("发送者昵称：小红", second_prompt)
+        self.assertIn("发送者QQ：20002", second_prompt)
+        self.assertIn("禁止在回复中输出QQ号、群号或发送者昵称", second_prompt)
+
+    async def test_private_default_and_missing_nickname_fallback(self):
+        context = FakeContext(responder=lambda kwargs: "回复")
+        plugin = make_plugin(context, group_identity_context_enabled=True)
+        event = FakeEvent(
+            [Plain("你好")],
+            message_str="你好",
+            private=True,
+            sender_id="20003",
+            sender_name="",
+            session_id="identity-private",
+        )
+        await run_handler(plugin, event)
+        prompt = context.calls[0]["prompt"]
+        self.assertIn("场景：私聊", prompt)
+        self.assertIn("群号：无（私聊）", prompt)
+        self.assertIn("发送者昵称：未知", prompt)
+        self.assertIn("[未知(20003)] 你好", prompt)
+
+    async def test_identity_is_redacted_from_model_reply(self):
+        context = FakeContext(
+            responder=lambda kwargs: "小明(20001) 333333 收到"
+        )
+        plugin = make_plugin(context, group_identity_context_enabled=True)
+        event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            self_id="10001",
+            group_id="333333",
+            sender_id="20001",
+            sender_name="小明",
+            session_id="identity-redact",
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("小明", results[0].text)
+        self.assertNotIn("20001", results[0].text)
+        self.assertNotIn("333333", results[0].text)
+        self.assertIn("收到", results[0].text)
+
+    async def test_history_limit_and_disabled_legacy_prompt(self):
+        context = FakeContext(responder=lambda kwargs: "回复")
+        plugin = make_plugin(
+            context,
+            group_identity_context_enabled=True,
+            group_identity_history_limit=2,
+        )
+        for index, text in enumerate(("第一句", "第二句", "第三句", "第四句")):
+            event = FakeEvent(
+                [At("10001"), Plain(text)],
+                message_str=text,
+                private=False,
+                self_id="10001",
+                group_id="444444",
+                sender_id=str(20010 + index),
+                sender_name=f"用户{index}",
+                session_id="identity-limit",
+            )
+            await run_handler(plugin, event)
+        fourth_prompt = context.calls[3]["prompt"]
+        self.assertNotIn("第一句", fourth_prompt)
+        self.assertIn("第二句", fourth_prompt)
+        self.assertIn("第三句", fourth_prompt)
+        self.assertIn("第四句", fourth_prompt)
+
+        legacy_context = FakeContext(responder=lambda kwargs: "回复")
+        legacy_plugin = make_plugin(
+            legacy_context,
+            group_identity_context_enabled=False,
+        )
+        legacy_event = FakeEvent(
+            [Plain("你好")],
+            message_str="你好",
+            private=True,
+            sender_name="旧昵称",
+            sender_id="20099",
+            session_id="identity-legacy",
+        )
+        await run_handler(legacy_plugin, legacy_event)
+        legacy_prompt = legacy_context.calls[0]["prompt"]
+        self.assertIn("用户昵称：旧昵称", legacy_prompt)
+        self.assertNotIn("发送者QQ", legacy_prompt)
+        self.assertNotIn("群号：", legacy_prompt)
+
+    async def test_memory_mode_degrades_and_option_does_not_leak_identity(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_identity_context_enabled=True,
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            self_id="10001",
+            group_id="555555",
+            sender_id="20055",
+            sender_name="私密昵称",
+            session_id="identity-memory",
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+        option_event = FakeEvent(
+            [Plain("/option")],
+            message_str="/option",
+            private=True,
+        )
+        option_results = await run_option_command(plugin, option_event)
+        option_text = option_results[0].text
+        self.assertIn("memory_mode=astrbot", option_text)
+        self.assertIn("群聊身份上下文", option_text)
+        self.assertIn("安全降级", option_text)
+        self.assertNotIn("私密昵称", option_text)
+        self.assertNotIn("20055", option_text)
+        self.assertNotIn("555555", option_text)
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):

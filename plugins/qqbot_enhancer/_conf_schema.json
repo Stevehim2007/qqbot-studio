@@ -524,14 +524,14 @@
     "default": true
   },
   "group_personas": {
-    "description": "实例级群人格映射 JSON（direct 模式按群 ID 注入）",
+    "description": "实例级群人格映射 JSON（direct 按群注入；astrbot 模式绑定每 UMO 的 AstrBot Persona）",
     "type": "text",
     "default": "{}",
     "max_length": 100000,
     "hint": "例：{\"default\":{\"name\":\"默认\",\"prompt\":\"你是默认人格\"},\"groups\":{\"123456789\":{\"name\":\"群A\",\"prompt\":\"你是群A专属人格\"}}}；旧配置无此键时回退 system_prompt。"
   },
   "group_persona_enabled": {
-    "description": "启用按群人格映射",
+    "description": "启用按群人格映射（direct 与 AstrBot memory 模式）",
     "type": "bool",
     "default": true
   },
@@ -564,6 +564,56 @@
       "max": 128,
       "step": 1
     }
+  },
+  "group_identity_context_enabled": {
+    "description": "direct 模式注入群聊发送者身份上下文",
+    "type": "bool",
+    "default": true
+  },
+  "group_identity_history_limit": {
+    "description": "最近身份消息上下文条数",
+    "type": "int",
+    "default": 8,
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 1
+    }
+  },
+  "group_identity_history_ttl_seconds": {
+    "description": "身份消息上下文 TTL 秒",
+    "type": "int",
+    "default": 600,
+    "slider": {
+      "min": 30,
+      "max": 3600,
+      "step": 30
+    }
+  },
+  "group_identity_message_max_chars": {
+    "description": "历史消息单条最大字符数",
+    "type": "int",
+    "default": 200,
+    "slider": {
+      "min": 20,
+      "max": 500,
+      "step": 10
+    }
+  },
+  "group_identity_nickname_max_chars": {
+    "description": "昵称最大字符数",
+    "type": "int",
+    "default": 32,
+    "slider": {
+      "min": 1,
+      "max": 64,
+      "step": 1
+    }
+  },
+  "group_identity_redact_in_reply": {
+    "description": "回复中脱敏发送者/群标识",
+    "type": "bool",
+    "default": true
   },
   "system_prompt": {
     "description": "直连 provider 时使用的系统提示词",

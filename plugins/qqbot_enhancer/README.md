@@ -11,6 +11,7 @@ AstrBot v4.29 自动加载插件，提供：
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的授权音频并用 `Comp.Record` 发送，不调用 LLM，不烧 token；
 - `/food 火锅`、`/food 南关区 火锅`（别名 `/吃什么`、`/饭店`）通过固定 HTTPS host `food.dlsz.top` 公开只读 API 查询最多 5 家餐厅，格式化店名/地点/标签/均分/口味/性价比/评价数/最新日期，带超时、大小、冷却和中文降级，不调用 LLM；
 - `group_personas` 实例级群人格映射：direct 模式按群 ID 注入不同 system prompt，私聊/未知群 fallback default，旧 `system_prompt` 兼容；astrbot memory 模式无稳定会话级 persona API 时安全降级，不串群。
+- direct 模式群聊身份上下文：prompt 包含群号、发送者昵称/QQ 和最近消息 `[昵称(QQ)]` 前缀，避免多人混为同一人；QQ/昵称仅用于本次 LLM 理解，回复中自动脱敏；astrbot memory 模式无稳定逐消息 hook 时安全降级。
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式与配置入口，并用 AstrBot 公开的 `Context.get_all_stars()` 列出已加载插件元数据；不暴露 Key，不枚举不稳定的内部 handler。
 - 从 `stickers/` 读取本地图片，按关键词、情绪或随机方式附加到回复，带冷却和防重复；
 - @/私聊收到纯 `Comp.Image`/`Comp.Face` 时优先用自然短句反应，可按概率附加内置或收藏表情；
@@ -309,12 +310,33 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
   - 请求头 `X-QB-Token: <管理服务 token>`；不要使用用户输入/cookie 作为 token。
 - 真实 AstrBot 多群人格 E2E 未验证；Agent 模式只能在宿主 AstrBot 支持时另行实现，当前明确降级。
 
-## 代码架构（1.15.0）
+## 群聊身份上下文
+
+`group_identity_context_enabled=true` 时，direct 模式 `_build_prompt` 在本次 LLM 请求中增加：
+
+```text
+场景：群聊
+群号：123456789
+发送者昵称：小明
+发送者QQ：20001
+身份说明：昵称和QQ号仅用于区分当前会话中的群成员，禁止在回复中输出...
+最近用户消息（每行格式 [昵称(QQ)] 内容）：
+- [小红(20002)] 你好
+当前用户消息：[小明(20001)] 在吗
+```
+
+- 最近消息历史按 `unified_msg_origin` 仅保存在内存，限制 `group_identity_history_limit`、TTL、单条消息长度；不写盘。
+- 群号、昵称、QQ 仅用于本次 LLM 上下文；不输出到日志；模型回复中的当前/历史昵称、QQ、群号会按 `group_identity_redact_in_reply` 做脱敏。
+- 无昵称显示 `未知`/`未知(QQ)`；私聊显示 `群号：无（私聊）`；旧配置 `group_identity_context_enabled=false` 时保持旧 prompt 结构。
+- `memory_mode=astrbot`：未核实到 AstrBot v4.29 稳定公开的“逐消息发送者元数据注入”hook，不修改 event/全局 Agent 文本，明确安全降级；`/option` 提示建议 direct。
+- 不新增 LLM tool/电脑控制；QQ 号不能作为工具参数或文件路径。真实 AstrBot/QQ 多群身份 E2E 未验证。
+
+## 代码架构（1.16.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 
 - `interfaces.py`：`StickerRepository`、`MediaDecoder`、`ImageSearchProvider`、`SongRepository`、`LLMService` 等 Protocol 和 `MediaPayload`/`StickerRecord`/`ImageCandidate` 数据对象。
-- `config.py`：169 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
+- `config.py`：175 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
 - `media.py`：图片 magic/尺寸、base64、媒体引用和公网 HTTP(S) URL 安全过滤。
 - `image_search.py`：中/日/英文相关性规范化、别名/阈值过滤。
 - `songs.py`：本地授权音频的安全路径解析/列表仓库。
@@ -325,7 +347,7 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `safe_tools.py`：白名单工具 marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成。
 - `__init__.py`：让插件目录可作为 Python package 部署，`main.py` 优先相对导入；测试 harness 也支持同目录模块 fallback。
 
-未变：所有配置键、schema 169 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
+未变：所有配置键、schema 175 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
 
 ## 依赖
 
