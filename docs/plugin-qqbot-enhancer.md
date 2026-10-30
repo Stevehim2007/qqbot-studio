@@ -16,6 +16,7 @@
 - 从插件的 `stickers/` 目录发送本地表情包；支持关键词、情绪和随机选择，并带会话冷却、防连续重复、文件缺失降级。
 - @/私聊收到无文字纯图片/表情包或 `Comp.Face` 时，优先用自然短句反应，不调用 LLM；可按概率附加内置/收藏表情。
 - 支持 `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]`，收藏表情持久化到 AstrBot 插件数据目录并参与正常回复。
+- AI 语境选表情：direct 模式通过系统提示中的私有 `[[sticker:标签]]` 标记按表情情绪/收藏分类附一个本地表情；astrbot memory 模式用本地关键词/情绪/分类匹配 + 概率。不使用电脑控制、沙箱、终端或额外 LLM tool。
 - 指令前缀消息不参与概率回复，避免抢占 AstrBot 指令。
 - 回复成功后阻止 AstrBot 默认 LLM 再回复一次，避免重复。
 
@@ -188,6 +189,9 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `sticker_probability` | float | `0.35` | 每次回复附加表情包的概率 |
 | `sticker_cooldown_seconds` | int | `120` | 同一会话表情包冷却 |
 | `sticker_prevent_repeat` | bool | `true` | 避免连续发同一张 |
+| `sticker_ai_select_enabled` | bool | `true` | 启用 AI 语境选表情 |
+| `sticker_ai_marker_enabled` | bool | `true` | direct 模式注入私有表情标签说明 |
+| `sticker_ai_select_probability` | float | `0.6` | AI 语境选表情概率 |
 | `max_images_per_message` | int | `4` | 单条消息最多送入 provider 的图片数 |
 | `user_sticker_reaction_enabled` | bool | `true` | @/私聊纯图片/Face 自动短句反应 |
 | `user_sticker_reaction_probability` | float | `0.85` | 自动表情反应概率 |
@@ -199,6 +203,14 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `collected_sticker_use_probability` | float | `0.5` | 正常回复时优先使用收藏表情的概率 |
 | `collected_sticker_category_max_chars` | int | `32` | 收藏分类最大长度 |
 | `collected_sticker_list_limit` | int | `30` | `/表情列表` 最多展示条数 |
+| `pending_sticker_ttl_seconds` | int | `300` | 最近媒体内存缓存 TTL；每会话最多 3 张 |
+| `auto_collect_user_sticker_enabled` | bool | `false` | 默认关闭；显式开启才做小图/方图本地启发式自动收藏 |
+| `auto_collect_sticker_max_file_bytes` | int | `2000000` | 自动收藏候选最大字节数 |
+| `auto_collect_sticker_max_dimension` | int | `512` | 自动收藏候选最大宽/高 |
+| `auto_collect_sticker_default_category` | string | `未分类` | 自动收藏默认分类 |
+| `auto_collect_sticker_reply_enabled` | bool | `true` | 自动收藏后是否短回复 |
+| `auto_collect_sticker_cooldown_seconds` | int | `60` | 自动收藏每会话冷却 |
+| `auto_collect_sticker_saved_reply` | text | `收下了，已收藏到「{category}」。` | 自动收藏成功回复模板 |
 
 ### 4.4 长期对话记忆模式
 
@@ -342,7 +354,14 @@ stars = self.context.get_all_stars()  # list[StarMetadata]
 /发表情 [分类]
 ```
 
-- `/收藏表情` 必须同一条消息带有 `Comp.Image`；不带分类时默认 `未分类`。QQ 原生 `Comp.Face` 只有 id、没有可保存的图片字节，因此不能收藏，会中文提示改用图片/贴纸形式。
+- `/收藏表情 [分类]` 的媒体解析优先级：
+  1. 当前消息中的 `Comp.Image`；
+  2. 引用消息中通过 AstrBot `Comp.Reply.chain` 可读取的图片；
+  3. 本会话内存中最近 3 张用户图片缓存的最新一张（TTL 默认 300 秒）。
+- 不带分类时默认 `未分类`。QQ 原生 `Comp.Face` 只有 id、没有可保存的图片字节，因此不能收藏，会中文提示改用图片/贴纸形式。
+- 支持自然语言显式收藏，例如引用图片后 @ 机器人说“收藏这个表情 猫猫”；也支持先发图片，再单独 @ 机器人发送 `/收藏表情 猫猫` 从最近缓存取图。
+- 最近媒体缓存只存在内存：按 `unified_msg_origin` 每会话最多 3 张已解码图片，不写盘，不记录用户文字、用户 ID 或绝对路径；过期或会话过多时淘汰。
+- `auto_collect_user_sticker_enabled` **默认 false**。默认绝不会因用户发普通图片而自动收藏。只有管理员显式开启后，纯图片 @/私聊才可能通过本地尺寸/宽高比/大小启发式自动收藏明显的小图/方图；仍受 max bytes、max dimension、每会话冷却和总数量限制，大图不会自动采集。
 - `/表情分类` 输出分类与数量；`/表情列表 [分类]` 输出文件名（不含绝对路径）；`/发表情 [分类]` 随机发送一张收藏图片。
 - 没有实现删除命令；管理员需要清理时手动管理插件数据目录。
 
@@ -373,6 +392,37 @@ data/plugin_data/qqbot_enhancer/collected_stickers/index.json
 收藏表情会参与 `_maybe_pick_sticker`：当 `collected_sticker_use_probability` 命中且收藏可用时，优先从收藏池（可按消息中出现的分类名筛选）选择；否则继续使用内置 stickers。已有冷却和防重复逻辑同时生效。
 
 **限制：** 数据目录写权限、index 手工损坏、收藏图片跨容器/协议端可读性均未做真实部署验证；插件不会自动把用户发送过的图片全部收藏，必须显式使用 `/收藏表情`。
+
+### 4.10 AI 语境发表情（不使用电脑控制）
+
+#### direct 模式：私有标签协议
+
+当 `sticker_ai_select_enabled=true`、`sticker_ai_marker_enabled=true` 且 `memory_mode=direct` 时，插件在发送给 provider 的 system prompt 末尾追加一段极短说明：
+
+```text
+可选表情标签：happy, sad, ... 收藏分类名 ...
+仅在确实贴切时，于回复末尾原样附加一个
+[[sticker:标签]] 标记；不需要就别输出标记，不要输出多个，不要解释标记。
+```
+
+- 可用标签只来自内置 stickers 的合法 `emotion` 值和收藏表情的安全分类名；不暴露绝对路径、文件名或文件内容。
+- 模型回复中的私有标记会被正则提取并从用户可见文本删除；合法标签通过 `sticker_ai_select_probability`、`sticker_cooldown_seconds`、`sticker_prevent_repeat` 检查后，附一个 `Comp.Image.fromFileSystem` 本地表情。
+- 一次最多一个。多个标记、未知标签、非法字符、文件缺失、冷却中都只保留纯文本，绝不让标记泄漏。
+- marker 模式开启但没有返回标记时，视为模型选择“不发表情”，不再随机补一张；仅当 `sticker_ai_select_enabled` 或 `sticker_ai_marker_enabled` 关闭时，才保留旧 `_maybe_pick_sticker` 随机路径（`sticker_probability`/收藏使用概率等）。
+- 不注册 LLM tool，不需要 AstrBot 电脑控制/沙箱/终端权限，模型只能从注入的安全标签列表选择。
+
+#### astrbot memory 模式：本地匹配 + 概率
+
+默认 Agent 回复不保证能稳定返回插件私有标记，因此插件在 `on_decorating_result` 中：
+
+1. 仅处理带 `qqbot_enhancer_memory_reply` 标记的 Agent 回复；
+2. 若回复链里已有图片，则不再追加，保证一次最多一个；
+3. 通过 `sticker_ai_select_probability` 做一次概率判断；
+4. 命中后复用 `_maybe_pick_sticker`：优先本地关键词/情绪匹配、收藏分类匹配，再按 `sticker_probability`/冷却/防重复选择一个内置或收藏表情。
+
+这不是视觉大模型判断，也不读取聊天历史文件；只是一个不消耗额外 token 的本地启发式。若需要更精确的语义判断，可在未来引入独立可选的本地/远程分类器，但本版本没有增加任何 LLM tool 或系统工具权限。
+
+配置：`sticker_ai_select_enabled`、`sticker_ai_marker_enabled`、`sticker_ai_select_probability`。真实 QQ 端对本地表情展示/顺序仍未验证。
 
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
@@ -528,6 +578,11 @@ yield event.chain_result(chain)
 16. **点歌只做名字关键词匹配，不解析标签/歌手/歌词。** 文件缺失、空文件、超限、符号链接和路径穿越会被跳过或提示，不会从网络下载歌曲。
 17. **`/option` 不能可靠枚举其他插件的具体命令。** AstrBot v4.29 的 `Context.get_all_stars()` 能返回插件元数据，但没有稳定的公开 API 把 handler 返回为用户命令；因此 `/option` 只列其他插件的名称/版本/描述/激活状态，不读取内部 handler registry、不猜测命令，也不展示任何插件配置值或 API Key。
 18. **纯 `Comp.Face` 不能收藏。** QQ Face 段只有表情 id，没有可保存的图片文件；可以触发自然短句反应，但 `/收藏表情` 只能保存带 `Comp.Image` 的消息，并会明确提示。
+18a. **引用图片读取依赖 `Comp.Reply.chain` 是否被适配器填充。** v4.29 公共消息组件提供该字段，但不同协议端可能只给引用文字/为空；此时自动回退到本会话最近媒体缓存。插件不会读取任意历史消息或伪造引用能力。
+18b. **普通图片不会自动收藏。** `auto_collect_user_sticker_enabled` 默认 false；即使显式开启，也是本地尺寸/大小/宽高比启发式，不调用视觉模型，不做全量采集；大图/长图/非图片格式会跳过。
+22. **direct 模式依赖模型遵循私有标签格式。** 不同 OpenAI-compatible 模型的 system prompt 遵循度不同；不返回标记时只会走原随机表情路径或纯文本，不会额外调用模型/工具重试。未知/非法/多标记会被安全删除，不会泄漏。
+23. **astrbot memory 模式是本地启发式，不是真正语境理解。** 它不会注入系统提示、不额外调用 LLM，只用关键词/情绪/收藏分类匹配与概率；命中不到时可能回退到原随机 sticker 逻辑。真实 Agent 结果链已有图片时不会追加第二个表情。
+24. **没有增加任何电脑控制、沙箱、终端或 LLM tool 权限。** 模型不能读取本地文件；只从插件提供的安全标签/分类列表中选择。真实 AstrBot + QQ 对本地图片显示/顺序未验证。
 19. **自动表情反应只针对无文字图片/Face。** 带文字的图片仍按识图/聊天逻辑处理。默认 `user_sticker_reaction_enabled=true` 时，@/私聊中的无文字纯图片会优先走短句反应而不是原生视觉理解；需要视觉理解时应带文字、关闭该开关，或显式调整概率。
 20. **收藏表情数据目录/权限/index 损坏未做真实部署验证。** 使用公开 `StarTools.get_data_dir()` 和原子写入，但磁盘写满、权限变化、手工破坏 index、跨容器读取等仍可能导致收藏不可用；插件会降级提示，不会主动删除用户文件。没有实现破坏性删除命令。
 21. **收藏表情不会自动收集所有用户图片。** 只有显式执行 `/收藏表情` 才会保存；不会保存朋友圈/聊天原文、用户 ID 或敏感路径。收藏文件跨 QQ/协议端可读性仍取决于部署与文件服务。
@@ -542,7 +597,7 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-当前增强插件测试为 **72 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、百度 JSON 解析、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容。单测本身**不访问真实网络**。
+当前增强插件测试为 **90 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、百度 JSON 解析、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用。单测本身**不访问真实网络**。
 
 非单测在线冒烟（不代表 AstrBot/QQ 端到端）：
 
@@ -556,4 +611,4 @@ python3 -m unittest tests.test_enhancer_plugin -v
 
 第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
 
-本次还执行了全仓回归：`python3 -m unittest discover -s tests -q`，当前 **212 tests OK**。全仓测试数量会随其他模块开发变化；以实际运行结果为准。
+本次还执行了全仓回归：`python3 -m unittest discover -s tests -q`，当前 **236 tests OK**。全仓测试数量会随其他模块开发变化；以实际运行结果为准。

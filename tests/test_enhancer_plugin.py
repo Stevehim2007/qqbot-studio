@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import importlib.util
 import inspect
 import json as json_module
+import struct
 import sys
 import tempfile
 import types
@@ -119,6 +121,13 @@ class Face:
         self.id = id
 
 
+class Reply:
+    def __init__(self, chain=None, id=1, sender_id=0, **kwargs):
+        self.chain = list(chain or [])
+        self.id = id
+        self.sender_id = sender_id
+
+
 class Record:
     def __init__(self, file=None, url=None, path=None, **kwargs):
         self.file = file
@@ -171,7 +180,7 @@ def _install_astrbot_stubs():
     star.StarTools = FakeStarTools
     components = types.ModuleType("astrbot.api.message_components")
     components.__path__ = []
-    for cls in (Plain, At, AtAll, Face, Image, Record):
+    for cls in (Plain, At, AtAll, Face, Image, Record, Reply):
         setattr(components, cls.__name__, cls)
 
     astrbot.api = api
@@ -440,6 +449,7 @@ def make_plugin(context, *, clock=None, **overrides):
             "user_cooldown_seconds": 0,
             "sticker_enabled": False,
             "user_sticker_reaction_enabled": False,
+            "sticker_ai_select_enabled": False,
             "llm_timeout_seconds": 5,
         }
     )
@@ -774,6 +784,19 @@ BAIDU_JSON_FIXTURE = json_module.dumps(
 
 
 PNG_MAGIC_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def make_test_png(width=32, height=32, tail=b""):
+    """Small synthetic PNG header with valid width/height for heuristics."""
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\x0dIHDR"
+        + struct.pack(">II", width, height)
+        + b"\x08\x06\x00\x00\x00"
+        + b"\x00\x00\x00\x00"
+        + tail
+    )
 
 
 class TestImageSearch(unittest.IsolatedAsyncioTestCase):
@@ -1981,6 +2004,274 @@ class TestCollectedStickers(unittest.IsolatedAsyncioTestCase):
             self.assertIn("QQ 原生 Face", face_results[0].text)
             self.assertEqual(plugin._collected_entries, [])
 
+    async def test_recent_media_cache_enables_text_only_collection(self):
+        context = FakeContext(responder=lambda kwargs: "收到图片")
+        plugin = make_plugin(
+            context,
+            auto_collect_user_sticker_enabled=False,
+            user_sticker_reaction_enabled=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            image_event = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"recent"))],
+                message_str="",
+                private=True,
+                session_id="cache-session",
+            )
+            await run_handler(plugin, image_event)
+            self.assertIsNotNone(
+                plugin._get_recent_user_media(image_event.unified_msg_origin)
+            )
+
+            command_event = FakeEvent(
+                [Plain("/收藏表情 猫猫")],
+                message_str="/收藏表情 猫猫",
+                private=True,
+                session_id="cache-session",
+            )
+            results = await run_collect_sticker_command(plugin, command_event)
+            self.assertIn("已收藏到「猫猫」", results[0].text)
+            self.assertEqual(plugin._collected_entries[0]["category"], "猫猫")
+
+    async def test_natural_language_collect_uses_recent_media(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            auto_collect_user_sticker_enabled=False,
+            user_sticker_reaction_enabled=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            image_event = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"nl"))],
+                message_str="",
+                private=True,
+                session_id="nl-collect-session",
+            )
+            await plugin._remember_recent_user_media(
+                image_event,
+                image_event.get_messages(),
+            )
+            collect_event = FakeEvent(
+                [Plain("收藏表情 猫猫")],
+                message_str="收藏表情 猫猫",
+                private=True,
+                session_id="nl-collect-session",
+            )
+            results = await run_handler(plugin, collect_event)
+            self.assertEqual(len(results), 1)
+            self.assertIn("已收藏到「猫猫」", results[0].text)
+            self.assertEqual(context.calls, [])
+            self.assertTrue(collect_event.call_llm)
+            self.assertTrue(collect_event.stopped)
+
+    async def test_quoted_image_precedes_cached_image(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            auto_collect_user_sticker_enabled=False,
+            user_sticker_reaction_enabled=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            cached_data = PNG_MAGIC_BYTES + b"cached"
+            quoted_data = PNG_MAGIC_BYTES + b"quoted"
+            cache_event = FakeEvent(
+                [Image(data=cached_data)],
+                message_str="",
+                private=True,
+                session_id="quoted-session",
+            )
+            await plugin._remember_recent_user_media(
+                cache_event,
+                cache_event.get_messages(),
+            )
+            command_event = FakeEvent(
+                [
+                    Reply(chain=[Image(data=quoted_data)]),
+                    Plain("/收藏表情 引用"),
+                ],
+                message_str="/收藏表情 引用",
+                private=True,
+                session_id="quoted-session",
+            )
+            results = await run_collect_sticker_command(plugin, command_event)
+            self.assertIn("已收藏", results[0].text)
+            self.assertEqual(
+                plugin._collected_entries[0]["sha256"],
+                hashlib.sha256(quoted_data).hexdigest(),
+            )
+            self.assertNotEqual(
+                plugin._collected_entries[0]["sha256"],
+                hashlib.sha256(cached_data).hexdigest(),
+            )
+
+    async def test_cache_expiry_returns_no_image_fallback(self):
+        clock = FakeClock(100.0)
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            clock=clock,
+            auto_collect_user_sticker_enabled=False,
+            user_sticker_reaction_enabled=False,
+            pending_sticker_ttl_seconds=10,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            image_event = FakeEvent(
+                [Image(data=make_test_png(32, 32, b"ttl"))],
+                message_str="",
+                private=True,
+                session_id="ttl-session",
+            )
+            await plugin._remember_recent_user_media(
+                image_event,
+                image_event.get_messages(),
+            )
+            clock.value = 111.0
+            command_event = FakeEvent(
+                [Plain("/收藏表情")],
+                message_str="/收藏表情",
+                private=True,
+                session_id="ttl-session",
+            )
+            results = await run_collect_sticker_command(plugin, command_event)
+            self.assertIn("没有可收藏的图片", results[0].text)
+            self.assertEqual(plugin._collected_entries, [])
+
+    async def test_default_auto_collect_is_disabled_for_plain_images(self):
+        context = FakeContext(responder=lambda kwargs: "普通图片回复")
+        plugin = make_plugin(
+            context,
+            user_sticker_reaction_enabled=False,
+        )
+        self.assertFalse(
+            plugin._cfg_bool("auto_collect_user_sticker_enabled")
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"default-off"))],
+                message_str="",
+                private=True,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].text, "普通图片回复")
+            self.assertEqual(plugin._collected_entries, [])
+
+    async def test_recent_media_cache_keeps_only_newest_three(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            auto_collect_user_sticker_enabled=False,
+            user_sticker_reaction_enabled=False,
+        )
+        images = [
+            Image(data=make_test_png(16, 16, bytes([i])))
+            for i in range(4)
+        ]
+        event = FakeEvent(images, message_str="", private=True)
+        await plugin._remember_recent_user_media(
+            event,
+            event.get_messages(),
+        )
+        cached = plugin._get_recent_user_media_list(
+            event.unified_msg_origin
+        )
+        self.assertEqual(len(cached), 3)
+        # Message order last image is newest and must be first in LRU list.
+        self.assertEqual(
+            cached[0]["sha256"],
+            hashlib.sha256(images[-1].data).hexdigest(),
+        )
+        self.assertNotIn(
+            hashlib.sha256(images[0].data).hexdigest(),
+            {item["sha256"] for item in cached},
+        )
+
+    async def test_auto_collect_small_square_image_replies_once(self):
+        context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
+        plugin = make_plugin(
+            context,
+            auto_collect_user_sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"auto"))],
+                message_str="",
+                private=True,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(results[0].chain), 1)
+            self.assertIn("已收藏到", results[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(
+                plugin._collected_entries[0]["category"],
+                "未分类",
+            )
+            self.assertEqual(context.calls, [])
+            self.assertTrue(event.call_llm)
+            self.assertTrue(event.stopped)
+
+    async def test_auto_collect_skips_large_image(self):
+        context = FakeContext(responder=lambda kwargs: "大图内容回复")
+        plugin = make_plugin(
+            context,
+            user_sticker_reaction_enabled=False,
+            auto_collect_user_sticker_enabled=True,
+            auto_collect_sticker_max_dimension=512,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(1024, 768, b"large"))],
+                message_str="",
+                private=True,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].text, "大图内容回复")
+            self.assertEqual(plugin._collected_entries, [])
+            self.assertGreaterEqual(len(context.calls), 1)
+
+    async def test_auto_collect_cooldown_limits_repeated_images(self):
+        clock = FakeClock(100.0)
+        context = FakeContext(responder=lambda kwargs: "普通图片回复")
+        plugin = make_plugin(
+            context,
+            clock=clock,
+            user_sticker_reaction_enabled=False,
+            auto_collect_user_sticker_enabled=True,
+            auto_collect_sticker_cooldown_seconds=60,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"first"))],
+                message_str="",
+                private=True,
+                session_id="auto-cooldown",
+            )
+            first_results = await run_handler(plugin, first)
+            self.assertIn("已收藏到", first_results[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+
+            clock.value = 110.0
+            second = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"second"))],
+                message_str="",
+                private=True,
+                session_id="auto-cooldown",
+            )
+            second_results = await run_handler(plugin, second)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(second_results[0].text, "普通图片回复")
+            self.assertGreaterEqual(len(context.calls), 1)
+
     async def test_categories_list_and_send_collected(self):
         context = FakeContext(responder=lambda kwargs: "不应调用 LLM")
         plugin = make_plugin(context)
@@ -2114,6 +2405,253 @@ class TestCollectedStickers(unittest.IsolatedAsyncioTestCase):
         }
         for command_name in ("收藏表情", "表情分类", "表情列表", "发表情"):
             self.assertIn(command_name, registered)
+
+
+class TestAIContextStickerSelection(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_mode_marker_is_removed_and_builtin_sticker_attached(self):
+        context = FakeContext(
+            responder=lambda kwargs: "好呀 [[sticker:happy]]"
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_probability=0.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        event = FakeEvent([Plain("你好呀")], message_str="你好呀", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "好呀")
+        self.assertEqual(len(results[0].chain), 2)
+        self.assertIsInstance(results[0].chain[1], Image)
+        self.assertEqual(
+            Path(results[0].chain[1].path).name,
+            "happy.png",
+        )
+        self.assertEqual(len(context.calls), 1)
+        system_prompt = context.calls[0]["system_prompt"]
+        self.assertIn("可选表情标签", system_prompt)
+        self.assertIn("happy", system_prompt)
+        self.assertNotIn("tools", context.calls[0])
+        self.assertNotIn("func_tool", context.calls[0])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_invalid_marker_is_stripped_and_keeps_plain_text(self):
+        context = FakeContext(
+            responder=lambda kwargs: "普通文本 [[sticker:../../etc/passwd]]"
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        event = FakeEvent([Plain("你好呀")], message_str="你好呀", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "普通文本")
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertNotIsInstance(results[0].chain[0], Image)
+
+    async def test_multiple_markers_are_removed_but_not_honored(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                "好呀 [[sticker:happy]] [[sticker:sad]]"
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_probability=0.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        event = FakeEvent([Plain("你好呀")], message_str="你好呀", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(results[0].text, "好呀")
+        self.assertEqual(len(results[0].chain), 1)
+
+    async def test_collected_category_tag_attaches_collected_sticker(self):
+        context = FakeContext(
+            responder=lambda kwargs: "喵 [[sticker:猫猫]]"
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_probability=0.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            category_dir = root / "猫猫"
+            category_dir.mkdir()
+            data = make_test_png(48, 48, b"cat")
+            sha256 = hashlib.sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            path = category_dir / filename
+            path.write_bytes(data)
+            plugin._collected_entries = [
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": "猫猫",
+                    "size": len(data),
+                    "created_at": 1,
+                    "source": "test",
+                    "path": path,
+                }
+            ]
+            event = FakeEvent(
+                [Plain("你好呀")],
+                message_str="你好呀",
+                private=True,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(results[0].text, "喵")
+            self.assertEqual(results[0].chain[1].path, str(path))
+            self.assertIn("猫猫", context.calls[0]["system_prompt"])
+
+    async def test_marker_disabled_does_not_inject_system_instruction(self):
+        context = FakeContext(responder=lambda kwargs: "普通回复")
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_probability=0.0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=False,
+        )
+        event = FakeEvent([Plain("你好呀")], message_str="你好呀", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(results[0].text, "普通回复")
+        self.assertNotIn(
+            "可选表情标签",
+            context.calls[0]["system_prompt"],
+        )
+
+    async def test_direct_marker_mode_without_marker_keeps_text_only(self):
+        context = FakeContext(responder=lambda kwargs: "普通文本")
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_marker_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        event = FakeEvent([Plain("你好呀")], message_str="你好呀", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "普通文本")
+        self.assertEqual(len(results[0].chain), 1)
+
+    async def test_memory_mode_local_semantic_match_attaches_sticker(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+            sticker_ai_select_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        event = FakeEvent(
+            [Plain("今天好开心")],
+            message_str="今天好开心",
+            private=True,
+        )
+        event.set_extra("qqbot_enhancer_memory_reply", True)
+        event.set_extra("qqbot_enhancer_sticker_text", "今天好开心")
+        event.result = FakeResult([Plain("太好了")])
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertTrue(any(isinstance(comp, Image) for comp in event.result.chain))
+        image = next(comp for comp in event.result.chain if isinstance(comp, Image))
+        self.assertEqual(Path(image.path).name, "happy.png")
+        self.assertEqual(context.calls, [])
+
+    async def test_memory_mode_local_category_match_attaches_collected(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_prevent_repeat=False,
+            collected_sticker_enabled=True,
+            collected_sticker_use_probability=1.0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_select_probability=1.0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            category_dir = root / "猫猫"
+            category_dir.mkdir()
+            data = make_test_png(48, 48, b"memory-cat")
+            sha256 = hashlib.sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            path = category_dir / filename
+            path.write_bytes(data)
+            plugin._collected_entries = [
+                {
+                    "sha256": sha256,
+                    "filename": filename,
+                    "category": "猫猫",
+                    "size": len(data),
+                    "created_at": 1,
+                    "source": "test",
+                    "path": path,
+                }
+            ]
+            event = FakeEvent(
+                [Plain("发个猫猫表情")],
+                message_str="发个猫猫表情",
+                private=True,
+            )
+            event.set_extra("qqbot_enhancer_memory_reply", True)
+            event.set_extra("qqbot_enhancer_sticker_text", "发个猫猫表情")
+            event.result = FakeResult([Plain("好呀")])
+            await plugin.attach_memory_mode_sticker(event)
+            images = [
+                comp for comp in event.result.chain if isinstance(comp, Image)
+            ]
+            self.assertEqual(len(images), 1)
+            self.assertEqual(images[0].path, str(path))
+            self.assertEqual(context.calls, [])
+
+    async def test_memory_mode_ai_probability_zero_does_not_attach(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            sticker_probability=1.0,
+            sticker_cooldown_seconds=0,
+            sticker_ai_select_enabled=True,
+            sticker_ai_select_probability=0.0,
+        )
+        event = FakeEvent([Plain("开心")], message_str="开心", private=True)
+        event.set_extra("qqbot_enhancer_memory_reply", True)
+        event.set_extra("qqbot_enhancer_sticker_text", "开心")
+        event.result = FakeResult([Plain("好呀")])
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertFalse(
+            any(isinstance(comp, Image) for comp in event.result.chain)
+        )
 
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):

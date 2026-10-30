@@ -493,6 +493,29 @@
     "type": "bool",
     "default": true
   },
+  "sticker_ai_select_enabled": {
+    "description": "启用语境自动选表情",
+    "type": "bool",
+    "default": true,
+    "hint": "direct 模式允许模型返回私有标签；astrbot memory 模式使用本地关键词/情绪/收藏分类匹配 + 概率。不启电脑控制或 LLM tool。"
+  },
+  "sticker_ai_marker_enabled": {
+    "description": "direct 模式向系统提示注入可选表情标签",
+    "type": "bool",
+    "default": true,
+    "hint": "只注入安全标签，不暴露文件路径；非法/未知标签会删除并仅保留文本。"
+  },
+  "sticker_ai_select_probability": {
+    "description": "AI 语境选表情概率",
+    "type": "float",
+    "default": 0.6,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "hint": "与现有 sticker_probability、冷却、防重复共同生效；一次回复最多一个。"
+  },
   "collected_sticker_enabled": {
     "description": "启用用户收藏表情的保存、管理和使用",
     "type": "bool",
@@ -554,6 +577,71 @@
       "max": 100,
       "step": 1
     }
+  },
+  "pending_sticker_ttl_seconds": {
+    "description": "最近用户媒体内存缓存 TTL（秒）",
+    "type": "int",
+    "default": 300,
+    "slider": {
+      "min": 1,
+      "max": 1800,
+      "step": 10
+    },
+    "hint": "每个会话最多缓存最近 3 张，仅内存，不落盘。"
+  },
+  "auto_collect_user_sticker_enabled": {
+    "description": "【默认关闭】纯图片 @/私聊时启用本地启发式自动收藏",
+    "type": "bool",
+    "default": false,
+    "hint": "用户最新要求默认不要自动收藏普通图片；只有显式开启后才对明显的小图/方图尝试收藏。"
+  },
+  "auto_collect_sticker_max_file_bytes": {
+    "description": "自动收藏候选图片最大字节数",
+    "type": "int",
+    "default": 2000000,
+    "slider": {
+      "min": 65536,
+      "max": 8388608,
+      "step": 65536
+    }
+  },
+  "auto_collect_sticker_max_dimension": {
+    "description": "自动收藏候选最大宽/高（像素）",
+    "type": "int",
+    "default": 512,
+    "slider": {
+      "min": 32,
+      "max": 2048,
+      "step": 32
+    },
+    "hint": "仅本地启发式，不调用视觉模型；明显大图不会自动收藏。"
+  },
+  "auto_collect_sticker_default_category": {
+    "description": "自动收藏默认分类",
+    "type": "string",
+    "default": "未分类",
+    "hint": "仍受分类字符校验；非法时回退未分类。"
+  },
+  "auto_collect_sticker_reply_enabled": {
+    "description": "自动收藏后回复短消息",
+    "type": "bool",
+    "default": true
+  },
+  "auto_collect_sticker_cooldown_seconds": {
+    "description": "自动收藏每会话冷却（秒）",
+    "type": "int",
+    "default": 60,
+    "slider": {
+      "min": 0,
+      "max": 3600,
+      "step": 10
+    }
+  },
+  "auto_collect_sticker_saved_reply": {
+    "description": "自动收藏成功短回复模板",
+    "type": "text",
+    "default": "收下了，已收藏到「{category}」。",
+    "hint": "支持 {category} 占位符；默认自动收藏关闭。"
   },
   "collected_sticker_storage_unavailable_reply": {
     "description": "收藏数据目录不可用提示",

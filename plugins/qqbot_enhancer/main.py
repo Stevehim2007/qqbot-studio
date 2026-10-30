@@ -24,6 +24,7 @@ import math
 import os
 import random
 import re
+import struct
 import tempfile
 import time
 import urllib.error
@@ -44,15 +45,36 @@ STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 SONG_SUFFIXES = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.5.0"
+PLUGIN_FALLBACK_VERSION = "1.5.2"
 COLLECTED_STICKER_DIR_NAME = "collected_stickers"
 COLLECTED_INDEX_FILENAME = "index.json"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 COLLECTED_CATEGORY_MAX_CHARS = 32
+PENDING_USER_MEDIA_MAX_COUNT = 3
+PENDING_USER_MEDIA_MAX_SESSIONS = 128
 COLLECTED_CATEGORY_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]{1,32}$")
 COLLECTED_FILENAME_RE = re.compile(
     r"^[a-f0-9]{64}\.(?:jpg|png|gif|webp|bmp|avif)$"
 )
+COLLECT_NATURAL_LANGUAGE_RE = re.compile(
+    r"^(?:帮我|给我|请(?:你)?|麻烦(?:你)?|你|能|可以)?\s*"
+    r"(?:把)?\s*(?:这个|这张|这条|这|它)?\s*"
+    r"(?:表情|图片|贴纸)?\s*"
+    r"(?:收藏|保存)(?:一下|起来|了)?\s*"
+    r"(?:(?:到|为|分类[:：]?)\s*)?"
+    r"(?P<category>[0-9A-Za-z_\-\u4e00-\u9fff]{1,32})?\s*$"
+)
+COLLECT_NATURAL_LANGUAGE_REVERSED_RE = re.compile(
+    r"^(?:帮我|给我|请(?:你)?|麻烦(?:你)?|你|能|可以)?\s*"
+    r"(?:收藏|保存)\s*"
+    r"(?P<category>[0-9A-Za-z_\-\u4e00-\u9fff]{1,32})\s*"
+    r"(?:表情|图片|贴纸)(?:吧|了)?\s*$"
+)
+STICKER_AI_MARKER_RE = re.compile(
+    r"\[\[\s*sticker\s*:\s*([^\[\]\r\n]{1,64})\s*\]\]",
+    re.IGNORECASE,
+)
+STICKER_AI_TAG_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]{1,32}$")
 
 BING_IMAGES_ENDPOINT = "https://www.bing.com/images/search"
 BING_IMAGES_REFERER = "https://www.bing.com/images/search"
@@ -205,6 +227,14 @@ DEFAULTS: dict[str, Any] = {
     "collected_sticker_category_header": "分类「{category}」共 {count} 张：",
     "collected_sticker_list_more": "……另有 {count} 张未展开。",
     "collected_sticker_command_error_reply": "表情收藏命令处理失败，请稍后再试。",
+    "pending_sticker_ttl_seconds": 300,
+    "auto_collect_user_sticker_enabled": False,
+    "auto_collect_sticker_max_file_bytes": 2_000_000,
+    "auto_collect_sticker_max_dimension": 512,
+    "auto_collect_sticker_default_category": "未分类",
+    "auto_collect_sticker_reply_enabled": True,
+    "auto_collect_sticker_cooldown_seconds": 60,
+    "auto_collect_sticker_saved_reply": "收下了，已收藏到「{category}」。",
     "reply_probability": 0.12,
     "group_cooldown_seconds": 30,
     "user_cooldown_seconds": 90,
@@ -238,6 +268,9 @@ DEFAULTS: dict[str, Any] = {
     "sticker_probability": 0.35,
     "sticker_cooldown_seconds": 120,
     "sticker_prevent_repeat": True,
+    "sticker_ai_select_enabled": True,
+    "sticker_ai_marker_enabled": True,
+    "sticker_ai_select_probability": 0.6,
     "max_images_per_message": 4,
 }
 
@@ -262,6 +295,8 @@ class QQBotEnhancerPlugin(Star):
         self._last_image_search_user: dict[str, float] = {}
         self._last_song_group: dict[str, float] = {}
         self._last_song_user: dict[str, float] = {}
+        self._last_auto_collect_at: dict[str, float] = {}
+        self._pending_user_media: dict[str, dict[str, Any]] = {}
         self._song_dir = SONG_DIR
 
         self._sticker_entries: list[dict[str, Any]] = []
@@ -360,6 +395,8 @@ class QQBotEnhancerPlugin(Star):
             message_text = self._message_text(event)
             has_face = any(isinstance(comp, Comp.Face) for comp in components)
             has_image = any(isinstance(comp, Comp.Image) for comp in components)
+            if has_image:
+                await self._remember_recent_user_media(event, components)
 
             # 不抢占 AstrBot 的指令处理。自定义 wake_prefix 也会在这里被识别，
             # 防止概率回复把 /help 之类的指令吞掉。
@@ -385,6 +422,47 @@ class QQBotEnhancerPlugin(Star):
                 mode = "random"
             else:
                 mode = "explicit"
+
+            # Natural-language collection on an explicit @/private text message.
+            # It can use the quoted image or the most recent media in this UMO.
+            if explicit:
+                collect_intent = self._detect_natural_language_collect_intent(
+                    message_text
+                )
+                if collect_intent is not None:
+                    should_stop = True
+                    event.should_call_llm(True)
+                    collect_reply = await self._collect_user_sticker(
+                        event,
+                        collect_intent["category"],
+                    )
+                    yield event.plain_result(collect_reply)
+                    yielded = True
+                    return
+
+            # Explicit, textless small/square image: locally heuristically
+            # auto-collect it as a user sticker. This happens before the generic
+            # image reaction so the user receives only one short reply.
+            if (
+                explicit
+                and has_image
+                and not message_text.strip()
+                and self._cfg_bool("auto_collect_user_sticker_enabled")
+            ):
+                auto_collect_reply = await self._maybe_auto_collect_user_sticker(
+                    event
+                )
+                if (
+                    auto_collect_reply
+                    and self._cfg_bool(
+                        "auto_collect_sticker_reply_enabled"
+                    )
+                ):
+                    should_stop = True
+                    event.should_call_llm(True)
+                    yield event.plain_result(auto_collect_reply)
+                    yielded = True
+                    return
 
             # Explicit @/private image or QQ Face without text: treat it as a
             # user sticker reaction and answer in natural language without an
@@ -471,8 +549,12 @@ class QQBotEnhancerPlugin(Star):
                 message_text=message_text,
                 has_face=has_face,
             )
-            reply_text = self._finalize_reply(reply_text)
-            result = self._build_result(event, reply_text, message_text)
+            result = self._build_result(
+                event,
+                reply_text,
+                message_text,
+                allow_random_sticker=not self._ai_marker_mode_active(),
+            )
             yield result
             yielded = True
         except Exception:
@@ -973,12 +1055,28 @@ class QQBotEnhancerPlugin(Star):
 
         if not event.get_extra("qqbot_enhancer_memory_reply"):
             return
-        if not self._cfg_bool("sticker_enabled") or not self._sticker_entries:
+        if not self._cfg_bool("sticker_enabled"):
+            return
+        collected_available = (
+            self._cfg_bool("collected_sticker_enabled")
+            and bool(self._valid_collected_entries())
+        )
+        if not self._sticker_entries and not collected_available:
             return
         result = event.get_result()
         chain = getattr(result, "chain", None) if result is not None else None
         if not isinstance(chain, list):
             return
+        # Never append a second image/sticker to an Agent reply.
+        if any(isinstance(component, Comp.Image) for component in chain):
+            return
+        if self._cfg_bool("sticker_ai_select_enabled"):
+            if self._rng.random() >= self._cfg_float(
+                "sticker_ai_select_probability",
+                0.0,
+                1.0,
+            ):
+                return
         message_text = str(
             event.get_extra("qqbot_enhancer_sticker_text")
             or getattr(event, "message_str", "")
@@ -1217,6 +1315,8 @@ class QQBotEnhancerPlugin(Star):
             + len(self._last_image_search_user)
             + len(self._last_song_group)
             + len(self._last_song_user)
+            + len(self._last_auto_collect_at)
+            + len(self._pending_user_media)
             < 4096
         ):
             return
@@ -1229,6 +1329,7 @@ class QQBotEnhancerPlugin(Star):
             self._last_image_search_user,
             self._last_song_group,
             self._last_song_user,
+            self._last_auto_collect_at,
         ):
             for key, timestamp in list(mapping.items()):
                 if timestamp < cutoff:
@@ -1236,6 +1337,7 @@ class QQBotEnhancerPlugin(Star):
         for key in list(self._last_sticker_file):
             if key not in self._last_sticker_at:
                 self._last_sticker_file.pop(key, None)
+        self._prune_pending_user_media(now)
 
     def _command_prefixes(self, event: AstrMessageEvent) -> list[str]:
         prefixes = self._cfg_list("ignore_command_prefixes")
@@ -1464,7 +1566,7 @@ class QQBotEnhancerPlugin(Star):
             reply = await self._llm_generate(
                 chat_provider_id=provider_id,
                 prompt=prompt,
-                system_prompt=self._cfg_str("system_prompt"),
+                system_prompt=self._effective_system_prompt(),
             )
         except Exception:
             logger.warning("qqbot_enhancer 文本 LLM 调用失败", exc_info=True)
@@ -1504,7 +1606,7 @@ class QQBotEnhancerPlugin(Star):
                         chat_provider_id=provider_id,
                         prompt=prompt,
                         image_urls=image_refs,
-                        system_prompt=self._cfg_str("system_prompt"),
+                        system_prompt=self._effective_system_prompt(),
                     )
                     if reply:
                         return reply
@@ -1533,7 +1635,7 @@ class QQBotEnhancerPlugin(Star):
                     reply = await self._llm_generate(
                         chat_provider_id=provider_id,
                         prompt=caption_prompt,
-                        system_prompt=self._cfg_str("system_prompt"),
+                        system_prompt=self._effective_system_prompt(),
                     )
                     if reply:
                         return reply
@@ -2729,6 +2831,120 @@ class QQBotEnhancerPlugin(Star):
         except (OSError, ValueError):
             return None
 
+    def _sticker_ai_available_tags(self) -> dict[str, list[Path]]:
+        tags: dict[str, list[Path]] = {}
+        if not self._cfg_bool("sticker_enabled"):
+            return tags
+        for entry in self._sticker_entries:
+            path = entry.get("path")
+            emotion = str(entry.get("emotion", "") or "").strip().casefold()
+            if (
+                isinstance(path, Path)
+                and path.is_file()
+                and STICKER_AI_TAG_RE.fullmatch(emotion)
+            ):
+                tags.setdefault(emotion, []).append(path)
+        if self._cfg_bool("collected_sticker_enabled"):
+            for entry in self._valid_collected_entries():
+                path = entry.get("path")
+                category = str(
+                    entry.get("category", DEFAULT_COLLECTED_CATEGORY)
+                ).strip().casefold()
+                if (
+                    isinstance(path, Path)
+                    and path.is_file()
+                    and STICKER_AI_TAG_RE.fullmatch(category)
+                ):
+                    tags.setdefault(category, []).append(path)
+        return tags
+
+    def _sticker_ai_system_instruction(self) -> str:
+        if self._memory_mode() != "direct":
+            return ""
+        if not (
+            self._cfg_bool("sticker_ai_select_enabled")
+            and self._cfg_bool("sticker_ai_marker_enabled")
+        ):
+            return ""
+        tags = sorted(self._sticker_ai_available_tags())
+        if not tags:
+            return ""
+        # Keep the injected prompt short and only expose safe tags, never paths.
+        visible_tags = ", ".join(tags[:20])
+        return (
+            f"可选表情标签：{visible_tags}。"
+            "仅在确实贴切时，于回复末尾原样附加一个"
+            "[[sticker:标签]] 标记；不需要就别输出标记，不要输出多个，不要解释标记。"
+        )
+
+    def _effective_system_prompt(self) -> str:
+        prompt = self._cfg_str("system_prompt")
+        instruction = self._sticker_ai_system_instruction()
+        return f"{prompt}\n{instruction}" if instruction else prompt
+
+    def _ai_marker_mode_active(self) -> bool:
+        return bool(
+            self._memory_mode() == "direct"
+            and self._cfg_bool("sticker_ai_select_enabled")
+            and self._cfg_bool("sticker_ai_marker_enabled")
+            and self._sticker_ai_available_tags()
+        )
+
+    def _extract_sticker_ai_marker(
+        self,
+        text: str,
+    ) -> tuple[str, str | None, bool]:
+        raw = str(text or "")
+        matches = list(STICKER_AI_MARKER_RE.finditer(raw))
+        if not matches:
+            return raw, None, False
+        clean = STICKER_AI_MARKER_RE.sub("", raw)
+        clean = re.sub(r"[ \t]+\n", "\n", clean)
+        clean = re.sub(r"[ \t]{2,}", " ", clean).strip()
+        if len(matches) != 1:
+            return clean, None, True
+        return clean, matches[0].group(1).strip(), True
+
+    def _resolve_sticker_ai_tag(
+        self,
+        tag: str | None,
+        session_key: str,
+    ) -> Path | None:
+        if not tag:
+            return None
+        normalized = tag.strip().casefold()
+        if not STICKER_AI_TAG_RE.fullmatch(normalized):
+            return None
+        candidates = self._sticker_ai_available_tags().get(normalized, [])
+        if not candidates:
+            return None
+        if self._rng.random() >= self._cfg_float(
+            "sticker_ai_select_probability",
+            0.0,
+            1.0,
+        ):
+            return None
+
+        now = self._clock()
+        cooldown = self._cfg_int("sticker_cooldown_seconds", 0)
+        last_sent = self._last_sticker_at.get(session_key)
+        if last_sent is not None and now - last_sent < cooldown:
+            return None
+        if self._cfg_bool("sticker_prevent_repeat"):
+            last_file = self._last_sticker_file.get(session_key)
+            if last_file and len(candidates) > 1:
+                non_repeating = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.name != last_file
+                ]
+                if non_repeating:
+                    candidates = non_repeating
+        chosen = self._rng.choice(candidates)
+        self._last_sticker_at[session_key] = now
+        self._last_sticker_file[session_key] = chosen.name
+        return chosen
+
     def _pick_user_sticker_reaction_reply(self) -> str:
         replies = self._cfg_list("user_sticker_reaction_replies")
         if not replies:
@@ -2740,7 +2956,49 @@ class QQBotEnhancerPlugin(Star):
         event: AstrMessageEvent,
         reply_text: str,
         message_text: str,
+        *,
+        allow_random_sticker: bool = True,
     ):
+        clean_text, ai_tag, had_marker = self._extract_sticker_ai_marker(
+            reply_text
+        )
+        reply_text = self._finalize_reply(clean_text)
+
+        if had_marker:
+            # A model-chosen/private marker must never leak into user-visible
+            # text. Only honor it when explicitly enabled; otherwise return the
+            # cleaned text without a random fallback sticker.
+            sticker_path = None
+            if (
+                self._cfg_bool("sticker_ai_select_enabled")
+                and self._cfg_bool("sticker_ai_marker_enabled")
+                and self._memory_mode() == "direct"
+            ):
+                sticker_path = self._resolve_sticker_ai_tag(
+                    ai_tag,
+                    event.unified_msg_origin,
+                )
+            if sticker_path is not None:
+                try:
+                    return event.chain_result(
+                        [
+                            Comp.Plain(reply_text),
+                            Comp.Image.fromFileSystem(str(sticker_path)),
+                        ]
+                    )
+                except Exception:
+                    logger.warning(
+                        "qqbot_enhancer AI 标签表情组装失败，仅返回文本",
+                        exc_info=True,
+                    )
+            return event.plain_result(reply_text)
+
+        if not allow_random_sticker:
+            # In direct marker mode the model decides whether to emit a tag.
+            # No tag means it chose not to send a sticker; do not add a random
+            # fallback that would override that decision.
+            return event.plain_result(reply_text)
+
         sticker_path = self._maybe_pick_sticker(event, message_text)
         if sticker_path is not None:
             try:
@@ -3104,18 +3362,117 @@ class QQBotEnhancerPlugin(Star):
             return None
         return Path(value)
 
-    async def _extract_collectible_image_payload(
+    def _prune_pending_user_media(self, now: float) -> None:
+        ttl = self._cfg_int("pending_sticker_ttl_seconds", 1)
+        for key, items in list(self._pending_user_media.items()):
+            kept: list[dict[str, Any]] = []
+            for item in items:
+                try:
+                    timestamp = float(item.get("timestamp", 0))
+                except (TypeError, ValueError):
+                    timestamp = 0
+                if now - timestamp <= ttl:
+                    kept.append(item)
+            if kept:
+                self._pending_user_media[key] = kept[
+                    :PENDING_USER_MEDIA_MAX_COUNT
+                ]
+            else:
+                self._pending_user_media.pop(key, None)
+        if len(self._pending_user_media) > PENDING_USER_MEDIA_MAX_SESSIONS:
+            oldest = sorted(
+                self._pending_user_media.items(),
+                key=lambda pair: max(
+                    (
+                        float(item.get("timestamp", 0))
+                        for item in pair[1]
+                    ),
+                    default=0,
+                ),
+            )
+            overflow = len(self._pending_user_media) - PENDING_USER_MEDIA_MAX_SESSIONS
+            for key, _ in oldest[:overflow]:
+                self._pending_user_media.pop(key, None)
+
+    async def _remember_recent_user_media(
         self,
         event: AstrMessageEvent,
-    ) -> tuple[str, dict[str, Any] | None]:
-        components = event.get_messages()
+        components: list[Any],
+    ) -> None:
+        if not self._cfg_bool("collected_sticker_enabled"):
+            return
         images = [comp for comp in components if isinstance(comp, Comp.Image)]
         if not images:
-            has_face = any(isinstance(comp, Comp.Face) for comp in components)
-            return ("face" if has_face else "no_image"), None
-
+            return
+        existing = list(
+            self._pending_user_media.get(event.unified_msg_origin, [])
+        )
+        now = self._clock()
         max_bytes = self._cfg_int("collected_sticker_max_file_bytes", 1)
-        image = images[0]
+        for image in images[-PENDING_USER_MEDIA_MAX_COUNT:]:
+            status, payload = await self._decode_image_component(
+                image,
+                max_bytes=max_bytes,
+            )
+            if status != "ok" or payload is None:
+                continue
+            cached = dict(payload)
+            cached["timestamp"] = now
+            existing = [
+                item
+                for item in existing
+                if item.get("sha256") != cached.get("sha256")
+            ]
+            existing.insert(0, cached)
+            existing = existing[:PENDING_USER_MEDIA_MAX_COUNT]
+        # 仅内存保存每个会话最近最多 3 张图片，不写盘、不记录用户文字/用户 ID。
+        if existing:
+            self._pending_user_media[event.unified_msg_origin] = existing
+        self._prune_pending_user_media(now)
+
+    def _get_recent_user_media(
+        self,
+        unified_msg_origin: str,
+    ) -> dict[str, Any] | None:
+        now = self._clock()
+        self._prune_pending_user_media(now)
+        cached_items = self._pending_user_media.get(unified_msg_origin, [])
+        return dict(cached_items[0]) if cached_items else None
+
+    def _get_recent_user_media_list(
+        self,
+        unified_msg_origin: str,
+    ) -> list[dict[str, Any]]:
+        now = self._clock()
+        self._prune_pending_user_media(now)
+        return [
+            dict(item)
+            for item in self._pending_user_media.get(
+                unified_msg_origin,
+                [],
+            )
+        ]
+
+    @staticmethod
+    def _quoted_image_components(components: list[Any]) -> list[Any]:
+        images: list[Any] = []
+        for comp in components:
+            if not isinstance(comp, Comp.Reply):
+                continue
+            chain = getattr(comp, "chain", None)
+            if not isinstance(chain, (list, tuple)):
+                continue
+            images.extend(
+                item for item in chain if isinstance(item, Comp.Image)
+            )
+        return images
+
+    async def _decode_image_component(
+        self,
+        image: Any,
+        *,
+        max_bytes: int,
+    ) -> tuple[str, dict[str, Any] | None]:
         for ref in (
             getattr(image, "path", None),
             getattr(image, "file", None),
@@ -3167,8 +3524,300 @@ class QQBotEnhancerPlugin(Star):
                 "mime": mime,
                 "extension": extension,
                 "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
             },
         )
+
+    async def _extract_collectible_image_payload(
+        self,
+        event: AstrMessageEvent,
+    ) -> tuple[str, dict[str, Any] | None]:
+        components = event.get_messages()
+        current_images = [
+            comp for comp in components if isinstance(comp, Comp.Image)
+        ]
+        quoted_images = self._quoted_image_components(components)
+        max_bytes = self._cfg_int("collected_sticker_max_file_bytes", 1)
+        last_status = "no_image"
+        for image in current_images + quoted_images:
+            status, payload = await self._decode_image_component(
+                image,
+                max_bytes=max_bytes,
+            )
+            if status == "ok" and payload is not None:
+                return "ok", payload
+            last_status = status
+        if current_images or quoted_images:
+            return last_status, None
+
+        cached = self._get_recent_user_media(event.unified_msg_origin)
+        if cached is not None:
+            return "ok", cached
+        has_face = any(
+            isinstance(comp, Comp.Face) for comp in components
+        )
+        return ("face" if has_face else "no_image"), None
+
+    @staticmethod
+    def _image_dimensions(data: bytes, mime: str) -> tuple[int, int] | None:
+        try:
+            if mime == "image/png" and len(data) >= 24:
+                if data[12:16] != b"IHDR":
+                    return None
+                width = int.from_bytes(data[16:20], "big")
+                height = int.from_bytes(data[20:24], "big")
+                return width, height
+            if mime == "image/gif" and len(data) >= 10:
+                return (
+                    int.from_bytes(data[6:8], "little"),
+                    int.from_bytes(data[8:10], "little"),
+                )
+            if mime == "image/bmp" and len(data) >= 26:
+                width = int.from_bytes(data[18:22], "little", signed=True)
+                height = int.from_bytes(data[22:26], "little", signed=True)
+                return abs(width), abs(height)
+            if mime == "image/jpeg":
+                offset = 2
+                sof_markers = {
+                    0xC0,
+                    0xC1,
+                    0xC2,
+                    0xC3,
+                    0xC5,
+                    0xC6,
+                    0xC7,
+                    0xC9,
+                    0xCA,
+                    0xCB,
+                    0xCD,
+                    0xCE,
+                    0xCF,
+                }
+                while offset + 9 < len(data):
+                    if data[offset] != 0xFF:
+                        offset += 1
+                        continue
+                    marker = data[offset + 1]
+                    offset += 2
+                    if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
+                        continue
+                    if offset + 2 > len(data):
+                        return None
+                    segment_length = int.from_bytes(
+                        data[offset : offset + 2],
+                        "big",
+                    )
+                    if segment_length < 2:
+                        return None
+                    if marker in sof_markers and offset + 7 <= len(data):
+                        height = int.from_bytes(
+                            data[offset + 3 : offset + 5],
+                            "big",
+                        )
+                        width = int.from_bytes(
+                            data[offset + 5 : offset + 7],
+                            "big",
+                        )
+                        return width, height
+                    offset += segment_length
+                return None
+            if mime == "image/webp" and len(data) >= 30:
+                chunk_type = data[12:16]
+                if chunk_type == b"VP8X":
+                    width = 1 + int.from_bytes(data[24:27], "little")
+                    height = 1 + int.from_bytes(data[27:30], "little")
+                    return width, height
+                if chunk_type == b"VP8 " and len(data) >= 30:
+                    width = int.from_bytes(data[26:28], "little") & 0x3FFF
+                    height = int.from_bytes(data[28:30], "little") & 0x3FFF
+                    return width, height
+            return None
+        except (IndexError, ValueError):
+            return None
+
+    def _is_probable_sticker_payload(self, payload: dict[str, Any]) -> bool:
+        data = payload.get("data")
+        mime = str(payload.get("mime", ""))
+        if not isinstance(data, bytes):
+            return False
+        max_file_bytes = self._cfg_int(
+            "auto_collect_sticker_max_file_bytes",
+            1,
+        )
+        if len(data) > max_file_bytes:
+            return False
+        dimensions = self._image_dimensions(data, mime)
+        if dimensions is None:
+            return False
+        width, height = dimensions
+        if width <= 0 or height <= 0:
+            return False
+        max_dimension = max(
+            32,
+            self._cfg_int("auto_collect_sticker_max_dimension", 32),
+        )
+        if max(width, height) > max_dimension:
+            return False
+        if max(width, height) / max(1, min(width, height)) > 2.5:
+            return False
+        # Small square-ish GIF/WebP are especially sticker-like; still bounded
+        # by the same dimensions and file-size limits above.
+        return True
+
+    def _detect_natural_language_collect_intent(
+        self,
+        text: str,
+    ) -> dict[str, Any] | None:
+        value = re.sub(r"\s+", " ", str(text or "")).strip()
+        value = value.strip("，。！？!?,.、:：;；\"'“”‘’")
+        if not value:
+            return None
+        match = re.search(r"(?:收藏|保存)", value)
+        if match is None:
+            return None
+
+        prefix = value[: match.start()].strip()
+        prefix = re.sub(
+            r"^(?:帮我|给我|请(?:你)?|麻烦(?:你)?|你|能|可以|(?:我)?(?:想|要))\s*",
+            "",
+            prefix,
+        ).strip()
+        prefix = re.sub(r"^(?:把)?\s*", "", prefix).strip()
+        prefix = re.sub(
+            r"^(?:这个|这张|这条|这|它)\s*",
+            "",
+            prefix,
+        ).strip()
+        # Anything left before the action means this is likely ordinary chat,
+        # e.g. “我收藏了很多图片” or “这只很可爱收藏一下”.
+        if prefix:
+            return None
+
+        rest = value[match.end() :].strip()
+        rest = re.sub(
+            r"(?:一下|起来|了|吧|啦|呀|哦|嘛|行吗|可以吗)+\s*$",
+            "",
+            rest,
+        ).strip()
+        rest = re.sub(r"^(?:来|去|到|为|分类[:：]?)\s*", "", rest).strip()
+        rest = re.sub(
+            r"^(?:了|一下|起来|这个|这张|这条|这|它)\s*",
+            "",
+            rest,
+        ).strip()
+        rest = re.sub(r"^(?:表情|图片|贴纸)\s*", "", rest).strip()
+        rest = re.sub(r"(?:表情|图片|贴纸)\s*$", "", rest).strip()
+        rest = rest.strip("，。！？!?,.、:：;；\"'“”‘’ ")
+
+        category = self._normalize_collected_category(rest)
+        if category is None:
+            return None
+        return {"category": category}
+
+    async def _save_collected_payload(
+        self,
+        event: AstrMessageEvent,
+        category: str,
+        payload: dict[str, Any],
+    ) -> tuple[str, str]:
+        if self._collected_root is None:
+            return (
+                "storage",
+                self._cfg_str("collected_sticker_storage_unavailable_reply"),
+            )
+        max_count = self._cfg_int("collected_sticker_max_count", 1)
+        async with self._collected_lock:
+            self._collected_entries = self._valid_collected_entries()
+            duplicate = next(
+                (
+                    entry
+                    for entry in self._collected_entries
+                    if entry.get("sha256") == payload.get("sha256")
+                ),
+                None,
+            )
+            if duplicate is not None:
+                return (
+                    "duplicate",
+                    self._format_collected_reply(
+                        self._cfg_str("collected_sticker_duplicate_reply"),
+                        category=duplicate.get(
+                            "category",
+                            DEFAULT_COLLECTED_CATEGORY,
+                        ),
+                    ),
+                )
+            if len(self._collected_entries) >= max_count:
+                return (
+                    "limit",
+                    self._format_collected_reply(
+                        self._cfg_str("collected_sticker_limit_reply"),
+                        max_count=max_count,
+                    ),
+                )
+
+            category_dir = self._collected_category_dir(category, create=True)
+            if category_dir is None:
+                return (
+                    "storage",
+                    self._cfg_str(
+                        "collected_sticker_storage_unavailable_reply"
+                    ),
+                )
+            filename = f"{payload['sha256']}{payload['extension']}"
+            final_path = category_dir / filename
+            if final_path.is_symlink():
+                return (
+                    "storage",
+                    self._cfg_str(
+                        "collected_sticker_storage_unavailable_reply"
+                    ),
+                )
+            if final_path.exists():
+                return (
+                    "duplicate",
+                    self._format_collected_reply(
+                        self._cfg_str("collected_sticker_duplicate_reply"),
+                        category=category,
+                    ),
+                )
+
+            source = ""
+            try:
+                get_platform_name = getattr(event, "get_platform_name", None)
+                if callable(get_platform_name):
+                    source = str(get_platform_name() or "")
+            except Exception:
+                source = ""
+            entry = {
+                "sha256": payload["sha256"],
+                "filename": filename,
+                "category": category,
+                "size": int(payload.get("size", len(payload["data"]))),
+                "created_at": int(time.time()),
+                "source": source,
+                "path": final_path,
+            }
+            old_entries = list(self._collected_entries)
+            self._atomic_write_bytes(final_path, payload["data"])
+            self._collected_entries = old_entries + [entry]
+            try:
+                self._save_collected_sticker_index()
+            except Exception:
+                self._collected_entries = old_entries
+                try:
+                    final_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+            return (
+                "saved",
+                self._format_collected_reply(
+                    self._cfg_str("collected_sticker_saved_reply"),
+                    category=category,
+                    filename=filename,
+                ),
+            )
 
     async def _collect_user_sticker(
         self,
@@ -3189,75 +3838,55 @@ class QQBotEnhancerPlugin(Star):
             return self._cfg_str("collected_sticker_too_large_reply")
         if status != "ok" or payload is None:
             return self._cfg_str("collected_sticker_invalid_image_reply")
+        _status, message = await self._save_collected_payload(
+            event,
+            category,
+            payload,
+        )
+        return message
 
-        max_count = self._cfg_int("collected_sticker_max_count", 1)
-        async with self._collected_lock:
-            self._collected_entries = self._valid_collected_entries()
-            duplicate = next(
-                (
-                    entry
-                    for entry in self._collected_entries
-                    if entry.get("sha256") == payload["sha256"]
-                ),
-                None,
+    async def _maybe_auto_collect_user_sticker(
+        self,
+        event: AstrMessageEvent,
+    ) -> str | None:
+        if not self._cfg_bool("auto_collect_user_sticker_enabled"):
+            return None
+        if not self._cfg_bool("collected_sticker_enabled"):
+            return None
+        now = self._clock()
+        cooldown = self._cfg_int(
+            "auto_collect_sticker_cooldown_seconds",
+            0,
+        )
+        last = self._last_auto_collect_at.get(event.unified_msg_origin)
+        if last is not None and now - last < cooldown:
+            return None
+        status, payload = await self._extract_collectible_image_payload(event)
+        if status != "ok" or payload is None:
+            return None
+        if not self._is_probable_sticker_payload(payload):
+            return None
+        category = self._normalize_collected_category(
+            self._cfg_str("auto_collect_sticker_default_category")
+        )
+        if category is None:
+            category = DEFAULT_COLLECTED_CATEGORY
+        self._last_auto_collect_at[event.unified_msg_origin] = now
+        save_status, message = await self._save_collected_payload(
+            event,
+            category,
+            payload,
+        )
+        if save_status != "saved":
+            logger.info(
+                "qqbot_enhancer 自动收藏未保存: %s",
+                save_status,
             )
-            if duplicate is not None:
-                return self._format_collected_reply(
-                    self._cfg_str("collected_sticker_duplicate_reply"),
-                    category=duplicate.get("category", DEFAULT_COLLECTED_CATEGORY),
-                )
-            if len(self._collected_entries) >= max_count:
-                return self._format_collected_reply(
-                    self._cfg_str("collected_sticker_limit_reply"),
-                    max_count=max_count,
-                )
-
-            category_dir = self._collected_category_dir(category, create=True)
-            if category_dir is None:
-                return self._cfg_str("collected_sticker_storage_unavailable_reply")
-            filename = f"{payload['sha256']}{payload['extension']}"
-            final_path = category_dir / filename
-            if final_path.is_symlink():
-                return self._cfg_str("collected_sticker_storage_unavailable_reply")
-            if final_path.exists():
-                return self._format_collected_reply(
-                    self._cfg_str("collected_sticker_duplicate_reply"),
-                    category=category,
-                )
-
-            source = ""
-            try:
-                get_platform_name = getattr(event, "get_platform_name", None)
-                if callable(get_platform_name):
-                    source = str(get_platform_name() or "")
-            except Exception:
-                source = ""
-            entry = {
-                "sha256": payload["sha256"],
-                "filename": filename,
-                "category": category,
-                "size": len(payload["data"]),
-                "created_at": int(time.time()),
-                "source": source,
-                "path": final_path,
-            }
-            old_entries = list(self._collected_entries)
-            self._atomic_write_bytes(final_path, payload["data"])
-            self._collected_entries = old_entries + [entry]
-            try:
-                self._save_collected_sticker_index()
-            except Exception:
-                self._collected_entries = old_entries
-                try:
-                    final_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise
-            return self._format_collected_reply(
-                self._cfg_str("collected_sticker_saved_reply"),
-                category=category,
-                filename=filename,
-            )
+            return None
+        return self._format_collected_reply(
+            self._cfg_str("auto_collect_sticker_saved_reply"),
+            category=category,
+        )
 
     def _collected_category_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}

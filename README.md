@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**3.5.1**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**3.6.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
 
@@ -280,7 +280,8 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 | 网络找图 | `/找图 关键词`、`/搜图 关键词` | Bing Images + 百度图片第二源；安全搜索、冷却、下载大小/超时 |
 | 自然语言找图 | @ 机器人或私聊说“帮我搜两张千早爱音图片” | `image_search_natural_language_enabled=true`；非 @ 群聊不触发 |
 | 用户表情反应 | 用户 @/私聊发送纯图片/表情时优先自然短句回应，可按概率附表情 | `user_sticker_reaction_enabled`、`user_sticker_reaction_probability`，不调用 LLM |
-| 收藏/分类/发表情 | `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]` | 收藏到 `data/plugin_data/qqbot_enhancer/collected_stickers/`，SHA-256 去重；带文字图片仍走识图 |
+| 收藏/分类/发表情 | `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]` | 支持引用图片或本会话最近媒体；默认不自动收藏普通图片；收藏到 `data/plugin_data/qqbot_enhancer/collected_stickers/`，SHA-256 去重 |
+| AI 自主发表情 | 机器人按语境/情绪自行决定附带内置或收藏表情，无需用户命令 | `sticker_ai_select_enabled`、`sticker_ai_marker_enabled`、`sticker_ai_select_probability`；不启用电脑控制/终端/工具权限 |
 | 本地表情包 | 回复时按概率附带内置 8 张 PNG 或用户收藏表情 | `sticker_probability=0.35`、`collected_sticker_use_probability`，不额外消耗 LLM token |
 | 本地点歌/唱歌 | `/唱歌`、`/唱歌 关键词`、`/点歌 关键词` | 读取 `songs/` 本地授权音频；不调用 LLM/TTS；默认上限 20 MB |
 | 插件用法 | `/option`、`/插件用法`、`/用法` | 显示本插件用法和已加载插件元数据 |
