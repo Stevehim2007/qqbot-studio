@@ -165,3 +165,86 @@ def persona_summary(parsed: PersonaConfig) -> str:
         "群人格映射：direct 模式按群 ID 注入；"
         f"群映射 {len(parsed.groups)} 个，默认人格 {default_state}"
     )
+
+
+PROMPT_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+@dataclass(slots=True)
+class PromptProfile:
+    id: str
+    name: str
+    prompt: str
+
+
+@dataclass(slots=True)
+class PromptProfileConfig:
+    profiles: list[PromptProfile]
+    active_id: str = ""
+
+    @property
+    def active(self) -> PromptProfile | None:
+        return next((item for item in self.profiles if item.id == self.active_id), None)
+
+
+def parse_prompt_profiles(
+    raw: Any,
+    active_id: Any = "",
+    *,
+    max_profiles: int = 100,
+    max_prompt_chars: int = 12000,
+    max_name_chars: int = 80,
+) -> PromptProfileConfig:
+    """Parse Studio-synced prompt profiles without ever raising."""
+
+    data: Any = raw
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw.strip() or "[]")
+        except (TypeError, ValueError):
+            return PromptProfileConfig(profiles=[])
+    if not isinstance(data, list):
+        return PromptProfileConfig(profiles=[])
+    max_profiles = max(1, int(max_profiles))
+    profiles: list[PromptProfile] = []
+    seen: set[str] = set()
+    for raw_item in data:
+        if not isinstance(raw_item, dict):
+            continue
+        profile_id = str(raw_item.get("id") or "").strip()
+        if not PROMPT_PROFILE_ID_RE.fullmatch(profile_id) or profile_id in seen:
+            continue
+        prompt = _safe_text(
+            raw_item.get("prompt"),
+            max_chars=max_prompt_chars,
+            allow_newlines=True,
+        )
+        if prompt is None:
+            continue
+        name = _safe_text(
+            raw_item.get("name", ""),
+            max_chars=max_name_chars,
+            allow_newlines=False,
+        ) or f"提示词 {len(profiles) + 1}"
+        profiles.append(PromptProfile(id=profile_id, name=name, prompt=prompt))
+        seen.add(profile_id)
+        if len(profiles) >= max_profiles:
+            break
+    safe_active = str(active_id or "").strip()
+    if safe_active not in seen:
+        safe_active = profiles[0].id if profiles else ""
+    return PromptProfileConfig(profiles=profiles, active_id=safe_active)
+
+
+def resolve_prompt_profile(
+    config: PromptProfileConfig,
+    *,
+    legacy_prompt: str = "",
+) -> tuple[str, str, str, str]:
+    """Return (prompt, name, profile_id, source). Empty profile -> legacy."""
+
+    active = config.active
+    if active is not None:
+        return active.prompt, active.name, active.id, "profile"
+    legacy = str(legacy_prompt or "")
+    return legacy, "", "", "legacy"

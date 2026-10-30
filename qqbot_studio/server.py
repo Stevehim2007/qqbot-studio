@@ -295,6 +295,19 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         }
 
     @staticmethod
+    def _prompt_profiles_unavailable(detail: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "prompts": [],
+            "active_id": "",
+            "restart_required": False,
+            "conversation_created": False,
+            "conversation_pending": False,
+            "message": "提示词列表接口暂不可用；主控制台和其它功能不受影响。",
+            "error": detail,
+        }
+
+    @staticmethod
     def _plugin_config_unavailable(plugin_id: str, detail: str) -> dict[str, Any]:
         return {
             "ok": False,
@@ -529,6 +542,29 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "prompts":
+                    getter = getattr(manager, "get_prompt_profiles", None)
+                    if not callable(getter):
+                        self._json(
+                            HTTPStatus.OK,
+                            self._prompt_profiles_unavailable(
+                                "当前后端未提供提示词列表接口。"
+                            ),
+                        )
+                        return
+                    try:
+                        result = getter()
+                    except Exception:  # noqa: BLE001 - optional endpoint isolation
+                        traceback.print_exc()
+                        result = self._prompt_profiles_unavailable(
+                            "读取提示词列表失败。"
+                        )
+                    if not isinstance(result, dict):
+                        result = self._prompt_profiles_unavailable(
+                            "提示词列表返回格式异常。"
+                        )
+                    self._json(HTTPStatus.OK, result)
+                    return
                 plugin_config_parts = subroute.split("/")
                 if (
                     len(plugin_config_parts) == 3
@@ -859,6 +895,29 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "prompts":
+                    updater = getattr(manager, "update_prompt_profiles", None)
+                    if not callable(updater):
+                        self._json(
+                            HTTPStatus.OK,
+                            self._prompt_profiles_unavailable(
+                                "当前后端未提供提示词列表接口。"
+                            ),
+                        )
+                        return
+                    try:
+                        result = updater(payload)
+                    except Exception:  # noqa: BLE001 - optional endpoint isolation
+                        traceback.print_exc()
+                        result = self._prompt_profiles_unavailable(
+                            "更新提示词列表失败。"
+                        )
+                    if not isinstance(result, dict):
+                        result = self._prompt_profiles_unavailable(
+                            "提示词列表返回格式异常。"
+                        )
+                    self._json(HTTPStatus.OK, result)
+                    return
                 plugin_config_parts = subroute.split("/")
                 if (
                     len(plugin_config_parts) == 3

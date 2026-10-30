@@ -18,6 +18,7 @@ from typing import Any
 
 AGENT_PERSONA_PREFIX = "qqbot_enhancer_group_"
 AGENT_DEFAULT_PERSONA_ID = AGENT_PERSONA_PREFIX + "default"
+AGENT_PROMPT_PERSONA_PREFIX = "qqbot_enhancer_prompt_"
 AGENT_PERSONA_MARKER = "# Group Persona Instructions"
 
 
@@ -29,6 +30,13 @@ def persona_id_for(group_id: str, source: str) -> str:
     if source == "default":
         return AGENT_DEFAULT_PERSONA_ID
     return ""
+
+
+def persona_id_for_profile(profile_id: str) -> str:
+    value = str(profile_id or "").strip()
+    if not value or not all(char.isalnum() or char in "_-" for char in value):
+        return ""
+    return f"{AGENT_PROMPT_PERSONA_PREFIX}{value}"
 
 
 class AgentPersonaBridge:
@@ -97,6 +105,7 @@ class AgentPersonaBridge:
         unified_msg_origin: str,
         platform_id: str,
         persona_id: str,
+        new_conversation_on_persona_change: bool = False,
     ) -> bool:
         if not self.supported or not unified_msg_origin or not persona_id:
             return False
@@ -118,6 +127,17 @@ class AgentPersonaBridge:
                     getattr(conversation, "persona_id", "") or ""
                 ) == persona_id:
                     return True
+            if new_conversation_on_persona_change:
+                # A different active prompt profile must not inherit the old
+                # persona's conversation history.  new_conversation() switches
+                # to the new conversation and binds the persona atomically from
+                # the caller's perspective.
+                await self.conversation_manager.new_conversation(
+                    unified_msg_origin,
+                    platform_id=platform_id,
+                    persona_id=persona_id,
+                )
+                return True
             await self.conversation_manager.update_conversation(
                 unified_msg_origin,
                 conversation_id=cid,

@@ -38,6 +38,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "qq_account": "",
     "model": MODEL_NAME,
     "prompt": DEFAULT_PROMPT,
+    "prompt_profiles": [],
+    "prompt_profiles_active_id": "",
     "use_mirror": False,
     "ports": {},
     "deployed": False,

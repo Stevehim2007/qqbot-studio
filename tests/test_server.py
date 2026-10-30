@@ -25,6 +25,35 @@ class FakeManager:
             "memory_mode": "direct",
         }
         self.plugin_config_set_calls = []
+        self.prompt_profiles = [
+            {
+                "id": "default",
+                "name": "默认提示词",
+                "prompt": "第一行\n第二行",
+                "pinned": True,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        ]
+        self.prompt_profile_actions = []
+
+    def get_prompt_profiles(self):
+        return {
+            "ok": True,
+            "prompts": [dict(item) for item in self.prompt_profiles],
+            "active_id": "default",
+            "restart_required": False,
+            "conversation_created": False,
+            "conversation_pending": False,
+            "message": "提示词列表已读取。",
+            "error": "",
+        }
+
+    def update_prompt_profiles(self, payload):
+        self.prompt_profile_actions.append(dict(payload or {}))
+        result = self.get_prompt_profiles()
+        result["message"] = "提示词已更新。"
+        return result
 
     def get_plugins(self):
         return {
@@ -774,6 +803,36 @@ class ServerTests(unittest.TestCase):
         status, body = self._post("/api/assistant/start", {}, token=False)
         self.assertEqual(status, 403)
         request = urllib.request.Request(self.base + "/api/assistant/config")
+        try:
+            with self.opener.open(request, timeout=5) as response:
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+        self.assertEqual(status, 403)
+
+    def test_instance_prompt_profiles_api_contract_and_token(self):
+        status, body = self._get("/api/instances/bot-1/prompts")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertIn("prompts", payload)
+        self.assertEqual(payload["active_id"], "default")
+        self.assertEqual(payload["prompts"][0]["prompt"], "第一行\n第二行")
+        self.assertIn("restart_required", payload)
+        self.assertIn("conversation_created", payload)
+
+        status, body = self._post(
+            "/api/instances/bot-1/prompts",
+            {"action": "create", "name": "新角色", "prompt": "A\nB"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        self.assertEqual(
+            self.studio.manager.prompt_profile_actions,
+            [{"action": "create", "name": "新角色", "prompt": "A\nB"}],
+        )
+
+        request = urllib.request.Request(self.base + "/api/instances/bot-1/prompts")
         try:
             with self.opener.open(request, timeout=5) as response:
                 status = response.status

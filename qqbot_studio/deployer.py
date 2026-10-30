@@ -43,6 +43,7 @@ QQ_ACCOUNT_RE = re.compile(r"^\d{5,12}$")
 PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
 MAX_PROMPT_LENGTH = 12_000
+PROMPT_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PLUGIN_CONFIG_MAX_FIELDS = 256
 PLUGIN_CONFIG_MAX_REQUEST_BYTES = 512 * 1024
@@ -2443,6 +2444,319 @@ class DeployManager:
                     requested_id,
                     "保存插件配置失败；主项目和其它插件不受影响。",
                     detail=detail,
+                )
+
+    # ------------------------------------------------------------------
+    # Per-instance prompt profiles
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _prompt_profile_name(value: Any, index: int = 0) -> str:
+        name = str(value or "").strip()
+        if len(name) > 80:
+            raise ValueError("提示词名称最多 80 个字符。")
+        return name or f"提示词 {index + 1}"
+
+    @staticmethod
+    def _prompt_profile_prompt(value: Any) -> str:
+        text = str(value or "")
+        if not text.strip():
+            raise ValueError("提示词内容不能为空。")
+        if len(text) > MAX_PROMPT_LENGTH:
+            raise ValueError(f"提示词不能超过 {MAX_PROMPT_LENGTH} 个字符。")
+        return text
+
+    @staticmethod
+    def _prompt_profile_failure(
+        prompts: list[dict[str, Any]],
+        active_id: str,
+        message: str,
+        detail: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "prompts": prompts,
+            "active_id": active_id,
+            "restart_required": False,
+            "conversation_created": False,
+            "conversation_pending": False,
+            "message": message,
+            "error": str(detail or message),
+        }
+
+    def _normalise_prompt_profiles(
+        self,
+        config: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], str, bool]:
+        """Return normalized profiles/active id and whether config changed."""
+
+        now = utc_now()
+        raw_profiles = config.get("prompt_profiles")
+        profiles: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        changed = False
+        if isinstance(raw_profiles, list):
+            for index, raw in enumerate(raw_profiles):
+                if not isinstance(raw, dict):
+                    changed = True
+                    continue
+                profile_id = str(raw.get("id") or "").strip()
+                if not PROMPT_PROFILE_ID_RE.fullmatch(profile_id) or profile_id in seen_ids:
+                    changed = True
+                    continue
+                prompt = str(raw.get("prompt") or "")
+                if not prompt.strip():
+                    changed = True
+                    continue
+                name = str(raw.get("name") or "").strip() or f"提示词 {index + 1}"
+                if len(name) > 80:
+                    name = name[:80]
+                    changed = True
+                created_at = str(raw.get("created_at") or now)
+                updated_at = str(raw.get("updated_at") or created_at)
+                profiles.append(
+                    {
+                        "id": profile_id,
+                        "name": name,
+                        "prompt": prompt,
+                        "pinned": bool(raw.get("pinned")),
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                    }
+                )
+                seen_ids.add(profile_id)
+        if not profiles:
+            plugin_config = self._read_json_object(self.enhancer_config_path)
+            legacy_prompt = str(
+                plugin_config.get("system_prompt")
+                or config.get("prompt")
+                or DEFAULT_PROMPT
+            )
+            if not legacy_prompt.strip():
+                legacy_prompt = DEFAULT_PROMPT
+            profiles = [
+                {
+                    "id": "default",
+                    "name": "默认提示词",
+                    "prompt": legacy_prompt,
+                    "pinned": True,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ]
+            active_id = "default"
+            changed = True
+        else:
+            configured_active = str(config.get("prompt_profiles_active_id") or "").strip()
+            active_id = ""
+            if configured_active in seen_ids:
+                active_id = configured_active
+            else:
+                pinned = next((item["id"] for item in profiles if item["pinned"]), "")
+                active_id = pinned or profiles[0]["id"]
+                changed = True
+            for item in profiles:
+                expected = item["id"] == active_id
+                if bool(item["pinned"]) != expected:
+                    item["pinned"] = expected
+                    changed = True
+        if len(profiles) > 100:
+            profiles = profiles[:100]
+            changed = True
+        if config.get("prompt_profiles") != profiles:
+            changed = True
+        if config.get("prompt_profiles_active_id") != active_id:
+            changed = True
+        return profiles, active_id, changed
+
+    def _sync_prompt_profiles_to_plugin(
+        self,
+        profiles: list[dict[str, Any]],
+        active_id: str,
+        active_prompt: str,
+    ) -> tuple[bool, str]:
+        """Write profile state to the enhancer plugin; online hot-reload if possible."""
+
+        plugin_config, read_error = self._read_json_object_with_error(self.enhancer_config_path)
+        if read_error:
+            return False, f"插件配置读取失败，提示词状态仅保存在 Studio：{read_error}"
+        merged = self._merged_enhancer_config(plugin_config)
+        merged["prompt_profiles"] = json.dumps(profiles, ensure_ascii=False)
+        merged["prompt_profile_active_id"] = active_id
+        # Keep the legacy direct/system prompt mirror in sync.
+        merged["system_prompt"] = active_prompt
+        try:
+            self._write_private_json(self.enhancer_config_path, merged)
+        except OSError as exc:
+            return False, f"无法写入插件提示词状态：{exc}"
+
+        api_available = False
+        api_error = ""
+        if self.store.load_config().get("deployed"):
+            try:
+                client = self._memory_api_client(timeout=6, wait_for_ready=False)
+                if client is not None:
+                    live = self._get_plugin_config_via_api(client, ENHANCER_PLUGIN_ID)
+                    if isinstance(live, dict):
+                        merged = {**merged, **live}
+                        merged["prompt_profiles"] = json.dumps(profiles, ensure_ascii=False)
+                        merged["prompt_profile_active_id"] = active_id
+                        merged["system_prompt"] = active_prompt
+                    self._save_plugin_config_via_api(client, ENHANCER_PLUGIN_ID, merged)
+                    api_available = True
+            except Exception as exc:  # noqa: BLE001 - local state remains authoritative
+                api_error = self.redact_sensitive_text(str(exc) or exc.__class__.__name__)
+        return api_available, api_error
+
+    def get_prompt_profiles(self) -> dict[str, Any]:
+        """Return safe prompt profiles for the current instance."""
+
+        with self._lock:
+            try:
+                config = self.store.load_config()
+                profiles, active_id, changed = self._normalise_prompt_profiles(config)
+                if changed:
+                    config["prompt_profiles"] = profiles
+                    config["prompt_profiles_active_id"] = active_id
+                    active_prompt = next(
+                        item["prompt"] for item in profiles if item["id"] == active_id
+                    )
+                    config["prompt"] = active_prompt
+                    self.store.save_config(config)
+                    self._sync_prompt_profiles_to_plugin(profiles, active_id, active_prompt)
+                return {
+                    "ok": True,
+                    "prompts": profiles,
+                    "active_id": active_id,
+                    "restart_required": False,
+                    "conversation_created": False,
+                    "conversation_pending": False,
+                    "message": "提示词列表已读取。",
+                    "error": "",
+                }
+            except Exception as exc:  # noqa: BLE001 - endpoint isolation
+                return self._prompt_profile_failure(
+                    [], "", "读取提示词列表失败；主控制台不受影响。", str(exc)
+                )
+
+    def update_prompt_profiles(self, payload: Any) -> dict[str, Any]:
+        """Apply create/update/delete/activate with atomic persistence."""
+
+        incoming = payload if isinstance(payload, dict) else {}
+        action = str(incoming.get("action") or "").strip().lower()
+        with self._lock:
+            try:
+                config = self.store.load_config()
+                profiles, active_id, _changed = self._normalise_prompt_profiles(config)
+                active_prompt = next(
+                    item["prompt"] for item in profiles if item["id"] == active_id
+                )
+                action_ok = False
+                conversation_pending = False
+                if action == "create":
+                    if len(profiles) >= 100:
+                        return self._prompt_profile_failure(
+                            profiles, active_id, "提示词数量已达上限（100）。"
+                        )
+                    name = self._prompt_profile_name(incoming.get("name"), len(profiles))
+                    prompt = self._prompt_profile_prompt(incoming.get("prompt"))
+                    now = utc_now()
+                    profile_id = f"p_{secrets_token_fragment(6).lower()}"
+                    profiles.append(
+                        {
+                            "id": profile_id,
+                            "name": name,
+                            "prompt": prompt,
+                            "pinned": False,
+                            "created_at": now,
+                            "updated_at": now,
+                        }
+                    )
+                    action_ok = True
+                elif action in {"update", "delete", "activate"}:
+                    profile_id = str(incoming.get("profile_id") or "").strip()
+                    target = next(
+                        (item for item in profiles if item["id"] == profile_id), None
+                    )
+                    if target is None:
+                        return self._prompt_profile_failure(
+                            profiles, active_id, "找不到指定提示词 profile。"
+                        )
+                    if action == "update":
+                        if "name" in incoming:
+                            target["name"] = self._prompt_profile_name(
+                                incoming.get("name"), profiles.index(target)
+                            )
+                        if "prompt" in incoming:
+                            target["prompt"] = self._prompt_profile_prompt(
+                                incoming.get("prompt")
+                            )
+                        target["updated_at"] = utc_now()
+                        action_ok = True
+                    elif action == "delete":
+                        if len(profiles) <= 1:
+                            return self._prompt_profile_failure(
+                                profiles, active_id, "不能删除最后一个提示词 profile。"
+                            )
+                        profiles = [item for item in profiles if item["id"] != profile_id]
+                        if active_id == profile_id:
+                            active_id = profiles[0]["id"]
+                            config["prompt"] = profiles[0]["prompt"]
+                        action_ok = True
+                    else:
+                        active_id = profile_id
+                        action_ok = True
+                else:
+                    return self._prompt_profile_failure(
+                        profiles, active_id, "action 只能是 create/update/delete/activate。"
+                    )
+
+                for item in profiles:
+                    item["pinned"] = item["id"] == active_id
+                active_prompt = next(
+                    item["prompt"] for item in profiles if item["id"] == active_id
+                )
+                config["prompt_profiles"] = profiles
+                config["prompt_profiles_active_id"] = active_id
+                config["prompt"] = active_prompt
+                self.store.save_config(config)
+                api_available, sync_error = self._sync_prompt_profiles_to_plugin(
+                    profiles, active_id, active_prompt
+                )
+                plugin_state = self._read_json_object(self.enhancer_config_path)
+                memory_mode = self._normalise_memory_mode(
+                    plugin_state.get("memory_mode", config.get("memory_mode"))
+                )
+                if action == "activate" and memory_mode == "astrbot":
+                    conversation_pending = True
+                warnings = [sync_error] if sync_error else []
+                message = {
+                    "create": "提示词已创建。",
+                    "update": "提示词已更新。",
+                    "delete": "提示词已删除。",
+                    "activate": (
+                        "提示词已激活；AstrBot 模式将在下一轮消息创建新会话并绑定人格。"
+                        if conversation_pending
+                        else "提示词已激活；下一轮回复使用新提示词。"
+                    ),
+                }[action]
+                if not api_available:
+                    message += " AstrBot 当前不在线，插件将在下次运行时读取新状态。"
+                return {
+                    "ok": bool(action_ok),
+                    "prompts": profiles,
+                    "active_id": active_id,
+                    "restart_required": bool(not api_available),
+                    "conversation_created": False,
+                    "conversation_pending": conversation_pending,
+                    "api_available": bool(api_available),
+                    "message": message,
+                    "warning": " ".join(warnings),
+                    "warnings": warnings,
+                    "error": "",
+                }
+            except Exception as exc:  # noqa: BLE001 - endpoint isolation
+                return self._prompt_profile_failure(
+                    [], "", "更新提示词失败；主控制台不受影响。", str(exc)
                 )
 
     def get_status(self) -> dict[str, Any]:

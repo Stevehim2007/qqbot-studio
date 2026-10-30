@@ -523,6 +523,19 @@
     "type": "bool",
     "default": true
   },
+  "prompt_profiles": {
+    "description": "实例提示词 profiles JSON（由 Studio 提示词 API 维护）",
+    "type": "text",
+    "default": "[]",
+    "max_length": 100000,
+    "hint": "通常由 Studio 提示词列表 API 写入；旧配置无此字段时回退 system_prompt。"
+  },
+  "prompt_profile_active_id": {
+    "description": "当前激活的提示词 profile id（由 Studio 提示词 API 维护）",
+    "type": "string",
+    "default": "",
+    "max_length": 128
+  },
   "group_personas": {
     "description": "实例级群人格映射 JSON（direct 按群注入；astrbot 模式绑定每 UMO 的 AstrBot Persona）",
     "type": "text",
@@ -623,6 +636,112 @@
       "min": 100,
       "max": 2000,
       "step": 50
+    }
+  },
+  "conversation_switch_enabled": {
+    "description": "启用群聊按名称切换 AstrBot 会话命令",
+    "type": "bool",
+    "default": true
+  },
+  "conversation_title_max_chars": {
+    "description": "会话标题最大字符数",
+    "type": "int",
+    "default": 32,
+    "slider": {
+      "min": 1,
+      "max": 64,
+      "step": 1
+    }
+  },
+  "conversation_list_limit": {
+    "description": "/会话列表最多显示条数",
+    "type": "int",
+    "default": 20,
+    "slider": {
+      "min": 1,
+      "max": 50,
+      "step": 1
+    }
+  },
+  "conversation_auto_create_enabled": {
+    "description": "/会话 名称 未找到时自动新建",
+    "type": "bool",
+    "default": true
+  },
+  "ambient_group_chat_enabled": {
+    "description": "启用群聊低频 ambient 参与（默认关闭）",
+    "type": "bool",
+    "default": false
+  },
+  "ambient_group_reply_probability": {
+    "description": "非 @ 群消息 ambient 参与概率",
+    "type": "float",
+    "default": 0.03,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.01
+    }
+  },
+  "ambient_group_keyword_probability": {
+    "description": "命中关键词/点名的参与概率",
+    "type": "float",
+    "default": 0.5,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  },
+  "ambient_group_keywords": {
+    "description": "触发 ambient 关注的关键词/机器人称呼",
+    "type": "list",
+    "default": [
+      "机器人",
+      "小助手"
+    ],
+    "items": {
+      "type": "string"
+    }
+  },
+  "ambient_group_round_interval": {
+    "description": "每 N 条群消息允许一次 ambient 随机参与（0=不轮次门控）",
+    "type": "int",
+    "default": 0,
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "ambient_group_cache_limit": {
+    "description": "每群短期消息缓存条数",
+    "type": "int",
+    "default": 20,
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "ambient_group_cache_ttl_seconds": {
+    "description": "群消息缓存 TTL 秒",
+    "type": "int",
+    "default": 300,
+    "slider": {
+      "min": 30,
+      "max": 3600,
+      "step": 30
+    }
+  },
+  "ambient_group_min_interval_seconds": {
+    "description": "同群 ambient 回复最小间隔秒",
+    "type": "int",
+    "default": 60,
+    "slider": {
+      "min": 0,
+      "max": 3600,
+      "step": 10
     }
   },
   "system_prompt": {

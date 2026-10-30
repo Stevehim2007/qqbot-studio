@@ -9,6 +9,8 @@ AstrBot v4.29 自动加载插件，提供：
 - `/找图 关键词`（别名 `/搜图`）默认只用纯标准库 + 免 API Key 的 Bing Images HTML 搜索，并做中/日/英文标题描述相关性过滤；下载校验图片后发本地文件，失败保留远程 URL 兜底。百度旧第二源默认关闭，只有显式开启才可选；
 - @/私聊支持保守自然语言找图，如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，命中后复用同一搜索下载流程并阻断默认 LLM；
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的授权音频并用 `Comp.Record` 发送，不调用 LLM，不烧 token；
+- 可选群聊 ambient：默认关闭；启用后缓存全群消息并按低频概率/关键词/轮次参与，回复优先用官方 `Comp.At` @ 发言人，失败降级 `@昵称`，默认有限冷却防刷屏；
+- `/会话列表`、`/会话 名称`、`/新会话 名称`（仅群聊）通过 AstrBot 官方 ConversationManager 列出/切换/新建命名会话，并绑定当前群人格；API 缺失时明确降级不伪造成功；
 - `/food 火锅`、`/food 南关区 火锅`（别名 `/吃什么`、`/饭店`）通过固定 HTTPS host `food.dlsz.top` 公开只读 API 查询最多 5 家餐厅，格式化店名/地点/标签/均分/口味/性价比/评价数/最新日期，带超时、大小、冷却和中文降级，不调用 LLM；
 - `group_personas` 实例级群人格映射：direct 模式按群 ID 注入不同 system prompt，私聊/未知群 fallback default，旧 `system_prompt` 兼容；astrbot memory 模式无稳定会话级 persona API 时安全降级，不串群。
 - direct 模式群聊身份上下文：prompt 包含群号、发送者昵称/QQ 和最近消息 `[昵称(QQ)]` 前缀，避免多人混为同一人；QQ/昵称仅用于本次 LLM 理解，回复中自动脱敏；astrbot memory 模式无稳定逐消息 hook 时安全降级。
@@ -331,12 +333,44 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `memory_mode=astrbot`：通过 AstrBot 官方 `on_llm_request(event, req)` 只向**当前轮** `req.system_prompt` 追加群号/昵称/QQ 和“不要输出身份”的短说明；不修改 event 文本、conversation history、provider/model/key。历史消息仍没有逐消息身份前缀，这是当前轮安全增强，不是彻底修复。
 - 不新增 LLM tool/电脑控制；QQ 号不能作为工具参数或文件路径。真实 AstrBot/QQ 多群身份 E2E 未验证。
 
-## 代码架构（1.17.0）
+## 群聊会话切换
+
+仅群聊命令，调用 AstrBot v4.29.3 官方 `ConversationManager`，不直接改数据库：
+
+```text
+/会话列表
+/会话 复盘
+/切换会话 复盘
+/新会话 2026-05
+```
+
+- `/会话列表`：显示当前群会话标题和安全短 id，标记当前会话；最多 `conversation_list_limit` 条。
+- `/会话 名称`：按标题精确查找并 `switch_conversation(umo, cid)`；未找到且 `conversation_auto_create_enabled=true` 时新建并切换。
+- `/新会话 名称`：同名已存在则拒绝重复创建；否则 `new_conversation(umo, title=..., persona_id=...)` 并切换。
+- 切换/新建后调用现有 persona bridge 绑定当前群人格（官方 PersonaManager/ConversationManager）；同一 `unified_msg_origin`，不同群会话隔离。
+- 标题仅普通短文本，拒绝控制字符/路径分隔符，长度 `conversation_title_max_chars`；API 缺失/异常时明确中文降级，不伪称成功；不直接改数据库。
+- 私聊命令回复“私聊默认使用当前会话”，不操作群会话。
+- 配置：`conversation_switch_enabled`、`conversation_title_max_chars`、`conversation_list_limit`、`conversation_auto_create_enabled`。真实 AstrBot/QQ E2E 未验证。
+
+## 群聊 ambient 低频参与
+
+`ambient_group_chat_enabled` **默认 false**，关闭时完全保持旧的 @/概率回复行为。
+
+启用后：
+- 每条群消息进入内存短期缓存（昵称/QQ/时间/文本/图片占位），受 `ambient_group_cache_limit`、`ambient_group_cache_ttl_seconds` 限制；不写盘、不写身份到日志。
+- 非 @ 消息按低频 `ambient_group_reply_probability`、关键词 `ambient_group_keywords`（命中用 `ambient_group_keyword_probability`）、可选 `ambient_group_round_interval` 轮次门控和 `ambient_group_min_interval_seconds` 冷却决定是否参与；默认约 3%。
+- 明确 @ 机器人仍必回；ambient 不改变旧 @/私聊必回和防重复。
+- 参与回复优先使用官方 `Comp.At(qq=...)` @ 当前发言人；组件不可用/异常时降级为 `@昵称` 文本，不伪造 API。
+- direct 复用群身份上下文与 persona/工具/表情；memory 模式给 Agent 结果加当前发言人或保留已有 At；一次回复仍最多一条文字+一个附件。
+- QQ/群号只在 LLM 上下文/官方 At 使用，不以文本泄露；接口/异常安全回退。
+- 配置：`ambient_group_chat_enabled=false`、概率、关键词、轮次、缓存条数/TTL、最小间隔。真实 AstrBot/OneBot/QQ E2E 未验证。
+
+## 代码架构（1.19.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 
 - `interfaces.py`：`StickerRepository`、`MediaDecoder`、`ImageSearchProvider`、`SongRepository`、`LLMService` 等 Protocol 和 `MediaPayload`/`StickerRecord`/`ImageCandidate` 数据对象。
-- `config.py`：176 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
+- `config.py`：190 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
 - `media.py`：图片 magic/尺寸、base64、媒体引用和公网 HTTP(S) URL 安全过滤。
 - `image_search.py`：中/日/英文相关性规范化、别名/阈值过滤。
 - `songs.py`：本地授权音频的安全路径解析/列表仓库。
@@ -347,7 +381,7 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `safe_tools.py`：白名单工具 marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成。
 - `__init__.py`：让插件目录可作为 Python package 部署，`main.py` 优先相对导入；测试 harness 也支持同目录模块 fallback。
 
-未变：所有配置键、schema 176 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
+未变：所有配置键、schema 190 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
 
 ## 依赖
 

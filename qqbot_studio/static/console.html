@@ -246,6 +246,50 @@
     </section>
   </div>
 
+  <div id="prompt-manager-overlay" class="prompt-manager-overlay" hidden>
+    <section id="prompt-manager-modal" class="prompt-manager-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-manager-title" aria-describedby="prompt-manager-warning" tabindex="-1">
+      <header class="prompt-manager-header">
+        <div class="prompt-manager-heading">
+          <span class="prompt-manager-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-edit"></use></svg></span>
+          <div>
+            <span class="prompt-manager-kicker">实例设置 · 提示词</span>
+            <h2 id="prompt-manager-title">提示词列表</h2>
+            <p id="prompt-manager-subtitle">管理当前实例的多套提示词</p>
+          </div>
+        </div>
+        <button id="prompt-manager-close" class="prompt-manager-close" type="button">关闭</button>
+      </header>
+      <div class="prompt-manager-toolbar">
+        <p id="prompt-manager-warning" class="prompt-manager-warning" role="note">置顶或切换当前使用提示词后，新消息会开始一个新会话；旧会话历史不会自动带过去。</p>
+        <button id="prompt-manager-new" class="btn btn-primary btn-small" type="button">新增提示词</button>
+      </div>
+      <div class="prompt-manager-body">
+        <p id="prompt-manager-loading" class="prompt-manager-loading" role="status">正在读取提示词列表…</p>
+        <div id="prompt-manager-list" class="prompt-manager-list" role="list"></div>
+        <p id="prompt-manager-empty" class="prompt-manager-empty" hidden>尚无提示词，点击“新增提示词”创建。</p>
+        <form id="prompt-manager-form" class="prompt-manager-form" novalidate hidden>
+          <h3 id="prompt-editor-title">新增提示词</h3>
+          <div class="prompt-editor-field">
+            <label for="prompt-editor-name">名称</label>
+            <input id="prompt-editor-name" type="text" maxlength="200" autocomplete="off" placeholder="例如：日常聊天 / 客服模式" aria-describedby="prompt-editor-name-error">
+            <p id="prompt-editor-name-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <div id="prompt-editor-prompt-field" class="prompt-editor-field">
+            <label for="prompt-editor-prompt">提示词内容</label>
+            <textarea id="prompt-editor-prompt" rows="9" spellcheck="false" placeholder="输入系统提示词；换行会原样保存。" aria-describedby="prompt-editor-prompt-error"></textarea>
+            <p id="prompt-editor-prompt-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <div class="prompt-manager-form-actions">
+            <button id="prompt-editor-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
+            <button id="prompt-editor-save" class="btn btn-primary btn-small" type="submit">创建</button>
+          </div>
+        </form>
+        <p id="prompt-manager-error" class="prompt-manager-error" role="alert" hidden></p>
+        <p id="prompt-manager-status" class="prompt-manager-status" role="status" hidden></p>
+      </div>
+    </section>
+  </div>
+
   <!-- 服务端会将 {{TOKEN}} 替换为本次本地会话的一次性访问令牌。 -->
   <script>window.QB_TOKEN = "{{TOKEN}}";</script>
   <script src="/services/api.js"></script>

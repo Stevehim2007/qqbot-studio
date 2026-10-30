@@ -1332,3 +1332,90 @@ Content-Type: application/json
 
 安全边界：API Key、token、password、secret 类字段不会出现在 `schema`、`values`、消息或错误中；
 服务端不记录配置请求体。旧后端缺少这些端点时，前端应只降级该插件的参数编辑面板。
+
+---
+
+## 12. 多提示词 Profiles 与 active 切换
+
+每个实例可以保存多个提示词 profile；同一时刻只有一个 `pinned/active`。旧实例没有该字段时，
+由后端把现有 `prompt`（或插件 `system_prompt`）迁移成名为“默认提示词”的单 profile。
+
+### 12.1 读取
+
+```text
+GET /api/instances/<instance_id>/prompts
+```
+
+需要 `X-QB-Token`。响应：
+
+```json
+{
+  "ok": true,
+  "prompts": [
+    {
+      "id": "default",
+      "name": "默认提示词",
+      "prompt": "第一行\n第二行",
+      "pinned": true,
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ],
+  "active_id": "default",
+  "restart_required": false,
+  "conversation_created": false,
+  "conversation_pending": false,
+  "message": "提示词列表已读取。",
+  "error": ""
+}
+```
+
+- profile prompt 保留内部/首尾换行和空白，长度上限 12000 字符。
+- profile 名称最长 80；最多 100 个 profile。
+- 不存在/空/非法旧列表会自动迁移为一个默认 profile；不会删除最后一个 profile。
+- prompt/active 同时镜像到插件配置字段 `prompt_profiles`（JSON 字符串）、
+  `prompt_profile_active_id` 和旧字段 `system_prompt`。
+
+### 12.2 创建 / 更新 / 删除 / 激活
+
+```text
+POST /api/instances/<instance_id>/prompts
+Content-Type: application/json
+X-QB-Token: <token>
+```
+
+```json
+{"action":"create","name":"角色A","prompt":"你是A\n保持换行"}
+{"action":"update","profile_id":"p_xxx","name":"角色A2","prompt":"新提示词"}
+{"action":"delete","profile_id":"p_xxx"}
+{"action":"activate","profile_id":"p_xxx"}
+```
+
+响应在 GET 字段基础上增加：
+
+- `conversation_created`: 后端当前始终为 `false`，因为 AstrBot conversation 只能由插件在下一轮
+  消息中创建；不伪造“已创建”。
+- `conversation_pending`: `action=activate` 且增强插件当前 `memory_mode=astrbot` 时为 `true`。
+- `restart_required`: 插件配置未能在线热重载时的明确提示；本地状态仍已原子保存。
+- `message` / `warning` / `warnings` / `error`。
+
+行为：
+
+- `activate` 会把目标 profile 设为唯一 pinned，并同步 `config.prompt` 镜像和插件 state。
+- direct 模式下一轮直接使用新 active prompt。
+- astrbot memory 模式：插件在下一轮检测 active profile persona 变化，通过官方
+  `ConversationManager.new_conversation(..., persona_id=...)` 新建会话并绑定专用 Persona；
+  `conversation_pending=true` 表示该动作延迟到插件下一轮，而不是后端假称已完成。
+- AstrBot 不在线或插件配置 API 不可用时：返回 `restart_required=true`/warning，本地配置仍保存，不返回 500。
+- 删除 active profile 时自动选择剩余的第一个 profile；删除最后一个返回 `ok:false`。
+- 写入使用原子 JSON + 0600；不记录 prompt、Key、用户 ID 到日志。
+
+提示词优先级（direct 与 astrbot 一致）：
+
+1. `group_personas.groups[群号]` 精确群映射最高；
+2. 当前 active prompt profile；
+3. `group_personas.default`；
+4. 旧 `system_prompt` fallback。
+
+因此群专属人格不会被全局 active profile 覆盖；未知群没有 exact 映射时会使用 active profile；
+只有未配置 active profile 时才使用 group default/legacy。

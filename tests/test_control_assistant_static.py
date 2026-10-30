@@ -393,6 +393,52 @@ class ControlAssistantStaticTests(unittest.TestCase):
             self.assertNotIn(forbidden, self.console_js)
         self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
 
+    def test_console_prompt_manager_modal_contract(self) -> None:
+        required = {
+            "prompt-manager-overlay", "prompt-manager-modal", "prompt-manager-title",
+            "prompt-manager-subtitle", "prompt-manager-warning", "prompt-manager-close",
+            "prompt-manager-new", "prompt-manager-list", "prompt-manager-loading",
+            "prompt-manager-empty", "prompt-manager-form", "prompt-editor-title",
+            "prompt-editor-name", "prompt-editor-name-error", "prompt-editor-prompt",
+            "prompt-editor-prompt-error", "prompt-editor-prompt-field",
+            "prompt-editor-cancel", "prompt-editor-save", "prompt-manager-error",
+            "prompt-manager-status",
+        }
+        self.assertTrue(required.issubset(set(self.console_parser.ids)))
+        for token in (
+            "openPromptManager", "closePromptManager", "openPromptEditor",
+            "submitPromptEditor", "mutatePrompt", "loadPromptList",
+            "prompt-manager-open", "prompt-manager-overlay", "prompt-manager-close",
+            "prompt-manager-new", "prompt-manager-list", "prompt-editor-prompt",
+            "prompt-item-summary", "prompt-item-badge", "state.promptManager.open",
+            "/api/instances/${encodeURIComponent(instance.id)}/prompts",
+            "action: config.editorMode === 'create' ? 'create' : 'update'",
+            "payload.profile_id", "payload.prompt = promptText",
+            "const payload = { action, profile_id: prompt.id };",
+            "mutatePrompt('activate'", "mutatePrompt('delete'",
+            "conversation_created", "restart_required",
+            "root.items", "root.profiles", "item.profile_id", "item.content",
+            "active_id", "updated_at", "config.prompts.length <= 1",
+            "已开始新会话", "需要重启 AstrBot 后生效",
+            "当前后端不支持提示词列表。",
+            "至少保留一个提示词，不能删除最后一个",
+            "切换后会开始新会话",
+        ):
+            self.assertIn(token, self.console_js)
+        self.assertIn("prompt-manager", self.console_html)
+        for style in (
+            ".prompt-manager-overlay", ".prompt-manager-modal", ".prompt-manager-body",
+            ".prompt-item", ".prompt-manager-form", ".prompt-item-summary",
+        ):
+            self.assertIn(style, self.console_css)
+        summary_start = self.console_css.index(".prompt-item-summary {")
+        summary_block = self.console_css[summary_start:self.console_css.index("}", summary_start) + 1]
+        self.assertIn("white-space: pre-wrap", summary_block)
+        self.assertIn("@media (max-width: 640px)", self.console_css)
+        for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
+            self.assertNotIn(forbidden, self.console_js)
+        self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
+
     def test_console_plugin_parameter_editor_contract(self) -> None:
         required = {
             "plugin-config-overlay", "plugin-config-panel", "plugin-config-title",
