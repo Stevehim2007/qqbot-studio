@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import copy
-import ctypes
 import json
 import os
 import re
@@ -20,6 +19,15 @@ from urllib.parse import urlsplit
 
 from .assistant_ext import AssistantExtensionManager
 from .configgen import allocate_instance_port_block
+from .contracts import ResourceStats
+from .resource_stats import (
+    DefaultResourceStatsProvider,
+    directory_usage as _directory_usage,
+    disk_usage as _disk_usage,
+    host_memory_info as _host_memory_info,
+    parse_percent as _parse_percent,
+    parse_size_bytes as _parse_size_bytes,
+)
 from .dockerctl import DockerController, DockerError
 from .store import Store, chmod_best_effort, default_data_dir, utc_now
 
@@ -54,213 +62,6 @@ DEFAULT_MIRROR_NODES: list[dict[str, Any]] = [
         "custom": False,
     },
 ]
-
-
-def _directory_usage(path: Path | str) -> tuple[int, int, list[str]]:
-    """Return (bytes, files, errors) for a directory tree without following links."""
-
-    root = Path(path)
-    total = 0
-    files = 0
-    errors: list[str] = []
-    if not root.exists():
-        return 0, 0, errors
-    stack = [root]
-    while stack:
-        current = stack.pop()
-        try:
-            entries = list(os.scandir(current))
-        except OSError as exc:
-            errors.append(f"无法读取 {current}：{exc}")
-            continue
-        for entry in entries:
-            try:
-                if entry.is_symlink():
-                    continue
-                if entry.is_dir(follow_symlinks=False):
-                    stack.append(Path(entry.path))
-                elif entry.is_file(follow_symlinks=False):
-                    total += int(entry.stat(follow_symlinks=False).st_size)
-                    files += 1
-            except OSError as exc:
-                errors.append(f"无法统计 {entry.path}：{exc}")
-    return total, files, errors[:20]
-
-
-def _disk_usage(path: Path | str) -> dict[str, Any]:
-    """Return filesystem capacity with a Windows/Linux-safe fallback."""
-
-    try:
-        usage = shutil.disk_usage(str(path))
-        used_percent = round((usage.used / usage.total) * 100, 2) if usage.total else None
-        return {
-            "total_bytes": int(usage.total),
-            "used_bytes": int(usage.used),
-            "free_bytes": int(usage.free),
-            "used_percent": used_percent,
-            "error": "",
-        }
-    except (OSError, AttributeError) as exc:
-        # os.statvfs exists on Unix-like systems and does not require third-party
-        # packages.  On Windows it is expected to be absent.
-        try:
-            stat = os.statvfs(str(path))
-            total = int(stat.f_frsize * stat.f_blocks)
-            free = int(stat.f_frsize * stat.f_bavail)
-            used = max(0, total - free)
-            return {
-                "total_bytes": total,
-                "used_bytes": used,
-                "free_bytes": free,
-                "used_percent": round((used / total) * 100, 2) if total else None,
-                "error": "",
-            }
-        except (AttributeError, OSError):
-            return {
-                "total_bytes": None,
-                "used_bytes": None,
-                "free_bytes": None,
-                "used_percent": None,
-                "error": f"磁盘容量读取失败：{exc}",
-            }
-
-
-def _host_memory_info() -> dict[str, Any]:
-    """Read physical host memory using only the standard library."""
-
-    result: dict[str, Any] = {
-        "total_bytes": None,
-        "available_bytes": None,
-        "used_bytes": None,
-        "used_percent": None,
-        "source": "",
-        "error": "",
-    }
-    if os.name == "nt":
-        try:
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            status = MEMORYSTATUSEX()
-            status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-                total = int(status.ullTotalPhys)
-                available = int(status.ullAvailPhys)
-                used = max(0, total - available)
-                result.update(
-                    {
-                        "total_bytes": total,
-                        "available_bytes": available,
-                        "used_bytes": used,
-                        "used_percent": round((used / total) * 100, 2) if total else None,
-                        "source": "GlobalMemoryStatusEx",
-                    }
-                )
-                return result
-            result["error"] = "Windows GlobalMemoryStatusEx 读取失败。"
-        except (AttributeError, OSError, ValueError) as exc:
-            result["error"] = f"Windows 内存读取失败：{exc}"
-        return result
-
-    try:
-        values: dict[str, int] = {}
-        with open("/proc/meminfo", encoding="utf-8") as handle:
-            for line in handle:
-                key, _, rest = line.partition(":")
-                parts = rest.strip().split()
-                if parts and parts[0].isdigit():
-                    values[key] = int(parts[0]) * 1024
-        total = int(values.get("MemTotal", 0))
-        if total > 0:
-            available = int(
-                values.get("MemAvailable", 0)
-                or values.get("MemFree", 0)
-                + values.get("Buffers", 0)
-                + values.get("Cached", 0)
-            )
-            available = max(0, min(total, available))
-            used = total - available
-            result.update(
-                {
-                    "total_bytes": total,
-                    "available_bytes": available,
-                    "used_bytes": used,
-                    "used_percent": round((used / total) * 100, 2),
-                    "source": "/proc/meminfo",
-                }
-            )
-            return result
-    except (OSError, ValueError) as exc:
-        result["error"] = f"/proc/meminfo 读取失败：{exc}"
-
-    # Best-effort Unix fallback (macOS/BSD or unusual proc mounts).
-    try:
-        page_size = int(os.sysconf("SC_PAGE_SIZE"))
-        total_pages = int(os.sysconf("SC_PHYS_PAGES"))
-        available_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
-        total = page_size * total_pages
-        available = page_size * available_pages
-        used = max(0, total - available)
-        result.update(
-            {
-                "total_bytes": total,
-                "available_bytes": available,
-                "used_bytes": used,
-                "used_percent": round((used / total) * 100, 2) if total else None,
-                "source": "os.sysconf",
-            }
-        )
-        if total <= 0:
-            result["error"] = "宿主机内存总量为 0 或不可用。"
-    except (AttributeError, OSError, ValueError) as exc:
-        result["error"] = result["error"] or f"宿主机内存读取失败：{exc}"
-    return result
-
-
-def _parse_size_bytes(value: Any) -> int | None:
-    """Parse Docker's human-readable memory values (for example 123.4MiB)."""
-
-    text = str(value or "").strip().replace(" ", "")
-    if not text or text.lower() in {"n/a", "0b"}:
-        return 0 if text.lower() == "0b" else None
-    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([A-Za-z]+)", text)
-    if not match:
-        return None
-    number = float(match.group(1))
-    unit = match.group(2).lower()
-    factors = {
-        "b": 1,
-        "kb": 1000,
-        "kib": 1024,
-        "mb": 1000**2,
-        "mib": 1024**2,
-        "gb": 1000**3,
-        "gib": 1024**3,
-        "tb": 1000**4,
-        "tib": 1024**4,
-    }
-    factor = factors.get(unit)
-    return int(number * factor) if factor is not None else None
-
-
-def _parse_percent(value: Any) -> float | None:
-    text = str(value or "").strip().rstrip("%")
-    if not text or text.lower() in {"n/a", "--"}:
-        return None
-    try:
-        return round(float(text), 2)
-    except ValueError:
-        return None
 
 
 def default_studio_settings() -> dict[str, Any]:
@@ -320,8 +121,13 @@ def _normalize_mirror_prefix(prefix: str) -> str:
 class StudioManager:
     """Manage global settings and multiple isolated bot instances."""
 
-    def __init__(self, root: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        root: Path | str | None = None,
+        resource_stats: ResourceStats | None = None,
+    ) -> None:
         self.root = Path(root).expanduser().resolve() if root else default_data_dir()
+        self.resource_stats: ResourceStats = resource_stats or DefaultResourceStatsProvider()
         self.root.mkdir(parents=True, exist_ok=True)
         chmod_best_effort(self.root, 0o700)
         self.instances_dir = self.root / "instances"
@@ -1007,8 +813,8 @@ class StudioManager:
     # ------------------------------------------------------------------
     # Storage, host memory and Docker container statistics
     # ------------------------------------------------------------------
-    @staticmethod
     def _docker_stats_records(
+        self,
         metas: list[dict[str, Any]],
         managers: dict[str, Any],
     ) -> list[dict[str, Any]]:
@@ -1103,45 +909,9 @@ class StudioManager:
                 record["error"] = str(output).strip()[:500]
             return base
 
-        parsed: dict[str, dict[str, Any]] = {}
-        for line in str(getattr(result, "stdout", "") or "").splitlines():
-            text = line.strip()
-            if not text:
-                continue
-            record: dict[str, Any] = {}
-            if text.startswith("{"):
-                try:
-                    raw = json.loads(text)
-                    if isinstance(raw, dict):
-                        record = raw
-                except ValueError:
-                    continue
-            else:
-                parts = text.split("\t")
-                if len(parts) >= 4:
-                    record = {
-                        "Name": parts[0],
-                        "CPUPerc": parts[1],
-                        "MemUsage": parts[2],
-                        "MemPerc": parts[3],
-                    }
-            name = str(record.get("Name") or record.get("name") or "").strip().lstrip("/")
-            if not name:
-                continue
-            memory_usage = record.get("MemUsage") or record.get("mem_usage") or ""
-            usage_bytes: int | None = None
-            limit_bytes: int | None = None
-            pieces = str(memory_usage).split("/", 1)
-            if pieces:
-                usage_bytes = _parse_size_bytes(pieces[0])
-            if len(pieces) > 1:
-                limit_bytes = _parse_size_bytes(pieces[1])
-            parsed[name] = {
-                "cpu_percent": _parse_percent(record.get("CPUPerc") or record.get("cpu_perc")),
-                "memory_usage_bytes": usage_bytes,
-                "memory_limit_bytes": limit_bytes,
-                "memory_percent": _parse_percent(record.get("MemPerc") or record.get("mem_perc")),
-            }
+        parsed = self.resource_stats.parse_docker_stats(
+            str(getattr(result, "stdout", "") or "")
+        )
 
         for record in base:
             stats = parsed.get(record["container"])
@@ -1189,7 +959,7 @@ class StudioManager:
         for meta in metas:
             current_id = str(meta.get("id") or "")
             instance_dir = self._instance_path(current_id)
-            size_bytes, file_count, read_errors = _directory_usage(instance_dir)
+            size_bytes, file_count, read_errors = self.resource_stats.directory_usage(instance_dir)
             rollup: list[dict[str, Any]] = []
             if instance_dir.is_dir():
                 try:
@@ -1201,7 +971,7 @@ class StudioManager:
                     if child.is_symlink():
                         continue
                     if child.is_dir():
-                        child_bytes, child_files, child_errors = _directory_usage(child)
+                        child_bytes, child_files, child_errors = self.resource_stats.directory_usage(child)
                     elif child.is_file():
                         child_errors = []
                         try:
@@ -1245,7 +1015,7 @@ class StudioManager:
                 managers[current_id] = None
                 errors.append(f"{current_id}: 无法创建实例管理器：{exc}")
 
-        host_memory = _host_memory_info()
+        host_memory = self.resource_stats.host_memory()
         if host_memory.get("error"):
             errors.append(str(host_memory["error"]))
 
@@ -1258,11 +1028,11 @@ class StudioManager:
                 label = record.get("container") or record.get("instance_id") or "容器"
                 errors.append(f"{label}: {record['error']}")
 
-        global_bytes, global_files, global_read_errors = _directory_usage(self.root)
+        global_bytes, global_files, global_read_errors = self.resource_stats.directory_usage(self.root)
         for item in global_read_errors:
             if item not in errors:
                 errors.append(item)
-        global_disk = _disk_usage(self.root)
+        global_disk = self.resource_stats.disk_usage(self.root)
         if global_disk.get("error"):
             errors.append(str(global_disk["error"]))
         instances_total = sum(int(item.get("data_dir_size_bytes") or 0) for item in instance_entries)
@@ -1318,6 +1088,11 @@ class StudioManager:
         """Return safe assistant B config/runtime state without its key."""
 
         return self.assistant_extension.get_config()
+
+    def assistant_diagnose(self) -> dict[str, Any]:
+        """Diagnose assistant B listener/health/public access without its key."""
+
+        return self.assistant_extension.diagnose()
 
     def save_assistant_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Persist assistant B config without echoing any API key."""

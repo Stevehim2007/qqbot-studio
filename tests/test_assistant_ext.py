@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -358,7 +359,12 @@ class AssistantConfigStartTests(unittest.TestCase):
         self.assertEqual(result["ssh_tunnel"], "")
         self._assert_no_key(result, secret)
         stored = json.loads(self.expected_config.read_text(encoding="utf-8"))
+        # Regression: the launcher must persist the exact wildcard bind and
+        # public_host that B reads from its config file on startup.
+        self.assertEqual(stored["host"], "0.0.0.0")
+        self.assertEqual(stored["port"], 8776)
         self.assertEqual(stored["public_host"], "assistant.example.com")
+        self.assertEqual(stored["api_key"], secret)
 
         # Wildcard bind without a public host remains savable but yields no
         # browser URL; the access note must ask for a public host.
@@ -604,6 +610,7 @@ class AssistantConfigStartTests(unittest.TestCase):
         )
         result = manager.start()
         self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "start_failed")
         self.assertIn("启动失败或未就绪", result["message"])
         self.assertTrue(process.terminated)
         self.assertFalse((self.root / "ai-assistant" / "assistant.pid").exists())
@@ -651,6 +658,13 @@ class AssistantConfigStartTests(unittest.TestCase):
             popen_factory=factory,
             start_timeout=0.2,
             poll_interval=0.01,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "0.0.0.0", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
         )
         secret = "sk-public-start-secret-123456"
         configured = manager.save_config(
@@ -729,6 +743,461 @@ class AssistantConfigStartTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertFalse(result["running"])
         self.assertIn("尚未配置", result["message"])
+
+    def test_start_already_running_public_loopback_listener_is_not_reported_ok(self):
+        spawned = []
+
+        def factory(command, **kwargs):
+            spawned.append(command)
+            raise AssertionError("already-running B must not spawn a second process")
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: True,
+            popen_factory=factory,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "127.0.0.1", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
+        )
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": "sk-already-loopback-secret-123456",
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
+                "port": 8791,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        (self.root / "ai-assistant" / "assistant.pid").write_text(
+            "43218", encoding="utf-8"
+        )
+        result = manager.start()
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["running"])
+        self.assertEqual(result["action"], "listener_mismatch")
+        self.assertEqual(result["error_code"], "listener_loopback_only")
+        self.assertTrue(result["old_b_suspected"])
+        self.assertEqual(spawned, [])
+        self.assertIn("停止→启动", " ".join(result["suggestions"]))
+        self._assert_no_key(result, "sk-already-loopback-secret-123456")
+
+    def test_start_already_running_public_wildcard_listener_is_idempotent(self):
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: True,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "0.0.0.0", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
+        )
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": "sk-already-wildcard-secret-123456",
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
+                "port": 8792,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        (self.root / "ai-assistant" / "assistant.pid").write_text(
+            "43219", encoding="utf-8"
+        )
+        result = manager.start()
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["action"], "already_running")
+        self.assertEqual(result["listener_match"], "wildcard")
+        self.assertIn("所有网卡", result["message"])
+        self._assert_no_key(result, "sk-already-wildcard-secret-123456")
+
+    def test_windows_netstat_listener_parser_supports_wildcard_and_ipv6(self):
+        output = (
+            "  TCP    0.0.0.0:8766       0.0.0.0:0       LISTENING       3210\n"
+            "  TCP    [::]:8767          [::]:0          LISTENING       3211\n"
+        )
+        completed = subprocess.CompletedProcess(
+            ["netstat"], 0, output, ""
+        )
+        with mock.patch(
+            "qqbot_studio.assistant_ext.subprocess.run",
+            return_value=completed,
+        ) as runner:
+            result = AssistantExtensionManager._windows_listener_snapshot(8766)
+        self.assertTrue(result["supported"])
+        self.assertTrue(result["listening"])
+        self.assertTrue(result["wildcard"])
+        self.assertEqual(result["bind_addresses"], ["0.0.0.0"])
+        self.assertIn("netstat", runner.call_args.args[0])
+
+    def test_default_listener_probe_sees_real_loopback_and_wildcard_bindings(self):
+        manager = self._make_installed_manager()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = int(listener.getsockname()[1])
+            loopback = manager._listener_snapshot(port)
+        if not loopback["supported"]:
+            self.skipTest("当前平台未提供可用的 listener 探测")
+        self.assertTrue(loopback["listening"])
+        self.assertIn("127.0.0.1", loopback["bind_addresses"])
+        self.assertTrue(loopback["loopback_only"])
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("0.0.0.0", 0))
+            listener.listen()
+            port = int(listener.getsockname()[1])
+            wildcard = manager._listener_snapshot(port)
+        self.assertTrue(wildcard["listening"])
+        self.assertIn("0.0.0.0", wildcard["bind_addresses"])
+        self.assertTrue(wildcard["wildcard"])
+        self.assertFalse(wildcard["loopback_only"])
+        self.assertEqual(manager._listener_match("0.0.0.0", port, wildcard), "wildcard")
+
+    def test_start_public_mode_wrong_listener_is_stopped_with_actionable_error(self):
+        health = {"running": False}
+        processes = []
+
+        class FakeProcess:
+            pid = 43214
+
+            def __init__(self):
+                self.terminated = False
+                self.return_code = None
+
+            def poll(self):
+                return self.return_code
+
+            def terminate(self):
+                self.terminated = True
+                self.return_code = -15
+
+            def wait(self, timeout=None):
+                return self.return_code
+
+            def kill(self):
+                self.return_code = -9
+
+        def factory(command, **kwargs):
+            health["running"] = True
+            process = FakeProcess()
+            processes.append(process)
+            return process
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: health["running"],
+            popen_factory=factory,
+            start_timeout=0.2,
+            poll_interval=0.01,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "127.0.0.1", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
+        )
+        secret = "sk-loopback-listener-secret-123456"
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
+                "port": 8783,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        result = manager.start()
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["running"])
+        self.assertEqual(result["action"], "listener_mismatch")
+        self.assertEqual(result["error_code"], "listener_loopback_only")
+        self.assertTrue(result["old_b_suspected"])
+        self.assertTrue(processes[0].terminated)
+        self.assertFalse((self.root / "ai-assistant" / "assistant.pid").exists())
+        self.assertIn("0.0.0.0", result["message"])
+        self.assertIn("更新", " ".join(result["suggestions"]))
+        self.assertIn("停止", " ".join(result["suggestions"]))
+        self.assertEqual(result["listener"]["bind_addresses"], ["127.0.0.1"])
+        self._assert_no_key(result, secret)
+
+    def test_diagnose_public_loopback_listener_identifies_old_b_without_key(self):
+        public_calls = []
+
+        def public_probe(url, timeout):
+            public_calls.append(url)
+            return {
+                "checked": True,
+                "skipped": False,
+                "status": "unreachable",
+                "tcp_connected": False,
+                "http_ok": None,
+                "inconclusive": True,
+                "remote_verification_required": True,
+                "detail": "mock public probe failed",
+            }
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: True,
+            public_probe=public_probe,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "127.0.0.1", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
+        )
+        secret = "sk-diagnose-old-b-secret-123456"
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
+                "port": 8784,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        (self.root / "ai-assistant" / "assistant.pid").write_text(
+            "43214", encoding="utf-8"
+        )
+        manager.log_path.write_text(
+            f"starting\napi_key={secret}\nAuthorization: Bearer {secret}\n",
+            encoding="utf-8",
+        )
+        diagnosis = manager.diagnose()
+        self.assertTrue(diagnosis["ok"], diagnosis.get("error"))
+        self.assertFalse(diagnosis["healthy"])
+        self.assertTrue(diagnosis["running"])
+        self.assertEqual(diagnosis["pid"], 43214)
+        self.assertEqual(diagnosis["listener_match"], "loopback_only")
+        self.assertEqual(diagnosis["listener"]["bind_addresses"], ["127.0.0.1"])
+        self.assertEqual(diagnosis["error_code"], "listener_loopback_only")
+        self.assertTrue(diagnosis["old_b_suspected"])
+        self.assertFalse(diagnosis["b_entry_supports_wildcard"])
+        self.assertTrue(any("更新" in item for item in diagnosis["suggestions"]))
+        self.assertTrue(any("停止" in item for item in diagnosis["suggestions"]))
+        self.assertTrue(public_calls)
+        self._assert_no_key(diagnosis, secret)
+
+    def test_diagnose_wildcard_listener_and_public_probe_success(self):
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: True,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "0.0.0.0", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
+            public_probe=lambda url, timeout: {
+                "checked": True,
+                "skipped": False,
+                "status": "ok",
+                "tcp_connected": True,
+                "http_ok": True,
+                "http_status": 200,
+                "inconclusive": False,
+                "remote_verification_required": False,
+                "detail": "mock public health ok",
+            },
+        )
+        secret = "sk-diagnose-public-ok-secret-123456"
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": secret,
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
+                "port": 8785,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        (self.root / "ai-assistant" / "assistant.pid").write_text(
+            "43215", encoding="utf-8"
+        )
+        diagnosis = manager.diagnose()
+        self.assertTrue(diagnosis["healthy"], diagnosis.get("message"))
+        self.assertEqual(diagnosis["listener_match"], "wildcard")
+        self.assertEqual(diagnosis["error_code"], "ok")
+        self.assertEqual(diagnosis["public_probe"]["status"], "ok")
+        self.assertTrue(diagnosis["public_access_verified"])
+        self.assertFalse(diagnosis["public_probe"]["remote_verification_required"])
+        self._assert_no_key(diagnosis, secret)
+
+    def test_diagnose_public_probe_failure_is_inconclusive_and_actionable(self):
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: True,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "0.0.0.0", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
+            public_probe=lambda url, timeout: {
+                "checked": True,
+                "skipped": False,
+                "status": "unreachable",
+                "tcp_connected": False,
+                "http_ok": None,
+                "inconclusive": True,
+                "remote_verification_required": True,
+                "detail": "模拟 NAT hairpin 或安全组拦截",
+            },
+        )
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": "sk-diagnose-firewall-secret-123456",
+                "host": "0.0.0.0",
+                "public_host": "bot.example.com",
+                "port": 8786,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        (self.root / "ai-assistant" / "assistant.pid").write_text(
+            "43216", encoding="utf-8"
+        )
+        diagnosis = manager.diagnose()
+        self.assertTrue(diagnosis["healthy"])
+        self.assertFalse(diagnosis["public_access_verified"])
+        self.assertFalse(diagnosis["public_probe"]["tcp_connected"])
+        self.assertTrue(diagnosis["public_probe"]["inconclusive"])
+        self.assertTrue(diagnosis["public_probe"]["remote_verification_required"])
+        self.assertEqual(diagnosis["error_code"], "public_probe_inconclusive")
+        joined = " ".join(diagnosis["suggestions"])
+        self.assertIn("外部", joined)
+        self.assertIn("安全组", joined)
+        self.assertIn("防火墙", joined)
+        self._assert_no_key(diagnosis, "sk-diagnose-firewall-secret-123456")
+
+    def test_diagnose_loopback_mode_skips_public_probe_and_gives_ssh_hint(self):
+        public_calls = []
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: True,
+            listener_probe=lambda port: {
+                "supported": True,
+                "addresses": [
+                    {"address": "127.0.0.1", "port": port, "family": "ipv4"}
+                ],
+                "source": "mock",
+            },
+            public_probe=lambda url, timeout: public_calls.append(url) or {},
+        )
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": "sk-diagnose-loopback-secret-123456",
+                "host": "127.0.0.1",
+                "port": 8787,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        (self.root / "ai-assistant" / "assistant.pid").write_text(
+            "43217", encoding="utf-8"
+        )
+        diagnosis = manager.diagnose()
+        self.assertTrue(diagnosis["healthy"])
+        self.assertEqual(diagnosis["error_code"], "ok_loopback")
+        self.assertTrue(diagnosis["public_probe"]["skipped"])
+        self.assertEqual(public_calls, [])
+        joined = " ".join(diagnosis["suggestions"])
+        self.assertIn("SSH", joined)
+        self.assertIn("安全组", joined)
+
+    def test_start_port_occupied_fails_before_spawn(self):
+        spawned = []
+
+        def factory(command, **kwargs):
+            spawned.append(command)
+            raise AssertionError("must not spawn when port is occupied")
+
+        manager = self._make_installed_manager(
+            health_checker=lambda url, timeout: False,
+            popen_factory=factory,
+        )
+        configured = manager.save_config(
+            {
+                "key_source": "independent",
+                "api_key": "sk-port-occupied-secret-123456",
+                "host": "127.0.0.1",
+                "port": 8788,
+            }
+        )
+        self.assertTrue(configured["ok"], configured.get("error"))
+        with mock.patch.object(manager, "_port_is_free", return_value=False):
+            result = manager.start()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "port_occupied")
+        self.assertIn("端口", result["message"])
+        self.assertEqual(spawned, [])
+        self._assert_no_key(result, "sk-port-occupied-secret-123456")
+
+    def test_public_probe_skips_private_and_metadata_targets(self):
+        manager = self._make_installed_manager()
+        for target in ("http://127.0.0.1:8790/", "http://169.254.169.254:8790/"):
+            result = manager._public_access_probe(target, timeout=0.01)
+            self.assertTrue(result["checked"])
+            self.assertEqual(result["status"], "non_public_target")
+            self.assertTrue(result["inconclusive"])
+            self.assertTrue(result["remote_verification_required"])
+            self.assertIn("非公网", result["error"])
+            self.assertIsNone(result["tcp_connected"])
+
+    def test_public_probe_default_marks_connection_refused_inconclusive(self):
+        manager = self._make_installed_manager()
+
+        class RefusedSocket:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def settimeout(self, timeout):
+                pass
+
+            def connect(self, sockaddr):
+                raise ConnectionRefusedError("connection refused by mock")
+
+        with mock.patch(
+            "qqbot_studio.assistant_ext.socket.getaddrinfo",
+            return_value=[
+                (
+                    2,
+                    1,
+                    6,
+                    "",
+                    ("8.8.8.8", 8789),
+                )
+            ],
+        ), mock.patch(
+            "qqbot_studio.assistant_ext.socket.socket",
+            RefusedSocket,
+        ):
+            result = manager._public_access_probe(
+                "http://8.8.8.8:8789/", timeout=0.01
+            )
+        self.assertTrue(result["checked"])
+        self.assertEqual(result["status"], "unreachable")
+        self.assertFalse(result["tcp_connected"])
+        self.assertTrue(result["inconclusive"])
+        self.assertTrue(result["remote_verification_required"])
+        self.assertIn("NAT hairpin", result["detail"])
+        self.assertIn("安全组", result["detail"])
+
 
 class AssistantInstallScriptTests(unittest.TestCase):
     def test_install_script_has_optional_fixed_repo_installer(self):

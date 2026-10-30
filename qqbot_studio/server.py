@@ -365,6 +365,19 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             if path == "/console.js":
                 self._serve_static(ctx.console_script, "text/javascript; charset=utf-8")
                 return
+            if path.startswith(("/services/", "/components/")):
+                relative = urllib.parse.unquote(path.lstrip("/"))
+                candidate = (ctx.static_dir / relative).resolve()
+                try:
+                    candidate.relative_to(ctx.static_dir.resolve())
+                except ValueError:
+                    self._error(HTTPStatus.NOT_FOUND, "静态资源不存在。")
+                    return
+                if candidate.suffix != ".js" or not candidate.is_file():
+                    self._error(HTTPStatus.NOT_FOUND, "静态资源不存在。")
+                    return
+                self._serve_static(candidate.read_bytes(), "text/javascript; charset=utf-8")
+                return
             if path in ("/favicon.ico", "/assets/qqbot-studio.svg"):
                 icon = Path(__file__).parent.parent / "assets" / "qqbot-studio.svg"
                 if icon.exists():
@@ -456,6 +469,51 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         ):
                             if field in config_payload:
                                 payload[field] = config_payload[field]
+                self._json(HTTPStatus.OK, payload)
+                return
+            if path == "/api/assistant/diagnose":
+                getter = getattr(ctx.studio, "assistant_diagnose", None)
+                if not callable(getter):
+                    payload = self._assistant_unavailable(
+                        "当前后端未提供 AI 助手 B 诊断接口。"
+                    )
+                else:
+                    try:
+                        payload = getter()
+                    except Exception as exc:  # noqa: BLE001 - optional feature isolation
+                        # Never print arbitrary exception text: it can contain
+                        # credentials copied from a malformed config.
+                        print(
+                            f"[assistant] diagnose failed: {exc.__class__.__name__}",
+                            file=sys.stderr,
+                        )
+                        payload = self._assistant_unavailable(
+                            "AI 助手 B 诊断失败；详情请查看管理服务终端日志。"
+                        )
+                    if not isinstance(payload, dict):
+                        payload = self._assistant_unavailable(
+                            "AI 助手 B 诊断返回格式异常。"
+                        )
+                payload.setdefault("healthy", False)
+                payload.setdefault("error_code", "diagnose_unavailable")
+                payload.setdefault("listener", {})
+                payload.setdefault(
+                    "local_health",
+                    {"ok": False, "url": "", "detail": "", "error": "unavailable"},
+                )
+                payload.setdefault(
+                    "public_probe",
+                    {
+                        "checked": False,
+                        "skipped": True,
+                        "status": "skipped",
+                        "detail": "诊断接口不可用。",
+                    },
+                )
+                payload.setdefault("old_b_suspected", False)
+                payload.setdefault("log_tail", "")
+                payload.setdefault("suggestions", [])
+                payload.setdefault("recommendations", [])
                 self._json(HTTPStatus.OK, payload)
                 return
             if path == "/api/instances":

@@ -20,6 +20,9 @@ CONSOLE_HTML = STATIC / "console.html"
 CONSOLE_CSS = STATIC / "console.css"
 CONSOLE_JS = STATIC / "console.js"
 ASSISTANT_HTML = STATIC / "assistant.html"
+API_SERVICE_JS = STATIC / "services" / "api.js"
+PLUGIN_CONFIG_SERVICE_JS = STATIC / "services" / "plugin-config.js"
+INSTANCE_SETTINGS_COMPONENT_JS = STATIC / "components" / "instance-settings.js"
 
 VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
@@ -103,6 +106,9 @@ class ControlAssistantStaticTests(unittest.TestCase):
         cls.console_html = CONSOLE_HTML.read_text(encoding="utf-8")
         cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
         cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.api_service_js = API_SERVICE_JS.read_text(encoding="utf-8")
+        cls.plugin_config_service_js = PLUGIN_CONFIG_SERVICE_JS.read_text(encoding="utf-8")
+        cls.instance_settings_component_js = INSTANCE_SETTINGS_COMPONENT_JS.read_text(encoding="utf-8")
         cls.assistant_html = ASSISTANT_HTML.read_text(encoding="utf-8")
         cls.console_parser = _parse_html(cls.console_html)
         cls.assistant_parser = _parse_html(cls.assistant_html)
@@ -157,19 +163,29 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertIn(".console-assistant-link", self.console_css)
 
     def test_console_browser_safety_and_css_cleanliness(self) -> None:
-        for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
-            self.assertNotIn(forbidden, self.console_js)
-        self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
+        for source in (self.console_js, self.api_service_js, self.plugin_config_service_js, self.instance_settings_component_js):
+            for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
+                self.assertNotIn(forbidden, source)
+            self.assertNotRegex(source, r"\balert\s*\(|\bconfirm\s*\(")
         self.assertFalse(self.console_parser.external_assets)
-        self.assertEqual(self.console_parser.script_sources, ["console.js"])
+        self.assertEqual(
+            self.console_parser.script_sources,
+            ["/services/api.js", "/services/plugin-config.js", "/components/instance-settings.js", "console.js"],
+        )
         _assert_css_structurally_clean(self, self.console_css, "console.css")
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_javascript_syntax_for_console_and_assistant_page(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            console_path = Path(temp_dir) / "console.js"
-            console_path.write_text(self.console_js, encoding="utf-8")
-            subprocess.run(["node", "--check", str(console_path)], check=True)
+            for filename, content in (
+                ("console.js", self.console_js),
+                ("api.js", self.api_service_js),
+                ("plugin-config.js", self.plugin_config_service_js),
+                ("instance-settings.js", self.instance_settings_component_js),
+            ):
+                script_path = Path(temp_dir) / filename
+                script_path.write_text(content, encoding="utf-8")
+                subprocess.run(["node", "--check", str(script_path)], check=True)
             for index, script in enumerate(self.assistant_scripts):
                 script_path = Path(temp_dir) / f"assistant-inline-{index}.js"
                 script_path.write_text(script, encoding="utf-8")
@@ -192,7 +208,10 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "main-status", "main-badge", "main-notice", "install-card", "install-button",
             "install-label", "update-button", "install-meta", "runtime-card", "configured-state",
             "running-state", "host-state", "port-state", "runtime-url", "runtime-note",
-            "open-button", "start-button", "stop-button", "config-card", "config-form",
+            "open-button", "start-button", "stop-button", "restart-button", "restart-label",
+            "diagnose-button", "diagnose-label", "diagnose-panel", "diagnose-code",
+            "diagnose-summary", "diagnose-listener", "diagnose-health", "diagnose-public",
+            "diagnose-suggestions", "diagnose-log", "config-card", "config-form",
             "key-source-independent", "key-source-instance", "api-key", "toggle-key",
             "instance-select", "port", "host-local", "host-public", "public-host",
             "public-host-fields", "public-host-error", "form-error", "form-status",
@@ -218,6 +237,7 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "/api/assistant/config",
             "/api/assistant/start",
             "/api/assistant/stop",
+            "/api/assistant/diagnose",
             "/api/instances",
         ):
             self.assertIn(endpoint, self.assistant_js)
@@ -233,7 +253,10 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertIn("ssh_tunnel", self.assistant_js)
         self.assertIn("access_note", self.assistant_js)
         self.assertIn("B 没有登录认证", self.assistant_html + self.assistant_js)
-        for term in ("SSH", "安全组", "防火墙", "VPN", "不要", "公网"):
+        for term in (
+            "SSH", "安全组", "防火墙", "VPN", "不要", "公网",
+            "诊断公网访问", "停止→启动", "NAT hairpin", "不会自动修改云安全组",
+        ):
             self.assertIn(term, self.assistant_html + self.assistant_js)
 
     def test_assistant_page_key_never_persisted_or_rendered(self) -> None:
@@ -254,6 +277,70 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertIn("@media (max-width: 480px)", self.assistant_css)
         self.assertIn("[hidden] { display: none !important; }", self.assistant_css)
 
+    def test_console_instance_settings_modal_contract(self) -> None:
+        required = {
+            "instance-settings-overlay", "instance-settings-modal",
+            "instance-settings-title", "instance-settings-subtitle",
+            "instance-settings-close", "instance-settings-body",
+        }
+        self.assertTrue(required.issubset(set(self.console_parser.ids)))
+        self.assertIn('role="dialog"', self.console_html)
+        self.assertIn('aria-modal="true"', self.console_html)
+        self.assertIn('aria-labelledby="instance-settings-title"', self.console_html)
+        for token in (
+            "createInstanceSettings", "openModal", "closeModal", "refreshModal",
+            "beginBusy", "endBusy", "mount", "event.target === overlay",
+            "options.renderSections", "body.replaceChildren", "aria-busy",
+            "findTrigger", "options.onVisibilityChange",
+            "if (busy > 0 && closeOptions.force !== true) return false;",
+        ):
+            self.assertIn(token, self.instance_settings_component_js)
+        for token in (
+            "instanceSettings.open(instance", "instanceSettings.refresh()",
+            "instanceSettings.beginBusy()", "instanceSettings.endBusy()",
+            "instanceSettings.isOpenFor", "instanceSettings.isOpen()",
+            "instanceSettings.updateSubtitle", "buildPluginSection(instance)",
+            "buildMemorySection(instance)", "buildStatsSection(instance)",
+            "aria-haspopup", "aria-controls", "event.key !== 'Escape'",
+            "if (state.pluginConfig.saving && options.force !== true) return false;",
+        ):
+            self.assertIn(token, self.console_js)
+        self.assertNotIn("state.instanceSettings", self.console_js)
+        self.assertNotIn("buildV3Panel", self.console_js)
+        self.assertNotIn("document.createElement('details')", self.console_js)
+        self.assertNotIn(".instance-v3-panel", self.console_css)
+        for style in (
+            ".instance-settings-overlay", ".instance-settings-modal",
+            ".instance-settings-body", ".instance-settings-btn",
+            ".instance-settings-overlay[hidden]",
+        ):
+            self.assertIn(style, self.console_css)
+        self.assertIn("overflow-y: auto", self.console_css)
+        self.assertIn("@media (max-width: 640px)", self.console_css)
+        settings_body_start = self.console_css.index(".instance-settings-body {")
+        settings_body_block = self.console_css[settings_body_start:self.console_css.index("}", settings_body_start) + 1]
+        self.assertIn("overflow-y: auto", settings_body_block)
+
+    def test_extracted_api_and_instance_settings_services(self) -> None:
+        self.assertIn("createApiClient", self.api_service_js)
+        self.assertIn("X-QB-Token", self.api_service_js)
+        self.assertIn("requestWithFallback", self.api_service_js)
+        self.assertIn("isMissingEndpointError", self.api_service_js)
+        self.assertIn("cache: 'no-store'", self.api_service_js)
+        self.assertIn("credentials: 'same-origin'", self.api_service_js)
+        self.assertIn("createInstanceSettings", self.instance_settings_component_js)
+        self.assertIn("onVisibilityChange", self.instance_settings_component_js)
+        self.assertIn("beginBusy", self.instance_settings_component_js)
+        self.assertIn("body.replaceChildren", self.instance_settings_component_js)
+        self.assertIn("aria-busy", self.instance_settings_component_js)
+        self.assertIn("options.renderSections", self.instance_settings_component_js)
+        for source in (self.api_service_js, self.plugin_config_service_js, self.instance_settings_component_js):
+            self.assertNotIn("innerHTML", source)
+            self.assertNotIn("localStorage", source)
+            self.assertNotIn("sessionStorage", source)
+        for script in ("/services/api.js", "/services/plugin-config.js", "/components/instance-settings.js"):
+            self.assertIn(f'src="{script}"', self.console_html)
+
     def test_console_plugin_parameter_editor_contract(self) -> None:
         required = {
             "plugin-config-overlay", "plugin-config-panel", "plugin-config-title",
@@ -273,15 +360,23 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "plugin-config-search", "input.setAttribute('type', 'checkbox')",
             "input.setAttribute('type', 'number')", "range.setAttribute('type', 'range')",
             "document.createElement('textarea')", "document.createElement('select')",
-            "type === 'list'", "body: { values }", "api_available", "restart_required",
+            "type === 'list'", "pluginConfigService.load", "pluginConfigService.save",
+            "api_available", "restart_required",
             "AstrBot 已热重载", "AstrBot 需要重启后生效",
-            "当前后端不支持参数编辑。", "isSensitivePluginField",
+            "当前后端不支持参数编辑。",
             "const canEditConfig = Boolean(plugin.id) && plugin.configAvailable !== false;",
-            "sliderDefinition.min", "sliderDefinition.max", "sliderDefinition.step",
         ):
             self.assertIn(token, self.console_js)
-        self.assertIn("/plugins/${encodeURIComponent(plugin.id)}/config", self.console_js)
-        self.assertIn("/plugins/${encodeURIComponent(config.pluginId)}/config", self.console_js)
+        for token in (
+            "pluginConfigPath", "/plugins/${encodeURIComponent(pluginId)}/config",
+            "body: { values }", "isSensitivePluginField",
+            "if (isSensitivePluginField(key, def)) return null;",
+            "pluginSchemaSnapshot", "pluginConfigUnsupportedMessage",
+            "sliderDefinition.min", "sliderDefinition.max", "sliderDefinition.step",
+            "X-QB-Token", "cache: 'no-store'",
+        ):
+            self.assertIn(token, self.api_service_js + self.plugin_config_service_js)
+        self.assertIn("/plugins/${encodeURIComponent(pluginId)}/config", self.plugin_config_service_js)
         for style in (
             ".plugin-edit-button", ".plugin-config-overlay", ".plugin-config-panel",
             ".plugin-config-body", ".plugin-config-field.is-highlight",

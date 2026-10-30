@@ -8,14 +8,28 @@
   const QB_TOKEN = TOKEN_RAW && TOKEN_RAW !== '{{TOKEN}}' ? TOKEN_RAW : '';
   const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
-  class ApiError extends Error {
-    constructor(message, options = {}) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = Number(options.status) || 0;
-      this.data = options.data || null;
-    }
+  const studioNamespace = window.QQBotStudio || {};
+  const apiNamespace = studioNamespace.services && studioNamespace.services.api;
+  if (!apiNamespace || typeof apiNamespace.createApiClient !== 'function') {
+    throw new Error('缺少共享 API service：请确认 /services/api.js 已加载。');
   }
+  const apiClient = apiNamespace.createApiClient({ token: QB_TOKEN });
+  const ApiError = apiClient.ApiError;
+  const apiRequest = apiClient.request;
+  const requestWithFallback = apiClient.requestWithFallback;
+  const isMissingEndpointError = apiClient.isMissingEndpointError;
+
+  const pluginConfigNamespace = studioNamespace.services && studioNamespace.services.pluginConfig;
+  if (!pluginConfigNamespace || typeof pluginConfigNamespace.createPluginConfigService !== 'function') {
+    throw new Error('缺少插件配置 service：请确认 /services/plugin-config.js 已加载。');
+  }
+  const pluginConfigService = pluginConfigNamespace.createPluginConfigService({ api: apiClient });
+  const sanitisePluginText = pluginConfigService.sanitisePluginText;
+  const pluginConfigUnsupportedMessage = pluginConfigService.pluginConfigUnsupportedMessage;
+  const pluginValueLookup = pluginConfigService.pluginValueLookup;
+  const pluginListText = pluginConfigService.pluginListText;
+  const pluginInputText = pluginConfigService.pluginInputText;
+  const pluginDefaultText = pluginConfigService.pluginDefaultText;
 
   const state = {
     instances: [],
@@ -38,7 +52,6 @@
       memory: null,
       stats: null
     },
-    expandedV3: new Set(),
     pluginConfig: {
       open: false,
       loading: false,
@@ -61,6 +74,31 @@
 
   const $ = (id) => document.getElementById(id);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+  function setText(id, text) {
+    const element = $(id);
+    if (element) element.textContent = text;
+  }
+
+  const instanceSettingsNamespace = studioNamespace.components && studioNamespace.components.instanceSettings;
+  if (!instanceSettingsNamespace || typeof instanceSettingsNamespace.createInstanceSettings !== 'function') {
+    throw new Error('缺少实例设置组件：请确认 /components/instance-settings.js 已加载。');
+  }
+  const instanceSettings = instanceSettingsNamespace.createInstanceSettings({
+    getInstance: (id) => state.instances.find((item) => item.id === id),
+    renderSections: (instance) => [
+      buildPluginSection(instance),
+      buildMemorySection(instance),
+      buildStatsSection(instance)
+    ],
+    subtitleText: (instance) => `实例 ${instance.name || instance.id} · ID ${instance.id || '缺失'} · ${v3SummaryText(instance)}`,
+    findTrigger: (id) => {
+      const card = findInstanceCard(id);
+      return card ? card.querySelector('.instance-settings-btn') : null;
+    },
+    isBlocked: () => state.pluginConfig.open,
+    onVisibilityChange: () => syncConsoleModalLock()
+  });
 
   function asRecord(value) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -94,51 +132,6 @@
     }
     if (error instanceof TypeError) return '无法连接本地服务，请确认本地启动器仍在运行。';
     return error && typeof error.message === 'string' && error.message ? error.message : fallback;
-  }
-
-  async function apiRequest(path, options = {}) {
-    const method = String(options.method || 'GET').toUpperCase();
-    const headers = {
-      Accept: 'application/json',
-      // 本机服务的 GET 接口也校验令牌，因此所有请求都显式携带。
-      'X-QB-Token': QB_TOKEN || '',
-      ...(options.headers || {})
-    };
-    const fetchOptions = {
-      method,
-      headers,
-      cache: 'no-store',
-      credentials: 'same-origin'
-    };
-    if (options.body !== undefined) {
-      headers['Content-Type'] = 'application/json';
-      fetchOptions.body = JSON.stringify(options.body);
-    }
-
-    let response;
-    try {
-      response = await fetch(path, fetchOptions);
-    } catch (error) {
-      throw new ApiError('无法连接本地服务，请确认本地启动器仍在运行。', { status: 0 });
-    }
-
-    const rawText = await response.text();
-    let data = {};
-    if (rawText) {
-      try {
-        data = JSON.parse(rawText);
-      } catch (error) {
-        if (response.ok) throw new ApiError('本地服务返回了无法识别的数据。', { status: response.status });
-      }
-    }
-    if (!response.ok) {
-      const payload = asRecord(data);
-      throw new ApiError(textValue(payload.message || payload.error, `本地服务返回 HTTP ${response.status}。`), {
-        status: response.status,
-        data
-      });
-    }
-    return data;
   }
 
   function instancePath(path, instanceId) {
@@ -788,23 +781,6 @@
     };
   }
 
-  function isMissingEndpointError(error) {
-    return error instanceof ApiError && (error.status === 404 || error.status === 405);
-  }
-
-  async function requestWithFallback(paths, options = {}) {
-    let lastError = null;
-    for (const path of paths) {
-      try {
-        return await apiRequest(path, options);
-      } catch (error) {
-        lastError = error;
-        if (!isMissingEndpointError(error)) throw error;
-      }
-    }
-    throw lastError || new ApiError('本地服务未提供该功能。', { status: 404 });
-  }
-
   function previousV3State(instance) {
     const previous = state.instances.find((item) => item.id === instance.id);
     return previous && previous.v3 ? previous.v3 : null;
@@ -942,9 +918,11 @@
 
   function updateV3Summary(instance) {
     const card = findInstanceCard(instance.id);
-    if (!card) return;
-    const summary = card.querySelector('.instance-v3-summary');
-    if (summary) summary.textContent = v3SummaryText(instance);
+    if (card) {
+      const button = card.querySelector('.instance-settings-btn');
+      if (button) button.title = `设置：${v3SummaryText(instance)}`;
+    }
+    instanceSettings.updateSubtitle(instance);
   }
 
   function pluginSourceLabel(source) {
@@ -961,173 +939,6 @@
   }
 
   let pluginConfigReturnFocus = null;
-
-  function pluginNumberValue(value) {
-    if (value === null || value === undefined || value === '') return undefined;
-    const number = Number(value);
-    return Number.isFinite(number) ? number : undefined;
-  }
-
-  function sanitisePluginText(value) {
-    return textValue(value, '').replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, 'sk-***');
-  }
-
-  function pluginConfigUnsupportedMessage(message) {
-    return /未提供.*(?:接口|参数|插件)|不支持.*(?:参数|编辑|插件)|插件配置接口.*暂不可用|参数.*暂不可用|接口.*不存在|不存在.*接口|未实现|not\s*(?:supported|found)/i.test(textValue(message, ''));
-  }
-
-  function isSensitivePluginField(key, definition) {
-    const def = asRecord(definition);
-    if (boolOrUndefined(def.sensitive) === true || boolOrUndefined(def.secret) === true) return true;
-    if (['password', 'secret', 'token', 'api_key', 'apikey'].includes(textValue(def.type, '').trim().toLowerCase())) return true;
-    return /(?:api[\s_-]*key|access[\s_-]*token|auth[\s_-]*token|secret[\s_-]*key|client[\s_-]*secret|password|authorization|credential|private[\s_-]*key)/i.test(`${key} ${textValue(def.label || def.title, '')}`);
-  }
-
-  function pluginFieldType(definition) {
-    const raw = textValue(asRecord(definition).type, 'string').trim().toLowerCase();
-    if (['bool', 'boolean', 'checkbox', 'switch'].includes(raw)) return 'bool';
-    if (['int', 'integer', 'number_int'].includes(raw)) return 'int';
-    if (['float', 'number', 'double', 'decimal'].includes(raw)) return 'float';
-    if (['text', 'textarea', 'multiline'].includes(raw)) return 'text';
-    if (['list', 'array', 'string_list', 'string-array'].includes(raw)) return 'list';
-    return 'string';
-  }
-
-  function normalisePluginOptions(rawOptions, rawLabels) {
-    const labels = Array.isArray(rawLabels) ? rawLabels : [];
-    let entries = [];
-    if (Array.isArray(rawOptions)) {
-      entries = rawOptions.map((item, index) => {
-        const record = asRecord(item);
-        if (Object.keys(record).length > 0 && Object.prototype.hasOwnProperty.call(record, 'value')) {
-          return { value: textValue(record.value, ''), label: sanitisePluginText(record.label || record.title || record.value) || textValue(record.value, '') };
-        }
-        const value = textValue(item, '');
-        return { value, label: sanitisePluginText(labels[index]) || value };
-      });
-    } else if (rawOptions && typeof rawOptions === 'object') {
-      entries = Object.entries(rawOptions).map(([value, label]) => ({
-        value,
-        label: sanitisePluginText(label) || value
-      }));
-    }
-    return entries.filter((entry, index, all) => entry.value !== '' && all.findIndex((item) => item.value === entry.value) === index);
-  }
-
-  function parsePluginSchemaValue(raw) {
-    if (typeof raw !== 'string') return raw;
-    const trimmed = raw.trim();
-    if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return raw;
-    try { return JSON.parse(trimmed); } catch (error) { return raw; }
-  }
-
-  function extractPluginSchemaDefinitions(rawSchema) {
-    const parsed = parsePluginSchemaValue(rawSchema);
-    const schema = asRecord(parsed);
-    let candidates = [];
-    if (Array.isArray(parsed)) {
-      candidates = parsed.map((item, index) => {
-        const definition = asRecord(item);
-        return { key: textValue(definition.key || definition.name || definition.id, `field_${index}`), definition };
-      });
-    } else if (Array.isArray(schema.fields)) {
-      candidates = schema.fields.map((item, index) => {
-        const definition = asRecord(item);
-        return { key: textValue(definition.key || definition.name || definition.id, `field_${index}`), definition };
-      });
-    } else if (schema.fields && typeof schema.fields === 'object') {
-      candidates = Object.entries(schema.fields).map(([key, definition]) => ({ key, definition: asRecord(definition) }));
-    } else if (schema.properties && typeof schema.properties === 'object') {
-      candidates = Object.entries(schema.properties).map(([key, definition]) => ({ key, definition: asRecord(definition) }));
-    } else if (schema.schema) {
-      return extractPluginSchemaDefinitions(schema.schema);
-    } else if (parsed && typeof parsed === 'object') {
-      candidates = Object.entries(schema).map(([key, definition]) => ({ key, definition: asRecord(definition) }));
-    }
-
-    return candidates.map(({ key, definition }) => {
-      const def = asRecord(definition);
-      if (isSensitivePluginField(key, def)) return null;
-      const type = pluginFieldType(def);
-      const sliderRaw = def.slider ?? def.range;
-      const sliderDefinition = asRecord(sliderRaw);
-      const min = pluginNumberValue(def.min ?? def.minimum ?? sliderDefinition.min ?? sliderDefinition.minimum);
-      const max = pluginNumberValue(def.max ?? def.maximum ?? sliderDefinition.max ?? sliderDefinition.maximum);
-      const step = pluginNumberValue(def.step ?? sliderDefinition.step);
-      const options = normalisePluginOptions(def.options || def.choices || def.items, def.labels);
-      const slider = sliderRaw === true || (sliderRaw !== null && typeof sliderRaw === 'object');
-      return {
-        key,
-        type,
-        label: sanitisePluginText(def.label || def.title) || key,
-        description: sanitisePluginText(def.description || def.desc),
-        hint: sanitisePluginText(def.hint),
-        default: Object.prototype.hasOwnProperty.call(def, 'default') ? def.default : undefined,
-        hasDefault: Object.prototype.hasOwnProperty.call(def, 'default'),
-        min,
-        max,
-        step,
-        options,
-        slider,
-        sensitive: false
-      };
-    }).filter(Boolean);
-  }
-
-  function pluginValueLookup(values, field) {
-    const record = asRecord(values);
-    if (Object.prototype.hasOwnProperty.call(record, field.key)) return record[field.key];
-    const def = asRecord(field);
-    return field.hasDefault ? field.default : undefined;
-  }
-
-  function pluginListText(value) {
-    if (Array.isArray(value)) return value.map((item) => textValue(item, '')).join('\n');
-    return textValue(value, '');
-  }
-
-  function pluginInputText(value) {
-    if (value === null || value === undefined) return '';
-    if (Array.isArray(value)) return pluginListText(value);
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (typeof value === 'object') {
-      try { return JSON.stringify(value); } catch (error) { return ''; }
-    }
-    return textValue(value, '');
-  }
-
-  function pluginDefaultText(value) {
-    if (value === null) return 'null';
-    if (value === undefined) return '';
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (Array.isArray(value)) return value.map((item) => textValue(item, '')).join(', ');
-    if (typeof value === 'object') {
-      try { return JSON.stringify(value); } catch (error) { return ''; }
-    }
-    return textValue(value, '');
-  }
-
-  function pluginSchemaSnapshot(data) {
-    const root = asRecord(data);
-    const source = asRecord(root.config);
-    const schemaRaw = root.schema !== undefined ? root.schema : (source.schema !== undefined ? source.schema : root.fields);
-    const valuesRaw = root.values !== undefined ? root.values : (source.values !== undefined ? source.values : (source.config !== undefined ? source.config : {}));
-    const schema = extractPluginSchemaDefinitions(schemaRaw);
-    const allValues = asRecord(valuesRaw);
-    const values = {};
-    for (const field of schema) {
-      if (Object.prototype.hasOwnProperty.call(allValues, field.key)) values[field.key] = allValues[field.key];
-    }
-    return {
-      schema,
-      values,
-      source: sanitisePluginText(root.source || source.source),
-      apiAvailable: boolOrUndefined(root.api_available) !== false,
-      restartRequired: boolOrUndefined(root.restart_required) === true,
-      message: sanitisePluginText(root.message),
-      error: sanitisePluginText(root.error || (root.ok === false ? root.message : ''))
-    };
-  }
 
   function updatePluginConfigFilter() {
     const search = $('plugin-config-search');
@@ -1205,9 +1016,13 @@
   function syncPluginConfigSaveState() {
     const button = $('plugin-config-save');
     const label = $('plugin-config-save-label');
+    const closeButton = $('plugin-config-close');
+    const cancelButton = $('plugin-config-cancel');
     const config = state.pluginConfig;
     if (button) button.disabled = config.loading || config.saving || !config.entries.length;
     if (label) label.textContent = config.saving ? '保存中…' : '保存参数';
+    if (closeButton) closeButton.disabled = config.saving;
+    if (cancelButton) cancelButton.disabled = config.saving;
   }
 
   function makePluginFieldEntry(field, value) {
@@ -1362,7 +1177,7 @@
     state.pluginConfig.snapshot = null;
     const overlay = $('plugin-config-overlay');
     if (overlay) overlay.hidden = true;
-    document.body.classList.remove('console-modal-open');
+    syncConsoleModalLock();
     const fields = $('plugin-config-fields');
     if (fields) fields.replaceChildren();
     const search = $('plugin-config-search');
@@ -1385,18 +1200,19 @@
   }
 
   function closePluginConfigPanel(options = {}) {
+    if (state.pluginConfig.saving && options.force !== true) return false;
     const wasOpen = state.pluginConfig.open;
     resetPluginConfigPanel();
     if (options.restoreFocus !== false && wasOpen && pluginConfigReturnFocus && pluginConfigReturnFocus.isConnected) {
       pluginConfigReturnFocus.focus({ preventScroll: true });
     }
     pluginConfigReturnFocus = null;
+    return true;
   }
 
   async function loadPluginConfig(instance, plugin) {
     const config = state.pluginConfig;
     const seq = ++config.requestSeq;
-    const url = `/api/instances/${encodeURIComponent(instance.id)}/plugins/${encodeURIComponent(plugin.id)}/config`;
     const fields = $('plugin-config-fields');
     if (fields) fields.replaceChildren();
     const loading = $('plugin-config-loading');
@@ -1408,12 +1224,9 @@
     clearAllPluginConfigFeedback();
     config.loading = true;
     try {
-      const data = await apiRequest(url);
+      const result = await pluginConfigService.load(instance.id, plugin.id);
       if (!config.open || seq !== config.requestSeq) return;
-      if (!data || data.ok === false) {
-        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '插件参数读取失败。', { data });
-      }
-      const snapshot = pluginSchemaSnapshot(data);
+      const snapshot = result.snapshot;
       config.snapshot = snapshot;
       config.loading = false;
       config.apiAvailable = snapshot.apiAvailable;
@@ -1477,7 +1290,7 @@
     pluginConfigReturnFocus = trigger || null;
     const overlay = $('plugin-config-overlay');
     if (overlay) overlay.hidden = false;
-    document.body.classList.add('console-modal-open');
+    syncConsoleModalLock();
     const title = $('plugin-config-title');
     if (title) title.textContent = plugin.name || plugin.id;
     const subtitle = $('plugin-config-subtitle');
@@ -1517,12 +1330,8 @@
     setPluginConfigError('');
     setPluginConfigStatus('正在保存参数…', false);
     try {
-      const url = `/api/instances/${encodeURIComponent(config.instanceId)}/plugins/${encodeURIComponent(config.pluginId)}/config`;
-      const data = await apiRequest(url, { method: 'POST', body: { values } });
+      const data = await pluginConfigService.save(config.instanceId, config.pluginId, values);
       if (!config.open) return;
-      if (!data || data.ok === false) {
-        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '插件参数保存失败。', { data });
-      }
       const response = asRecord(data);
       const restart = boolOrUndefined(response.restart_required) === true
         || boolOrUndefined(asRecord(response.plugin).restart_required) === true;
@@ -1643,6 +1452,8 @@
   async function handlePluginToggle(instance, plugin, checkbox, row, stateText, statusElement) {
     const previousEnabled = plugin.enabled === true;
     const targetEnabled = checkbox.checked;
+    const settingsBusy = instanceSettings.isOpenFor(instance.id);
+    if (settingsBusy) instanceSettings.beginBusy();
     checkbox.disabled = true;
     row.classList.add('is-busy');
     stateText.textContent = '保存中…';
@@ -1687,6 +1498,7 @@
     } finally {
       row.classList.remove('is-busy');
       checkbox.disabled = !plugin.id || plugin.enabled === undefined || (instance.v3 && instance.v3.plugins.status !== 'ok');
+      if (settingsBusy) instanceSettings.endBusy();
     }
   }
 
@@ -1752,6 +1564,8 @@
   async function handleMemoryModeChange(instance, mode, group, statusElement) {
     const previousMode = normaliseMemoryMode(instance.v3 && instance.v3.memory && instance.v3.memory.mode);
     const radios = Array.from(group.querySelectorAll('input[type="radio"]'));
+    const settingsBusy = instanceSettings.isOpenFor(instance.id);
+    if (settingsBusy) instanceSettings.beginBusy();
     for (const radio of radios) radio.disabled = true;
     setV3Status(statusElement, '正在保存记忆模式…', 'info');
     try {
@@ -1798,6 +1612,8 @@
         radio.disabled = false;
       }
       setV3Status(statusElement, formatError(error, '记忆模式保存失败。'), 'error');
+    } finally {
+      if (settingsBusy) instanceSettings.endBusy();
     }
   }
 
@@ -1856,32 +1672,8 @@
     return section;
   }
 
-  function buildV3Panel(instance) {
-    const details = document.createElement('details');
-    details.className = 'instance-v3-panel';
-    const summary = document.createElement('summary');
-    summary.className = 'instance-v3-summary-row';
-    const icon = makeElement('span', 'instance-v3-summary-icon');
-    icon.appendChild(makeIcon('c-i-puzzle'));
-    summary.appendChild(icon);
-    summary.appendChild(makeElement('span', 'instance-v3-summary-title', '插件、记忆与资源'));
-    summary.appendChild(makeElement('span', 'instance-v3-summary', v3SummaryText(instance)));
-    const chevron = makeElement('span', 'instance-v3-chevron');
-    chevron.appendChild(makeIcon('c-i-chevron-right'));
-    summary.appendChild(chevron);
-    details.appendChild(summary);
-
-    const body = makeElement('div', 'instance-v3-body');
-    body.appendChild(buildPluginSection(instance));
-    body.appendChild(buildMemorySection(instance));
-    body.appendChild(buildStatsSection(instance));
-    details.appendChild(body);
-    details.open = state.expandedV3.has(instance.id);
-    details.addEventListener('toggle', () => {
-      if (details.open) state.expandedV3.add(instance.id);
-      else state.expandedV3.delete(instance.id);
-    });
-    return details;
+  function syncConsoleModalLock() {
+    document.body.classList.toggle('console-modal-open', Boolean(state.pluginConfig.open || instanceSettings.isOpen()));
   }
 
   function renderGlobalResourceSummary() {
@@ -2059,9 +1851,18 @@
     webSection.appendChild(webLinks);
     card.appendChild(webSection);
 
-    card.appendChild(buildV3Panel(instance));
-
     const actions = makeElement('div', 'instance-actions');
+    const settingsButton = makeElement('button', 'btn btn-secondary btn-small instance-settings-btn', '');
+    settingsButton.type = 'button';
+    settingsButton.dataset.instanceSettingsId = instance.id;
+    settingsButton.setAttribute('aria-haspopup', 'dialog');
+    settingsButton.setAttribute('aria-controls', 'instance-settings-modal');
+    settingsButton.setAttribute('aria-expanded', 'false');
+    settingsButton.title = `设置：${v3SummaryText(instance)}`;
+    settingsButton.appendChild(iconText('c-i-edit', '设置'));
+    settingsButton.addEventListener('click', () => instanceSettings.open(instance, settingsButton));
+    actions.appendChild(settingsButton);
+
     const wizardLink = makeElement('a', 'btn btn-primary btn-small instance-wizard-link', '');
     wizardLink.href = wizardUrl(instance.id);
     wizardLink.appendChild(iconText('c-i-edit', '打开向导'));
@@ -2094,6 +1895,7 @@
     if (empty) empty.hidden = state.instances.length !== 0;
     grid.hidden = state.instances.length === 0;
     setStats(state.instances);
+    instanceSettings.refresh();
   }
 
   async function loadConsole(options = {}) {
@@ -2368,10 +2170,18 @@
     if (pluginConfigSave) pluginConfigSave.addEventListener('click', () => void savePluginConfig());
     const pluginConfigSearch = $('plugin-config-search');
     if (pluginConfigSearch) pluginConfigSearch.addEventListener('input', updatePluginConfigFilter);
+
+    instanceSettings.mount();
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && state.pluginConfig.open) {
+      if (event.key !== 'Escape') return;
+      if (state.pluginConfig.open) {
         event.preventDefault();
         closePluginConfigPanel();
+        return;
+      }
+      if (instanceSettings.isOpen()) {
+        event.preventDefault();
+        instanceSettings.close();
       }
     });
 

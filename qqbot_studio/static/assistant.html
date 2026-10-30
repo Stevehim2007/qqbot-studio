@@ -167,6 +167,22 @@
     .url-box code { display: block; color: #1f5773; font-size: 11px; overflow-wrap: anywhere; }
     .url-box p { margin-top: 5px; color: var(--muted); font-size: 9.5px; line-height: 1.65; }
     .url-box p.warning { color: #8a5a12; }
+    .diagnose-panel { margin-top: 12px; padding: 13px; background: #fbfdff; border: 1px solid #dce8f1; border-radius: 10px; }
+    .diagnose-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .diagnose-head h3 { margin: 0; color: #29435d; font-size: 11px; }
+    .diagnose-summary { margin-top: 8px; color: #315a73; font-size: 9.5px; line-height: 1.65; overflow-wrap: anywhere; }
+    .diagnose-summary.warning { color: #8a5a12; }
+    .diagnose-summary.error { color: #90333f; }
+    .diagnose-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
+    .diagnose-item { min-width: 0; padding: 8px; background: #f6fafc; border: 1px solid #e4edf4; border-radius: 7px; }
+    .diagnose-item span { display: block; color: var(--muted); font-size: 8px; }
+    .diagnose-item strong { display: block; margin-top: 3px; color: #29435d; font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+    .diagnose-list { margin: 10px 0 0; padding-left: 18px; color: #4b647b; font-size: 9px; line-height: 1.7; }
+    .diagnose-list li + li { margin-top: 3px; }
+    .diagnose-log { margin-top: 9px; color: #4b647b; font-size: 8.5px; }
+    .diagnose-log summary { cursor: pointer; }
+    .diagnose-log pre { max-height: 150px; margin: 6px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f8fb; border: 1px solid #e3ecf3; border-radius: 7px; font: 8.5px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .diagnose-warning { margin-top: 9px; color: #8a5a12; font-size: 8.5px; line-height: 1.6; }
     .form { display: grid; gap: 13px; margin-top: 4px; }
     fieldset { min-width: 0; margin: 0; padding: 11px; border: 1px solid #e1eaf1; border-radius: 10px; }
     legend { padding: 0 4px; color: #4e6780; font-size: 9.5px; font-weight: 760; }
@@ -214,7 +230,7 @@
       .card { padding: 18px 16px; }
       .card-heading { display: block; }
       .card-heading .actions { margin-top: 10px; }
-      .install-meta, .runtime-grid, .choice-grid { grid-template-columns: 1fr; }
+      .install-meta, .runtime-grid, .choice-grid, .diagnose-grid { grid-template-columns: 1fr; }
       .port-row { grid-template-columns: 1fr; }
       .port-row .help { grid-column: 1; }
       footer { display: block; }
@@ -327,6 +343,8 @@
           <a id="open-button" class="button primary" href="#" target="_blank" rel="noopener noreferrer" hidden>打开 AI 助手 B<svg class="icon" aria-hidden="true"><use href="#ai-external"></use></svg></a>
           <button id="start-button" class="button" type="button"><svg class="icon" aria-hidden="true"><use href="#ai-play"></use></svg>启动</button>
           <button id="stop-button" class="button danger" type="button"><svg class="icon" aria-hidden="true"><use href="#ai-stop"></use></svg>停止</button>
+          <button id="restart-button" class="button" type="button"><svg class="icon" aria-hidden="true"><use href="#ai-refresh"></use></svg><span id="restart-label">停止→启动</span></button>
+          <button id="diagnose-button" class="button" type="button"><svg class="icon" aria-hidden="true"><use href="#ai-refresh"></use></svg><span id="diagnose-label">诊断公网访问</span></button>
         </div>
       </div>
       <div class="runtime-grid">
@@ -341,6 +359,24 @@
         <p id="runtime-note"></p>
       </div>
       <p id="runtime-status" class="form-status" role="status" hidden></p>
+      <div id="diagnose-panel" class="diagnose-panel" aria-live="polite" hidden>
+        <div class="diagnose-head">
+          <h3>公网访问诊断</h3>
+          <span id="diagnose-code" class="badge neutral">未诊断</span>
+        </div>
+        <p id="diagnose-summary" class="diagnose-summary">尚未运行诊断。</p>
+        <div class="diagnose-grid">
+          <div class="diagnose-item"><span>实际 listener</span><strong id="diagnose-listener">未诊断</strong></div>
+          <div class="diagnose-item"><span>本机 health</span><strong id="diagnose-health">未诊断</strong></div>
+          <div class="diagnose-item"><span>公网 URL 探测</span><strong id="diagnose-public">未诊断</strong></div>
+        </div>
+        <ul id="diagnose-suggestions" class="diagnose-list"></ul>
+        <details class="diagnose-log">
+          <summary>最近日志摘要</summary>
+          <pre id="diagnose-log">未读取。</pre>
+        </details>
+        <p class="diagnose-warning">诊断不会自动修改云安全组、NAT 或主机防火墙；公网模式无登录认证，请勿在未限制来源时长期暴露。</p>
+      </div>
     </section>
 
     <section id="config-card" class="card" aria-labelledby="config-title" hidden>
@@ -450,6 +486,8 @@
       message: '',
       busy: false,
       installArmed: false,
+      diagnosing: false,
+      diagnosis: null,
       instances: [],
       config: {
         status: 'idle',
@@ -838,6 +876,10 @@
       $('stop-button').disabled = state.busy || !config.running;
       $('save-button').disabled = config.saving;
       $('save-label').textContent = config.saving ? '处理中…' : '保存并启动';
+      $('restart-button').disabled = state.busy || config.saving || !config.running;
+      $('diagnose-button').disabled = state.loading || state.busy || config.saving || state.diagnosing;
+      $('restart-label').textContent = state.busy && state.action === 'restart' ? '重启中…' : '停止→启动';
+      $('diagnose-label').textContent = state.diagnosing ? '诊断中…' : '诊断公网访问';
       setFormStatus($('runtime-status'), config.message || '', false);
       fillFormIfClosed();
     }
@@ -979,6 +1021,7 @@
         const data = await requestWithFallback(['/api/assistant/update', '/api/assistant/install'], { method: 'POST', body: {} });
         if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手更新失败。', { data });
         state.message = sanitise(asRecord(data).message) || 'AI 助手 B 已更新。';
+        clearDiagnosis();
         await loadStatus({ silent: false });
       } catch (error) {
         showMainError(formatError(error, 'AI 助手更新失败。'));
@@ -1102,6 +1145,7 @@
         if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手启动失败。', { data });
         const info = normaliseConfig(data, state.config);
         state.config = { ...state.config, ...info, running: true, configured: true, error: '' };
+        clearDiagnosis();
         state.message = state.config.message || 'AI 助手 B 已启动。';
         formReady = false;
         showMainError('');
@@ -1125,6 +1169,7 @@
         if (!data || data.ok === false) throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || 'AI 助手停止失败。', { data });
         const info = normaliseConfig(data, state.config);
         state.config = { ...state.config, ...info, running: false, error: '' };
+        clearDiagnosis();
         state.message = state.config.message || 'AI 助手 B 已停止。';
         formReady = false;
         showMainError('');
@@ -1139,6 +1184,124 @@
       }
     }
 
+    function renderDiagnosis(raw) {
+      const panel = $('diagnose-panel');
+      const diagnosis = asRecord(raw);
+      if (!panel || Object.keys(diagnosis).length === 0) return;
+      const listener = asRecord(diagnosis.listener);
+      const health = asRecord(diagnosis.local_health);
+      const publicProbe = asRecord(diagnosis.public_probe);
+      const healthy = boolOrUndefined(diagnosis.healthy) === true;
+      const errorCode = textValue(diagnosis.error_code, healthy ? 'ok' : 'diagnose');
+      const codeOk = errorCode === 'ok' || errorCode === 'ok_loopback';
+      const summaries = Array.isArray(diagnosis.suggestions) ? diagnosis.suggestions : [];
+      panel.hidden = false;
+      setBadge($('diagnose-code'), errorCode, healthy && codeOk ? 'ok' : 'warn');
+      const summary = $('diagnose-summary');
+      summary.textContent = sanitise(diagnosis.message || (healthy && codeOk ? '诊断完成。' : '诊断发现问题，请查看下方建议。'));
+      summary.className = `diagnose-summary${healthy && codeOk ? '' : ' warning'}`;
+      const bindings = Array.isArray(listener.bind_addresses) ? listener.bind_addresses.filter(Boolean) : [];
+      $('diagnose-listener').textContent = bindings.length
+        ? `${bindings.join(' / ')}${listener.supported === false ? '（探测能力受限）' : ''}`
+        : (listener.supported === false ? '当前平台无法读取' : '未检测到监听');
+      const healthOk = boolOrUndefined(health.ok) === true;
+      $('diagnose-health').textContent = healthOk
+        ? `正常${health.url ? ` · ${textValue(health.url, '')}` : ''}`
+        : '失败或无响应';
+      const publicStatus = textValue(publicProbe.status, 'skipped');
+      let publicText = '已跳过';
+      if (publicStatus === 'ok') publicText = '成功';
+      else if (publicStatus === 'skipped') publicText = '未进行（仅本机模式或未配置）';
+      else if (publicStatus === 'unreachable') publicText = '无法确认（可能是 NAT hairpin、安全组或防火墙）';
+      else if (publicStatus === 'dns_error') publicText = 'public_host 无法解析';
+      else if (publicStatus === 'http_error' || publicStatus === 'tcp_only') publicText = `异常（${publicStatus}）`;
+      else publicText = publicStatus;
+      $('diagnose-public').textContent = publicText;
+      const list = $('diagnose-suggestions');
+      list.replaceChildren();
+      for (const item of summaries) {
+        if (!item) continue;
+        const li = document.createElement('li');
+        li.textContent = sanitise(item);
+        list.appendChild(li);
+      }
+      $('diagnose-log').textContent = sanitise(diagnosis.log_tail) || '没有可显示的日志摘要。';
+    }
+
+    function clearDiagnosis() {
+      state.diagnosis = null;
+      const panel = $('diagnose-panel');
+      if (panel) panel.hidden = true;
+      const list = $('diagnose-suggestions');
+      if (list) list.replaceChildren();
+      setBadge($('diagnose-code'), '未诊断', 'neutral');
+    }
+
+    async function diagnoseAssistant() {
+      if (state.diagnosing || state.busy || state.loading) return;
+      state.diagnosing = true;
+      render();
+      try {
+        const data = await apiRequest('/api/assistant/diagnose');
+        if (!data || data.ok === false) {
+          throw new ApiError(sanitise(asRecord(data).message || asRecord(data).error) || '公网访问诊断失败。', { data });
+        }
+        state.diagnosis = asRecord(data);
+        renderDiagnosis(state.diagnosis);
+        if (state.diagnosis.message) showMainError('');
+      } catch (error) {
+        const panel = $('diagnose-panel');
+        if (panel) panel.hidden = false;
+        setBadge($('diagnose-code'), '诊断失败', 'error');
+        const summary = $('diagnose-summary');
+        summary.textContent = formatError(error, '公网访问诊断失败。');
+        summary.className = 'diagnose-summary error';
+        const list = $('diagnose-suggestions');
+        list.replaceChildren();
+        const li = document.createElement('li');
+        li.textContent = '请查看管理服务终端日志；诊断不会修改云安全组。';
+        list.appendChild(li);
+      } finally {
+        state.diagnosing = false;
+        render();
+      }
+    }
+
+    async function restartAssistant() {
+      if (state.busy || state.config.saving || !state.config.running) return;
+      state.busy = true;
+      state.action = 'restart';
+      render();
+      try {
+        const stopped = await apiRequest('/api/assistant/stop', { method: 'POST', body: {} });
+        if (!stopped || stopped.ok === false) {
+          throw new ApiError(sanitise(asRecord(stopped).message || asRecord(stopped).error) || 'AI 助手停止失败。', { data: stopped });
+        }
+        const stopInfo = normaliseConfig(stopped, state.config);
+        state.config = { ...state.config, ...stopInfo, running: false, error: '' };
+        const started = await apiRequest('/api/assistant/start', { method: 'POST', body: {} });
+        if (!started || started.ok === false) {
+          throw new ApiError(sanitise(asRecord(started).message || asRecord(started).error) || 'AI 助手启动失败。', { data: started });
+        }
+        const startInfo = normaliseConfig(started, state.config);
+        state.config = { ...state.config, ...startInfo, running: true, configured: true, error: '' };
+        state.message = state.config.message || 'AI 助手 B 已停止并重新启动。';
+        formReady = false;
+        clearDiagnosis();
+        showMainError('');
+        render();
+      } catch (error) {
+        const message = formatError(error, 'AI 助手停止→启动失败。');
+        state.config.error = message;
+        state.config.running = false;
+        showMainError(message);
+      } finally {
+        state.busy = false;
+        state.action = '';
+        render();
+      }
+    }
+
     async function refreshAll() {
       await Promise.all([loadStatus({ silent: false }), loadInstances()]);
     }
@@ -1149,6 +1312,8 @@
       $('update-button').addEventListener('click', () => void updateAssistant());
       $('start-button').addEventListener('click', () => void startAssistant());
       $('stop-button').addEventListener('click', () => void stopAssistant());
+      $('restart-button').addEventListener('click', () => void restartAssistant());
+      $('diagnose-button').addEventListener('click', () => void diagnoseAssistant());
       $('config-form').addEventListener('submit', saveAndStart);
       $$('input[name="key-source"]').forEach((radio) => radio.addEventListener('change', () => { clearFormErrors(); syncKeySourceFields(); }));
       $$('input[name="host-mode"]').forEach((radio) => radio.addEventListener('change', () => { clearFormErrors(); syncHostFields(); }));

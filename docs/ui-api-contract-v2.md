@@ -1024,8 +1024,12 @@ body: {}   # 也接受空请求体
 3. 独立进程、`start_new_session`/Windows 新进程组启动；stdout/stderr 追加到
    `data_dir/ai-assistant/assistant.log`，PID 写入 `data_dir/ai-assistant/assistant.pid`（0600）。
 4. 启动时只注入 `QQBOT_STUDIO_HOME=<主数据目录>` 等非敏感环境变量，**不通过 argv/env 传 Key**。
-5. 轮询 B 的 `/api/health`；成功返回 running/url/pid，失败或提前退出会清理 PID、
-   终止残留子进程，并返回有限长度的脱敏日志摘要。
+5. 轮询 B 的 `/api/health`；失败或提前退出会清理 PID、终止残留子进程，并返回有限长度的脱敏日志摘要。
+6. 健康检查成功后，服务端还会读取实际 TCP listener（Linux `/proc/net/tcp`/`tcp6`，
+   Windows `netstat -ano`，测试可注入 `listener_probe`）。`host=0.0.0.0` 时必须看到
+   `0.0.0.0`/`::` 通配监听；若只看到 `127.0.0.1`/`::1`，会终止本次刚启动的错误进程并返回
+   `ok:false, action:"listener_mismatch", error_code:"listener_loopback_only"`。
+   不会把“health 能通”误报成“公网模式启动成功”。
 
 成功响应包含与 GET 配置相同的字段，并增加：
 
@@ -1046,6 +1050,9 @@ body: {}   # 也接受空请求体
 公网模式成功时 `url` 形如 `http://bot.example.com:8768/`，`health_url` 仍是
 `http://127.0.0.1:8768/`，并在 `access_note` 中返回高风险提示。若没有 `public_host`，
 `url` 为空字符串，不会返回 `http://0.0.0.0:...`。
+公网模式响应还会带 `listener`、`listener_match`、`listener_ok`、`error_code`、
+`suggestions/recommendations`：只有实际 listener 为 `0.0.0.0`/`::` 才算公网绑定成功；
+若仍只有回环，返回 `ok:false` 且建议更新 B 后“停止→启动”，不会静默报告已成功打开公网。
 
 主项目要求已有可用 Key 才启动 B：`independent` 模式必须有已保存 Key，`instance` 模式必须能读取所选实例的 AstrBot Key；否则返回 `ok:false` 和中文配置提示。
 主项目不会自动启动 B，也不会调用 B 的聊天 API 或读取聊天内容。
@@ -1064,7 +1071,91 @@ body: {}   # 也接受空请求体
 - 超时仍运行、无 PID 或 PID 异常时返回 `ok:false`，不会盲目强杀。
 - 成功返回 `action:"stopped"`, `running:false`，不含 Key 或日志内容。
 
-### 10.5 安全与兼容边界
+### 10.5 公网访问诊断
+
+```text
+GET /api/assistant/diagnose
+```
+
+需要 `X-QB-Token`。此接口只读，不会启动/停止 B，也不会修改云安全组、NAT 或主机防火墙。
+它用于把“公网拒绝连接”拆成可验证的层次，返回安全字段：
+
+```json
+{
+  "ok": true,
+  "healthy": false,
+  "installed": true,
+  "configured": true,
+  "running": true,
+  "pid": 12345,
+  "host": "0.0.0.0",
+  "port": 8766,
+  "public_host": "bot.example.com",
+  "url": "http://bot.example.com:8766/",
+  "health_url": "http://127.0.0.1:8766/",
+  "listener": {
+    "supported": true,
+    "listening": true,
+    "bind_addresses": ["127.0.0.1", "::1"],
+    "wildcard": false,
+    "loopback_only": true,
+    "source": "proc/net/tcp"
+  },
+  "listener_match": "loopback_only",
+  "listener_ok": false,
+  "local_health": {"ok": true, "url": "http://127.0.0.1:8766/", "detail": "本机 health 成功", "error": ""},
+  "public_probe": {
+    "checked": true,
+    "skipped": false,
+    "status": "unreachable",
+    "tcp_connected": false,
+    "http_ok": null,
+    "inconclusive": true,
+    "remote_verification_required": true,
+    "detail": "服务器侧无法回环公网地址；可能 NAT hairpin/安全组/防火墙"
+  },
+  "public_access_verified": false,
+  "old_b_suspected": true,
+  "b_entry_supports_wildcard": false,
+  "log_tail": "最近的脱敏日志摘要",
+  "error_code": "listener_loopback_only",
+  "suggestions": [
+    "先在“安装状态”点击“更新 AI 助手 B”。",
+    "再执行一次“停止 → 启动”，让新版本和 host=0.0.0.0 生效。",
+    "从外部网络验证 URL，并检查云安全组/主机防火墙。"
+  ],
+  "message": "B 实际只监听回环地址，公网模式未生效。",
+  "error": ""
+}
+```
+
+诊断字段与解释：
+
+- `listener.supported/listening/bind_addresses/wildcard/loopback_only`：实际 TCP 监听结果，
+  不依赖 `host` 配置字符串；Linux 读取 `/proc/net/tcp`、`tcp6`，Windows 调用无 shell 的
+  `netstat -ano -p tcp`。平台不支持时 `supported=false`，不会伪报成功。
+- `listener_match`：`wildcard`（0.0.0.0 正常）、`loopback_only`（只监听回环）、
+  `missing`（无 listener）、`unknown`（平台无法探测）、`ok`（回环模式正常）。
+- `local_health`：服务器本机回环 `/api/health` 的真实结果；公网 URL 不用于本机健康检查。
+- `public_probe`：服务器侧可选 TCP+HTTP 探测。`status=unreachable/tcp_only` 时
+  `inconclusive=true`，因为服务器访问自己的公网 IP 可能受 NAT hairpin 影响；必须从外部网络复核，
+  不能把它直接当作外网一定不可达。`public_access_verified` 为 `true`（探测成功）、
+  `false`（未确认/失败）或 `null`（回环模式或已跳过）。为避免 SSRF，探测只连接解析后的全局公网地址；
+  私网/回环/元数据地址返回 `non_public_target` 并跳过。
+- `error_code`：例如 `not_installed`、`not_configured`、`not_running`、
+  `listener_loopback_only`、`listener_missing`、`public_probe_inconclusive`、
+  `public_probe_dns_error`、`ok_loopback`、`ok`。
+- `suggestions` / `recommendations`：中文可操作建议。公网探测失败会建议检查：
+  1) 从外部网络访问；2) 云安全组放行 TCP 端口；3) UFW/firewalld；4) public_host/端口/NAT 映射；
+  5) 更新 B 后“停止→启动”。
+- `old_b_suspected`：配置为 `0.0.0.0` 且实际只监听回环，同时入口文件未出现
+  `0.0.0.0` 支持标记时为 true；这是“旧版 B/未重启”的强提示，不是唯一判据。
+- `log_tail`：脱敏后的最近日志摘要；不返回 Key、token、password、secret。
+
+主项目**不会**自动打开云安全组或主机防火墙；`/assistant` 页面的“诊断公网访问”只显示结果和
+建议。公网模式没有用户认证，页面会继续显示高风险警告，并建议安全组/防火墙/VPN/认证反代限制来源。
+
+### 10.6 安全与兼容边界
 
 - `configure_url` 固定为 `/api/assistant/config`，供前端识别配置入口。
 - B 服务自身**没有用户认证**，默认 host 为 `127.0.0.1`。`0.0.0.0` 是显式高风险选项：

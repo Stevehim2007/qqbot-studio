@@ -9,7 +9,7 @@
 - 非 `@` 群消息默认按 12% 概率回复，受每群冷却、每用户冷却、最小长度、纯图片/纯表情/空消息过滤限制。
 - 支持 `direct` / `astrbot` 两种 `memory_mode`：前者省 Token 直连模型，后者交给 AstrBot 默认 Agent 使用长期会话历史。
 - 图片消息优先尝试当前会话 provider 的原生多模态能力；失败后回退到插件配置的视觉 provider，或 AstrBot 的全局图片转述 provider。
-- `/找图 关键词`（别名 `/搜图`）通过免 API Key 的 Bing Images HTML + 百度图片 JSON 双搜索源找图；服务端下载并校验图片后使用本地 `Comp.Image.fromFileSystem` 发送，下载全失败时保留远程 URL 兜底。带超时、安全搜索、结果数、群/用户冷却、大小限制和中文失败降级。
+- `/找图 关键词`（别名 `/搜图`）默认只用免 API Key 的 Bing Images HTML 找图，并基于标题/描述做中/日/英文相关性过滤；服务端下载并校验图片后使用本地 `Comp.Image.fromFileSystem` 发送，下载全失败时保留远程 URL 兜底。百度旧第二源默认关闭且默认绝不调用。带超时、安全搜索、结果数、群/用户冷却、大小限制和中文失败降级。
 - @/私聊支持保守的自然语言找图意图，例如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，避免误伤普通聊天。
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的本地授权音频，用 `Comp.Record.fromFileSystem` 发送；不调用 LLM/TTS/音乐生成，不消耗 token。
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式和配置入口；通过公开 `Context.get_all_stars()` 列出可可靠读取的已加载插件元数据，不暴露配置值/API Key，不枚举不稳定的内部 handler 命令。
@@ -139,7 +139,9 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `image_search_user_cooldown_seconds` | int | `10` | 图片搜索每用户冷却 |
 | `image_search_max_response_bytes` | int | `2000000` | 搜索结果 HTML 最大字节数 |
 | `image_search_max_keyword_chars` | int | `100` | 搜索关键词最大长度 |
-| `image_search_second_source_enabled` | bool | `true` | Bing 结果不足时启用百度图片 JSON 第二源 |
+| `image_search_second_source_enabled` | bool | `false` | 百度图片 JSON 旧第二源，默认关闭；默认绝不自动调用 |
+| `image_search_relevance_enabled` | bool | `true` | 启用标题/描述相关性过滤 |
+| `image_search_min_relevance_score` | float | `0.6` | 候选最低相关性分数；越高越保守 |
 | `image_search_download_timeout_seconds` | int | `20` | 单张候选图片下载超时 |
 | `image_search_download_max_bytes` | int | `8000000` | 单张候选图片最大下载字节数 |
 | `image_search_download_attempts` | int | `8` | 每次命令最多尝试下载的候选数 |
@@ -192,6 +194,25 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `sticker_ai_select_enabled` | bool | `true` | 启用 AI 语境选表情 |
 | `sticker_ai_marker_enabled` | bool | `true` | direct 模式注入私有表情标签说明 |
 | `sticker_ai_select_probability` | float | `0.6` | AI 语境选表情概率 |
+| `sticker_ai_auto_collect_enabled` | bool | `false` | 可选 AI 自动识别收藏任意群成员纯图片 |
+| `sticker_ai_auto_collect_probability` | float | `0.2` | 每条纯图片触发 AI 判断的概率 |
+| `sticker_ai_auto_collect_max_per_hour` | int | `5` | 每会话每小时最多自动收藏尝试次数 |
+| `sticker_ai_auto_collect_default_category` | string | `未分类` | AI 自动收藏默认分类 |
+| `sticker_ai_auto_collect_require_image` | bool | `true` | 只处理 Comp.Image |
+| `sticker_ai_auto_collect_provider_id` | string | `""` | 视觉 provider；留空用当前会话（DeepSeek Flash 1017 可用） |
+| `sticker_ai_auto_collect_min_confidence` | float | `0.6` | AI 表情判定最低置信度 |
+| `sticker_ai_auto_collect_saved_reply` | text | `这个表情我收下了（{category}）。` | 保存成功回复模板 |
+| `safe_tools_enabled` | bool | `true` | 启用受限安全工具 intent router |
+| `safe_tools_marker_enabled` | bool | `true` | direct 模式注入白名单工具 marker 说明 |
+| `safe_tools_max_actions_per_reply` | int | `1` | 单条回复最多工具数 |
+| `safe_tools_search_max_count` | int | `1` | search_images 单次最多图片数（硬上限 1） |
+| `safe_tools_max_categories` | int | `20` | list_sticker_categories 最多展示分类数 |
+| `safe_tools_allow_search_images` | bool | `true` | 允许 search_images |
+| `safe_tools_allow_send_sticker` | bool | `true` | 允许 send_sticker |
+| `safe_tools_allow_collect_sticker` | bool | `true` | 允许 collect_sticker |
+| `safe_tools_allow_list_categories` | bool | `true` | 允许 list_sticker_categories |
+| `safe_tools_sticker_prefix` | string | `给你一个表情：` | send_sticker 前缀 |
+| `safe_tools_collect_cooldown_seconds` | int | `30` | collect_sticker 每会话冷却 |
 | `max_images_per_message` | int | `4` | 单条消息最多送入 provider 的图片数 |
 | `user_sticker_reaction_enabled` | bool | `true` | @/私聊纯图片/Face 自动短句反应 |
 | `user_sticker_reaction_probability` | float | `0.85` | 自动表情反应概率 |
@@ -267,16 +288,17 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 
 搜索与下载实现约束：
 
-- 默认搜索 Bing Images HTML（`https://www.bing.com/images/search`）；当 Bing 候选不足或失败时，使用百度图片 JSON（`https://image.baidu.com/search/acjson`）作为第二源，均不需要 API Key。`image_search_safe_search=strict` 会映射为 Bing 的 `adlt` 参数；百度 JSON 没有等价可控参数，第二源内容安全由百度自身策略决定。
+- 默认且正常只请求 Bing Images HTML（`https://www.bing.com/images/search`），带 `setlang=zh-hans/en-US`、`adlt` 安全参数和结果数量。百度图片 JSON（`https://image.baidu.com/search/acjson`）旧代码保留，但 `image_search_second_source_enabled` **默认 false**，默认不会请求、不会自动回退；只有管理员显式开启后才可能作为可选第二源。
 - 不递归抓站、不提供任意搜索 endpoint 配置；搜索结果请求与图片下载请求都在 `asyncio.to_thread` 中执行，不阻塞 AstrBot 事件循环。
 - 搜索页/JSON 最多读取 `image_search_max_response_bytes + 1` 字节，检查 `Content-Length`、`Content-Type`；单张图片最多读取 `image_search_download_max_bytes + 1` 字节。
-- Bing 解析 `a.iusc[m]` JSON 的 `murl`，并做有限的 `"murl":"..."` / 图片扩展名 URL 兜底；百度解析 `data[].middleURL/thumbURL/hoverURL/replaceUrl`。每页最多检查 200 个候选。
+- Bing 优先解析 `a.iusc[m]` JSON 的 `murl` 以及 `t`/`desc`/`purl` 标题、描述、来源页；百度旧代码解析 `middleURL`/`thumbURL`/`hoverURL`/`replaceUrl` 和 `fromPageTitleEnc`/`fromPageTitle` 等标题字段。没有标题/描述元数据的 fallback URL 会被相关性过滤保守丢弃。
 - 搜索与下载 URL 都必须通过公网 HTTP(S) 过滤：拒绝 `file://`、`javascript:`、带 userinfo URL、localhost/`.local`/`.internal` 等内部域名，以及私有/回环/链路本地/保留 IP；重定向链最多 3 次，最终 URL 再校验一次。百度图片代理可无扩展名，最终由下载 Content-Type + magic 校验。
+- 相关性策略（`image_search_relevance_enabled=true`，默认阈值 0.6）：对关键词与标题/描述做 NFKC、casefold、常见日文异体字（如 `愛→爱`）和标点空白规范化；CJK 使用压缩字符串匹配，英文使用完整词匹配；提供少量名称别名（如 `千早爱音` ↔ `Anon Chihaya`）。无标题/描述或低于阈值的候选不进入下载。
 - 单张图片下载必须同时通过：Content-Type 是图片（或 octet-stream 且 magic 有效）、JPEG/PNG/GIF/WebP/BMP/AVIF magic、文件大小上限。下载请求带浏览器 User-Agent 和对应搜索源的 Referer。
 - 成功时写入 `tempfile` 并登记 `event.track_temporary_local_file(...)`，用 `Comp.Image.fromFileSystem(...)` 发送本地文件；单张失败会自动尝试下一个候选。只有全部下载失败时才用远程 `Comp.Image.fromURL(...)` 兜底。
 - 默认发送 1 张，可配置到 5 张；下载尝试次数可配。群/用户冷却在网络请求前占用；缺少关键词、无结果、超时、网络错误均有独立中文提示配置。
 
-**限制：** Bing/Baidu 页面或 JSON 都不是稳定官方 API，页面改版、地区/语言差异、反爬验证、网络不可达时可能解析不到结果。插件不下载原图到插件目录，临时文件由 AstrBot 事件清理；图片 URL 结构合法但下载失败时会尝试远程 URL 兜底，是否需要登录/防盗链由 QQ 协议端决定。若最终平台仍无法加载，插件收不到平台侧渲染结果。
+**限制：** Bing/Baidu 页面或 JSON 都不是稳定官方 API，页面改版、地区/语言差异、反爬验证、网络不可达时可能解析不到结果。相关性过滤是词面/标题描述启发式，不是视觉内容识别；摘要缺失、语言别名缺失、第三方标题误导时会保守地少发或不发，宁可“没找到”也不发无关图。插件不下载原图到插件目录，临时文件由 AstrBot 事件清理；图片 URL 结构合法但下载失败时会尝试远程 URL 兜底，是否需要登录/防盗链由 QQ 协议端决定。若最终平台仍无法加载，插件收不到平台侧渲染结果。
 
 ### 4.6 图片搜索的可选 LLM tool
 
@@ -424,6 +446,83 @@ data/plugin_data/qqbot_enhancer/collected_stickers/index.json
 
 配置：`sticker_ai_select_enabled`、`sticker_ai_marker_enabled`、`sticker_ai_select_probability`。真实 QQ 端对本地表情展示/顺序仍未验证。
 
+### 4.11 可选 AI 自动识别收藏（默认关闭）
+
+`sticker_ai_auto_collect_enabled` **默认 false**；默认不会自动调用视觉 provider，也不会自动收藏普通群图片。
+
+显式开启后，对**任意群成员**的无文字纯 `Comp.Image`：
+
+1. 本地安全门槛：magic/格式、`auto_collect_sticker_max_file_bytes`、`auto_collect_sticker_max_dimension`；纯 `Comp.Face` 没有图片字节，不处理。
+2. `sticker_ai_auto_collect_probability` 概率门；`sticker_ai_auto_collect_max_per_hour` 每会话每小时最多尝试次数；同时复用 `auto_collect_sticker_cooldown_seconds` 和收藏总数量限制。
+3. 优先调用视觉 provider：
+   - `sticker_ai_auto_collect_provider_id` 非空时使用该 provider；
+   - 留空时使用 `Context.get_current_chat_provider_id(umo=...)` 的当前会话 provider。部署 DeepSeek Flash 1017 视觉模型时可以默认使用；
+   - 只发送当前图片 `base64://...` 和固定 JSON 分类提示；不传用户文字、ID、文件路径，不启用工具/电脑控制。
+4. 视觉模型只负责输出：
+   ```json
+   {"is_sticker": true, "category": "猫猫", "confidence": 0.95}
+   ```
+   解析失败/无 provider/调用失败/低置信度时回退本地小图/方图启发式；AI 明确返回 `is_sticker=false` 则不收藏。
+5. 保存复用已有 `_save_collected_payload`：分类安全化、SHA-256 去重、原子文件/index 写入、数量/大小上限；保存成功只回一条短句 `sticker_ai_auto_collect_saved_reply`（只显示分类）。
+6. 失败、非表情、大图、纯 Face、超频、超限都不回复、不阻塞正常聊天；不会泄露用户文字/用户 ID/绝对路径/API Key。
+
+限制：真实视觉 provider 的图片识别准确性、DeepSeek Flash/Qwen 等实际视觉接口和 QQ 端展示均未验证；视觉判断会产生额外 token 消耗，默认关闭。AI 建议分类也只通过本地安全正则，非法分类回退默认分类。
+
+### 4.12 模块化接口与依赖装配（1.6.0）
+
+`main.py` 是 AstrBot 组合根：保留 `Star`、`filter` 装饰器、事件 hander、`Context`/`Comp` 适配和模块装配。业务能力拆分为：
+
+| 模块 | 职责 |
+|---|---|
+| `interfaces.py` | `StickerRepository` / `MediaDecoder` / `ImageSearchProvider` / `SongRepository` / `LLMService` Protocol；`MediaPayload` / `StickerRecord` / `ImageCandidate` 数据对象 |
+| `config.py` | 120 个默认配置集中定义、默认值兜底、旧 config 缺失键兼容、类型读取 |
+| `media.py` | 图片 magic/尺寸、base64 解码、媒体引用、公网 HTTP(S) URL 过滤 |
+| `image_search.py` | 中/日/英文相关性规范化、别名/阈值过滤纯函数 |
+| `songs.py` | 本地授权音频路径解析、超大文件检测、歌曲 repository |
+| `sticker_store.py` | 收藏 index 原子写/加载、旧 index 兼容、分类目录/文件校验、分类/去重查询辅助 |
+| `llm.py` | sticker marker 提取、AI 判定 JSON 严格解析、注入标签指令 |
+| `safe_tools.py` | 白名单 tool marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成 |
+| `main.py` | AstrBot handler/事件编排、网络/LLM 适配、依赖装配 |
+
+兼容性：
+
+- 配置 schema 仍 120 项、`DEFAULTS` 与 schema 完全一致；
+- 旧 config 只需提供已有字段，新字段通过 `ConfigReader` 默认值补齐；
+- 旧收藏 `index.json` 版本/字段仍可读取，旧内置 8 张贴纸保持不变；
+- `main.py` 优先 `from .config/...`，直接测试 harness 使用同目录绝对导入 fallback；新增 `__init__.py` 后插件目录可作为 package 部署；
+- 测试包含一个真实 package 相对导入加载 smoke，验证 main 可导入。
+
+限制：`main.py` 仍需承载 AstrBot 装饰器 handler，未将命令实现全部搬到 commands 模块；真实 AstrBot 实例复制部署和 QQ E2E 未验证。此重构不改变用户可见行为。
+
+### 4.13 受限安全工具意图路由
+
+AstrBot v4.29 的 tool/function-calling API 没有被本插件当作稳定公开依赖；本版本使用**插件内私有 marker/intent router**，不注册任意 LLM tool，也不启用电脑控制/沙箱/终端。
+
+#### 白名单与参数 schema
+
+| 工具 | 参数 | 执行边界 |
+|---|---|---|
+| `search_images` | `keyword`（1–100 字）、`count`（1–5，实际附件硬上限 1） | 只调用现有 Bing 搜索/安全下载/大小 magic 校验；不接受 URL/path；复用图片搜索群/用户冷却；一次最多 1 张 |
+| `send_sticker` | 二选一 `category` 或 `emotion` | 只从内置/收藏表情池取；分类安全正则；不接受路径；复用 sticker 冷却/防重复；最多 1 个附件 |
+| `collect_sticker` | 可选 `category` | 只从当前消息/引用/本会话最近缓存取图；禁止任意文件路径；复用收藏大小/数量/原子写/去重；独立冷却 |
+| `list_sticker_categories` | 无参数 | 只回安全分类名+数量，不含路径/Key；数量有上限 |
+
+模型格式示例：
+
+```text
+好呀 [[tool:send_sticker emotion="happy"]]
+```
+
+解析器只接受 `[A-Za-z_][A-Za-z0-9_]*=值` 参数，白名单外工具/参数直接拒绝；任何参数包含 `..`、`/`、`\`、`://`、控制字符或命令关键字都拒绝。多个 marker、无效 marker、无权限、冷却中、工具执行失败时删除 marker 并回退纯文本；不泄露内部路径/Key，一次最多一个附件。没有 `eval/exec/subprocess`，没有 shell/终端/电脑控制，也没有模型自定义网络 URL 下载。
+
+direct 模式仅向 system prompt 注入简短白名单说明；memory 模式不注入提示，但会解析 Agent 最终文本中的合法 marker，并在 `on_decorating_result` 替换回复链。与现有 sticker AI marker、`/option`、收藏/搜索/唱歌兼容。
+
+#### 配置
+
+`safe_tools_enabled`、`safe_tools_marker_enabled`、`safe_tools_max_actions_per_reply`、`safe_tools_search_max_count`、`safe_tools_max_categories`、`safe_tools_allow_search_images`、`safe_tools_allow_send_sticker`、`safe_tools_allow_collect_sticker`、`safe_tools_allow_list_categories`、`safe_tools_sticker_prefix`、`safe_tools_collect_cooldown_seconds`。
+
+真实 AstrBot tool 联调未做（设计上不依赖 tool API）；真实 QQ E2E 未验证。
+
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
 插件自己调用 provider，属于“显式调用 LLM”路线，不把同一条消息再交给默认 Agent 管线。实际流程是：
@@ -568,11 +667,12 @@ yield event.chain_result(chain)
 6. **冷却/防重复状态只在内存中，重启清空，且只在单实例内有效。** 多进程/多机器人实例不会共享冷却。
 7. **高优先级 handler 成功回复后会 `stop_event()`。** 这会阻止后续插件再处理同一条消息，属于有意的去重策略；若部署中还有其他必须同时响应普通消息的插件，需要评估顺序和冲突。
 8. **纯图片/纯表情过滤只针对非 @ 群消息。** @ 机器人和私聊消息即使只有图片/表情也会处理，这是“必回”的设计取舍。
-9. **Bing Images HTML 和百度图片 JSON 都不是官方稳定 API。** 搜索依赖第三方当前页面/JSON 结构；改版、地区差异、反爬验证或网络限制会导致无结果/失败。单测使用本地 fixture，不访问真实网络。
+9. **Bing Images HTML（以及默认关闭的百度旧源）都不是官方稳定 API。** 搜索依赖第三方当前页面/JSON 结构；改版、地区差异、反爬验证或网络限制会导致无结果/失败。单测使用本地 fixture，不访问真实网络。
 10. **搜索图片已在服务端下载并校验 magic/Content-Type/大小，但平台侧是否真正显示仍未验证。** 下载成功后会发送本地文件；远程 URL 只作为全部下载失败时兜底。QQ/协议端或本地文件回调服务仍可能在真实部署中失败，插件无法看到平台侧渲染/播放结果。
 11. **没有实现可选 LLM tool。** 当前只提供 `/找图`、`/搜图` 命令和 @/私聊自然语言意图识别。AstrBot v4.29 的 `filter.llm_tool` 是真实 API，但本版本没有注册 `search_images` tool。
 12. **URL 公网过滤不做 DNS 解析后的二次 IP 校验。** 下载前会拒绝明显的私有 IP、回环、内部域名和非 HTTP(S) 地址，但公网域名仍可能解析到内网地址（DNS rebinding/CNAME）。本插件确实会通过 urllib 下载图片，因此生产环境若威胁模型要求严格 SSRF 防护，应再加 DNS 解析后 IP 校验和网络出口策略。
-13. **搜索关键词会发送给 Bing/百度。** 与所有第三方搜索一样，不应在关键词中提交密码、Token 或其他敏感信息。
+13. **搜索关键词默认只发送给 Bing。** 百度只在管理员显式开启可选第二源时才会收到关键词；默认关闭。与所有第三方搜索一样，不应在关键词中提交密码、Token 或其他敏感信息。
+22. **相关性过滤不是视觉理解。** 默认不额外调用视觉 LLM，只用标题/描述和有限别名做保守过滤；标题不准确、没有摘要、跨语言别名未覆盖时会少发或不发，但不应发明显无关图。可降低 `image_search_min_relevance_score` 放宽，但会增加误配风险。
 14. **自然语言找图采用保守正则，不调用小模型做意图分类。** 复杂句式、方言、否定/反问、错别字可能漏识别或故意不触发；无法确定时交给普通聊天。当前只对 @/私聊生效，非 @ 群消息不转成搜索。
 15. **本地点歌未内置任何歌曲，也不生成音乐/TTS。** 必须由管理员把有授权的本地音频放入 `songs/`。真实 QQ/协议端对 mp3/wav 等格式的播放支持未验证，部分适配器可能只可靠支持 WAV；本地文件是否能被容器/协议端读取也取决于部署路径。
 16. **点歌只做名字关键词匹配，不解析标签/歌手/歌词。** 文件缺失、空文件、超限、符号链接和路径穿越会被跳过或提示，不会从网络下载歌曲。
@@ -583,6 +683,10 @@ yield event.chain_result(chain)
 22. **direct 模式依赖模型遵循私有标签格式。** 不同 OpenAI-compatible 模型的 system prompt 遵循度不同；不返回标记时只会走原随机表情路径或纯文本，不会额外调用模型/工具重试。未知/非法/多标记会被安全删除，不会泄漏。
 23. **astrbot memory 模式是本地启发式，不是真正语境理解。** 它不会注入系统提示、不额外调用 LLM，只用关键词/情绪/收藏分类匹配与概率；命中不到时可能回退到原随机 sticker 逻辑。真实 Agent 结果链已有图片时不会追加第二个表情。
 24. **没有增加任何电脑控制、沙箱、终端或 LLM tool 权限。** 模型不能读取本地文件；只从插件提供的安全标签/分类列表中选择。真实 AstrBot + QQ 对本地图片显示/顺序未验证。
+25. **AI 自动识别收藏默认关闭，开启后才会消耗视觉 token。** 视觉 provider 对“表情包/贴纸”的判断、分类建议和 DeepSeek Flash 1017 实际视觉能力未在真实 AstrBot/QQ E2E 验证；调用失败会本地启发式降级，不会阻塞聊天。
+26. **AI 自动收藏仅支持 Comp.Image。** Comp.Face 只有 QQ 表情 id、无图片字节，不处理；大图/未知尺寸/纯风景/截图可能被跳过或交由本地启发式判断。每会话每小时次数、冷却、总数量、文件大小均有硬限制。
+27. **模块化重构不保证真实 AstrBot 实例复制部署零配置。** 新增 package `__init__.py`、main 相对导入和 test harness fallback 已在 mock/package smoke 中验证；但真实 AstrBot 插件加载器、Windows 路径/文件权限和 QQ E2E 未验证。`main.py` 仍保留 handler，业务模块未改变用户可见行为。
+28. **安全工具通过私有 marker 而非 AstrBot tool API。** 本版本未验证/依赖 AstrBot v4.29 tool/function-calling 稳定性；模型可能不输出 marker、格式不合法或被直接拒绝，此时只回退普通文本。工具白名单不含任意 URL/文件/命令/电脑控制；真实 QQ 群聊工具联调未验证。一次回复最多一个附件。
 19. **自动表情反应只针对无文字图片/Face。** 带文字的图片仍按识图/聊天逻辑处理。默认 `user_sticker_reaction_enabled=true` 时，@/私聊中的无文字纯图片会优先走短句反应而不是原生视觉理解；需要视觉理解时应带文字、关闭该开关，或显式调整概率。
 20. **收藏表情数据目录/权限/index 损坏未做真实部署验证。** 使用公开 `StarTools.get_data_dir()` 和原子写入，但磁盘写满、权限变化、手工破坏 index、跨容器读取等仍可能导致收藏不可用；插件会降级提示，不会主动删除用户文件。没有实现破坏性删除命令。
 21. **收藏表情不会自动收集所有用户图片。** 只有显式执行 `/收藏表情` 才会保存；不会保存朋友圈/聊天原文、用户 ID 或敏感路径。收藏文件跨 QQ/协议端可读性仍取决于部署与文件服务。
@@ -597,18 +701,18 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-当前增强插件测试为 **90 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析、百度 JSON 解析、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用。单测本身**不访问真实网络**。
+当前增强插件测试为 **116 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析（含 title/desc 元数据）、百度 JSON 解析、相关性中/日/英文规范化/阈值过滤/无相关候选不发图/百度第二源默认不调用、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用、AI 自动收藏默认关闭、任意群成员图片视觉判定收藏、AI 失败本地启发式降级、AI 非表情/大图/纯 Face 不收藏、每小时限频、provider overrides、恶意分类安全回退、无 tool/电脑控制、模块导入/package 相对导入/ConfigReader 旧配置/旧 index/媒体/歌曲/相关性/store/llm helper、安全工具白名单/参数 schema/路径/URL/命令拒绝、search_images/send_sticker/collect_sticker/list_sticker_categories mock、权限关闭回退、多 marker 拒绝、memory 模式工具链替换、无 eval/exec/subprocess。单测本身**不访问真实网络**。
 
 非单测在线冒烟（不代表 AstrBot/QQ 端到端）：
 
-- Bing Images HTML 对 `千早爱音` 返回候选，`plugin._search_image_candidates("千早爱音")` 得到 6 个候选；
-- 实际下载首个候选成功，内容为 51,430 字节 JPEG，magic 为 `ffd8ff...`；其余候选部分失败后自动跳过；
-- 百度 JSON 第二源对 `千早爱音` 返回约 39 KB JSON，解析出 3 个百度图片代理 URL；下载首个 URL 成功，实际内容为 WebP（14,484 字节，`RIFF...WEBP`），通过 magic 校验；
-- `/找图 千早爱音` 命令真实网络冒烟：经同一搜索/下载管线得到 1 个本地 JPEG（51,430 字节），回复链为文字 + `Comp.Image.fromFileSystem` 本地图片，事件 `call_llm=True` 且 `stop_event()`；
-- 私聊自然语言路径 `帮我搜两张千早爱音图片` 真实网络冒烟：下载到 2 个本地 JPEG 临时文件（51,430 / 20,410 字节），回复链包含 2 个本地 `Image` 组件，未进入默认 LLM；
-- 下载失败原因实测：部分 `cdn.mfuns.net` 候选即使带 Referer/UA 仍返回 HTTP 403 Forbidden，插件按设计跳过并尝试下一候选；`picx.zhimg.com` / `pic1.zhimg.com` 候选成功通过 Content-Type + JPEG magic 校验；
-- 以上临时文件已在冒烟后删除，未发送到真实 QQ。
+- 真实网络 smoke（默认 Bing-only、相关性开启、第二源关闭）：
+  - `/找图 千早爱音`：Bing 返回 6 个相关性候选；首条标题为 `【BanG Dream!It's MyGO】千早爱音_...`，分数 1.0；实际命令发送 1 个本地 JPEG（51,430 字节，magic `ffd8ff...`）。
+  - `/找图 大树`：6 个候选标题均含“大树”，分数 1.0；实际命令发送 1 个本地 JPEG（270,280 字节）。
+  - `/找图 cat`：6 个候选标题均含 cat，分数 1.0；实际命令发送 1 个本地 JPEG（9,342 字节）。
+- 相关性过滤 fixture 另验证了 `千早 愛音`、`Anon Chihaya`、无关“山景/美食”标题和无 title/desc 候选：只有相关候选进入下载，全部无关时回复“没有找到合适的图片”且下载调用为 0。
+- 百度旧第二源测试仅在显式 `image_search_second_source_enabled=true` 的 mock 中覆盖；默认关闭测试断言百度 fetch 调用 0 次。真实百度网络请求本次不作为默认路径依赖。
+- 临时文件已在冒烟后删除，未发送到真实 QQ。
 
 第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
 
-本次还执行了全仓回归：`python3 -m unittest discover -s tests -q`，当前 **236 tests OK**。全仓测试数量会随其他模块开发变化；以实际运行结果为准。
+本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **288 tests OK**；其中本插件 116 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。

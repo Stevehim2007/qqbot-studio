@@ -267,6 +267,15 @@ class StudioV3Tests(unittest.TestCase):
         started = self.studio.start_assistant()
         self.assertFalse(started["ok"])
         self.assertFalse(started["running"])
+        diagnosis = self.studio.assistant_diagnose()
+        self.assertTrue(diagnosis["ok"])
+        self.assertFalse(diagnosis["healthy"])
+        self.assertEqual(diagnosis["error_code"], "not_installed")
+        self.assertIn("listener", diagnosis)
+        self.assertIn("public_probe", diagnosis)
+        self.assertIn("suggestions", diagnosis)
+        self.assertNotIn("api_key", json.dumps(diagnosis, ensure_ascii=False).lower())
+        self.assertNotIn("sk-", json.dumps(diagnosis, ensure_ascii=False))
 
     def test_v1_root_layout_is_migrated_without_rewriting_compose_or_env(self):
         with tempfile.TemporaryDirectory() as root_name:

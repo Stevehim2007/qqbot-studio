@@ -371,6 +371,57 @@ class FakeStudio:
             "error": "",
         }
 
+    def assistant_diagnose(self):
+        return {
+            "ok": True,
+            "healthy": False,
+            "installed": True,
+            "configured": True,
+            "running": True,
+            "pid": 123,
+            "host": "0.0.0.0",
+            "port": 8766,
+            "public_host": "bot.example.com",
+            "url": "http://bot.example.com:8766/",
+            "health_url": "http://127.0.0.1:8766/",
+            "listener": {
+                "supported": True,
+                "listening": True,
+                "bind_addresses": ["127.0.0.1"],
+                "wildcard": False,
+                "loopback_only": True,
+                "source": "mock",
+                "error": "",
+            },
+            "listener_match": "loopback_only",
+            "listener_ok": False,
+            "local_health": {
+                "ok": True,
+                "url": "http://127.0.0.1:8766/",
+                "detail": "health ok",
+                "error": "",
+            },
+            "public_probe": {
+                "checked": True,
+                "skipped": False,
+                "status": "unreachable",
+                "tcp_connected": False,
+                "http_ok": None,
+                "inconclusive": True,
+                "remote_verification_required": True,
+                "detail": "模拟公网探测失败",
+                "error": "",
+            },
+            "old_b_suspected": True,
+            "b_entry_supports_wildcard": False,
+            "log_tail": "assistant started",
+            "error_code": "listener_loopback_only",
+            "suggestions": ["更新 B", "停止 → 启动", "检查云安全组"],
+            "recommendations": ["更新 B", "停止 → 启动", "检查云安全组"],
+            "message": "实际只监听回环地址。",
+            "error": "",
+        }
+
     def save_assistant_config(self, payload):
         self.assistant_saved_config = dict(payload)
         result = self.assistant_config()
@@ -669,6 +720,46 @@ class ServerTests(unittest.TestCase):
         self.assertIn("安全组", payload["access_note"])
         self.assertNotIn("api_key", body.lower())
 
+    def test_assistant_diagnose_contract_and_token_protection(self):
+        status, body = self._get("/api/assistant/diagnose")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["healthy"])
+        self.assertEqual(payload["error_code"], "listener_loopback_only")
+        self.assertEqual(payload["listener"]["bind_addresses"], ["127.0.0.1"])
+        self.assertTrue(payload["local_health"]["ok"])
+        self.assertTrue(payload["public_probe"]["inconclusive"])
+        self.assertTrue(payload["old_b_suspected"])
+        self.assertIn("更新 B", payload["suggestions"])
+        self.assertIn("云安全组", " ".join(payload["suggestions"]))
+        self.assertNotIn("api_key", body.lower())
+        self.assertNotIn("sk-", body)
+
+        request = urllib.request.Request(self.base + "/api/assistant/diagnose")
+        try:
+            with self.opener.open(request, timeout=5) as response:
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+        self.assertEqual(status, 403)
+
+    def test_assistant_diagnose_failure_is_isolated_with_safe_json(self):
+        with mock.patch.object(
+            self.studio,
+            "assistant_diagnose",
+            side_effect=RuntimeError("sensitive sk-should-not-leak"),
+        ):
+            status, body = self._get("/api/assistant/diagnose")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "diagnose_unavailable")
+        self.assertIn("healthy", payload)
+        self.assertIn("listener", payload)
+        self.assertIn("suggestions", payload)
+        self.assertNotIn("sk-should-not-leak", body)
+
     def test_assistant_config_and_start_require_token(self):
         status, body = self._post(
             "/api/assistant/config",
@@ -925,7 +1016,7 @@ class ServerTests(unittest.TestCase):
 
 
 class AssistantPageRouteTests(unittest.TestCase):
-    def _start_static_server(self, assistant_content=None):
+    def _start_static_server(self, assistant_content=None, extra_files=None):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         static_dir = Path(tmp.name)
@@ -934,6 +1025,10 @@ class AssistantPageRouteTests(unittest.TestCase):
             "<p>wizard</p>",
             encoding="utf-8",
         )
+        for relative, content in (extra_files or {}).items():
+            target = static_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
         if assistant_content is not None:
             (static_dir / "assistant.html").write_text(
                 assistant_content,
@@ -1001,6 +1096,32 @@ class AssistantPageRouteTests(unittest.TestCase):
         status, body, _ = self._get(base, "/wizard")
         self.assertEqual(status, 200)
         self.assertIn("assistant-page-token-123", body)
+
+    def test_component_and_service_static_asset_routes(self):
+        base = self._start_static_server(
+            assistant_content=None,
+            extra_files={
+                "services/api.js": "window.QQBotStudio = { api: true };",
+                "services/plugin-config.js": "window.QQBotStudio.pluginConfig = true;",
+                "components/instance-settings.js": "window.QQBotStudio.instanceSettings = true;",
+                "services/not-js.txt": "not javascript",
+            },
+        )
+        for path, expected in (
+            ("/services/api.js", "api: true"),
+            ("/services/plugin-config.js", "pluginConfig = true"),
+            ("/components/instance-settings.js", "instanceSettings = true"),
+        ):
+            status, body, headers = self._get(base, path)
+            self.assertEqual(status, 200, body)
+            self.assertIn("javascript", headers.get("Content-Type", ""))
+            self.assertIn(expected, body)
+        status, _, _ = self._get(base, "/services/missing.js")
+        self.assertEqual(status, 404)
+        status, _, _ = self._get(base, "/services/not-js.txt")
+        self.assertEqual(status, 404)
+        status, _, _ = self._get(base, "/components/../server.py")
+        self.assertEqual(status, 404)
 
     def test_assistant_page_without_placeholder_degrades_safely(self):
         base = self._start_static_server("<html><body>broken template</body></html>")

@@ -140,10 +140,10 @@
     "hint": "支持 {seconds} 占位符。"
   },
   "image_search_second_source_enabled": {
-    "description": "Bing 结果不足时启用百度图片 JSON 第二搜索源",
+    "description": "【默认关闭】是否允许百度图片 JSON 可选第二搜索源",
     "type": "bool",
-    "default": true,
-    "hint": "两个搜索源均免 API Key，但都依赖第三方页面/接口结构。"
+    "default": false,
+    "hint": "默认只用 Bing，不会自动调用百度。仅在管理员显式开启时才可能回退；用户可保持关闭。"
   },
   "image_search_download_timeout_seconds": {
     "description": "单张图片下载超时（秒）",
@@ -175,6 +175,23 @@
       "max": 15,
       "step": 1
     }
+  },
+  "image_search_relevance_enabled": {
+    "description": "启用图片搜索结果相关性过滤",
+    "type": "bool",
+    "default": true,
+    "hint": "优先使用标题/描述并按中/日/英文规范化；没有相关候选时宁可返回没找到。"
+  },
+  "image_search_min_relevance_score": {
+    "description": "候选图片最低相关性分数",
+    "type": "float",
+    "default": 0.6,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "hint": "默认 0.6；越高越保守。无标题/描述元数据的候选默认过滤掉。"
   },
   "song_enabled": {
     "description": "启用 /唱歌 和 /点歌 本地点歌",
@@ -515,6 +532,145 @@
       "step": 0.05
     },
     "hint": "与现有 sticker_probability、冷却、防重复共同生效；一次回复最多一个。"
+  },
+  "sticker_ai_auto_collect_enabled": {
+    "description": "【默认关闭】AI 自动识别并收藏任意群成员纯图片",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后优先调用视觉 provider 判断是否表情包/贴纸；失败回退本地小图/方图启发式，不调用电脑控制/终端/工具。"
+  },
+  "sticker_ai_auto_collect_probability": {
+    "description": "每条纯图片触发 AI 自动收藏判断的概率",
+    "type": "float",
+    "default": 0.2,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  },
+  "sticker_ai_auto_collect_max_per_hour": {
+    "description": "每个会话每小时最多自动收藏次数",
+    "type": "int",
+    "default": 5,
+    "slider": {
+      "min": 1,
+      "max": 50,
+      "step": 1
+    },
+    "hint": "同时受 auto_collect_sticker_cooldown_seconds 和收藏总数量限制。"
+  },
+  "sticker_ai_auto_collect_default_category": {
+    "description": "AI 自动收藏默认分类",
+    "type": "string",
+    "default": "未分类"
+  },
+  "sticker_ai_auto_collect_require_image": {
+    "description": "AI 自动收藏只处理 Comp.Image",
+    "type": "bool",
+    "default": true,
+    "hint": "纯 Comp.Face 没有图片字节，当前无法保存；保持 true 最安全。"
+  },
+  "sticker_ai_auto_collect_provider_id": {
+    "description": "AI 自动收藏视觉 Provider（可留空）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "留空使用当前会话 provider；部署 DeepSeek Flash 1017 视觉模型时默认即可。API Key 由 AstrBot 管理。"
+  },
+  "sticker_ai_auto_collect_min_confidence": {
+    "description": "AI 判定为表情的最低置信度",
+    "type": "float",
+    "default": 0.6,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  },
+  "sticker_ai_auto_collect_saved_reply": {
+    "description": "AI 自动收藏成功短回复模板",
+    "type": "text",
+    "default": "这个表情我收下了（{category}）。",
+    "hint": "只显示分类，不显示路径/用户 ID/API Key。"
+  },
+  "safe_tools_enabled": {
+    "description": "启用受限安全工具意图路由",
+    "type": "bool",
+    "default": true,
+    "hint": "仅白名单 search_images/send_sticker/collect_sticker/list_sticker_categories；不启用 AstrBot tool、电脑控制、终端、任意文件/URL。"
+  },
+  "safe_tools_marker_enabled": {
+    "description": "direct 模式注入安全工具标记说明",
+    "type": "bool",
+    "default": true,
+    "hint": "模型只能输出受限 marker，插件解析后调用自有白名单能力。"
+  },
+  "safe_tools_max_actions_per_reply": {
+    "description": "单条回复最多执行的工具数",
+    "type": "int",
+    "default": 1,
+    "slider": {
+      "min": 1,
+      "max": 1,
+      "step": 1
+    }
+  },
+  "safe_tools_search_max_count": {
+    "description": "search_images 单次最多发送图片数",
+    "type": "int",
+    "default": 1,
+    "slider": {
+      "min": 1,
+      "max": 1,
+      "step": 1
+    },
+    "hint": "固定为1，满足一次回复最多一个图片/表情附件；参数 count 仅用于兼容但上限为1。"
+  },
+  "safe_tools_max_categories": {
+    "description": "list_sticker_categories 最多展示分类数",
+    "type": "int",
+    "default": 20,
+    "slider": {
+      "min": 1,
+      "max": 50,
+      "step": 1
+    }
+  },
+  "safe_tools_allow_search_images": {
+    "description": "允许 search_images 工具",
+    "type": "bool",
+    "default": true
+  },
+  "safe_tools_allow_send_sticker": {
+    "description": "允许 send_sticker 工具",
+    "type": "bool",
+    "default": true
+  },
+  "safe_tools_allow_collect_sticker": {
+    "description": "允许 collect_sticker 工具",
+    "type": "bool",
+    "default": true
+  },
+  "safe_tools_allow_list_categories": {
+    "description": "允许 list_sticker_categories 工具",
+    "type": "bool",
+    "default": true
+  },
+  "safe_tools_sticker_prefix": {
+    "description": "安全工具发送表情时前缀文字",
+    "type": "string",
+    "default": "给你一个表情："
+  },
+  "safe_tools_collect_cooldown_seconds": {
+    "description": "collect_sticker 工具每会话冷却秒数",
+    "type": "int",
+    "default": 30,
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 1
+    }
   },
   "collected_sticker_enabled": {
     "description": "启用用户收藏表情的保存、管理和使用",

@@ -18,13 +18,10 @@ import asyncio
 import base64
 import hashlib
 import html as html_lib
-import ipaddress
 import json
 import math
-import os
 import random
 import re
-import struct
 import tempfile
 import time
 import urllib.error
@@ -38,24 +35,78 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools
 
+try:  # Loaded as a package by AstrBot.
+    from .config import COLLECTED_CATEGORY_MAX_CHARS, DEFAULTS, ConfigReader
+    from . import image_search as image_search_engine
+    from .media import (
+        IMAGE_PATH_EXTENSIONS,
+        decode_base64_payload,
+        detect_image_magic,
+        image_dimensions,
+        is_media_ref as media_is_media_ref,
+        local_image_ref_path as media_local_image_ref_path,
+        sanitize_http_url as media_sanitize_http_url,
+    )
+    from .songs import SONG_SUFFIXES, list_song_files, resolve_song_file
+    from . import safe_tools as safe_tools_engine
+    from .llm import (
+        STICKER_AI_MARKER_RE,
+        STICKER_AI_TAG_RE,
+        extract_sticker_ai_marker,
+        parse_ai_sticker_judgement,
+        sticker_ai_system_instruction,
+    )
+    from .sticker_store import (
+        COLLECTED_CATEGORY_RE,
+        COLLECTED_FILENAME_RE,
+        COLLECTED_INDEX_FILENAME,
+        COLLECTED_STICKER_DIR_NAME,
+        CollectedStickerStore,
+    )
+except ImportError:  # Loaded directly by a test harness.
+    import sys as _sys
+
+    _plugin_dir = str(Path(__file__).resolve().parent)
+    if _plugin_dir not in _sys.path:
+        _sys.path.insert(0, _plugin_dir)
+    from config import COLLECTED_CATEGORY_MAX_CHARS, DEFAULTS, ConfigReader
+    import image_search as image_search_engine
+    from media import (
+        IMAGE_PATH_EXTENSIONS,
+        decode_base64_payload,
+        detect_image_magic,
+        image_dimensions,
+        is_media_ref as media_is_media_ref,
+        local_image_ref_path as media_local_image_ref_path,
+        sanitize_http_url as media_sanitize_http_url,
+    )
+    from songs import SONG_SUFFIXES, list_song_files, resolve_song_file
+    import safe_tools as safe_tools_engine
+    from llm import (
+        STICKER_AI_MARKER_RE,
+        STICKER_AI_TAG_RE,
+        extract_sticker_ai_marker,
+        parse_ai_sticker_judgement,
+        sticker_ai_system_instruction,
+    )
+    from sticker_store import (
+        COLLECTED_CATEGORY_RE,
+        COLLECTED_FILENAME_RE,
+        COLLECTED_INDEX_FILENAME,
+        COLLECTED_STICKER_DIR_NAME,
+        CollectedStickerStore,
+    )
+
 PLUGIN_DIR = Path(__file__).resolve().parent
 STICKER_DIR = PLUGIN_DIR / "stickers"
 STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
-SONG_SUFFIXES = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.5.2"
-COLLECTED_STICKER_DIR_NAME = "collected_stickers"
-COLLECTED_INDEX_FILENAME = "index.json"
+PLUGIN_FALLBACK_VERSION = "1.7.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
-COLLECTED_CATEGORY_MAX_CHARS = 32
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PENDING_USER_MEDIA_MAX_SESSIONS = 128
-COLLECTED_CATEGORY_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]{1,32}$")
-COLLECTED_FILENAME_RE = re.compile(
-    r"^[a-f0-9]{64}\.(?:jpg|png|gif|webp|bmp|avif)$"
-)
 COLLECT_NATURAL_LANGUAGE_RE = re.compile(
     r"^(?:帮我|给我|请(?:你)?|麻烦(?:你)?|你|能|可以)?\s*"
     r"(?:把)?\s*(?:这个|这张|这条|这|它)?\s*"
@@ -70,25 +121,10 @@ COLLECT_NATURAL_LANGUAGE_REVERSED_RE = re.compile(
     r"(?P<category>[0-9A-Za-z_\-\u4e00-\u9fff]{1,32})\s*"
     r"(?:表情|图片|贴纸)(?:吧|了)?\s*$"
 )
-STICKER_AI_MARKER_RE = re.compile(
-    r"\[\[\s*sticker\s*:\s*([^\[\]\r\n]{1,64})\s*\]\]",
-    re.IGNORECASE,
-)
-STICKER_AI_TAG_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]{1,32}$")
-
 BING_IMAGES_ENDPOINT = "https://www.bing.com/images/search"
 BING_IMAGES_REFERER = "https://www.bing.com/images/search"
 BAIDU_IMAGES_ENDPOINT = "https://image.baidu.com/search/acjson"
 BAIDU_IMAGES_REFERER = "https://image.baidu.com/"
-IMAGE_PATH_EXTENSIONS = (
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".avif",
-)
 IMAGE_SEARCH_MAX_CANDIDATES = 200
 IMAGE_SEARCH_MAX_CANDIDATE_URLS = 15
 IMAGE_SEARCH_MAX_RESULTS_PER_COMMAND = 5
@@ -143,136 +179,7 @@ class _LimitedSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return new_request
 
 
-DEFAULTS: dict[str, Any] = {
-    "memory_mode": "direct",
-    "image_search_enabled": True,
-    "image_search_natural_language_enabled": True,
-    "image_search_timeout_seconds": 12,
-    "image_search_result_count": 1,
-    "image_search_safe_search": "strict",
-    "image_search_group_cooldown_seconds": 15,
-    "image_search_user_cooldown_seconds": 10,
-    "image_search_max_response_bytes": 2_000_000,
-    "image_search_max_keyword_chars": 100,
-    "image_search_second_source_enabled": True,
-    "image_search_download_timeout_seconds": 20,
-    "image_search_download_max_bytes": 8_000_000,
-    "image_search_download_attempts": 8,
-    "image_search_success_prefix": "为你找到这些图片：",
-    "image_search_usage_reply": "用法：/找图 关键词（也可以 /搜图 关键词）",
-    "image_search_disabled_reply": "图片搜索功能当前未启用。",
-    "image_search_empty_reply": "没有找到合适的图片，换个关键词试试吧。",
-    "image_search_error_reply": "搜索图片失败了，请稍后再试。",
-    "image_search_timeout_reply": "搜索图片超时了，请稍后再试。",
-    "image_search_cooldown_reply": "图片搜索冷却中，请约 {seconds} 秒后再试。",
-    "song_enabled": True,
-    "song_group_cooldown_seconds": 15,
-    "song_user_cooldown_seconds": 10,
-    "song_max_file_bytes": 20_000_000,
-    "song_success_prefix": "🎵 本地歌曲：{name}",
-    "song_disabled_reply": "本地点歌功能当前未启用。",
-    "song_empty_reply": (
-        "本地点歌目录还没有音频文件。请把授权的 mp3/wav 放进 "
-        "plugins/qqbot_enhancer/songs/ 后再试。"
-    ),
-    "song_not_found_reply": "没有找到匹配的本地歌曲，换个关键词试试吧。",
-    "song_too_large_reply": "本地音频超过大小限制，管理员可调整 song_max_file_bytes。",
-    "song_error_reply": "本地音频构造失败，请检查文件格式或让管理员查看日志。",
-    "song_cooldown_reply": "点歌冷却中，请约 {seconds} 秒后再试。",
-    "option_include_other_plugins": True,
-    "option_max_plugins": 20,
-    "option_max_chars": 1800,
-    "user_sticker_reaction_enabled": True,
-    "user_sticker_reaction_probability": 0.85,
-    "user_sticker_reaction_replies": [
-        "收到这张表情啦～",
-        "这个表情我收下啦！",
-        "好可爱，回你一张～",
-        "表情包已收到，嘿嘿～",
-    ],
-    "user_sticker_reaction_attach_sticker": True,
-    "collected_sticker_enabled": True,
-    "collected_sticker_disabled_reply": "用户表情收藏/使用功能当前未启用。",
-    "collected_sticker_max_count": 200,
-    "collected_sticker_max_file_bytes": 8_388_608,
-    "collected_sticker_use_probability": 0.5,
-    "collected_sticker_category_max_chars": COLLECTED_CATEGORY_MAX_CHARS,
-    "collected_sticker_list_limit": 30,
-    "collected_sticker_storage_unavailable_reply": (
-        "收藏存储目录不可用，请检查 AstrBot 的 data/plugin_data 权限。"
-    ),
-    "collected_sticker_no_image_reply": (
-        "这条消息里没有可收藏的图片。请发送图片/表情包并同时使用 /收藏表情。"
-    ),
-    "collected_sticker_face_unsupported_reply": (
-        "QQ 原生 Face 表情没有可保存的图片文件，无法收藏；"
-        "请发送图片/贴纸形式的 Image。"
-    ),
-    "collected_sticker_invalid_category_reply": (
-        "分类名不合法，只允许中文、字母、数字、-、_，且不超过 {max_chars} 个字符。"
-    ),
-    "collected_sticker_invalid_image_reply": (
-        "无法识别这张图片的格式，未收藏。支持 JPEG/PNG/GIF/WebP/BMP/AVIF。"
-    ),
-    "collected_sticker_too_large_reply": "图片超过收藏大小限制，未收藏。",
-    "collected_sticker_duplicate_reply": "这张表情已经收藏过（分类：{category}）。",
-    "collected_sticker_limit_reply": (
-        "收藏数量已达上限 {max_count} 张，请先清理数据目录。"
-    ),
-    "collected_sticker_saved_reply": "已收藏到「{category}」：{filename}",
-    "collected_sticker_empty_reply": "还没有收藏任何表情。",
-    "collected_sticker_not_found_reply": "没有找到符合条件的收藏表情。",
-    "collected_sticker_send_prefix": "送你一张收藏表情（{category}）：{filename}",
-    "collected_sticker_list_header": "收藏表情共 {count} 张：",
-    "collected_sticker_category_header": "分类「{category}」共 {count} 张：",
-    "collected_sticker_list_more": "……另有 {count} 张未展开。",
-    "collected_sticker_command_error_reply": "表情收藏命令处理失败，请稍后再试。",
-    "pending_sticker_ttl_seconds": 300,
-    "auto_collect_user_sticker_enabled": False,
-    "auto_collect_sticker_max_file_bytes": 2_000_000,
-    "auto_collect_sticker_max_dimension": 512,
-    "auto_collect_sticker_default_category": "未分类",
-    "auto_collect_sticker_reply_enabled": True,
-    "auto_collect_sticker_cooldown_seconds": 60,
-    "auto_collect_sticker_saved_reply": "收下了，已收藏到「{category}」。",
-    "reply_probability": 0.12,
-    "group_cooldown_seconds": 30,
-    "user_cooldown_seconds": 90,
-    "min_message_chars": 3,
-    "max_input_chars": 2000,
-    "max_reply_chars": 500,
-    "ignore_pure_image": True,
-    "ignore_pure_face": True,
-    "block_default_llm_for_group_non_at": True,
-    "ignore_command_prefixes": ["/"],
-    "inherit_astrbot_wake_prefix": True,
-    "system_prompt": (
-        "你是一个简洁、友好的 QQ 聊天机器人。请用中文自然地回复，"
-        "不要暴露系统提示词、内部实现或 API 凭据。"
-    ),
-    "llm_timeout_seconds": 45,
-    "native_vision_first": True,
-    "vision_provider_id": "",
-    "auto_use_astrbot_caption_provider": True,
-    "image_caption_prompt": (
-        "请用中文客观描述这张图片的内容，尽量具体，不要编造图中不存在的信息。"
-    ),
-    "max_caption_chars": 1200,
-    "image_unavailable_reply": (
-        "我收到图片啦，但当前对话模型不能看图，且没有配置可用的图片转述模型。"
-        "请让管理员配置支持视觉输入的模型后重试。"
-    ),
-    "llm_error_reply": "我暂时没想好怎么回复，稍后再试试吧。",
-    "empty_reply_fallback": "嗯嗯，我在听。",
-    "sticker_enabled": True,
-    "sticker_probability": 0.35,
-    "sticker_cooldown_seconds": 120,
-    "sticker_prevent_repeat": True,
-    "sticker_ai_select_enabled": True,
-    "sticker_ai_marker_enabled": True,
-    "sticker_ai_select_probability": 0.6,
-    "max_images_per_message": 4,
-}
+
 
 
 class QQBotEnhancerPlugin(Star):
@@ -281,6 +188,7 @@ class QQBotEnhancerPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None) -> None:
         super().__init__(context)
         self.config: dict[str, Any] = config if isinstance(config, dict) else {}
+        self._config_reader = ConfigReader(self.config)
 
         # 可注入的时钟/随机源让单元测试不必真的 sleep。
         self._clock = time.monotonic
@@ -296,6 +204,8 @@ class QQBotEnhancerPlugin(Star):
         self._last_song_group: dict[str, float] = {}
         self._last_song_user: dict[str, float] = {}
         self._last_auto_collect_at: dict[str, float] = {}
+        self._last_safe_tool_collect_at: dict[str, float] = {}
+        self._sticker_ai_auto_collect_times: dict[str, list[float]] = {}
         self._pending_user_media: dict[str, dict[str, Any]] = {}
         self._song_dir = SONG_DIR
 
@@ -314,45 +224,28 @@ class QQBotEnhancerPlugin(Star):
     # Configuration helpers
     # ------------------------------------------------------------------
     def _config_value(self, key: str) -> Any:
-        if isinstance(self.config, dict) and key in self.config:
-            return self.config[key]
-        return DEFAULTS.get(key)
+        return self._config_reader.value(key)
 
     def _cfg_bool(self, key: str) -> bool:
-        value = self._config_value(key)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return bool(value)
+        return self._config_reader.bool(key)
 
     def _cfg_int(self, key: str, minimum: int = 0) -> int:
-        raw = self._config_value(key)
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            raw_default = DEFAULTS.get(key, minimum)
-            try:
-                value = int(raw_default)
-            except (TypeError, ValueError):
-                value = minimum
-        return max(minimum, value)
+        return self._config_reader.int(key, minimum=minimum)
 
-    def _cfg_float(self, key: str, minimum: float = 0.0, maximum: float = 1.0) -> float:
-        raw = self._config_value(key)
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            raw_default = DEFAULTS.get(key, minimum)
-            try:
-                value = float(raw_default)
-            except (TypeError, ValueError):
-                value = minimum
-        return min(maximum, max(minimum, value))
+    def _cfg_float(
+        self,
+        key: str,
+        minimum: float = 0.0,
+        maximum: float = 1.0,
+    ) -> float:
+        return self._config_reader.float(
+            key,
+            minimum=minimum,
+            maximum=maximum,
+        )
 
     def _cfg_str(self, key: str) -> str:
-        raw = self._config_value(key)
-        if raw is None:
-            raw = DEFAULTS.get(key, "")
-        return str(raw)
+        return self._config_reader.string(key)
 
     def _memory_mode(self) -> str:
         value = self._cfg_str("memory_mode").strip().lower()
@@ -361,12 +254,7 @@ class QQBotEnhancerPlugin(Star):
         return "direct"
 
     def _cfg_list(self, key: str) -> list[str]:
-        raw = self._config_value(key)
-        if isinstance(raw, str):
-            raw = raw.replace("，", ",").split(",")
-        if not isinstance(raw, (list, tuple, set)):
-            return []
-        return [str(item).strip() for item in raw if str(item).strip()]
+        return self._config_reader.string_list(key)
 
     # ------------------------------------------------------------------
     # Event handler
@@ -402,6 +290,24 @@ class QQBotEnhancerPlugin(Star):
             # 防止概率回复把 /help 之类的指令吞掉。
             if self._is_command_message(event, message_text):
                 return
+
+            # Optional AI auto-collect for any group member's textless image.
+            # Disabled by default; when enabled it only saves after local safety
+            # checks and a vision-provider/local-heuristic decision.
+            if (
+                has_image
+                and not message_text.strip()
+                and self._cfg_bool("sticker_ai_auto_collect_enabled")
+            ):
+                ai_auto_collect_reply = (
+                    await self._maybe_ai_auto_collect_user_sticker(event)
+                )
+                if ai_auto_collect_reply:
+                    should_stop = True
+                    event.should_call_llm(True)
+                    yield event.plain_result(ai_auto_collect_reply)
+                    yielded = True
+                    return
 
             is_private = event.is_private_chat()
             bot_mentioned = self._is_bot_mentioned(event, components)
@@ -549,6 +455,23 @@ class QQBotEnhancerPlugin(Star):
                 message_text=message_text,
                 has_face=has_face,
             )
+            (
+                reply_text,
+                tool_result,
+                had_safe_tool_marker,
+            ) = await self._route_safe_tool(event, reply_text)
+            if had_safe_tool_marker:
+                should_stop = True
+                event.should_call_llm(True)
+                yield (
+                    tool_result
+                    if tool_result is not None
+                    else event.plain_result(
+                        self._finalize_reply(reply_text)
+                    )
+                )
+                yielded = True
+                return
             result = self._build_result(
                 event,
                 reply_text,
@@ -1055,6 +978,34 @@ class QQBotEnhancerPlugin(Star):
 
         if not event.get_extra("qqbot_enhancer_memory_reply"):
             return
+        result = event.get_result()
+        chain = getattr(result, "chain", None) if result is not None else None
+        if not isinstance(chain, list):
+            return
+
+        # A memory-mode Agent can still emit the same private marker; parse it
+        # before sticker selection so tool failures cleanly fall back to text.
+        plain_text = "".join(
+            str(component.text or "")
+            for component in chain
+            if isinstance(component, Comp.Plain)
+        )
+        if plain_text:
+            (
+                clean_text,
+                tool_result,
+                had_safe_tool_marker,
+            ) = await self._route_safe_tool(event, plain_text)
+            if had_safe_tool_marker:
+                replacement_chain = getattr(tool_result, "chain", None)
+                if isinstance(replacement_chain, list) and replacement_chain:
+                    chain[:] = replacement_chain
+                else:
+                    chain[:] = [
+                        Comp.Plain(self._finalize_reply(clean_text))
+                    ]
+                return
+
         if not self._cfg_bool("sticker_enabled"):
             return
         collected_available = (
@@ -1062,10 +1013,6 @@ class QQBotEnhancerPlugin(Star):
             and bool(self._valid_collected_entries())
         )
         if not self._sticker_entries and not collected_available:
-            return
-        result = event.get_result()
-        chain = getattr(result, "chain", None) if result is not None else None
-        if not isinstance(chain, list):
             return
         # Never append a second image/sticker to an Agent reply.
         if any(isinstance(component, Comp.Image) for component in chain):
@@ -1316,6 +1263,8 @@ class QQBotEnhancerPlugin(Star):
             + len(self._last_song_group)
             + len(self._last_song_user)
             + len(self._last_auto_collect_at)
+            + len(self._last_safe_tool_collect_at)
+            + len(self._sticker_ai_auto_collect_times)
             + len(self._pending_user_media)
             < 4096
         ):
@@ -1330,6 +1279,7 @@ class QQBotEnhancerPlugin(Star):
             self._last_song_group,
             self._last_song_user,
             self._last_auto_collect_at,
+            self._last_safe_tool_collect_at,
         ):
             for key, timestamp in list(mapping.items()):
                 if timestamp < cutoff:
@@ -1338,6 +1288,7 @@ class QQBotEnhancerPlugin(Star):
             if key not in self._last_sticker_at:
                 self._last_sticker_file.pop(key, None)
         self._prune_pending_user_media(now)
+        self._prune_sticker_ai_auto_collect_times(now)
 
     def _command_prefixes(self, event: AstrMessageEvent) -> list[str]:
         prefixes = self._cfg_list("ignore_command_prefixes")
@@ -1490,21 +1441,7 @@ class QQBotEnhancerPlugin(Star):
 
     @staticmethod
     def _is_media_ref(ref: str) -> bool:
-        value = ref.strip()
-        if not value:
-            return False
-        lowered = value.lower()
-        if lowered.startswith(
-            (
-                "http://",
-                "https://",
-                "base64://",
-                "data:image/",
-                "file://",
-            )
-        ):
-            return True
-        return os.path.exists(value)
+        return media_is_media_ref(ref)
 
     def _build_prompt(
         self,
@@ -1903,6 +1840,12 @@ class QQBotEnhancerPlugin(Star):
         safe_mode = self._cfg_str("image_search_safe_search").strip().lower()
         if safe_mode not in {"strict", "moderate", "off"}:
             safe_mode = "strict"
+        has_cjk = bool(
+            re.search(
+                r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]",
+                keyword,
+            )
+        )
         params = urllib.parse.urlencode(
             {
                 "q": keyword,
@@ -1910,6 +1853,8 @@ class QQBotEnhancerPlugin(Star):
                 "first": "1",
                 "count": str(fetch_count),
                 "adlt": safe_mode,
+                "setlang": "zh-hans" if has_cjk else "en-US",
+                "qs": "n",
             }
         )
         return f"{BING_IMAGES_ENDPOINT}?{params}"
@@ -2105,10 +2050,74 @@ class QQBotEnhancerPlugin(Star):
                 raise ImageSearchError("百度图片搜索被重定向到非安全 HTTP(S) 地址")
             return self._read_search_response(response, expected="json")
 
-    async def _search_image_candidates(self, keyword: str) -> list[dict[str, str]]:
+    @staticmethod
+    def _normalize_relevance_text(value: Any) -> str:
+        return image_search_engine.normalize_relevance_text(value)
+
+    def _relevance_query_variants(self, keyword: str) -> list[str]:
+        return image_search_engine.relevance_query_variants(keyword)
+
+    def _image_relevance_score_single(
+        self,
+        query: str,
+        title_norm: str,
+        desc_norm: str,
+    ) -> float:
+        return image_search_engine.relevance_score_single(
+            query,
+            title_norm,
+            desc_norm,
+        )
+
+    def _image_relevance_score(
+        self,
+        keyword: str,
+        title: str,
+        description: str,
+    ) -> float:
+        return image_search_engine.relevance_score(
+            keyword,
+            title,
+            description,
+        )
+
+    def _filter_image_candidates_by_relevance(
+        self,
+        keyword: str,
+        candidates: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not self._cfg_bool("image_search_relevance_enabled"):
+            for candidate in candidates:
+                candidate["relevance_score"] = 1.0
+            return candidates
+        min_score = self._cfg_float(
+            "image_search_min_relevance_score",
+            0.0,
+            1.0,
+        )
+        relevant = image_search_engine.filter_candidates(
+            keyword,
+            candidates,
+            min_score=min_score,
+        )
+        if len(relevant) < len(candidates):
+            logger.info(
+                "qqbot_enhancer 图片相关性过滤: 保留 %s/%s（关键词=%s，阈值=%.2f）",
+                len(relevant),
+                len(candidates),
+                keyword,
+                min_score,
+            )
+        return relevant
+
+    async def _search_image_candidates(self, keyword: str) -> list[dict[str, Any]]:
         result_limit = self._image_search_result_limit()
         candidate_limit = self._image_search_candidate_limit()
-        candidates: list[dict[str, str]] = []
+        raw_candidate_limit = min(
+            IMAGE_SEARCH_MAX_CANDIDATE_URLS,
+            max(20, candidate_limit * 3),
+        )
+        candidates: list[dict[str, Any]] = []
         errors: list[BaseException] = []
         bing_ok = False
         baidu_ok = False
@@ -2116,27 +2125,26 @@ class QQBotEnhancerPlugin(Star):
         try:
             bing_url = self._build_bing_image_search_url(keyword)
             bing_page = await self._fetch_image_search_html(bing_url)
-            bing_urls = self._parse_bing_image_urls(
-                bing_page,
-                limit=candidate_limit,
+            bing_candidates = self._filter_image_candidates_by_relevance(
+                keyword,
+                self._parse_bing_image_candidates(
+                    bing_page,
+                    limit=raw_candidate_limit,
+                ),
             )
             bing_ok = True
-            candidates.extend(
-                {
-                    "url": url,
-                    "referer": BING_IMAGES_REFERER,
-                    "source": "bing",
-                }
-                for url in bing_urls
-            )
+            for candidate in bing_candidates:
+                candidate["referer"] = BING_IMAGES_REFERER
+                candidate["source"] = "bing"
+                candidates.append(candidate)
         except Exception as exc:
             errors.append(exc)
             logger.warning(
-                "qqbot_enhancer Bing 图片搜索失败，尝试第二搜索源",
+                "qqbot_enhancer Bing 图片搜索失败",
                 exc_info=True,
             )
 
-        # 第二搜索源：Baidu Images JSON。只在 Bing 结果不足时请求，避免双重流量。
+        # 百度作为旧可选源保留，但默认关闭，且默认绝不自动回退。
         if (
             len(candidates) < result_limit
             and self._cfg_bool("image_search_second_source_enabled")
@@ -2144,27 +2152,27 @@ class QQBotEnhancerPlugin(Star):
             try:
                 baidu_url = self._build_baidu_image_search_url(keyword)
                 baidu_payload = await self._fetch_baidu_image_json(baidu_url)
-                baidu_urls = self._parse_baidu_image_urls(
-                    baidu_payload,
-                    limit=candidate_limit,
+                baidu_candidates = self._filter_image_candidates_by_relevance(
+                    keyword,
+                    self._parse_baidu_image_candidates(
+                        baidu_payload,
+                        limit=raw_candidate_limit,
+                    ),
                 )
                 baidu_ok = True
                 existing = {item["url"] for item in candidates}
-                for url in baidu_urls:
-                    if url in existing:
+                for candidate in baidu_candidates:
+                    url = str(candidate.get("url", "") or "")
+                    if not url or url in existing:
                         continue
                     existing.add(url)
-                    candidates.append(
-                        {
-                            "url": url,
-                            "referer": BAIDU_IMAGES_REFERER,
-                            "source": "baidu",
-                        }
-                    )
+                    candidate["referer"] = BAIDU_IMAGES_REFERER
+                    candidate["source"] = "baidu"
+                    candidates.append(candidate)
             except Exception as exc:
                 errors.append(exc)
                 logger.warning(
-                    "qqbot_enhancer 百度图片搜索失败",
+                    "qqbot_enhancer 百度图片可选搜索失败",
                     exc_info=True,
                 )
 
@@ -2172,6 +2180,11 @@ class QQBotEnhancerPlugin(Star):
             if any(isinstance(error, asyncio.TimeoutError) for error in errors):
                 raise asyncio.TimeoutError
             raise ImageSearchError("所有图片搜索源均请求失败")
+        if self._cfg_bool("image_search_relevance_enabled"):
+            candidates.sort(
+                key=lambda item: float(item.get("relevance_score", 0.0)),
+                reverse=True,
+            )
         return candidates[:candidate_limit]
 
     async def _search_image_urls(self, keyword: str) -> list[str]:
@@ -2250,17 +2263,17 @@ class QQBotEnhancerPlugin(Star):
             ]
         )
 
-    def _parse_baidu_image_urls(
+    def _parse_baidu_image_candidates(
         self,
         payload: str | dict[str, Any],
         *,
         limit: int = 1,
-    ) -> list[str]:
-        """Extract image proxy/direct URLs from Baidu Images JSON."""
+    ) -> list[dict[str, Any]]:
+        """Extract safe URLs plus title/description metadata from Baidu JSON."""
 
         result_limit = max(
             1,
-            min(IMAGE_SEARCH_MAX_CANDIDATE_URLS, int(limit or 1)),
+            min(IMAGE_SEARCH_MAX_CANDIDATES, int(limit or 1)),
         )
         if isinstance(payload, str):
             try:
@@ -2273,7 +2286,7 @@ class QQBotEnhancerPlugin(Star):
         if not isinstance(entries, list):
             return []
 
-        results: list[str] = []
+        results: list[dict[str, Any]] = []
         seen: set[str] = set()
         for entry in entries:
             if len(results) >= result_limit:
@@ -2285,6 +2298,7 @@ class QQBotEnhancerPlugin(Star):
                 entry.get("thumbURL"),
                 entry.get("hoverURL"),
             ]
+            page_url = ""
             replace_urls = entry.get("replaceUrl", [])
             if isinstance(replace_urls, list):
                 for replacement in replace_urls:
@@ -2296,18 +2310,76 @@ class QQBotEnhancerPlugin(Star):
                             replacement.get("ObjUrl"),
                         ]
                     )
+                    if not page_url:
+                        page_url = str(
+                            replacement.get("FromURL")
+                            or replacement.get("FromUrl")
+                            or ""
+                        )
+            chosen_url = ""
             for raw_candidate in raw_candidates:
                 safe_url = self._sanitize_http_url(
                     raw_candidate,
                     require_image_extension=False,
                 )
-                if not safe_url or safe_url in seen:
-                    continue
-                seen.add(safe_url)
-                results.append(safe_url)
-                break
-
+                if safe_url:
+                    chosen_url = safe_url
+                    break
+            if not chosen_url or chosen_url in seen:
+                continue
+            title = ""
+            for title_key in (
+                "fromPageTitleEnc",
+                "fromPageTitle",
+                "bdSourceName",
+                "bdFromPageTitlePrefix",
+            ):
+                title = str(entry.get(title_key) or "").strip()
+                if title:
+                    break
+            description_parts: list[str] = []
+            for description_key in (
+                "fromPageTitleEnc",
+                "fromPageTitle",
+                "bdSourceName",
+                "bdFromPageTitlePrefix",
+                "fromURLHost",
+            ):
+                value = str(entry.get(description_key) or "").strip()
+                if value and value not in description_parts:
+                    description_parts.append(value)
+            if not page_url:
+                page_url = str(
+                    entry.get("fromURL")
+                    or entry.get("fromJumpUrl")
+                    or ""
+                )
+            seen.add(chosen_url)
+            results.append(
+                {
+                    "url": chosen_url,
+                    "title": title,
+                    "description": " ".join(description_parts),
+                    "page_url": page_url,
+                }
+            )
         return results
+
+    def _parse_baidu_image_urls(
+        self,
+        payload: str | dict[str, Any],
+        *,
+        limit: int = 1,
+    ) -> list[str]:
+        """Compatibility wrapper returning only Baidu candidate URLs."""
+
+        return [
+            str(candidate["url"])
+            for candidate in self._parse_baidu_image_candidates(
+                payload,
+                limit=limit,
+            )
+        ]
 
     async def _download_search_image_files(
         self,
@@ -2465,43 +2537,29 @@ class QQBotEnhancerPlugin(Star):
 
     @staticmethod
     def _detect_image_magic(data: bytes) -> tuple[str, str] | None:
-        if data.startswith(b"\xff\xd8\xff"):
-            return "image/jpeg", ".jpg"
-        if data.startswith(b"\x89PNG\r\n\x1a\n"):
-            return "image/png", ".png"
-        if data.startswith((b"GIF87a", b"GIF89a")):
-            return "image/gif", ".gif"
-        if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-            return "image/webp", ".webp"
-        if data.startswith(b"BM"):
-            return "image/bmp", ".bmp"
-        if len(data) >= 12 and data[4:12] in {b"ftypavif", b"ftypavis"}:
-            return "image/avif", ".avif"
-        return None
+        return detect_image_magic(data)
 
-    def _parse_bing_image_urls(self, page: str, *, limit: int = 1) -> list[str]:
-        """Extract image URLs from Bing Images HTML without third-party libs.
-
-        Bing renders result links as ``<a class="iusc" m="{...json...}">`` and
-        the JSON contains ``murl``. Some responses omit the wrapper, so there
-        are two conservative fallbacks. Every result is filtered to a public
-        HTTP(S) URL with an image-like path before it can reach a message
-        component.
-        """
+    def _parse_bing_image_candidates(
+        self,
+        page: str,
+        *,
+        limit: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Extract safe image URLs with Bing title/description metadata."""
 
         result_limit = max(
             1,
-            min(IMAGE_SEARCH_MAX_CANDIDATE_URLS, int(limit or 1)),
+            min(IMAGE_SEARCH_MAX_CANDIDATES, int(limit or 1)),
         )
         scan_limit = min(
             IMAGE_SEARCH_MAX_CANDIDATES,
             max(50, result_limit * 20),
         )
-        candidates: list[str] = []
+        raw_candidates: list[dict[str, str]] = []
 
-        # Primary parser: the m="..." JSON payload.
+        # Primary parser: the m="..." JSON payload contains murl + t/desc/purl.
         for match in re.finditer(r'\bm="([^"]+)"', page, re.IGNORECASE):
-            if len(candidates) >= scan_limit:
+            if len(raw_candidates) >= scan_limit:
                 break
             raw = html_lib.unescape(match.group(1))
             try:
@@ -2512,18 +2570,25 @@ class QQBotEnhancerPlugin(Star):
                 continue
             murl = payload.get("murl")
             if isinstance(murl, str) and murl.strip():
-                candidates.append(murl)
+                raw_candidates.append(
+                    {
+                        "url": murl.strip(),
+                        "title": str(payload.get("t") or "").strip(),
+                        "description": str(payload.get("desc") or "").strip(),
+                        "page_url": str(payload.get("purl") or "").strip(),
+                    }
+                )
 
         decoded_page = html_lib.unescape(page)
 
         # Fallback 1: a JSON "murl":"..." fragment without the anchor wrapper.
-        if len(candidates) < scan_limit:
+        if len(raw_candidates) < scan_limit:
             murl_pattern = re.compile(
                 r'"murl"\s*:\s*"((?:\\.|[^"\\])*)"',
                 re.IGNORECASE,
             )
             for match in murl_pattern.finditer(decoded_page):
-                if len(candidates) >= scan_limit:
+                if len(raw_candidates) >= scan_limit:
                     break
                 encoded = match.group(1)
                 try:
@@ -2531,35 +2596,67 @@ class QQBotEnhancerPlugin(Star):
                 except (TypeError, ValueError):
                     url = encoded.replace("\\/", "/")
                 if isinstance(url, str) and url.strip():
-                    candidates.append(url)
+                    raw_candidates.append(
+                        {
+                            "url": url.strip(),
+                            "title": "",
+                            "description": "",
+                            "page_url": "",
+                        }
+                    )
 
         # Fallback 2: image-looking absolute URLs anywhere in the HTML.
-        if len(candidates) < scan_limit:
+        if len(raw_candidates) < scan_limit:
             for match in re.finditer(
                 r'https?://[^\s"\'<>\\]+',
                 decoded_page,
                 re.IGNORECASE,
             ):
-                if len(candidates) >= scan_limit:
+                if len(raw_candidates) >= scan_limit:
                     break
                 candidate = match.group(0).rstrip(".,);]}\\")
                 if self._has_image_path(candidate):
-                    candidates.append(candidate)
+                    raw_candidates.append(
+                        {
+                            "url": candidate,
+                            "title": "",
+                            "description": "",
+                            "page_url": "",
+                        }
+                    )
 
-        results: list[str] = []
+        results: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for candidate in candidates:
+        for candidate in raw_candidates:
             safe_url = self._sanitize_http_url(
-                candidate,
+                candidate.get("url"),
                 require_image_extension=True,
             )
             if not safe_url or safe_url in seen:
                 continue
             seen.add(safe_url)
-            results.append(safe_url)
+            results.append(
+                {
+                    "url": safe_url,
+                    "title": candidate.get("title", ""),
+                    "description": candidate.get("description", ""),
+                    "page_url": candidate.get("page_url", ""),
+                }
+            )
             if len(results) >= result_limit:
                 break
         return results
+
+    def _parse_bing_image_urls(self, page: str, *, limit: int = 1) -> list[str]:
+        """Compatibility wrapper returning only Bing candidate URLs."""
+
+        return [
+            str(candidate["url"])
+            for candidate in self._parse_bing_image_candidates(
+                page,
+                limit=limit,
+            )
+        ]
 
     @staticmethod
     def _has_image_path(url: str) -> bool:
@@ -2575,63 +2672,10 @@ class QQBotEnhancerPlugin(Star):
         *,
         require_image_extension: bool,
     ) -> str:
-        if not isinstance(value, str):
-            return ""
-        raw = html_lib.unescape(value).strip()
-        if not raw:
-            return ""
-        if raw.startswith("//"):
-            raw = "https:" + raw
-        if "\\" in raw or any(ord(char) < 32 for char in raw):
-            return ""
-        try:
-            parsed = urllib.parse.urlsplit(raw)
-        except ValueError:
-            return ""
-        scheme = parsed.scheme.lower()
-        if scheme not in {"http", "https"}:
-            return ""
-        if not parsed.netloc or not parsed.hostname:
-            return ""
-        if parsed.username is not None or parsed.password is not None:
-            return ""
-        try:
-            port = parsed.port
-        except ValueError:
-            return ""
-        if port is not None and not (0 < port <= 65535):
-            return ""
-
-        host = parsed.hostname.rstrip(".").lower()
-        if not host:
-            return ""
-        if host in {"localhost", "metadata.google.internal"} or host.endswith(
-            (".localhost", ".local", ".internal", ".lan", ".home")
-        ):
-            return ""
-        try:
-            ip = ipaddress.ip_address(host)
-        except ValueError:
-            # 要求公网域名至少包含一个点，拒绝裸主机名/内网别名。
-            if "." not in host:
-                return ""
-        else:
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_reserved
-                or ip.is_unspecified
-            ):
-                return ""
-
-        if require_image_extension:
-            path = parsed.path.lower()
-            if not any(path.endswith(extension) for extension in IMAGE_PATH_EXTENSIONS):
-                return ""
-        return urllib.parse.urlunsplit(
-            (scheme, parsed.netloc, parsed.path, parsed.query, "")
+        return media_sanitize_http_url(
+            value,
+            require_image_extension=require_image_extension,
+            extensions=IMAGE_PATH_EXTENSIONS,
         )
 
     # ------------------------------------------------------------------
@@ -2679,55 +2723,31 @@ class QQBotEnhancerPlugin(Star):
         return 0
 
     def _resolve_song_file(self, filename: str) -> Path | None:
-        if not filename:
-            return None
-        try:
-            base = self._song_dir.resolve()
-            raw_candidate = base / filename
-            if raw_candidate.is_symlink():
-                return None
-            candidate = raw_candidate.resolve()
-            if candidate.parent != base:
-                return None
-            if candidate.suffix.lower() not in SONG_SUFFIXES:
-                return None
-            if not candidate.is_file():
-                return None
-            return candidate
-        except (OSError, ValueError):
-            return None
+        return resolve_song_file(
+            self._song_dir,
+            filename,
+            suffixes=SONG_SUFFIXES,
+        )
 
     def _list_song_files(self) -> tuple[list[Path], bool]:
-        try:
-            base = self._song_dir.resolve()
-            entries = sorted(base.iterdir(), key=lambda path: path.name.casefold())
-        except (OSError, ValueError):
-            return [], False
-
         max_bytes = self._cfg_int("song_max_file_bytes", 1)
-        song_files: list[Path] = []
-        has_oversized = False
-        for entry in entries:
-            song_file = self._resolve_song_file(entry.name)
-            if song_file is None:
-                continue
+        song_files, oversized = list_song_files(
+            self._song_dir,
+            max_bytes=max_bytes,
+            suffixes=SONG_SUFFIXES,
+        )
+        for song_file in oversized:
             try:
                 size = song_file.stat().st_size
             except OSError:
                 continue
-            if size <= 0:
-                continue
-            if size > max_bytes:
-                has_oversized = True
-                logger.warning(
-                    "qqbot_enhancer 本地音频超过大小限制: %s (%s > %s)",
-                    song_file,
-                    size,
-                    max_bytes,
-                )
-                continue
-            song_files.append(song_file)
-        return song_files, has_oversized
+            logger.warning(
+                "qqbot_enhancer 本地音频超过大小限制: %s (%s > %s)",
+                song_file,
+                size,
+                max_bytes,
+            )
+        return song_files, bool(oversized)
 
     # ------------------------------------------------------------------
     # Stickers
@@ -2866,21 +2886,46 @@ class QQBotEnhancerPlugin(Star):
             and self._cfg_bool("sticker_ai_marker_enabled")
         ):
             return ""
-        tags = sorted(self._sticker_ai_available_tags())
-        if not tags:
+        return sticker_ai_system_instruction(
+            sorted(self._sticker_ai_available_tags())
+        )
+
+    def _enabled_safe_tool_names(self) -> list[str]:
+        if not self._cfg_bool("safe_tools_enabled"):
+            return []
+        names: list[str] = []
+        if self._cfg_bool("safe_tools_allow_search_images"):
+            names.append("search_images")
+        if self._cfg_bool("safe_tools_allow_send_sticker"):
+            names.append("send_sticker")
+        if self._cfg_bool("safe_tools_allow_collect_sticker"):
+            names.append("collect_sticker")
+        if self._cfg_bool("safe_tools_allow_list_categories"):
+            names.append("list_sticker_categories")
+        return names
+
+    def _safe_tool_system_instruction(self) -> str:
+        if self._memory_mode() != "direct":
             return ""
-        # Keep the injected prompt short and only expose safe tags, never paths.
-        visible_tags = ", ".join(tags[:20])
-        return (
-            f"可选表情标签：{visible_tags}。"
-            "仅在确实贴切时，于回复末尾原样附加一个"
-            "[[sticker:标签]] 标记；不需要就别输出标记，不要输出多个，不要解释标记。"
+        if not self._cfg_bool("safe_tools_marker_enabled"):
+            return ""
+        return safe_tools_engine.tool_instruction(
+            self._enabled_safe_tool_names()
         )
 
     def _effective_system_prompt(self) -> str:
         prompt = self._cfg_str("system_prompt")
-        instruction = self._sticker_ai_system_instruction()
-        return f"{prompt}\n{instruction}" if instruction else prompt
+        instructions = [
+            instruction
+            for instruction in (
+                self._sticker_ai_system_instruction(),
+                self._safe_tool_system_instruction(),
+            )
+            if instruction
+        ]
+        if not instructions:
+            return prompt
+        return prompt + "\n" + "\n".join(instructions)
 
     def _ai_marker_mode_active(self) -> bool:
         return bool(
@@ -2894,16 +2939,7 @@ class QQBotEnhancerPlugin(Star):
         self,
         text: str,
     ) -> tuple[str, str | None, bool]:
-        raw = str(text or "")
-        matches = list(STICKER_AI_MARKER_RE.finditer(raw))
-        if not matches:
-            return raw, None, False
-        clean = STICKER_AI_MARKER_RE.sub("", raw)
-        clean = re.sub(r"[ \t]+\n", "\n", clean)
-        clean = re.sub(r"[ \t]{2,}", " ", clean).strip()
-        if len(matches) != 1:
-            return clean, None, True
-        return clean, matches[0].group(1).strip(), True
+        return extract_sticker_ai_marker(text)
 
     def _resolve_sticker_ai_tag(
         self,
@@ -2944,6 +2980,237 @@ class QQBotEnhancerPlugin(Star):
         self._last_sticker_at[session_key] = now
         self._last_sticker_file[session_key] = chosen.name
         return chosen
+
+    def _select_safe_tool_sticker(
+        self,
+        event: AstrMessageEvent,
+        intent: Any,
+    ) -> Path | None:
+        if not self._cfg_bool("sticker_enabled"):
+            return None
+        session_key = event.unified_msg_origin
+        candidates: list[Path] = []
+        emotion = str(intent.args.get("emotion", "") or "").strip().casefold()
+        category = str(intent.args.get("category", "") or "").strip()
+        if emotion:
+            for entry in self._sticker_entries:
+                path = entry.get("path")
+                if (
+                    isinstance(path, Path)
+                    and path.is_file()
+                    and str(entry.get("emotion", "") or "").strip().casefold()
+                    == emotion
+                ):
+                    candidates.append(path)
+        elif category and self._cfg_bool("collected_sticker_enabled"):
+            normalized = self._normalize_collected_category(category)
+            if normalized is None:
+                return None
+            for entry in self._valid_collected_entries():
+                if entry.get("category") == normalized:
+                    path = entry.get("path")
+                    if isinstance(path, Path) and path.is_file():
+                        candidates.append(path)
+        if not candidates:
+            return None
+
+        now = self._clock()
+        cooldown = self._cfg_int("sticker_cooldown_seconds", 0)
+        last_sent = self._last_sticker_at.get(session_key)
+        if last_sent is not None and now - last_sent < cooldown:
+            return None
+        if self._cfg_bool("sticker_prevent_repeat"):
+            last_file = self._last_sticker_file.get(session_key)
+            if last_file and len(candidates) > 1:
+                non_repeating = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.name != last_file
+                ]
+                if non_repeating:
+                    candidates = non_repeating
+        chosen = self._rng.choice(candidates)
+        self._last_sticker_at[session_key] = now
+        self._last_sticker_file[session_key] = chosen.name
+        return chosen
+
+    async def _execute_safe_tool(
+        self,
+        event: AstrMessageEvent,
+        intent: Any,
+        clean_text: str,
+    ):
+        name = intent.name
+        if name == "search_images":
+            if not self._cfg_bool("safe_tools_allow_search_images"):
+                return None
+            keyword = str(intent.args.get("keyword", "") or "").strip()
+            if not keyword:
+                return None
+            # The tool contract accepts count for compatibility, but a single
+            # reply must never contain more than one attachment.
+            try:
+                requested_count = int(intent.args.get("count", "1"))
+            except (TypeError, ValueError):
+                return None
+            max_safe_count = max(
+                1,
+                self._cfg_int("safe_tools_search_max_count", 1),
+            )
+            if requested_count < 1 or max_safe_count < 1:
+                return None
+            # Hard attachment cap: the tool never sends more than one image.
+            requested_count = min(requested_count, max_safe_count, 1)
+            if self._image_search_cooldown_remaining(event) > 0:
+                return None
+            candidates = await self._search_image_candidates(keyword)
+            if not candidates:
+                return None
+            local_paths, remote_urls = await self._download_search_image_files(
+                event,
+                candidates,
+                result_limit=1,
+            )
+            image_component = None
+            if local_paths:
+                try:
+                    image_component = Comp.Image.fromFileSystem(
+                        str(local_paths[0])
+                    )
+                except Exception:
+                    image_component = None
+            if image_component is None and remote_urls:
+                try:
+                    image_component = Comp.Image.fromURL(remote_urls[0])
+                except Exception:
+                    image_component = None
+            if image_component is None:
+                return None
+            return event.chain_result(
+                [
+                    Comp.Plain(self._cfg_str("image_search_success_prefix")),
+                    image_component,
+                ]
+            )
+
+        if name == "send_sticker":
+            if not self._cfg_bool("safe_tools_allow_send_sticker"):
+                return None
+            sticker_path = self._select_safe_tool_sticker(event, intent)
+            if sticker_path is None:
+                return None
+            try:
+                image_component = Comp.Image.fromFileSystem(str(sticker_path))
+            except Exception:
+                return None
+            return event.chain_result(
+                [
+                    Comp.Plain(self._cfg_str("safe_tools_sticker_prefix")),
+                    image_component,
+                ]
+            )
+
+        if name == "collect_sticker":
+            if not self._cfg_bool("safe_tools_allow_collect_sticker"):
+                return None
+            now = self._clock()
+            cooldown = self._cfg_int(
+                "safe_tools_collect_cooldown_seconds",
+                0,
+            )
+            last = self._last_safe_tool_collect_at.get(
+                event.unified_msg_origin
+            )
+            if last is not None and now - last < cooldown:
+                return None
+            self._last_safe_tool_collect_at[event.unified_msg_origin] = now
+            raw_category = intent.args.get("category", "").strip()
+            category = self._normalize_collected_category(
+                raw_category or DEFAULT_COLLECTED_CATEGORY
+            )
+            if category is None:
+                return None
+            status, payload = await self._extract_collectible_image_payload(
+                event
+            )
+            if status != "ok" or payload is None:
+                return None
+            save_status, _ = await self._save_collected_payload(
+                event,
+                category,
+                payload,
+            )
+            if save_status != "saved":
+                return None
+            return event.plain_result(
+                self._format_collected_reply(
+                    self._cfg_str(
+                        "sticker_ai_auto_collect_saved_reply"
+                    ),
+                    category=category,
+                )
+            )
+
+        if name == "list_sticker_categories":
+            if not self._cfg_bool("safe_tools_allow_list_categories"):
+                return None
+            counts: dict[str, int] = {}
+            for entry in self._sticker_entries:
+                path = entry.get("path")
+                emotion = str(entry.get("emotion", "") or "").strip()
+                if isinstance(path, Path) and path.is_file() and emotion:
+                    counts[emotion] = counts.get(emotion, 0) + 1
+            if self._cfg_bool("collected_sticker_enabled"):
+                for entry in self._valid_collected_entries():
+                    category = str(entry.get("category", "") or "").strip()
+                    if category:
+                        counts[category] = counts.get(category, 0) + 1
+            if not counts:
+                return event.plain_result(
+                    self._cfg_str("collected_sticker_empty_reply")
+                )
+            max_categories = max(
+                1,
+                self._cfg_int("safe_tools_max_categories", 1),
+            )
+            lines = ["可用表情分类："]
+            for category, count in sorted(counts.items())[:max_categories]:
+                lines.append(f"- {category}（{count}）")
+            return event.plain_result("\n".join(lines))
+
+        return None
+
+    async def _route_safe_tool(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+    ) -> tuple[str, Any | None, bool]:
+        parsed = safe_tools_engine.parse_tool_markers(text)
+        if not parsed.had_marker:
+            return text, None, False
+        clean_text, _, _ = self._extract_sticker_ai_marker(parsed.clean_text)
+        if not self._cfg_bool("safe_tools_enabled"):
+            return clean_text, None, True
+        enabled = self._enabled_safe_tool_names()
+        max_actions = self._cfg_int("safe_tools_max_actions_per_reply", 1)
+        if max_actions < 1 or len(parsed.intents) != 1:
+            return clean_text, None, True
+        intent = parsed.intents[0]
+        if not intent.valid or intent.name not in enabled:
+            return clean_text, None, True
+        try:
+            result = await self._execute_safe_tool(
+                event,
+                intent,
+                clean_text,
+            )
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer 安全工具执行失败，回退普通文本",
+                exc_info=True,
+            )
+            result = None
+        return clean_text, result, True
 
     def _pick_user_sticker_reaction_reply(self) -> str:
         replies = self._cfg_list("user_sticker_reaction_replies")
@@ -3117,6 +3384,19 @@ class QQBotEnhancerPlugin(Star):
     # ------------------------------------------------------------------
     # Collected user stickers
     # ------------------------------------------------------------------
+    def _collected_store(self) -> CollectedStickerStore | None:
+        if self._collected_root is None:
+            return None
+        return CollectedStickerStore(
+            self._collected_root,
+            max_file_bytes=self._cfg_int(
+                "collected_sticker_max_file_bytes",
+                1,
+            ),
+            category_normalizer=self._normalize_collected_category,
+            default_category=DEFAULT_COLLECTED_CATEGORY,
+        )
+
     def _resolve_collected_sticker_root(self) -> Path | None:
         try:
             plugin_name = str(getattr(self, "name", "") or "qqbot_enhancer")
@@ -3145,52 +3425,13 @@ class QQBotEnhancerPlugin(Star):
 
     @staticmethod
     def _atomic_write_bytes(path: Path, data: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temp_path = ""
-        try:
-            with tempfile.NamedTemporaryFile(
-                prefix=".tmp-",
-                dir=str(path.parent),
-                delete=False,
-            ) as temporary:
-                temp_path = temporary.name
-                temporary.write(data)
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temp_path, path)
-        except Exception:
-            if temp_path:
-                try:
-                    Path(temp_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
-            raise
+        CollectedStickerStore.atomic_write_bytes(path, data)
 
     def _save_collected_sticker_index(self) -> None:
-        index_path = self._collected_index_path()
-        if index_path is None:
+        store = self._collected_store()
+        if store is None:
             raise RuntimeError("收藏数据目录不可用")
-        serializable = []
-        for entry in self._collected_entries:
-            serializable.append(
-                {
-                    "sha256": str(entry.get("sha256", "")),
-                    "filename": str(entry.get("filename", "")),
-                    "category": str(entry.get("category", DEFAULT_COLLECTED_CATEGORY)),
-                    "size": int(entry.get("size", 0)),
-                    "created_at": int(entry.get("created_at", 0)),
-                    "source": str(entry.get("source", "")),
-                }
-            )
-        payload = {
-            "version": 1,
-            "saved_at": int(time.time()),
-            "stickers": serializable,
-        }
-        self._atomic_write_bytes(
-            index_path,
-            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
-        )
+        store.save_index(self._collected_entries)
 
     def _normalize_collected_category(self, raw: Any) -> str | None:
         value = str(raw or "").strip()
@@ -3214,127 +3455,39 @@ class QQBotEnhancerPlugin(Star):
         *,
         create: bool = False,
     ) -> Path | None:
-        if self._collected_root is None or not category:
+        store = self._collected_store()
+        if store is None:
             return None
-        try:
-            base = self._collected_root.resolve()
-            raw_dir = base / category
-            if raw_dir.is_symlink():
-                return None
-            if create:
-                raw_dir.mkdir(parents=False, exist_ok=True, mode=0o700)
-            if not raw_dir.is_dir():
-                return None
-            resolved = raw_dir.resolve()
-            if resolved.parent != base:
-                return None
-            return resolved
-        except (OSError, ValueError):
-            return None
+        return store.category_dir(category, create=create)
 
     def _collected_file_path_for(
         self,
         category: str,
         filename: str,
     ) -> Path | None:
-        if not COLLECTED_FILENAME_RE.fullmatch(filename):
+        store = self._collected_store()
+        if store is None:
             return None
-        category_dir = self._collected_category_dir(category)
-        if category_dir is None:
-            return None
-        candidate = category_dir / filename
-        if candidate.is_symlink():
-            return None
-        try:
-            resolved = candidate.resolve()
-            if resolved.parent != category_dir or not resolved.is_file():
-                return None
-            return resolved
-        except (OSError, ValueError):
-            return None
+        return store.file_path(category, filename)
 
     def _valid_collected_entries(self) -> list[dict[str, Any]]:
-        max_bytes = self._cfg_int("collected_sticker_max_file_bytes", 1)
-        valid: list[dict[str, Any]] = []
-        for entry in self._collected_entries:
-            category = self._normalize_collected_category(entry.get("category"))
-            filename = str(entry.get("filename", ""))
-            if category is None or category != entry.get("category"):
-                continue
-            path = self._collected_file_path_for(category, filename)
-            if path is None:
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if size <= 0 or size > max_bytes:
-                continue
-            normalized = dict(entry)
-            normalized["path"] = path
-            normalized["size"] = size
-            valid.append(normalized)
-        return valid
+        store = self._collected_store()
+        if store is None:
+            return []
+        return store.valid_entries(self._collected_entries)
 
     def _load_collected_sticker_index(self) -> None:
         self._collected_entries = []
-        index_path = self._collected_index_path()
-        if index_path is None or not index_path.is_file():
+        store = self._collected_store()
+        if store is None or not store.index_path.is_file():
             return
         try:
-            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            self._collected_entries = store.load_index()
         except Exception:
             logger.warning(
                 "qqbot_enhancer 收藏表情 index.json 无法解析，本次从空列表启动",
                 exc_info=True,
             )
-            return
-        raw_entries = payload.get("stickers", []) if isinstance(payload, dict) else []
-        if not isinstance(raw_entries, list):
-            return
-        max_bytes = self._cfg_int("collected_sticker_max_file_bytes", 1)
-        loaded: list[dict[str, Any]] = []
-        seen_sha: set[str] = set()
-        for item in raw_entries:
-            if not isinstance(item, dict):
-                continue
-            sha256 = str(item.get("sha256", "") or "").lower()
-            filename = str(item.get("filename", "") or "")
-            category = self._normalize_collected_category(item.get("category"))
-            if (
-                not re.fullmatch(r"[a-f0-9]{64}", sha256)
-                or category is None
-                or not COLLECTED_FILENAME_RE.fullmatch(filename)
-                or not filename.startswith(sha256 + ".")
-                or sha256 in seen_sha
-            ):
-                continue
-            path = self._collected_file_path_for(category, filename)
-            if path is None:
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if size <= 0 or size > max_bytes:
-                continue
-            seen_sha.add(sha256)
-            try:
-                created_at = int(item.get("created_at", 0) or 0)
-            except (TypeError, ValueError):
-                created_at = 0
-            loaded.append(
-                {
-                    "sha256": sha256,
-                    "filename": filename,
-                    "category": category,
-                    "size": size,
-                    "created_at": created_at,
-                    "source": str(item.get("source", "") or ""),
-                    "path": path,
-                }
-            )
-        self._collected_entries = loaded
 
     def _format_collected_reply(self, template: str, **kwargs: Any) -> str:
         try:
@@ -3343,24 +3496,7 @@ class QQBotEnhancerPlugin(Star):
             return str(template)
 
     def _local_image_ref_path(self, ref: Any) -> Path | None:
-        if not isinstance(ref, str) or not ref.strip():
-            return None
-        value = html_lib.unescape(ref).strip()
-        if value.startswith("file://"):
-            try:
-                parsed = urllib.parse.urlsplit(value)
-            except ValueError:
-                return None
-            if parsed.scheme != "file":
-                return None
-            return Path(urllib.parse.unquote(parsed.path))
-        try:
-            scheme = urllib.parse.urlsplit(value).scheme.lower()
-        except ValueError:
-            return None
-        if scheme in {"http", "https", "data", "base64"}:
-            return None
-        return Path(value)
+        return media_local_image_ref_path(ref)
 
     def _prune_pending_user_media(self, now: float) -> None:
         ttl = self._cfg_int("pending_sticker_ttl_seconds", 1)
@@ -3467,6 +3603,26 @@ class QQBotEnhancerPlugin(Star):
             )
         return images
 
+    def _prune_sticker_ai_auto_collect_times(self, now: float) -> None:
+        cutoff = now - 3600
+        for session, timestamps in list(
+            self._sticker_ai_auto_collect_times.items()
+        ):
+            kept = [timestamp for timestamp in timestamps if timestamp >= cutoff]
+            if kept:
+                self._sticker_ai_auto_collect_times[session] = kept
+            else:
+                self._sticker_ai_auto_collect_times.pop(session, None)
+        if len(self._sticker_ai_auto_collect_times) > 128:
+            oldest = sorted(
+                self._sticker_ai_auto_collect_times.items(),
+                key=lambda pair: min(pair[1]) if pair[1] else 0,
+            )
+            for session, _ in oldest[
+                : len(self._sticker_ai_auto_collect_times) - 128
+            ]:
+                self._sticker_ai_auto_collect_times.pop(session, None)
+
     async def _decode_image_component(
         self,
         image: Any,
@@ -3492,23 +3648,7 @@ class QQBotEnhancerPlugin(Star):
         except Exception:
             logger.warning("qqbot_enhancer 收藏图片读取失败", exc_info=True)
             return "invalid_image", None
-        if isinstance(raw_base64, bytes):
-            data = raw_base64
-        elif isinstance(raw_base64, str) and raw_base64.strip():
-            encoded = raw_base64.strip()
-            if encoded.startswith("data:"):
-                encoded = encoded.split(",", 1)[-1]
-            encoded = encoded.removeprefix("base64://")
-            try:
-                data = base64.b64decode(encoded, validate=True)
-            except Exception:
-                try:
-                    data = base64.b64decode(encoded)
-                except Exception:
-                    return "invalid_image", None
-        else:
-            return "invalid_image", None
-
+        data = decode_base64_payload(raw_base64)
         if not data:
             return "invalid_image", None
         if len(data) > max_bytes:
@@ -3560,80 +3700,7 @@ class QQBotEnhancerPlugin(Star):
 
     @staticmethod
     def _image_dimensions(data: bytes, mime: str) -> tuple[int, int] | None:
-        try:
-            if mime == "image/png" and len(data) >= 24:
-                if data[12:16] != b"IHDR":
-                    return None
-                width = int.from_bytes(data[16:20], "big")
-                height = int.from_bytes(data[20:24], "big")
-                return width, height
-            if mime == "image/gif" and len(data) >= 10:
-                return (
-                    int.from_bytes(data[6:8], "little"),
-                    int.from_bytes(data[8:10], "little"),
-                )
-            if mime == "image/bmp" and len(data) >= 26:
-                width = int.from_bytes(data[18:22], "little", signed=True)
-                height = int.from_bytes(data[22:26], "little", signed=True)
-                return abs(width), abs(height)
-            if mime == "image/jpeg":
-                offset = 2
-                sof_markers = {
-                    0xC0,
-                    0xC1,
-                    0xC2,
-                    0xC3,
-                    0xC5,
-                    0xC6,
-                    0xC7,
-                    0xC9,
-                    0xCA,
-                    0xCB,
-                    0xCD,
-                    0xCE,
-                    0xCF,
-                }
-                while offset + 9 < len(data):
-                    if data[offset] != 0xFF:
-                        offset += 1
-                        continue
-                    marker = data[offset + 1]
-                    offset += 2
-                    if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
-                        continue
-                    if offset + 2 > len(data):
-                        return None
-                    segment_length = int.from_bytes(
-                        data[offset : offset + 2],
-                        "big",
-                    )
-                    if segment_length < 2:
-                        return None
-                    if marker in sof_markers and offset + 7 <= len(data):
-                        height = int.from_bytes(
-                            data[offset + 3 : offset + 5],
-                            "big",
-                        )
-                        width = int.from_bytes(
-                            data[offset + 5 : offset + 7],
-                            "big",
-                        )
-                        return width, height
-                    offset += segment_length
-                return None
-            if mime == "image/webp" and len(data) >= 30:
-                chunk_type = data[12:16]
-                if chunk_type == b"VP8X":
-                    width = 1 + int.from_bytes(data[24:27], "little")
-                    height = 1 + int.from_bytes(data[27:30], "little")
-                    return width, height
-                if chunk_type == b"VP8 " and len(data) >= 30:
-                    width = int.from_bytes(data[26:28], "little") & 0x3FFF
-                    height = int.from_bytes(data[28:30], "little") & 0x3FFF
-                    return width, height
-            return None
-        except (IndexError, ValueError):
-            return None
+        return image_dimensions(data, mime)
 
     def _is_probable_sticker_payload(self, payload: dict[str, Any]) -> bool:
         data = payload.get("data")
@@ -3713,6 +3780,170 @@ class QQBotEnhancerPlugin(Star):
         if category is None:
             return None
         return {"category": category}
+
+    @staticmethod
+    def _parse_ai_sticker_judgement(text: str) -> dict[str, Any] | None:
+        return parse_ai_sticker_judgement(text)
+
+    async def _ai_judge_sticker_payload(
+        self,
+        event: AstrMessageEvent,
+        payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any] | None]:
+        provider_id = self._cfg_str(
+            "sticker_ai_auto_collect_provider_id"
+        ).strip()
+        if not provider_id:
+            provider_id = await self._get_current_provider_id(event)
+        if not provider_id:
+            return "unavailable", None
+        image_base64 = base64.b64encode(payload["data"]).decode("ascii")
+        prompt = (
+            "请判断这张图片是否适合作为聊天表情包/贴纸。"
+            "只输出一个 JSON 对象，不要 Markdown、不要解释："
+            '{"is_sticker": true 或 false, '
+            '"category": "建议分类（中文/字母/数字/-/_，最多32字）", '
+            '"confidence": 0.0 到 1.0}。'
+            "如果图片是普通风景/人物照片/截图/文档，请返回 false。"
+        )
+        try:
+            response_text = await self._llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+                image_urls=[f"base64://{image_base64}"],
+                system_prompt=(
+                    "你只负责判断是否为聊天表情包/贴纸，必须只输出 JSON。"
+                    "不要调用工具，不要读取文件，不要输出路径或凭据。"
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "qqbot_enhancer AI 自动收藏视觉判断失败，回退本地启发式",
+                exc_info=True,
+            )
+            return "error", None
+        judgement = self._parse_ai_sticker_judgement(response_text)
+        if judgement is None:
+            logger.info(
+                "qqbot_enhancer AI 自动收藏返回无法解析，回退本地启发式"
+            )
+            return "error", None
+        return ("ok" if judgement["is_sticker"] else "not_sticker"), judgement
+
+    async def _maybe_ai_auto_collect_user_sticker(
+        self,
+        event: AstrMessageEvent,
+    ) -> str | None:
+        if not self._cfg_bool("sticker_ai_auto_collect_enabled"):
+            return None
+        if not self._cfg_bool("collected_sticker_enabled"):
+            return None
+        if self._collected_root is None:
+            return None
+        if self._rng.random() >= self._cfg_float(
+            "sticker_ai_auto_collect_probability",
+            0.0,
+            1.0,
+        ):
+            return None
+
+        now = self._clock()
+        cooldown = self._cfg_int("auto_collect_sticker_cooldown_seconds", 0)
+        last = self._last_auto_collect_at.get(event.unified_msg_origin)
+        if last is not None and now - last < cooldown:
+            return None
+        self._prune_sticker_ai_auto_collect_times(now)
+        max_per_hour = self._cfg_int(
+            "sticker_ai_auto_collect_max_per_hour",
+            1,
+        )
+        recent_attempts = self._sticker_ai_auto_collect_times.get(
+            event.unified_msg_origin,
+            [],
+        )
+        if len(recent_attempts) >= max_per_hour:
+            return None
+
+        status, payload = await self._extract_collectible_image_payload(event)
+        if status != "ok" or payload is None:
+            return None
+        data = payload.get("data")
+        if not isinstance(data, bytes):
+            return None
+        max_bytes = self._cfg_int("auto_collect_sticker_max_file_bytes", 1)
+        if len(data) > max_bytes:
+            return None
+        dimensions = self._image_dimensions(
+            data,
+            str(payload.get("mime", "")),
+        )
+        if dimensions is None:
+            return None
+        width, height = dimensions
+        if width <= 0 or height <= 0:
+            return None
+        max_dimension = max(
+            32,
+            self._cfg_int("auto_collect_sticker_max_dimension", 32),
+        )
+        if max(width, height) > max_dimension:
+            return None
+
+        # Count the provider attempt against the hourly cap even if the AI
+        # fails; this also prevents hot loops that burn tokens.
+        self._last_auto_collect_at[event.unified_msg_origin] = now
+        self._sticker_ai_auto_collect_times.setdefault(
+            event.unified_msg_origin,
+            [],
+        ).append(now)
+
+        default_category = self._normalize_collected_category(
+            self._cfg_str("sticker_ai_auto_collect_default_category")
+        ) or DEFAULT_COLLECTED_CATEGORY
+        category = default_category
+        judgement_status, judgement = await self._ai_judge_sticker_payload(
+            event,
+            payload,
+        )
+        if judgement_status == "not_sticker":
+            return None
+        if judgement_status == "ok" and judgement is not None:
+            confidence = float(judgement.get("confidence", 1.0))
+            if confidence >= self._cfg_float(
+                "sticker_ai_auto_collect_min_confidence",
+                0.0,
+                1.0,
+            ):
+                suggested = self._normalize_collected_category(
+                    judgement.get("category")
+                )
+                if suggested is not None:
+                    category = suggested
+            else:
+                # Low-confidence AI result is treated as uncertain -> local
+                # safe fallback.
+                if not self._is_probable_sticker_payload(payload):
+                    return None
+        else:
+            # Provider unavailable/unparseable -> local heuristic fallback.
+            if not self._is_probable_sticker_payload(payload):
+                return None
+
+        save_status, _message = await self._save_collected_payload(
+            event,
+            category,
+            payload,
+        )
+        if save_status != "saved":
+            logger.info(
+                "qqbot_enhancer AI 自动收藏未保存: %s",
+                save_status,
+            )
+            return None
+        return self._format_collected_reply(
+            self._cfg_str("sticker_ai_auto_collect_saved_reply"),
+            category=category,
+        )
 
     async def _save_collected_payload(
         self,

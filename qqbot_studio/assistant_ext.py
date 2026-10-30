@@ -26,6 +26,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import urlsplit
 
 ASSISTANT_REPO_URL = "https://github.com/Stevehim2007/qqbot-studio-ai-assistant.git"
 ASSISTANT_DIR_NAME = "ai-assistant"
@@ -93,6 +94,8 @@ class AssistantExtensionManager:
         git_timeout: int = 60,
         popen_factory: Callable[..., Any] | None = None,
         health_checker: Callable[[str, float], bool] | None = None,
+        listener_probe: Callable[[int], dict[str, Any]] | None = None,
+        public_probe: Callable[[str, float], dict[str, Any]] | None = None,
         start_timeout: float = 12.0,
         stop_timeout: float = 5.0,
         poll_interval: float = 0.25,
@@ -113,6 +116,8 @@ class AssistantExtensionManager:
         self._runner = runner or _default_git_runner
         self._popen_factory = popen_factory or subprocess.Popen
         self._health_checker = health_checker
+        self._listener_probe = listener_probe
+        self._public_probe = public_probe
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
@@ -509,7 +514,14 @@ class AssistantExtensionManager:
         value = re.sub(r"(?i)(https?://)[^\s/@:]+(?::[^\s/@]*)?@", r"\1***@", value)
         value = re.sub(r"(?i)(authorization:\s*bearer\s+)\S+", r"\1***", value)
         value = re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}\b", "sk-***", value)
-        value = re.sub(r"(?i)(api[_-]?key\s*[=:]\s*)\S+", r"\1***", value)
+        # Remove key/token/password assignments in text/JSON logs entirely,
+        # including the field name, so a returned log summary cannot echo a
+        # credential or even its value-shaped field.
+        value = re.sub(
+            r"(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret|credential)\b\s*[=:]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}]+)",
+            "[redacted-sensitive-field]",
+            value,
+        )
         return value
 
     @staticmethod
@@ -1023,6 +1035,775 @@ class AssistantExtensionManager:
         app = str(payload.get("app") or "")
         return not app or app.startswith("qqbot-studio-ai-assistant")
 
+    # ------------------------------------------------------------------
+    # Listener, public-access and diagnostic helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalise_bind_address(value: Any) -> str:
+        text = str(value or "").strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        return text
+
+    @staticmethod
+    def _proc_ipv4_address(hex_address: str) -> str:
+        value = int(hex_address, 16)
+        return socket.inet_ntoa(value.to_bytes(4, "little"))
+
+    @staticmethod
+    def _proc_ipv6_address(hex_address: str) -> str:
+        raw = bytes.fromhex(hex_address)
+        if len(raw) != 16:
+            raise ValueError("invalid IPv6 listener address")
+        # /proc/net/tcp6 stores each 32-bit word in host (little-endian)
+        # order; convert back to network order before formatting.
+        network = b"".join(raw[index : index + 4][::-1] for index in range(0, 16, 4))
+        return socket.inet_ntop(socket.AF_INET6, network)
+
+    @classmethod
+    def _normalise_listener_result(
+        cls,
+        raw: Any,
+        port: int,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "supported": False,
+            "listening": False,
+            "addresses": [],
+            "bind_addresses": [],
+            "wildcard": False,
+            "loopback_only": False,
+            "port": int(port),
+            "source": "unavailable",
+            "error": "",
+        }
+        if not isinstance(raw, dict):
+            result["error"] = "监听探测没有返回有效结果。"
+            return result
+        result["supported"] = bool(raw.get("supported", True))
+        result["source"] = str(raw.get("source") or "custom")
+        result["error"] = cls._sanitize_text(raw.get("error") or "")
+        addresses: list[dict[str, Any]] = []
+        raw_addresses = (
+            raw.get("addresses")
+            or raw.get("bind_addresses")
+            or raw.get("address")
+            or []
+        )
+        # Test/alternate adapters may expose only boolean bind flags.  Convert
+        # them to concrete addresses so listener validation remains available.
+        if not raw_addresses:
+            if raw.get("wildcard") is True:
+                raw_addresses = ["0.0.0.0"]
+            elif raw.get("loopback_only") is True:
+                raw_addresses = ["127.0.0.1"]
+        if isinstance(raw_addresses, (str, dict)):
+            raw_addresses = [raw_addresses]
+        if isinstance(raw_addresses, list):
+            for item in raw_addresses:
+                if isinstance(item, str):
+                    address = cls._normalise_bind_address(item)
+                    entry = {"address": address, "port": int(port), "family": "unknown", "pid": None}
+                elif isinstance(item, dict):
+                    address = cls._normalise_bind_address(
+                        item.get("address") or item.get("host") or item.get("bind")
+                    )
+                    if not address:
+                        continue
+                    entry = {
+                        "address": address,
+                        "port": int(item.get("port") or port),
+                        "family": str(item.get("family") or "unknown"),
+                        "pid": item.get("pid"),
+                    }
+                else:
+                    continue
+                addresses.append(entry)
+        result["addresses"] = addresses
+        bind_addresses: list[str] = []
+        for item in addresses:
+            address = str(item["address"])
+            if address not in bind_addresses:
+                bind_addresses.append(address)
+        result["bind_addresses"] = bind_addresses
+        result["listening"] = bool(raw.get("listening", bool(addresses))) and bool(addresses)
+        result["wildcard"] = any(address in {"0.0.0.0", "::"} for address in bind_addresses)
+        loopbacks = {"127.0.0.1", "::1", "localhost"}
+        result["loopback_only"] = bool(bind_addresses) and all(
+            address.lower() in loopbacks for address in bind_addresses
+        )
+        return result
+
+    def _proc_listener_snapshot(self, port: int) -> dict[str, Any]:
+        addresses: list[dict[str, Any]] = []
+        supported = False
+        errors: list[str] = []
+        sources: list[str] = []
+        for filename, family, decoder in (
+            ("/proc/net/tcp", "ipv4", self._proc_ipv4_address),
+            ("/proc/net/tcp6", "ipv6", self._proc_ipv6_address),
+        ):
+            path = Path(filename)
+            if not path.exists():
+                continue
+            supported = True
+            sources.append(path.name)
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError as exc:
+                errors.append(f"无法读取 {path}：{exc}")
+                continue
+            for line in lines[1:]:
+                fields = line.split()
+                if len(fields) < 4 or fields[3] != "0A":
+                    continue
+                local = fields[1]
+                address_hex, separator, port_hex = local.rpartition(":")
+                if not separator:
+                    continue
+                try:
+                    listener_port = int(port_hex, 16)
+                except ValueError:
+                    continue
+                if listener_port != int(port):
+                    continue
+                try:
+                    address = decoder(address_hex)
+                except (ValueError, OSError):
+                    continue
+                addresses.append(
+                    {
+                        "address": self._normalise_bind_address(address),
+                        "port": int(port),
+                        "family": family,
+                        "pid": None,
+                    }
+                )
+        return self._normalise_listener_result(
+            {
+                "supported": supported,
+                "addresses": addresses,
+                "source": "+".join(sources) if sources else "unavailable",
+                "error": "；".join(errors),
+            },
+            port,
+        )
+
+    @staticmethod
+    def _windows_listener_snapshot(port: int) -> dict[str, Any]:
+        try:
+            completed = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                timeout=6,
+                check=False,
+                shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                "supported": False,
+                "addresses": [],
+                "source": "netstat",
+                "error": f"无法执行 netstat：{exc}",
+            }
+        addresses: list[dict[str, Any]] = []
+        for line in (completed.stdout or "").splitlines():
+            fields = line.split()
+            if len(fields) < 4 or fields[0].upper() != "TCP":
+                continue
+            if "LISTENING" not in {field.upper() for field in fields}:
+                continue
+            local = fields[1]
+            host, separator, port_text = local.rpartition(":")
+            if not separator:
+                continue
+            try:
+                listener_port = int(port_text)
+            except ValueError:
+                continue
+            if listener_port != int(port):
+                continue
+            try:
+                pid = int(fields[-1])
+            except (TypeError, ValueError):
+                pid = None
+            addresses.append(
+                {
+                    "address": AssistantExtensionManager._normalise_bind_address(host),
+                    "port": int(port),
+                    "family": "ipv6" if ":" in host else "ipv4",
+                    "pid": pid,
+                }
+            )
+        return AssistantExtensionManager._normalise_listener_result(
+            {"supported": True, "addresses": addresses, "source": "netstat"},
+            port,
+        )
+
+    def _listener_snapshot(self, port: int) -> dict[str, Any]:
+        """Return actual TCP listeners for ``port`` without shell invocation."""
+
+        if callable(self._listener_probe):
+            try:
+                return self._normalise_listener_result(self._listener_probe(int(port)), int(port))
+            except Exception as exc:  # noqa: BLE001 - diagnostic fallback
+                return self._normalise_listener_result(
+                    {
+                        "supported": False,
+                        "source": "custom",
+                        "error": f"监听探测失败：{exc}",
+                    },
+                    int(port),
+                )
+        if os.name == "nt":
+            return self._windows_listener_snapshot(int(port))
+        if Path("/proc/net/tcp").exists() or Path("/proc/net/tcp6").exists():
+            return self._proc_listener_snapshot(int(port))
+        return self._normalise_listener_result(
+            {
+                "supported": False,
+                "source": "unavailable",
+                "error": "当前平台没有可用的监听地址探测方式。",
+            },
+            int(port),
+        )
+
+    @staticmethod
+    def _listener_match(host: str, port: int, listener: dict[str, Any]) -> str:
+        if not listener.get("supported"):
+            return "unknown"
+        if not listener.get("listening"):
+            return "missing"
+        addresses = [str(item).lower() for item in listener.get("bind_addresses") or []]
+        if host == "0.0.0.0":
+            if any(item in {"0.0.0.0", "::"} for item in addresses):
+                return "wildcard"
+            if addresses and all(item in {"127.0.0.1", "::1", "localhost"} for item in addresses):
+                return "loopback_only"
+            return "unexpected"
+        loopbacks = {"127.0.0.1", "::1", "localhost"}
+        if host in {"127.0.0.1", "localhost", "::1"}:
+            return "ok" if any(item in loopbacks for item in addresses) else "unexpected"
+        return "ok"
+
+    def _entry_supports_wildcard(self) -> bool | None:
+        entry = self.extension_dir / ASSISTANT_ENTRY_FILE
+        try:
+            text = entry.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        return "0.0.0.0" in text
+
+    def _public_access_probe(self, url: str, timeout: float = 3.0) -> dict[str, Any]:
+        """Best-effort TCP+HTTP probe from the server itself.
+
+        Failure to loop back to a public address can be caused by NAT hairpin,
+        so a failed probe is explicitly marked inconclusive rather than proving
+        that external clients cannot connect.
+        """
+
+        result: dict[str, Any] = {
+            "checked": False,
+            "skipped": True,
+            "url": self._sanitize_text(url),
+            "host": "",
+            "port": None,
+            "tcp_connected": None,
+            "http_ok": None,
+            "http_status": None,
+            "status": "skipped",
+            "inconclusive": False,
+            "remote_verification_required": False,
+            "detail": "未配置公网 URL，跳过公网探测。",
+            "error": "",
+        }
+        if not url:
+            return result
+        if callable(self._public_probe):
+            try:
+                raw = self._public_probe(str(url), float(timeout))
+            except Exception as exc:  # noqa: BLE001 - optional diagnostic
+                raw = {
+                    "checked": True,
+                    "skipped": False,
+                    "status": "inconclusive",
+                    "inconclusive": True,
+                    "remote_verification_required": True,
+                    "detail": f"公网探测异常：{exc}",
+                    "error": str(exc),
+                }
+            if not isinstance(raw, dict):
+                raw = {}
+            for key in result:
+                if key in raw:
+                    result[key] = raw[key]
+            result["url"] = str(url)
+            result["detail"] = self._sanitize_text(result.get("detail") or "")
+            result["error"] = self._sanitize_text(result.get("error") or "")
+            result["checked"] = bool(result.get("checked", not result.get("skipped")))
+            result["skipped"] = bool(result.get("skipped", False))
+            result["inconclusive"] = bool(result.get("inconclusive", False))
+            result["remote_verification_required"] = bool(
+                result.get("remote_verification_required", False)
+            )
+            return result
+
+        parsed = urlsplit(str(url))
+        host = str(parsed.hostname or "").strip()
+        try:
+            port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+        except (TypeError, ValueError):
+            port = 0
+        result.update(
+            {
+                "checked": True,
+                "skipped": False,
+                "host": host,
+                "port": port,
+                "detail": "",
+            }
+        )
+        if not host or port <= 0 or parsed.scheme not in {"http", "https"}:
+            result.update(
+                {
+                    "status": "invalid_url",
+                    "error": "公网访问 URL 无效。",
+                    "detail": "public_host 或端口配置无法生成有效的 HTTP URL。",
+                }
+            )
+            return result
+
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            result.update(
+                {
+                    "status": "dns_error",
+                    "remote_verification_required": True,
+                    "error": f"public_host 无法解析：{exc}",
+                    "detail": "公网 IP/域名无法解析；请检查 public_host。",
+                }
+            )
+            return result
+        except OSError as exc:
+            result.update(
+                {
+                    "status": "dns_error",
+                    "remote_verification_required": True,
+                    "error": str(exc),
+                    "detail": "解析 public_host 失败。",
+                }
+            )
+            return result
+
+        # Avoid turning a tampered config or a public_host that resolves to a
+        # private/metadata address into an SSRF probe.  Only global addresses
+        # are considered for the optional public-access check.
+        safe_infos: list[tuple[Any, ...]] = []
+        non_public_addresses: list[str] = []
+        for info in infos:
+            family, socktype, proto, canonname, sockaddr = info
+            try:
+                address = ipaddress.ip_address(str(sockaddr[0]).split("%", 1)[0])
+            except ValueError:
+                non_public_addresses.append(str(sockaddr[0]))
+                continue
+            if address.is_global:
+                safe_infos.append(info)
+            else:
+                non_public_addresses.append(str(address))
+        if not safe_infos:
+            result.update(
+                {
+                    "status": "non_public_target",
+                    "inconclusive": True,
+                    "remote_verification_required": True,
+                    "error": "public_host 指向非公网地址，已跳过公网探测。",
+                    "detail": (
+                        "public_host 解析到私网/回环/保留地址，服务端不会连接该地址。"
+                        "请填写真实公网 IP 或域名，或使用回环 + SSH 隧道。"
+                    ),
+                }
+            )
+            return result
+
+        connected = False
+        connect_errors: list[str] = []
+        for family, socktype, proto, _canonname, sockaddr in safe_infos:
+            try:
+                with socket.socket(family, socktype, proto) as sock:
+                    sock.settimeout(timeout)
+                    sock.connect(sockaddr)
+                connected = True
+                break
+            except OSError as exc:
+                connect_errors.append(str(exc))
+        if not connected:
+            result.update(
+                {
+                    "tcp_connected": False,
+                    "status": "unreachable",
+                    "inconclusive": True,
+                    "remote_verification_required": True,
+                    "detail": (
+                        "服务器侧 TCP 连接公网地址失败。可能原因包括 NAT hairpin、"
+                        "云安全组/防火墙未放行，或公网 IP/端口不正确；这项失败本身"
+                        "不能证明外部客户端一定不可达，请从外部网络复核。"
+                    ),
+                    "error": "；".join(connect_errors[-3:]),
+                }
+            )
+            return result
+
+        result["tcp_connected"] = True
+        # Rebuild from parsed host/port so a tampered URL cannot inject
+        # credentials, paths or a different host into the health request.
+        url_host = f"[{host}]" if ":" in host else host
+        safe_base = f"{parsed.scheme}://{url_host}"
+        default_port = 443 if parsed.scheme == "https" else 80
+        if port != default_port:
+            safe_base += f":{port}"
+        safe_base += "/"
+        result["url"] = safe_base
+        health_url = safe_base + "api/health"
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+                return None
+
+        request = urllib.request.Request(
+            health_url,
+            headers={"Accept": "application/json", "User-Agent": "QQBotStudio/3.0-diagnose"},
+            method="GET",
+        )
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirect(),
+        )
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                raw_body = response.read(64 * 1024).decode("utf-8", "replace")
+                http_status = int(getattr(response, "status", 200))
+        except urllib.error.HTTPError as exc:
+            result.update(
+                {
+                    "http_ok": False,
+                    "http_status": int(exc.code),
+                    "status": "http_error",
+                    "inconclusive": False,
+                    "remote_verification_required": True,
+                    "detail": f"公网地址 TCP 可达，但 health HTTP 返回 {exc.code}。",
+                    "error": self._sanitize_text(exc.reason or f"HTTP {exc.code}"),
+                }
+            )
+            return result
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            result.update(
+                {
+                    "http_ok": False,
+                    "status": "tcp_only",
+                    "inconclusive": True,
+                    "remote_verification_required": True,
+                    "detail": "公网 TCP 端口可达，但 HTTP health 请求失败；可能被防火墙/反代拦截。",
+                    "error": self._sanitize_text(exc),
+                }
+            )
+            return result
+        try:
+            payload = json.loads(raw_body)
+        except ValueError:
+            payload = {}
+        health_ok = isinstance(payload, dict) and payload.get("ok") is True
+        result.update(
+            {
+                "http_ok": health_ok,
+                "http_status": http_status,
+                "status": "ok" if health_ok else "http_error",
+                "inconclusive": False,
+                "remote_verification_required": not health_ok,
+                "detail": (
+                    "公网 TCP 与 health 探测均成功；服务在服务器自身视角可访问。"
+                    if health_ok
+                    else "公网 HTTP 可达，但 health 响应未返回 ok=true。"
+                ),
+                "error": "" if health_ok else "health 响应异常",
+            }
+        )
+        return result
+
+    def diagnose(self) -> dict[str, Any]:
+        """Return safe, actionable diagnosis for local and public access.
+
+        The method never starts/stops the service and never returns an API Key.
+        It distinguishes local listener binding, local health, and a best-effort
+        public probe.  Public-probe failures are marked inconclusive where NAT
+        hairpin can make a server unable to reach its own public address.
+        """
+
+        with self._lock:
+            try:
+                state = self.get_config()
+                installed = bool(state.get("installed"))
+                configured = bool(state.get("configured"))
+                running = bool(state.get("running"))
+                host = str(state.get("host") or ASSISTANT_DEFAULT_HOST)
+                try:
+                    port = int(state.get("port") or ASSISTANT_DEFAULT_PORT)
+                except (TypeError, ValueError):
+                    port = ASSISTANT_DEFAULT_PORT
+                public_host = str(state.get("public_host") or "")
+                url = self._sanitize_text(state.get("url"))
+                health_url = self._sanitize_text(state.get("health_url"))
+                pid = state.get("pid")
+                config_present = self.config_path.exists()
+                entry_supports = self._entry_supports_wildcard() if installed else None
+
+                if config_present:
+                    listener = self._listener_snapshot(port)
+                else:
+                    listener = self._normalise_listener_result(
+                        {
+                            "supported": False,
+                            "listening": False,
+                            "addresses": [],
+                            "source": "skipped",
+                            "error": "尚未创建 B 配置。",
+                        },
+                        port,
+                    )
+                listener_match = self._listener_match(host, port, listener)
+                local_health_ok = running and bool(health_url)
+                local_health = {
+                    "ok": local_health_ok,
+                    "url": health_url,
+                    "detail": (
+                        "本机回环 health 检查成功。"
+                        if local_health_ok
+                        else "本机回环 health 检查失败；B 未运行或尚未完成启动。"
+                    ),
+                    "error": "" if local_health_ok else "health_unreachable",
+                }
+
+                # Build the public probe default with its own stable shape.
+                public_probe = {
+                    "checked": False,
+                    "skipped": True,
+                    "url": "",
+                    "host": public_host,
+                    "port": port,
+                    "tcp_connected": None,
+                    "http_ok": None,
+                    "http_status": None,
+                    "status": "skipped",
+                    "inconclusive": False,
+                    "remote_verification_required": False,
+                    "detail": "未进入公网探测。",
+                    "error": "",
+                }
+                if installed and config_present and host == "0.0.0.0":
+                    if not public_host:
+                        public_probe.update(
+                            {
+                                "status": "public_host_missing",
+                                "checked": False,
+                                "skipped": False,
+                                "detail": "已绑定所有网卡，但 public_host 为空，无法生成公网 URL。",
+                                "error": "public_host_missing",
+                                "remote_verification_required": True,
+                            }
+                        )
+                    elif running:
+                        public_probe = self._public_access_probe(url, timeout=3.0)
+
+                suggestions: list[str] = []
+                error_code = "ok"
+                healthy = False
+                message = "AI 助手 B 状态正常。"
+                old_b_suspected = False
+
+                if not installed:
+                    error_code = "not_installed"
+                    message = "AI 助手 B 尚未安装。"
+                    suggestions.append("先点击“安装 AI 助手 B”，再配置 Key。")
+                elif not config_present:
+                    error_code = "not_configured"
+                    message = "AI 助手 B 尚未创建配置。"
+                    suggestions.append("填写 Key、端口和监听方式后保存。")
+                elif state.get("ok") is False:
+                    error_code = "config_invalid"
+                    message = "AI 助手 B 配置无效，无法可靠启动或诊断。"
+                    suggestions.append("修正配置后重试；不要直接编辑含 Key 的文件并粘贴到聊天中。")
+                elif not configured:
+                    error_code = "key_missing"
+                    message = "AI 助手 B 已配置，但未检测到可用 API Key。"
+                    suggestions.append("补充独立 Key，或选择可读取的实例 Key。")
+                elif not running:
+                    error_code = "not_running"
+                    message = "AI 助手 B 已配置但进程未运行。"
+                    suggestions.append("点击“启动 AI 助手 B”；若启动失败，先更新 B 再重试。")
+                else:
+                    healthy = True
+                    if host == "0.0.0.0":
+                        if listener_match == "loopback_only":
+                            healthy = False
+                            error_code = "listener_loopback_only"
+                            old_b_suspected = entry_supports is False
+                            message = (
+                                "B 进程在运行且本机 health 正常，但实际监听地址只有 127.0.0.1/::1，"
+                                "公网无法连接。常见原因是旧版 B 不支持 0.0.0.0、更新后未重启，"
+                                "或启动时仍在使用旧配置。"
+                            )
+                            suggestions.extend(
+                                [
+                                    "先在“安装状态”点击“更新 AI 助手 B”。",
+                                    "再执行一次“停止→启动”，让新版本和 host=0.0.0.0 生效。",
+                                    "稍后点击“诊断公网访问”确认 listener 变为 0.0.0.0。",
+                                ]
+                            )
+                            if old_b_suspected:
+                                suggestions.insert(0, "检测到当前 assistant.py 可能不支持 0.0.0.0，请先更新 B。")
+                        elif listener_match == "missing":
+                            healthy = False
+                            error_code = "listener_missing"
+                            message = "配置为 0.0.0.0，但未检测到 TCP 端口监听。"
+                            suggestions.extend(
+                                [
+                                    "检查端口是否被其他进程占用。",
+                                    "查看最近日志并执行“停止→启动”。",
+                                    "确认 AstrBot/B 没有因 Key 或旧版代码启动失败。",
+                                ]
+                            )
+                        elif listener_match == "unexpected":
+                            healthy = False
+                            error_code = "listener_unexpected"
+                            message = "B 的监听地址与 0.0.0.0 配置不一致。"
+                            suggestions.append("更新 B 后执行“停止→启动”。")
+                        elif listener_match == "unknown":
+                            error_code = "listener_unknown"
+                            message = "当前平台无法读取实际 listener；本机 health 正常但公网可达性无法确认。"
+                            suggestions.append("从外部网络验证 URL，并检查安全组/防火墙。")
+                        elif not local_health_ok:
+                            healthy = False
+                            error_code = "health_failed"
+                            message = "端口有 listener，但本机 health 检查失败。"
+                            suggestions.append("查看最近日志并重启 B。")
+                        elif not public_host:
+                            error_code = "public_host_missing"
+                            message = "已绑定所有网卡，但缺少 public_host，无法生成公网 URL。"
+                            suggestions.append("填写公网 IP/域名；如仅本机使用请改回 127.0.0.1。")
+                        elif public_probe.get("status") == "ok":
+                            error_code = "ok"
+                            message = "本机 listener、health 和公网 health 探测均正常。"
+                            suggestions.append("若外部浏览器仍失败，请用另一网络复核 DNS、代理和安全组。")
+                        elif public_probe.get("status") == "public_host_missing":
+                            error_code = "public_host_missing"
+                            message = "缺少 public_host，无法进行公网 URL 探测。"
+                            suggestions.append("填写公网 IP/域名后再诊断。")
+                        else:
+                            probe_status = str(public_probe.get("status") or "unknown")
+                            error_code = (
+                                "public_probe_dns_error"
+                                if probe_status == "dns_error"
+                                else "public_probe_inconclusive"
+                            )
+                            message = "本机已监听所有网卡，但从服务器侧探测公网地址未成功；这不等于外网一定不可达。"
+                            suggestions.extend(
+                                [
+                                    "从一台外部电脑/手机网络访问该 URL；不要在服务器上只凭失败结果判断。",
+                                    f"检查云厂商安全组是否放行 TCP {port}（主项目不能替你修改云安全组）。",
+                                    f"检查主机防火墙：Ubuntu 可用 `sudo ufw status`，确认允许 TCP {port}。",
+                                    "确认 public_host 和端口与实际公网入口一致；NAT 映射需要匹配。",
+                                    "若刚更新 B 或改过 host，执行“停止→启动”后再诊断。",
+                                ]
+                            )
+                    else:
+                        if listener_match == "missing":
+                            healthy = False
+                            error_code = "listener_missing"
+                            message = "B 配置为回环地址，但未检测到本机 listener。"
+                            suggestions.append("查看日志并重新启动。")
+                        elif not local_health_ok:
+                            healthy = False
+                            error_code = "health_failed"
+                            message = "B 进程配置看似存在，但本机 health 检查失败。"
+                            suggestions.append("查看最近日志并重启 B。")
+                        else:
+                            error_code = "ok_loopback"
+                            message = "AI 助手 B 正在本机回环地址运行；远程访问请使用 SSH 隧道。"
+                            if state.get("ssh_tunnel"):
+                                suggestions.append("远程访问请使用 SSH 隧道：" + str(state["ssh_tunnel"]))
+                            suggestions.append("如暴露公网，必须用安全组/防火墙/VPN/认证反代限制来源。")
+
+                if host == "0.0.0.0" and public_host and running and not suggestions:
+                    suggestions.append("公网模式无认证，必须用安全组/防火墙/VPN 限制来源。")
+                if error_code != "ok" and host == "0.0.0.0" and not any(
+                    "安全组" in item for item in suggestions
+                ):
+                    suggestions.append("公网模式风险高：请同时检查云安全组和主机防火墙；主项目不会自动开放端口。")
+
+                log_tail = self._read_log_tail(2000) if installed else ""
+                return {
+                    "ok": True,
+                    "healthy": bool(healthy),
+                    "installed": installed,
+                    "configured": configured,
+                    "running": running,
+                    "pid": pid,
+                    "host": host,
+                    "port": port,
+                    "public_host": public_host,
+                    "url": url,
+                    "health_url": health_url,
+                    "config_path": str(self.config_path),
+                    "listener": listener,
+                    "listener_match": listener_match,
+                    "listener_ok": (
+                        True
+                        if listener_match in {"wildcard", "ok"}
+                        else False
+                        if listener_match in {"missing", "loopback_only", "unexpected"}
+                        else None
+                    ),
+                    "local_health": local_health,
+                    "public_probe": public_probe,
+                    "public_access_verified": (
+                        True
+                        if public_probe.get("status") == "ok"
+                        else None
+                        if public_probe.get("skipped")
+                        else False
+                    ),
+                    "old_b_suspected": bool(old_b_suspected),
+                    "b_entry_supports_wildcard": entry_supports,
+                    "log_tail": log_tail,
+                    "error_code": error_code,
+                    "suggestions": list(dict.fromkeys(suggestions)),
+                    "recommendations": list(dict.fromkeys(suggestions)),
+                    "access_note": state.get("access_note") or self._access_note(host, public_host, url),
+                    "ssh_tunnel": state.get("ssh_tunnel") or "",
+                    "message": message,
+                    "error": "",
+                }
+            except Exception as exc:  # noqa: BLE001 - diagnostic endpoint isolation
+                base = self._config_base_state(installed=False)
+                base.update(
+                    {
+                        "ok": False,
+                        "healthy": False,
+                        "error_code": "diagnose_failed",
+                        "listener": {},
+                        "local_health": {"ok": False, "url": "", "detail": "", "error": "diagnose_failed"},
+                        "public_probe": {"status": "skipped", "checked": False, "skipped": True},
+                        "log_tail": "",
+                        "suggestions": ["请查看管理服务终端日志后重试。"],
+                        "recommendations": ["请查看管理服务终端日志后重试。"],
+                        "message": "AI 助手 B 诊断失败；主控制台不受影响。",
+                        "error": self._sanitize_text(exc),
+                    }
+                )
+                return base
+
     def _runtime_state(self, url: str) -> tuple[bool, int | None]:
         running = self._health_ok(url, timeout=1.2)
         return running, (self._read_pid() if running else None)
@@ -1264,6 +2045,60 @@ class AssistantExtensionManager:
                 already["ok"] = True
                 already["running"] = True
                 already["message"] = "AI 助手 B 已在运行，未重复启动。"
+                host = str(state.get("host") or ASSISTANT_DEFAULT_HOST)
+                try:
+                    port = int(state.get("port"))
+                except (TypeError, ValueError):
+                    port = ASSISTANT_DEFAULT_PORT
+                if host == "0.0.0.0":
+                    listener = self._listener_snapshot(port)
+                    listener_match = self._listener_match(host, port, listener)
+                    entry_supports = self._entry_supports_wildcard()
+                    already["listener"] = listener
+                    already["listener_match"] = listener_match
+                    already["b_entry_supports_wildcard"] = entry_supports
+                    if listener.get("supported") and listener_match in {
+                        "loopback_only",
+                        "unexpected",
+                        "missing",
+                    }:
+                        already["ok"] = False
+                        already["action"] = "listener_mismatch"
+                        already["error_code"] = (
+                            "listener_loopback_only"
+                            if listener_match == "loopback_only"
+                            else "listener_missing"
+                            if listener_match == "missing"
+                            else "listener_unexpected"
+                        )
+                        already["listener_ok"] = False
+                        already["old_b_suspected"] = bool(
+                            listener_match == "loopback_only"
+                            and entry_supports is False
+                        )
+                        suggestions = [
+                            "先在“安装状态”点击“更新 AI 助手 B”。",
+                            "再执行“停止→启动”，让新版本和 host=0.0.0.0 生效。",
+                            "点击“诊断公网访问”确认实际 listener 是否为 0.0.0.0。",
+                            "检查云安全组和主机防火墙；主项目不会自动开放云端口。",
+                        ]
+                        already["suggestions"] = suggestions
+                        already["recommendations"] = list(suggestions)
+                        already["message"] = (
+                            "AI 助手 B 虽在响应 health，但实际监听地址与 host=0.0.0.0 不一致；"
+                            "当前进程可能是旧版 B 或未重启。请先更新，再停止→启动。"
+                        )
+                        already["error"] = already["message"]
+                        return already
+                    if not listener.get("supported"):
+                        already["message"] += (
+                            " 当前平台无法验证实际 listener；请使用“诊断公网访问”并从外部网络确认。"
+                        )
+                    else:
+                        already["message"] += " 已确认实际监听所有网卡。"
+                    already["error_code"] = "ok"
+                    already["suggestions"] = []
+                    already["recommendations"] = []
                 return already
             if not state.get("configured"):
                 return self._service_failure(
@@ -1294,11 +2129,20 @@ class AssistantExtensionManager:
             if not self._port_is_free(host, port):
                 # A foreign process may already own the port.  The health check
                 # above distinguishes the managed B; this branch is actionable.
-                return self._service_failure(
+                failure = self._service_failure(
                     f"AI 助手 B 端口 {port} 已被占用，请修改端口后重试。",
                     installed=True,
                     state=state,
                 )
+                failure["error_code"] = "port_occupied"
+                failure["listener"] = self._listener_snapshot(port)
+                failure["suggestions"] = [
+                    f"端口 {port} 已被其他进程占用；请换一个 5000–10000 的未占用端口。",
+                    "先停止旧的 B 进程，再重新“停止→启动”。",
+                    "诊断接口会显示实际 listener，但不会替你修改安全组。",
+                ]
+                failure["recommendations"] = list(failure["suggestions"])
+                return failure
 
             self._ensure_private_dir()
             self._remove_pid()
@@ -1377,6 +2221,68 @@ class AssistantExtensionManager:
                     result["action"] = "started"
                     result["running"] = True
                     result["pid"] = pid
+                    listener = self._listener_snapshot(port)
+                    listener_match = self._listener_match(host, port, listener)
+                    entry_supports_wildcard = self._entry_supports_wildcard()
+                    result["listener"] = listener
+                    result["listener_match"] = listener_match
+                    result["b_entry_supports_wildcard"] = entry_supports_wildcard
+                    result["local_health"] = {
+                        "ok": True,
+                        "url": probe_url,
+                        "detail": "启动后本机 health 检查成功。",
+                        "error": "",
+                    }
+                    if host == "0.0.0.0" and listener.get("supported") and listener_match in {
+                        "loopback_only",
+                        "missing",
+                        "unexpected",
+                    }:
+                        # A public-mode process that still binds only loopback is
+                        # not a successful start.  Stop the just-started process
+                        # so the UI does not show a misleading running state.
+                        self._terminate_process(process)
+                        self._remove_pid()
+                        result["ok"] = False
+                        result["running"] = False
+                        result["pid"] = None
+                        result["action"] = "listener_mismatch"
+                        result["error_code"] = (
+                            "listener_loopback_only"
+                            if listener_match == "loopback_only"
+                            else "listener_missing"
+                            if listener_match == "missing"
+                            else "listener_unexpected"
+                        )
+                        result["old_b_suspected"] = bool(
+                            listener_match == "loopback_only"
+                            and entry_supports_wildcard is False
+                        )
+                        result["listener_ok"] = False
+                        suggestions = [
+                            "先在“安装状态”点击“更新 AI 助手 B”。",
+                            "再执行“停止→启动”，确保新版本和 host=0.0.0.0 生效。",
+                            "点击“诊断公网访问”确认实际 listener 是否为 0.0.0.0。",
+                            "检查云安全组和主机防火墙；主项目不会自动开放云端口。",
+                        ]
+                        if listener_match == "loopback_only":
+                            result["message"] = (
+                                "B 健康检查成功但实际仍只监听 127.0.0.1/::1，host=0.0.0.0 "
+                                "公网模式未生效。常见原因是旧版 B、更新后未重启，或运行中的仍是旧配置；"
+                                "已停止该错误进程。"
+                            )
+                        elif listener_match == "missing":
+                            result["message"] = (
+                                "B 健康检查成功但未读取到端口 listener，公网绑定无法确认；已停止该进程。"
+                            )
+                        else:
+                            result["message"] = (
+                                "B 的实际监听地址与 host=0.0.0.0 不一致，公网模式未生效；已停止该进程。"
+                            )
+                        result["suggestions"] = suggestions
+                        result["recommendations"] = list(suggestions)
+                        result["error"] = result["message"]
+                        return result
                     if result.get("url"):
                         result["message"] = (
                             f"AI 助手 B 已启动：{result['url']}。"
@@ -1388,6 +2294,15 @@ class AssistantExtensionManager:
                             "暂无可点击的浏览器 URL。"
                             f"{result.get('access_note') or ''}"
                         )
+                    result["error_code"] = "ok"
+                    result["suggestions"] = []
+                    result["recommendations"] = []
+                    if host == "0.0.0.0" and not listener.get("supported"):
+                        result["message"] += (
+                            " 当前平台无法验证实际 listener；请点击“诊断公网访问”并从外部网络确认。"
+                        )
+                    elif host == "0.0.0.0":
+                        result["message"] += " 已确认实际监听所有网卡。"
                     result["error"] = ""
                     return result
                 try:
@@ -1405,12 +2320,20 @@ class AssistantExtensionManager:
             detail = last_error or f"等待 AI 助手 B 健康检查超时（{self.start_timeout:g} 秒）。"
             if log_tail:
                 detail += " 最近日志：" + log_tail
-            return self._service_failure(
-                "AI 助手 B 启动失败或未就绪；主项目和 主控制台和其他实例不受影响。",
+            failure = self._service_failure(
+                "AI 助手 B 启动失败或未就绪；主控制台和其他实例不受影响。",
                 installed=True,
                 detail=detail,
                 state=state,
             )
+            failure["error_code"] = "start_failed"
+            failure["suggestions"] = [
+                "查看最近的脱敏日志摘要，确认 B 的依赖/Key/配置是否有效。",
+                "旧版 B 请先更新，再执行“停止→启动”。",
+                "公网模式仍需单独检查云安全组和主机防火墙。",
+            ]
+            failure["recommendations"] = list(failure["suggestions"])
+            return failure
 
     def stop(self) -> dict[str, Any]:
         """Stop the tracked B process.  Missing/stale PIDs degrade safely."""
@@ -1487,7 +2410,7 @@ class AssistantExtensionManager:
             final["running"] = False
             final["pid"] = None
             final["action"] = "stopped"
-            final["message"] = "AI 助手 B 已停止；主项目和 主控制台和其他实例不受影响。"
+            final["message"] = "AI 助手 B 已停止；主控制台和其他实例不受影响。"
             final["error"] = ""
             return final
 

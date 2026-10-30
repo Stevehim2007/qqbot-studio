@@ -192,6 +192,23 @@
     </footer>
   </main>
 
+  <div id="instance-settings-overlay" class="instance-settings-overlay" hidden>
+    <section id="instance-settings-modal" class="instance-settings-modal" role="dialog" aria-modal="true" aria-labelledby="instance-settings-title" aria-describedby="instance-settings-subtitle" tabindex="-1">
+      <header class="instance-settings-header">
+        <div class="instance-settings-heading">
+          <span class="instance-settings-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-edit"></use></svg></span>
+          <div>
+            <span class="instance-settings-kicker">实例设置</span>
+            <h2 id="instance-settings-title">实例设置</h2>
+            <p id="instance-settings-subtitle">插件、记忆与资源</p>
+          </div>
+        </div>
+        <button id="instance-settings-close" class="instance-settings-close" type="button">关闭</button>
+      </header>
+      <div id="instance-settings-body" class="instance-settings-body"></div>
+    </section>
+  </div>
+
   <div id="plugin-config-overlay" class="plugin-config-overlay" hidden>
     <section id="plugin-config-panel" class="plugin-config-panel" role="dialog" aria-modal="true" aria-labelledby="plugin-config-title" tabindex="-1">
       <header class="plugin-config-header">
@@ -231,6 +248,9 @@
 
   <!-- 服务端会将 {{TOKEN}} 替换为本次本地会话的一次性访问令牌。 -->
   <script>window.QB_TOKEN = "{{TOKEN}}";</script>
+  <script src="/services/api.js"></script>
+  <script src="/services/plugin-config.js"></script>
+  <script src="/components/instance-settings.js"></script>
   <script src="console.js"></script>
 </body>
 </html>

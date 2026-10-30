@@ -6,6 +6,7 @@ small subset of AstrBot v4.29 APIs used by the plugin is stubbed in sys.modules.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import hashlib
@@ -750,8 +751,8 @@ class TestReplyRouting(unittest.IsolatedAsyncioTestCase):
 
 BING_HTML_FIXTURE = """
 <html><body>
-<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/cat-one.jpg&quot;,&quot;turl&quot;:&quot;https://bing.example/thumb.jpg&quot;}"></a>
-<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/cat-two.png?w=640&amp;h=480&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/cat-one.jpg&quot;,&quot;t&quot;:&quot;千早爱音 猫 大树 山 测试图片一&quot;,&quot;desc&quot;:&quot;千早爱音 猫 大树 山 测试描述&quot;,&quot;purl&quot;:&quot;https://example.com/page-one&quot;,&quot;turl&quot;:&quot;https://bing.example/thumb.jpg&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/cat-two.png?w=640&amp;h=480&quot;,&quot;t&quot;:&quot;千早爱音 猫 大树 山 测试图片二&quot;,&quot;desc&quot;:&quot;千早爱音 猫 大树 山 测试描述二&quot;,&quot;purl&quot;:&quot;https://example.com/page-two&quot;}"></a>
 <a class="iusc" m="{&quot;murl&quot;:&quot;file:///etc/passwd&quot;}"></a>
 <a class="iusc" m="{&quot;murl&quot;:&quot;http://127.0.0.1/private.jpg&quot;}"></a>
 <a class="iusc" m="{&quot;murl&quot;:&quot;https://example.com/not-an-image.html&quot;}"></a>
@@ -768,13 +769,20 @@ BAIDU_JSON_FIXTURE = json_module.dumps(
                     "https://img1.baidu.com/it/u=1,2&fm=253&fmt=auto&f=JPEG?w=500&h=500"
                 ),
                 "thumbURL": "https://img1.baidu.com/thumb-one.jpg",
+                "fromPageTitleEnc": "千早爱音 猫 大树 百度图片一",
+                "fromURLHost": "baike.baidu.com",
+                "fromURL": "https://baike.baidu.com/item/千早爱音",
                 "replaceUrl": [
-                    {"ObjURL": "https://example.com/original-one.jpg"}
+                    {
+                        "ObjURL": "https://example.com/original-one.jpg",
+                        "FromURL": "https://example.com/source-one",
+                    }
                 ],
             },
             {
                 "middleURL": "http://127.0.0.1/private.jpg",
                 "thumbURL": "https://img0.baidu.com/thumb-two.png",
+                "fromPageTitleEnc": "千早爱音 猫 大树 百度图片二",
             },
             {"middleURL": "file:///etc/passwd"},
         ]
@@ -797,6 +805,15 @@ def make_test_png(width=32, height=32, tail=b""):
         + b"\x00\x00\x00\x00"
         + tail
     )
+
+
+UNRELATED_BING_HTML_FIXTURE = """
+<html><body>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/landscape.jpg&quot;,&quot;t&quot;:&quot;美丽的山景风景照片&quot;,&quot;desc&quot;:&quot;自然风光山水&quot;,&quot;purl&quot;:&quot;https://example.com/landscape&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/food.jpg&quot;,&quot;t&quot;:&quot;美食晚餐&quot;,&quot;desc&quot;:&quot;餐厅菜品&quot;}"></a>
+<a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/no-meta.jpg&quot;}"></a>
+</body></html>
+"""
 
 
 class TestImageSearch(unittest.IsolatedAsyncioTestCase):
@@ -918,6 +935,135 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
                 "https://cdn.example.com/large.png",
                 "https://www.bing.com/images/search",
             )
+
+    def test_relevance_normalizes_chinese_japanese_english(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        self.assertGreaterEqual(
+            plugin._image_relevance_score("千早爱音", "千早 愛音 | MyGO", ""),
+            0.6,
+        )
+        self.assertGreaterEqual(
+            plugin._image_relevance_score(
+                "千早爱音",
+                "Anon Chihaya | MyGO",
+                "Anon Chihaya character",
+            ),
+            0.6,
+        )
+        self.assertGreaterEqual(
+            plugin._image_relevance_score("大树", "大树风景图片", ""),
+            0.6,
+        )
+        self.assertGreaterEqual(
+            plugin._image_relevance_score("cat", "cute cat wallpaper", ""),
+            0.6,
+        )
+        self.assertLess(
+            plugin._image_relevance_score("cat", "catalog page", ""),
+            0.6,
+        )
+        self.assertLess(
+            plugin._image_relevance_score("千早爱音", "美丽的山景", "山水"),
+            0.6,
+        )
+
+    def test_candidate_parsers_preserve_title_and_description(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        bing_candidates = plugin._parse_bing_image_candidates(
+            BING_HTML_FIXTURE,
+            limit=5,
+        )
+        self.assertIn("千早爱音", bing_candidates[0]["title"])
+        self.assertIn("测试描述", bing_candidates[0]["description"])
+        self.assertEqual(
+            bing_candidates[0]["page_url"],
+            "https://example.com/page-one",
+        )
+
+        baidu_candidates = plugin._parse_baidu_image_candidates(
+            BAIDU_JSON_FIXTURE,
+            limit=5,
+        )
+        self.assertEqual(
+            baidu_candidates[0]["title"],
+            "千早爱音 猫 大树 百度图片一",
+        )
+        self.assertIn("baike.baidu.com", baidu_candidates[0]["description"])
+
+    def test_relevance_filter_drops_unrelated_and_metadata_less_candidates(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        candidates = [
+            {"url": "https://example.com/relevant.jpg", "title": "千早 愛音 MyGO", "description": "Anon"},
+            {"url": "https://example.com/unrelated.jpg", "title": "山景风景", "description": "山水"},
+            {"url": "https://example.com/no-meta.jpg", "title": "", "description": ""},
+            {"url": "https://example.com/english.jpg", "title": "Anon Chihaya", "description": "MyGO"},
+        ]
+        filtered = plugin._filter_image_candidates_by_relevance(
+            "千早爱音",
+            candidates,
+        )
+        self.assertEqual(
+            {item["url"] for item in filtered},
+            {
+                "https://example.com/relevant.jpg",
+                "https://example.com/english.jpg",
+            },
+        )
+        self.assertTrue(all(item["relevance_score"] >= 0.6 for item in filtered))
+
+    async def test_command_does_not_download_when_all_bing_candidates_irrelevant(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            image_search_result_count=1,
+            image_search_second_source_enabled=False,
+            image_search_empty_reply="没有相关图片。",
+        )
+        plugin._fetch_image_search_html_sync = lambda url: UNRELATED_BING_HTML_FIXTURE
+        download_calls = []
+
+        async def fake_download(image_url, *, referer):
+            download_calls.append(image_url)
+            return "/tmp/should-not-exist.png"
+
+        plugin._download_image = fake_download
+        event = FakeEvent(
+            [Plain("/找图 千早爱音")],
+            message_str="/找图 千早爱音",
+            private=True,
+        )
+        results = await run_image_search_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "没有相关图片。")
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertEqual(download_calls, [])
+
+    async def test_baidu_second_source_is_default_off_and_not_called(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        self.assertFalse(
+            plugin._cfg_bool("image_search_second_source_enabled")
+        )
+        plugin._fetch_image_search_html_sync = lambda url: "<html>no images</html>"
+        baidu_calls = []
+
+        def fake_baidu(url):
+            baidu_calls.append(url)
+            return BAIDU_JSON_FIXTURE
+
+        plugin._fetch_baidu_image_json_sync = fake_baidu
+        event = FakeEvent(
+            [Plain("/找图 千早爱音")],
+            message_str="/找图 千早爱音",
+            private=True,
+        )
+        results = await run_image_search_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "没有找到合适的图片，换个关键词试试吧。")
+        self.assertEqual(baidu_calls, [])
 
     async def test_command_downloads_local_images_and_tracks_temp_files(self):
         context = FakeContext()
@@ -2653,6 +2799,709 @@ class TestAIContextStickerSelection(unittest.IsolatedAsyncioTestCase):
             any(isinstance(comp, Image) for comp in event.result.chain)
         )
 
+
+class TestAIAutoCollectStickers(unittest.IsolatedAsyncioTestCase):
+    async def test_disabled_by_default_does_not_call_vision_or_collect(self):
+        context = FakeContext()
+        plugin = make_plugin(context)
+        self.assertFalse(
+            plugin._cfg_bool("sticker_ai_auto_collect_enabled")
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"off"))],
+                message_str="",
+                private=False,
+                sender_id="other-group-member",
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(results, [])
+            self.assertEqual(plugin._collected_entries, [])
+            self.assertEqual(context.calls, [])
+
+    async def test_enabled_any_group_member_ai_sticker_is_saved(self):
+        context = FakeContext(
+            responder=lambda kwargs: json_module.dumps(
+                {
+                    "is_sticker": True,
+                    "category": "猫猫",
+                    "confidence": 0.95,
+                },
+                ensure_ascii=False,
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_ai_auto_collect_enabled=True,
+            sticker_ai_auto_collect_probability=1.0,
+            sticker_ai_auto_collect_max_per_hour=5,
+            auto_collect_sticker_cooldown_seconds=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"ai-save"))],
+                message_str="",
+                private=False,
+                sender_id="other-group-member",
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertIn("这个表情我收下了", results[0].text)
+            self.assertIn("猫猫", results[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(
+                plugin._collected_entries[0]["category"],
+                "猫猫",
+            )
+            self.assertEqual(len(context.calls), 1)
+            self.assertNotIn("tools", context.calls[0])
+            self.assertIn("base64://", context.calls[0]["image_urls"][0])
+            self.assertTrue(event.call_llm)
+            self.assertTrue(event.stopped)
+
+    async def test_ai_failure_falls_back_to_local_heuristic(self):
+        def fail(kwargs):
+            raise RuntimeError("vision provider unavailable")
+
+        context = FakeContext(responder=fail)
+        plugin = make_plugin(
+            context,
+            sticker_ai_auto_collect_enabled=True,
+            sticker_ai_auto_collect_probability=1.0,
+            sticker_ai_auto_collect_max_per_hour=5,
+            auto_collect_sticker_cooldown_seconds=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"fallback"))],
+                message_str="",
+                private=False,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertIn("未分类", results[0].text)
+            self.assertEqual(len(context.calls), 1)
+
+    async def test_ai_says_not_sticker_does_not_collect_or_reply(self):
+        context = FakeContext(
+            responder=lambda kwargs: json_module.dumps(
+                {
+                    "is_sticker": False,
+                    "category": "未分类",
+                    "confidence": 0.99,
+                },
+                ensure_ascii=False,
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_ai_auto_collect_enabled=True,
+            sticker_ai_auto_collect_probability=1.0,
+            auto_collect_sticker_cooldown_seconds=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"not-sticker"))],
+                message_str="",
+                private=False,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(results, [])
+            self.assertEqual(plugin._collected_entries, [])
+            self.assertEqual(len(context.calls), 1)
+
+    async def test_large_image_and_face_skip_ai_call(self):
+        context = FakeContext(
+            responder=lambda kwargs: self.fail("不应调用视觉 provider")
+        )
+        plugin = make_plugin(
+            context,
+            sticker_ai_auto_collect_enabled=True,
+            sticker_ai_auto_collect_probability=1.0,
+            auto_collect_sticker_cooldown_seconds=0,
+            auto_collect_sticker_max_dimension=512,
+            user_sticker_reaction_enabled=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            large = FakeEvent(
+                [Image(data=make_test_png(1024, 768, b"large-ai"))],
+                message_str="",
+                private=False,
+            )
+            large_results = await run_handler(plugin, large)
+            self.assertEqual(large_results, [])
+            self.assertEqual(plugin._collected_entries, [])
+            self.assertEqual(context.calls, [])
+
+            face = FakeEvent([Face(21)], message_str="", private=False)
+            face_results = await run_handler(plugin, face)
+            self.assertEqual(face_results, [])
+            self.assertEqual(plugin._collected_entries, [])
+            self.assertEqual(context.calls, [])
+
+    async def test_hourly_limit_prevents_more_vision_calls(self):
+        clock = FakeClock(100.0)
+        context = FakeContext(
+            responder=lambda kwargs: json_module.dumps(
+                {
+                    "is_sticker": True,
+                    "category": "表情",
+                    "confidence": 0.99,
+                },
+                ensure_ascii=False,
+            )
+        )
+        plugin = make_plugin(
+            context,
+            clock=clock,
+            sticker_ai_auto_collect_enabled=True,
+            sticker_ai_auto_collect_probability=1.0,
+            sticker_ai_auto_collect_max_per_hour=1,
+            auto_collect_sticker_cooldown_seconds=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            first = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"first-ai"))],
+                message_str="",
+                private=False,
+                session_id="ai-hourly",
+            )
+            first_results = await run_handler(plugin, first)
+            self.assertEqual(len(first_results), 1)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(len(context.calls), 1)
+
+            clock.value = 110.0
+            second = FakeEvent(
+                [Image(data=make_test_png(64, 64, b"second-ai"))],
+                message_str="",
+                private=False,
+                session_id="ai-hourly",
+            )
+            second_results = await run_handler(plugin, second)
+            self.assertEqual(second_results, [])
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(len(context.calls), 1)
+
+    async def test_provider_override_and_malicious_category_are_safe(self):
+        seen_providers = []
+
+        def responder(kwargs):
+            seen_providers.append(kwargs["chat_provider_id"])
+            return json_module.dumps(
+                {
+                    "is_sticker": True,
+                    "category": "../../etc/passwd",
+                    "confidence": 0.99,
+                },
+                ensure_ascii=False,
+            )
+
+        context = FakeContext(
+            responder=responder,
+            extra_providers={"vision-collector": ("image",)},
+        )
+        plugin = make_plugin(
+            context,
+            sticker_ai_auto_collect_enabled=True,
+            sticker_ai_auto_collect_probability=1.0,
+            sticker_ai_auto_collect_provider_id="vision-collector",
+            auto_collect_sticker_cooldown_seconds=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"safe-cat"))],
+                message_str="",
+                private=False,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(seen_providers, ["vision-collector"])
+            self.assertEqual(len(results), 1)
+            self.assertEqual(
+                plugin._collected_entries[0]["category"],
+                "未分类",
+            )
+            self.assertNotIn(str(root), results[0].text)
+            self.assertNotIn("passwd", results[0].text)
+
+class TestModuleArchitecture(unittest.TestCase):
+    def test_deploy_package_relative_imports_work(self):
+        package_dir = PLUGIN_PATH.parent
+        package_name = "qqbot_enhancer_deploy_test_pkg"
+        init_spec = importlib.util.spec_from_file_location(
+            package_name,
+            package_dir / "__init__.py",
+            submodule_search_locations=[str(package_dir)],
+        )
+        self.assertIsNotNone(init_spec)
+        package = importlib.util.module_from_spec(init_spec)
+        sys.modules[package_name] = package
+        assert init_spec.loader is not None
+        init_spec.loader.exec_module(package)
+
+        main_spec = importlib.util.spec_from_file_location(
+            f"{package_name}.main",
+            PLUGIN_PATH,
+        )
+        self.assertIsNotNone(main_spec)
+        deployed_main = importlib.util.module_from_spec(main_spec)
+        sys.modules[f"{package_name}.main"] = deployed_main
+        assert main_spec.loader is not None
+        main_spec.loader.exec_module(deployed_main)
+        schema = json_module.loads(
+            (
+                PLUGIN_PATH.parent / "_conf_schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(set(deployed_main.DEFAULTS), set(schema))
+        self.assertTrue(hasattr(deployed_main, "QQBotEnhancerPlugin"))
+
+    def test_config_reader_centralized_defaults_and_old_config(self):
+        config_module = importlib.import_module("config")
+        schema = json_module.loads(
+            (
+                PLUGIN_PATH.parent / "_conf_schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(set(config_module.DEFAULTS), set(schema))
+        reader = config_module.ConfigReader({"sticker_probability": 0.9})
+        self.assertAlmostEqual(
+            reader.float("sticker_probability", 0.0, 1.0),
+            0.9,
+        )
+        self.assertFalse(reader.bool("sticker_ai_auto_collect_enabled"))
+        self.assertEqual(
+            config_module.DEFAULTS["sticker_ai_auto_collect_enabled"],
+            False,
+        )
+
+    def test_media_song_and_relevance_modules(self):
+        media = importlib.import_module("media")
+        image_search = importlib.import_module("image_search")
+        songs = importlib.import_module("songs")
+
+        png = make_test_png(48, 64, b"module-media")
+        self.assertEqual(media.detect_image_magic(png), ("image/png", ".png"))
+        self.assertEqual(media.image_dimensions(png, "image/png"), (48, 64))
+        self.assertEqual(
+            media.sanitize_http_url(
+                "file:///etc/passwd",
+                require_image_extension=False,
+            ),
+            "",
+        )
+        self.assertEqual(
+            media.sanitize_http_url(
+                "http://127.0.0.1/private.png",
+                require_image_extension=True,
+            ),
+            "",
+        )
+        self.assertTrue(
+            media.sanitize_http_url(
+                "https://cdn.example.com/public.png",
+                require_image_extension=True,
+            )
+        )
+        self.assertGreaterEqual(
+            image_search.relevance_score(
+                "千早爱音",
+                "Anon Chihaya | MyGO",
+                "",
+            ),
+            0.6,
+        )
+        self.assertGreaterEqual(
+            image_search.relevance_score(
+                "千早爱音",
+                "千早 愛音 | MyGO",
+                "",
+            ),
+            0.6,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "alpha.mp3").write_bytes(b"authorized-audio")
+            (root / "beta.wav").write_bytes(b"authorized-audio-2")
+            (root / "ignore.txt").write_text("not audio")
+            files, oversized = songs.list_song_files(
+                root,
+                max_bytes=1024,
+            )
+            self.assertEqual([path.name for path in files], ["alpha.mp3", "beta.wav"])
+            self.assertEqual([path.name for path in oversized], [])
+            repository = songs.LocalSongRepository(root)
+            self.assertIsNotNone(repository.resolve("alpha.mp3"))
+            self.assertIsNone(repository.resolve("../outside.mp3"))
+
+    def test_sticker_store_and_old_index_compatibility(self):
+        store_module = importlib.import_module("sticker_store")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            category_dir = root / "猫猫"
+            category_dir.mkdir()
+            data = make_test_png(32, 32, b"store-module")
+            sha256 = hashlib.sha256(data).hexdigest()
+            filename = sha256 + ".png"
+            (category_dir / filename).write_bytes(data)
+
+            def normalize(raw):
+                value = str(raw or "").strip()
+                if not value:
+                    return "未分类"
+                if len(value) > 32:
+                    return None
+                if not store_module.COLLECTED_CATEGORY_RE.fullmatch(value):
+                    return None
+                return value
+
+            store = store_module.CollectedStickerStore(
+                root,
+                max_file_bytes=1024 * 1024,
+                category_normalizer=normalize,
+            )
+            old_index = {
+                "version": 1,
+                "saved_at": 1,
+                "stickers": [
+                    {
+                        "sha256": sha256,
+                        "filename": filename,
+                        "category": "猫猫",
+                        "size": len(data),
+                        "created_at": 1,
+                        "source": "legacy",
+                    }
+                ],
+            }
+            (root / "index.json").write_text(
+                json_module.dumps(old_index, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            loaded = store.load_index()
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["category"], "猫猫")
+            self.assertEqual(loaded[0]["path"], category_dir / filename)
+            self.assertEqual(store.categories(loaded), {"猫猫": 1})
+            self.assertIsNotNone(store.find_by_sha(loaded, sha256))
+            store.save_index(loaded)
+            reloaded = store.load_index()
+            self.assertEqual(len(reloaded), 1)
+
+    def test_llm_helpers_parse_marker_and_judgement(self):
+        llm = importlib.import_module("llm")
+        clean, tag, present = llm.extract_sticker_ai_marker(
+            "好呀 [[sticker:猫猫]]"
+        )
+        self.assertEqual(clean, "好呀")
+        self.assertEqual(tag, "猫猫")
+        self.assertTrue(present)
+        self.assertEqual(
+            llm.extract_sticker_ai_marker("好呀"),
+            ("好呀", None, False),
+        )
+        judgement = llm.parse_ai_sticker_judgement(
+            '```json\n{"is_sticker": true, '
+            '"category": "猫猫", "confidence": 0.9}\n```'
+        )
+        self.assertEqual(judgement["category"], "猫猫")
+        self.assertTrue(judgement["is_sticker"])
+        self.assertEqual(
+            llm.sticker_ai_system_instruction(["happy", "猫猫"]),
+            "可选表情标签：happy, 猫猫。"
+            "仅在确实贴切时，于回复末尾原样附加一个"
+            "[[sticker:标签]] 标记；不需要就别输出标记，不要输出多个，不要解释标记。",
+        )
+
+    def test_safe_tools_whitelist_and_argument_validation(self):
+        safe_tools = importlib.import_module("safe_tools")
+        parsed = safe_tools.parse_tool_markers(
+            '好呀 [[tool:search_images keyword="千早爱音" count=1]]'
+        )
+        self.assertTrue(parsed.had_marker)
+        self.assertEqual(parsed.clean_text, "好呀")
+        self.assertEqual(len(parsed.intents), 1)
+        self.assertTrue(parsed.intents[0].valid)
+        self.assertEqual(parsed.intents[0].args["keyword"], "千早爱音")
+
+        valid_sticker = safe_tools.parse_tool_markers(
+            '[[tool:send_sticker emotion="happy"]]'
+        ).intents[0]
+        self.assertTrue(valid_sticker.valid)
+        valid_categories = safe_tools.parse_tool_markers(
+            "[[tool:list_sticker_categories]]"
+        ).intents[0]
+        self.assertTrue(valid_categories.valid)
+
+        invalid_markers = [
+            '[[tool:send_sticker category="../../etc/passwd"]]',
+            '[[tool:search_images keyword="file:///etc/passwd"]]',
+            '[[tool:search_images keyword="cat" count=0]]',
+            '[[tool:search_images keyword="cat" path="/tmp/x"]]',
+            '[[tool:send_sticker category="猫猫" emotion="happy"]]',
+            '[[tool:rm_rf path="/etc"]]',
+            '[[tool:collect_sticker category="a b"]]',
+        ]
+        for marker in invalid_markers:
+            parsed = safe_tools.parse_tool_markers(marker)
+            self.assertTrue(parsed.had_marker, marker)
+            self.assertEqual(len(parsed.intents), 1, marker)
+            self.assertFalse(parsed.intents[0].valid, marker)
+        self.assertIn("search_images", safe_tools.ALLOWED_TOOLS)
+        self.assertNotIn("eval", safe_tools.ALLOWED_TOOLS)
+        source = (
+            PLUGIN_PATH.parent / "safe_tools.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        forbidden_calls = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in {"eval", "exec", "compile"}:
+                    forbidden_calls.add(node.func.id)
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = [alias.name for alias in node.names]
+                if any(
+                    name.split(".")[0] in {"subprocess", "os", "ctypes"}
+                    for name in names
+                ):
+                    forbidden_calls.add("unsafe-import")
+        self.assertEqual(forbidden_calls, set())
+
+    def test_protocol_interfaces_are_exposed(self):
+        interfaces = importlib.import_module("interfaces")
+        for name in (
+            "StickerRepository",
+            "MediaDecoder",
+            "ImageSearchProvider",
+            "SongRepository",
+            "LLMService",
+        ):
+            self.assertTrue(hasattr(interfaces, name))
+        payload = interfaces.MediaPayload(
+            data=b"x",
+            mime="image/png",
+            extension=".png",
+            sha256="a" * 64,
+        )
+        self.assertEqual(payload.extension, ".png")
+
+
+class TestSafeToolRouter(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_search_images_tool_sends_one_image(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '帮你找 [[tool:search_images keyword="千早爱音" count=1]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            image_search_group_cooldown_seconds=0,
+            image_search_user_cooldown_seconds=0,
+            safe_tools_enabled=True,
+            safe_tools_allow_search_images=True,
+        )
+
+        async def fake_search(keyword):
+            self.assertEqual(keyword, "千早爱音")
+            return [
+                {
+                    "url": "https://cdn.example.com/anon.png",
+                    "title": "千早爱音",
+                    "description": "",
+                }
+            ]
+
+        async def fake_download(event, candidates, *, result_limit):
+            self.assertEqual(result_limit, 1)
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                f.write(make_test_png(16, 16, b"tool-search"))
+                path = f.name
+            return [path], ["https://cdn.example.com/anon.png"]
+
+        plugin._search_image_candidates = fake_search
+        plugin._download_search_image_files = fake_download
+        event = FakeEvent(
+            [Plain("你好呀")],
+            message_str="你好呀",
+            private=True,
+        )
+        try:
+            results = await run_handler(plugin, event)
+        finally:
+            # The fake download path is temporary and intentionally removed.
+            pass
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("[[tool:", results[0].text)
+        self.assertEqual(len(results[0].chain), 2)
+        self.assertIsInstance(results[0].chain[1], Image)
+        self.assertIn("可选安全工具", context.calls[0]["system_prompt"])
+        self.assertIn("search_images", context.calls[0]["system_prompt"])
+        self.assertNotIn("tools", context.calls[0])
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_direct_send_sticker_tool_sends_one_builtin(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '接好 [[tool:send_sticker emotion="happy"]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            sticker_cooldown_seconds=0,
+            safe_tools_enabled=True,
+            safe_tools_allow_send_sticker=True,
+        )
+        event = FakeEvent([Plain("发个开心表情")], message_str="发个开心表情", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("[[tool:", results[0].text)
+        self.assertEqual(len(results[0].chain), 2)
+        self.assertIsInstance(results[0].chain[1], Image)
+        self.assertEqual(Path(results[0].chain[1].path).name, "happy.png")
+
+    async def test_direct_collect_sticker_tool_uses_current_image(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '收到 [[tool:collect_sticker category="猫猫"]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            safe_tools_enabled=True,
+            safe_tools_allow_collect_sticker=True,
+            safe_tools_collect_cooldown_seconds=0,
+            auto_collect_user_sticker_enabled=False,
+            sticker_ai_auto_collect_enabled=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_temp_collected_root(plugin, temp_dir)
+            event = FakeEvent(
+                [Image(data=make_test_png(48, 48, b"tool-collect"))],
+                message_str="这张图怎么样",
+                private=True,
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(len(results), 1)
+            self.assertIn("猫猫", results[0].text)
+            self.assertEqual(len(plugin._collected_entries), 1)
+            self.assertEqual(plugin._collected_entries[0]["category"], "猫猫")
+            self.assertEqual(len(results[0].chain), 1)
+            self.assertNotIsInstance(results[0].chain[0], Image)
+
+    async def test_direct_list_sticker_categories_tool(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '分类如下 [[tool:list_sticker_categories]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_list_categories=True,
+        )
+        event = FakeEvent([Plain("有哪些表情分类")], message_str="有哪些表情分类", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertIn("happy", results[0].text)
+        self.assertNotIn("[[tool:", results[0].text)
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertNotIsInstance(results[0].chain[0], Image)
+
+    async def test_invalid_path_and_disabled_permission_fall_back_to_text(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '普通文本 [[tool:send_sticker category="../../etc/passwd"]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_send_sticker=True,
+        )
+        event = FakeEvent([Plain("你好")], message_str="你好", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "普通文本")
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertNotIn("passwd", results[0].text)
+
+        disabled_context = FakeContext(
+            responder=lambda kwargs: (
+                '普通文本 [[tool:send_sticker emotion="happy"]]'
+            )
+        )
+        disabled_plugin = make_plugin(
+            disabled_context,
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_send_sticker=False,
+        )
+        disabled_event = FakeEvent([Plain("你好")], message_str="你好", private=True)
+        disabled_results = await run_handler(disabled_plugin, disabled_event)
+        self.assertEqual(disabled_results[0].text, "普通文本")
+        self.assertEqual(len(disabled_results[0].chain), 1)
+
+    async def test_multiple_tool_markers_do_not_execute(self):
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '不执行 [[tool:list_sticker_categories]] '
+                '[[tool:send_sticker emotion="happy"]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            safe_tools_allow_list_categories=True,
+        )
+        event = FakeEvent([Plain("你好")], message_str="你好", private=True)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "不执行")
+        self.assertEqual(len(results[0].chain), 1)
+        self.assertNotIsInstance(results[0].chain[0], Image)
+
+    async def test_memory_mode_tool_marker_replaces_agent_chain(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_allow_list_categories=True,
+        )
+        event = FakeEvent(
+            [Plain("有哪些分类")],
+            message_str="有哪些分类",
+            private=True,
+        )
+        event.set_extra("qqbot_enhancer_memory_reply", True)
+        event.set_extra("qqbot_enhancer_sticker_text", "有哪些分类")
+        event.result = FakeResult(
+            [Plain("分类如下 [[tool:list_sticker_categories]]")]
+        )
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertEqual(len(event.result.chain), 1)
+        self.assertIsInstance(event.result.chain[0], Plain)
+        self.assertIn("可用表情分类", event.result.chain[0].text)
+        self.assertIn("happy", event.result.chain[0].text)
+        self.assertFalse(
+            any(isinstance(comp, Image) for comp in event.result.chain)
+        )
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):
