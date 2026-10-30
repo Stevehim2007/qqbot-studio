@@ -1872,7 +1872,7 @@
     controlGroup.appendChild(makeActionButton(instance, 'start'));
     controlGroup.appendChild(makeActionButton(instance, 'stop'));
     controlGroup.appendChild(makeActionButton(instance, 'restart'));
-    const deleteButton = makeElement('button', 'instance-delete-btn', '删除实例');
+    const deleteButton = makeElement('button', 'instance-delete-btn instance-action-btn', '删除实例');
     deleteButton.type = 'button';
     deleteButton.addEventListener('click', () => void handleDeleteInstance(instance, deleteButton));
     controlGroup.appendChild(deleteButton);

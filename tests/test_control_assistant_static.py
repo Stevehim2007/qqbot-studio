@@ -159,6 +159,8 @@ class ControlAssistantStaticTests(unittest.TestCase):
         for token in ("/api/instances", "/api/update/check", "/api/update/apply", "memory_mode", "plugin"):
             self.assertIn(token, self.console_js)
         self.assertIn(".instance-card { padding: 26px; }", self.console_css)
+        self.assertIn("instance-delete-btn instance-action-btn", self.console_js)
+        self.assertIn(".instance-delete-btn", self.console_css)
         self.assertIn("@media (max-width: 760px)", self.console_css)
         self.assertIn(".console-assistant-link", self.console_css)
 

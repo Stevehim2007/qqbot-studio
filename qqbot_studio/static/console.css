@@ -329,6 +329,19 @@
 }
 .instance-action-btn:hover:not(:disabled) { color: var(--ink-800); background: #f8fbfd; border-color: #b9cada; }
 .instance-action-btn:disabled { cursor: not-allowed; opacity: .45; }
+.instance-delete-btn {
+  color: var(--red-600);
+  background: #fff7f8;
+  border-color: #f2cbd2;
+}
+.instance-delete-btn:hover:not(:disabled) {
+  color: #8f1f2c;
+  background: #fff0f2;
+  border-color: #e7aab5;
+}
+.instance-delete-btn.is-loading {
+  cursor: wait;
+}
 .instances-empty {
   display: flex;
   flex-direction: column;
