@@ -23,14 +23,6 @@ IMAGE_PATH_EXTENSIONS = (
     ".bmp",
     ".avif",
 )
-IMAGE_MIME_EXTENSIONS = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
-    "image/bmp": ".bmp",
-    "image/avif": ".avif",
-}
 
 
 def detect_image_magic(data: bytes) -> tuple[str, str] | None:

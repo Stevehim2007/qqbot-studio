@@ -23,7 +23,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
@@ -504,10 +503,6 @@ class AssistantExtensionManager:
     # ------------------------------------------------------------------
     # Safe local configuration
     # ------------------------------------------------------------------
-    @staticmethod
-    def _now() -> str:
-        return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
     @staticmethod
     def _sanitize_text(text: Any) -> str:
         value = str(text or "")

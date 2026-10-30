@@ -10,7 +10,6 @@ from qqbot_studio.studio import (
     DEFAULT_BIND_HOST,
     DEFAULT_BIND_PORT,
     StudioManager,
-    detect_public_host,
 )
 
 

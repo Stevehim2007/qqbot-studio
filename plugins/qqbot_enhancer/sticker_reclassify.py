@@ -20,16 +20,7 @@ except ImportError:  # Loaded directly by a test harness.
     )
 
 SAFE_CATEGORY_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]{1,32}$")
-KNOWN_EMOTIONS = {
-    "happy",
-    "sad",
-    "angry",
-    "thinking",
-    "love",
-    "sleepy",
-    "surprised",
-    "cool",
-}
+KNOWN_EMOTIONS = {emotion for _keywords, emotion in EMOTION_KEYWORDS}
 _SUBJECT = r"(?:刚刚|刚才|上一个|上一张|上一条|这个|那个)"
 _NOUN = r"(?:表情包|表情|贴纸)"
 _VERB = r"(?:是|属于|分类为|改成|改到|移动到|移到|放到|标为|归为|算作)"

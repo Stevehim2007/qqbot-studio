@@ -75,11 +75,6 @@
   const $ = (id) => document.getElementById(id);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-  function setText(id, text) {
-    const element = $(id);
-    if (element) element.textContent = text;
-  }
-
   const instanceSettingsNamespace = studioNamespace.components && studioNamespace.components.instanceSettings;
   if (!instanceSettingsNamespace || typeof instanceSettingsNamespace.createInstanceSettings !== 'function') {
     throw new Error('缺少实例设置组件：请确认 /components/instance-settings.js 已加载。');

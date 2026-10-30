@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 TOOL_MARKER_RE = re.compile(
     r"\[\[\s*tool\s*:\s*([a-z_]+)([^\[\]\r\n]*)\]\]",

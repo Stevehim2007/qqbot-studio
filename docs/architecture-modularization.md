@@ -1,6 +1,6 @@
 # QQ Bot Studio 模块化 / 接口化架构
 
-> 状态：Phase 0（后端契约/资源统计）、Phase 4 第二阶段（前端 service/component 低风险提取）已实现。
+> 状态：Phase 0（后端契约/资源统计）、Phase 4 第二阶段（前端 service/component 低风险提取）已实现；Ponytail full 全仓审计与低风险精简已完成（详见 [ponytail-audit.md](ponytail-audit.md)）。
 > 本文描述目标架构、现有耦合、分阶段迁移方案、回滚方式和兼容边界。
 > 所有阶段均**不改变**现有用户可见 API、页面 URL、实例数据、文件路径或安全策略。
 
@@ -412,3 +412,21 @@ Phase 0 完成了“可替换接口 + 可独立测试平台无关模块”的目
 - 保留旧入口和兼容别名，API/数据/权限/安全策略未改变；
 - 剩余前端组件（参数编辑器 DOM、实例卡片、向导、独立助手页）、Windows Native 和
   deployer/server 深度拆分留到后续阶段，未伪称已完成。
+
+## 10. Ponytail full 全仓审计与低风险精简进度
+
+日期：2026-10-30。规则：DSH Ponytail `full` + `ponytail-audit` 七级阶梯（YAGNI、复用、
+stdlib/native、既有依赖、一行化、最小实现）。
+
+本轮只删除可证明无调用方的私有辅助、未使用导入/常量、单调用包装器和重复固定模板；
+没有改 API、数据格式、权限、安全策略、插件协议或 Windows 发行物。实际代码/测试净减少
+**129 行**（11 个源码文件、2 个测试文件；无新增/删除文件、无新增依赖）。
+
+保留项和剩余债务已记录在 [`ponytail-audit.md`](ponytail-audit.md)：前端 `app.js` /
+`console.js` 工具函数和插件配置前后端双校验优先保留；Git runner、原子 JSON 写入、
+sticker/tool marker 分叉和 Windows vendored core 暂不做跨边界合并。Windows 独立仓库
+本轮只读审计，后续需按既有 sync workflow 同步同一个 upstream commit。
+
+验收：`python3 -m unittest discover -s tests -v` 通过 **357 tests**；插件专项
+**161 tests**；`node --check`、`py_compile`、`bash -n` 和 Markdown 链接检查通过。
+后续触发条件：出现真实第二个 runtime/组件实现，或重复逻辑已产生缺陷/测试漂移时再拆。

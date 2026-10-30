@@ -3,7 +3,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from qqbot_studio.astrbot_api import AstrBotClient, AstrBotAPIError
+from qqbot_studio.astrbot_api import AstrBotClient
 
 
 class FakeAstrBotHandler(BaseHTTPRequestHandler):

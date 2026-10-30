@@ -235,10 +235,6 @@ class DeployManager:
             raise DeploymentError(f"提示词不能超过 {MAX_PROMPT_LENGTH} 个字符。")
         return value
 
-    @staticmethod
-    def _now() -> str:
-        return utc_now()
-
     def _job_path(self, job_id: str) -> Path:
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(job_id))
         return self.jobs_dir / f"{safe}.json"
@@ -318,7 +314,7 @@ class DeployManager:
             # Keep the in-memory job bounded; the UI only needs recent output.
             if len(job.logs) > 2500:
                 job.logs = job.logs[-2500:]
-            job.updated_at = self._now()
+            job.updated_at = utc_now()
             self._persist_job(job)
 
     def _set_job(self, job: Job, *, step: str | None = None, progress: int | None = None, message: str | None = None) -> None:
@@ -329,7 +325,7 @@ class DeployManager:
                 job.progress = max(0, min(100, int(progress)))
             if message is not None:
                 job.message = message
-            job.updated_at = self._now()
+            job.updated_at = utc_now()
             self._persist_job(job)
 
     def _collect_sensitive_values(self) -> set[str]:
@@ -565,7 +561,7 @@ class DeployManager:
                 job.error = message
                 job.message = message
                 job.step = job.step or "部署失败"
-                job.updated_at = self._now()
+                job.updated_at = utc_now()
                 self._append_log(job, f"[错误] {message}")
                 self._persist_job(job, force=True)
         else:
@@ -575,7 +571,7 @@ class DeployManager:
                 job.step = "部署完成"
                 job.message = "AstrBot、SnowLuma 与 DeepSeek 已配置完成。下一步请打开 noVNC 扫码登录 QQ。"
                 job.error = ""
-                job.updated_at = self._now()
+                job.updated_at = utc_now()
                 self._append_log(job, "[完成] 部署成功。请打开 noVNC 扫码登录 QQ。")
                 self._persist_job(job, force=True)
         finally:

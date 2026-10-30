@@ -15,8 +15,6 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .contracts import ResourceStats
-
 
 def _directory_scan_warning(path: Path | str, exc: OSError, *, action: str) -> str:
     if isinstance(exc, PermissionError):

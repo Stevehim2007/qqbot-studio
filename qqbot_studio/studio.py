@@ -15,7 +15,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from .assistant_ext import AssistantExtensionManager
 from .configgen import allocate_instance_port_block
@@ -28,7 +27,7 @@ from .resource_stats import (
     parse_percent as _parse_percent,
     parse_size_bytes as _parse_size_bytes,
 )
-from .dockerctl import DockerController, DockerError
+from .dockerctl import DockerController
 from .store import Store, chmod_best_effort, default_data_dir, utc_now
 
 STUDIO_SCHEMA_VERSION = 2

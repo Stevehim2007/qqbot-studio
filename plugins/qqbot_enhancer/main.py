@@ -62,8 +62,6 @@ try:  # Loaded as a package by AstrBot.
     )
     from .sticker_store import (
         COLLECTED_CATEGORY_RE,
-        COLLECTED_FILENAME_RE,
-        COLLECTED_INDEX_FILENAME,
         COLLECTED_STICKER_DIR_NAME,
         CollectedStickerStore,
     )
@@ -99,8 +97,6 @@ except ImportError:  # Loaded directly by a test harness.
     )
     from sticker_store import (
         COLLECTED_CATEGORY_RE,
-        COLLECTED_FILENAME_RE,
-        COLLECTED_INDEX_FILENAME,
         COLLECTED_STICKER_DIR_NAME,
         CollectedStickerStore,
     )
@@ -115,20 +111,6 @@ PLUGIN_FALLBACK_VERSION = "1.15.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PENDING_USER_MEDIA_MAX_SESSIONS = 128
-COLLECT_NATURAL_LANGUAGE_RE = re.compile(
-    r"^(?:帮我|给我|请(?:你)?|麻烦(?:你)?|你|能|可以)?\s*"
-    r"(?:把)?\s*(?:这个|这张|这条|这|它)?\s*"
-    r"(?:表情|图片|贴纸)?\s*"
-    r"(?:收藏|保存)(?:一下|起来|了)?\s*"
-    r"(?:(?:到|为|分类[:：]?)\s*)?"
-    r"(?P<category>[0-9A-Za-z_\-\u4e00-\u9fff]{1,32})?\s*$"
-)
-COLLECT_NATURAL_LANGUAGE_REVERSED_RE = re.compile(
-    r"^(?:帮我|给我|请(?:你)?|麻烦(?:你)?|你|能|可以)?\s*"
-    r"(?:收藏|保存)\s*"
-    r"(?P<category>[0-9A-Za-z_\-\u4e00-\u9fff]{1,32})\s*"
-    r"(?:表情|图片|贴纸)(?:吧|了)?\s*$"
-)
 BING_IMAGES_ENDPOINT = "https://www.bing.com/images/search"
 BING_IMAGES_REFERER = "https://www.bing.com/images/search"
 BAIDU_IMAGES_ENDPOINT = "https://image.baidu.com/search/acjson"
@@ -1602,16 +1584,6 @@ class QQBotEnhancerPlugin(Star):
                 return True
         return False
 
-    def _has_at_all(self, components: list[Any]) -> bool:
-        for comp in components:
-            if isinstance(comp, Comp.AtAll):
-                return True
-            if isinstance(comp, Comp.At):
-                qq = str(getattr(comp, "qq", "") or "").strip().lower()
-                if qq in {"all", "everyone"}:
-                    return True
-        return False
-
     def _group_random_eligible(
         self,
         message_text: str,
@@ -1825,7 +1797,7 @@ class QQBotEnhancerPlugin(Star):
                 getattr(comp, "file", None),
                 getattr(comp, "path", None),
             ):
-                if isinstance(candidate, str) and self._is_media_ref(candidate):
+                if isinstance(candidate, str) and media_is_media_ref(candidate):
                     chosen = candidate
                     break
 
@@ -1843,10 +1815,6 @@ class QQBotEnhancerPlugin(Star):
                 seen.add(chosen)
                 refs.append(chosen)
         return refs
-
-    @staticmethod
-    def _is_media_ref(ref: str) -> bool:
-        return media_is_media_ref(ref)
 
     def _build_prompt(
         self,
@@ -2455,25 +2423,6 @@ class QQBotEnhancerPlugin(Star):
                 raise ImageSearchError("百度图片搜索被重定向到非安全 HTTP(S) 地址")
             return self._read_search_response(response, expected="json")
 
-    @staticmethod
-    def _normalize_relevance_text(value: Any) -> str:
-        return image_search_engine.normalize_relevance_text(value)
-
-    def _relevance_query_variants(self, keyword: str) -> list[str]:
-        return image_search_engine.relevance_query_variants(keyword)
-
-    def _image_relevance_score_single(
-        self,
-        query: str,
-        title_norm: str,
-        desc_norm: str,
-    ) -> float:
-        return image_search_engine.relevance_score_single(
-            query,
-            title_norm,
-            desc_norm,
-        )
-
     def _image_relevance_score(
         self,
         keyword: str,
@@ -2591,10 +2540,6 @@ class QQBotEnhancerPlugin(Star):
                 reverse=True,
             )
         return candidates[:candidate_limit]
-
-    async def _search_image_urls(self, keyword: str) -> list[str]:
-        candidates = await self._search_image_candidates(keyword)
-        return [item["url"] for item in candidates]
 
     async def _build_image_search_result(
         self,
@@ -2917,7 +2862,7 @@ class QQBotEnhancerPlugin(Star):
                 raise ImageSearchError("图片响应为空")
             if len(data) > max_bytes:
                 raise ImageSearchError("图片响应超过大小限制")
-            detected = self._detect_image_magic(data)
+            detected = detect_image_magic(data)
             if detected is None:
                 raise ImageSearchError("下载内容不是受支持的图片格式")
             _, suffix = detected
@@ -2939,10 +2884,6 @@ class QQBotEnhancerPlugin(Star):
                 except OSError:
                     pass
             raise
-
-    @staticmethod
-    def _detect_image_magic(data: bytes) -> tuple[str, str] | None:
-        return detect_image_magic(data)
 
     def _parse_bing_image_candidates(
         self,
@@ -3408,12 +3349,6 @@ class QQBotEnhancerPlugin(Star):
             self._safe_tool_system_instruction()
             or self._sticker_ai_system_instruction()
         )
-
-    def _extract_sticker_ai_marker(
-        self,
-        text: str,
-    ) -> tuple[str, str | None, bool]:
-        return extract_sticker_ai_marker(text)
 
     def _resolve_sticker_ai_tag(
         self,
@@ -4283,7 +4218,7 @@ class QQBotEnhancerPlugin(Star):
         parsed = safe_tools_engine.parse_tool_markers(text)
         if not parsed.had_marker:
             return text, None, False
-        clean_text, _, _ = self._extract_sticker_ai_marker(parsed.clean_text)
+        clean_text, _, _ = extract_sticker_ai_marker(parsed.clean_text)
         if not self._cfg_bool("safe_tools_enabled"):
             logger.info(
                 "qqbot_enhancer safe_tool marker tool=%s success=False "
@@ -4339,7 +4274,7 @@ class QQBotEnhancerPlugin(Star):
         *,
         allow_random_sticker: bool = True,
     ):
-        clean_text, ai_tag, had_marker = self._extract_sticker_ai_marker(
+        clean_text, ai_tag, had_marker = extract_sticker_ai_marker(
             reply_text
         )
         reply_text = self._finalize_reply(clean_text)
@@ -4636,11 +4571,6 @@ class QQBotEnhancerPlugin(Star):
             )
             return None
 
-    def _collected_index_path(self) -> Path | None:
-        if self._collected_root is None:
-            return None
-        return self._collected_root / COLLECTED_INDEX_FILENAME
-
     @staticmethod
     def _atomic_write_bytes(path: Path, data: bytes) -> None:
         CollectedStickerStore.atomic_write_bytes(
@@ -4731,16 +4661,6 @@ class QQBotEnhancerPlugin(Star):
             return None
         return store.category_dir(category, create=create)
 
-    def _collected_file_path_for(
-        self,
-        category: str,
-        filename: str,
-    ) -> Path | None:
-        store = self._collected_store()
-        if store is None:
-            return None
-        return store.file_path(category, filename)
-
     def _valid_collected_entries(self) -> list[dict[str, Any]]:
         store = self._collected_store()
         if store is None:
@@ -4765,9 +4685,6 @@ class QQBotEnhancerPlugin(Star):
             return str(template).format(**kwargs)
         except (KeyError, ValueError):
             return str(template)
-
-    def _local_image_ref_path(self, ref: Any) -> Path | None:
-        return media_local_image_ref_path(ref)
 
     def _prune_pending_user_media(self, now: float) -> None:
         ttl = self._cfg_int("pending_sticker_ttl_seconds", 1)
@@ -4905,7 +4822,7 @@ class QQBotEnhancerPlugin(Star):
             getattr(image, "file", None),
             getattr(image, "url", None),
         ):
-            local_path = self._local_image_ref_path(ref)
+            local_path = media_local_image_ref_path(ref)
             if local_path is None:
                 continue
             try:
@@ -4924,7 +4841,7 @@ class QQBotEnhancerPlugin(Star):
             return "invalid_image", None
         if len(data) > max_bytes:
             return "too_large", None
-        detected = self._detect_image_magic(data)
+        detected = detect_image_magic(data)
         if detected is None:
             return "invalid_image", None
         mime, extension = detected
@@ -4969,10 +4886,6 @@ class QQBotEnhancerPlugin(Star):
         )
         return ("face" if has_face else "no_image"), None
 
-    @staticmethod
-    def _image_dimensions(data: bytes, mime: str) -> tuple[int, int] | None:
-        return image_dimensions(data, mime)
-
     def _is_probable_sticker_payload(self, payload: dict[str, Any]) -> bool:
         data = payload.get("data")
         mime = str(payload.get("mime", ""))
@@ -4984,7 +4897,7 @@ class QQBotEnhancerPlugin(Star):
         )
         if len(data) > max_file_bytes:
             return False
-        dimensions = self._image_dimensions(data, mime)
+        dimensions = image_dimensions(data, mime)
         if dimensions is None:
             return False
         width, height = dimensions
@@ -5052,10 +4965,6 @@ class QQBotEnhancerPlugin(Star):
             return None
         return {"category": category}
 
-    @staticmethod
-    def _parse_ai_sticker_judgement(text: str) -> dict[str, Any] | None:
-        return parse_ai_sticker_judgement(text)
-
     async def _ai_judge_sticker_payload(
         self,
         event: AstrMessageEvent,
@@ -5093,7 +5002,7 @@ class QQBotEnhancerPlugin(Star):
                 exc_info=True,
             )
             return "error", None
-        judgement = self._parse_ai_sticker_judgement(response_text)
+        judgement = parse_ai_sticker_judgement(response_text)
         if judgement is None:
             logger.info(
                 "qqbot_enhancer AI 自动收藏返回无法解析，回退本地启发式"
@@ -5144,7 +5053,7 @@ class QQBotEnhancerPlugin(Star):
         max_bytes = self._cfg_int("auto_collect_sticker_max_file_bytes", 1)
         if len(data) > max_bytes:
             return None
-        dimensions = self._image_dimensions(
+        dimensions = image_dimensions(
             data,
             str(payload.get("mime", "")),
         )

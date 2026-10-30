@@ -10,7 +10,6 @@ from typing import Callable, Sequence
 from .store import default_data_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "auto-update.sh"
 GitRunner = Callable[[Sequence[str], Path, int], subprocess.CompletedProcess[str]]
 
 
