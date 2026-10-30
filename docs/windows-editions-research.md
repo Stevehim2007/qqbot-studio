@@ -22,6 +22,37 @@
 3. **noVNC 不删掉，但降级为可选增强**：官方 SnowLuma Windows 路径是直接看桌面 QQ 窗口；若用户坚持浏览器扫码，需要额外 VNC Server + websockify/noVNC，且只能共享 Windows 当前交互桌面。
 4. **两个 EXE 必须同版本、同 Release、CI 同批构建**；不要维护两套手工分叉前端。
 
+## 0.1 已落地的同步与双 EXE 发布规则
+
+Windows 独立仓库已按本文结论接入以下流程（流程文件已存在；真实 GitHub Actions 跨仓库
+自动运行仍以实际 workflow run 为准）：
+
+- 同一 Windows 仓库、同一版本线、同一 `v*` GitHub Release 同时发布：
+  - `QQBotStudioWindows.exe` = Docker Desktop + WSL2 稳定 edition；
+  - `QQBotStudioWindowsNative.exe` = Native bootstrap/guide 占位，不冒充完整 Native
+    产品，不宣称 AstrBot/SnowLuma/NTQQ E2E。
+- `.github/workflows/sync-upstream.yml`：
+  - 支持 `workflow_dispatch` 和每日 schedule，checkout 本仓库公开 `main`；
+  - allowlist 同步 `qqbot_studio/`（含 static）、`plugins/qqbot_enhancer/`、`assets/`
+    和必要 docs；
+  - 保留 Windows launcher、PowerShell、build/spec、`VERSION`、release workflow 和
+    Windows 专属 README/FAQ；
+  - 写入 `.upstream-commit` 并更新 `UPSTREAM.md` 的 Linux commit、bundled core 版本和
+    plugin 版本；同步后跑测试，有变化才自动 commit/push，无变化不空提交；
+  - 不覆盖 Windows 版本号，版本升级和 tag 仍由发布任务显式处理。
+- 每次 Linux major/minor 更新必须在同一发布周期同步 Windows 两个 edition；tag
+  Release 前校验 `VERSION`，构建和 smoke 两个 EXE，上传 Docker/Native EXE +
+  `SHA256SUMS.txt` + README/VALIDATION。未同步、测试失败或任一 smoke 失败时阻止发布。
+- Native noVNC 继续作为可选高级增强：Windows VNC Server + websockify，共享整个
+  交互式桌面，不承诺每实例独立屏；官方推荐路径仍是本机 NTQQ 窗口扫码。
+
+本地预演（在 Windows 仓库）：
+
+```powershell
+python scripts\sync_upstream.py --upstream-dir ..\qqbot-studio --target-dir . --dry-run
+python -m unittest discover -s tests -v
+```
+
 ---
 
 ## 1. A：纯 Windows 原生版

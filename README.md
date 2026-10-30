@@ -131,12 +131,23 @@ http://服务器IP:8765/console
 Windows 版不是 Ubuntu 主项目的同一发行版、不是本仓库的自动更新分支，也不能与 Linux 共用数据目录或自动更新。
 
 - Windows 独立仓库：<https://github.com/Stevehim2007/qqbot-studio-windows>
-- EXE 构建产物：从 [windows-build workflow](https://github.com/Stevehim2007/qqbot-studio-windows/actions/workflows/windows-build.yml) 最新成功构建的 artifact 下载 `QQBotStudioWindows.exe`
-- Releases 页面：<https://github.com/Stevehim2007/qqbot-studio-windows/releases>（当前没有正式 EXE Release 资产；以后续实际发布为准）
+- Releases 页面：<https://github.com/Stevehim2007/qqbot-studio-windows/releases>
+- 双发行版（同一版本线/同一 Release）：
+  - **Docker edition（稳定）**：`QQBotStudioWindows.exe`，Docker Desktop + WSL2 + Linux containers；
+  - **Native edition（POC/bootstrap）**：`QQBotStudioWindowsNative.exe`，官方 SnowLuma Windows + 本机桌面 NTQQ 单实例路线；当前 Native EXE 只提供官方指南和只读依赖检查，不是已完成的 AstrBot/SnowLuma 管理器，也没有 native E2E 结果。
 - 主仓库内的 [`windows/README.md`](windows/README.md) 是早期移植资料/开发记录，正式 Windows 入口以上面的独立仓库为准。
-- Windows 双发行版（原生/ Docker）的可行性、noVNC 取舍和限制见 [`docs/windows-editions-research.md`](docs/windows-editions-research.md)。
+- Windows 双发行版可行性、noVNC 取舍和限制见 [`docs/windows-editions-research.md`](docs/windows-editions-research.md)。
 
-Windows 版使用 Docker Desktop + WSL2 **Linux containers**，不是 Windows containers。当前尚未完成真实 Windows 10/11 + Docker Desktop + EXE 的完整 E2E 验收，请不要把它当作与 Ubuntu 主项目同等级的生产承诺。Windows 数据目录默认在 `%LOCALAPPDATA%\QQBotStudio\data`，不能直接复制 Linux 的 `~/.local/share/qqbot-studio` 混合使用。
+**每次 Linux 主项目更新都要同步 Windows 双版本**：Windows 仓库的
+`.github/workflows/sync-upstream.yml` 支持 `workflow_dispatch` 和每日 schedule，从本仓库
+公开 `main` 同步 allowlist（`qqbot_studio/`、`plugins/qqbot_enhancer/`、`assets/`、必要 docs），
+记录 `.upstream-commit` 与 `UPSTREAM.md`，有变化才自动 commit/push；Windows launcher、
+PowerShell、build/spec、`VERSION` 和 release workflow 保留在 Windows 仓库。Linux
+major/minor 发布后必须在同一发布周期同步 Windows；`v*` Release 校验 tag/VERSION 并同批
+构建、smoke、上传 Docker/Native 两个 EXE + SHA256 + README/VALIDATION。未同步、测试失败或
+任一 EXE smoke 失败时不得发布。当前 Windows 正式 Release 的 EXE/API 真实验证与未验证项
+以 Windows 仓库 README/VALIDATION 为准；真实 Windows AstrBot/SnowLuma/QQ/noVNC E2E 仍未验证，
+不能把 Native bootstrap 当作生产可用版本。
 
 <a id="assistants"></a>
 ### 1.5 AI 助手独立页面
