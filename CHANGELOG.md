@@ -8,6 +8,14 @@
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
 
+
+## v4.0.2
+
+- 合并非 @ 群聊双概率：`reply_probability` 成为唯一普通参与概率。
+- ambient 开启时只走 ambient 单一决策，未命中不再 fallback 旧 random；ambient 关闭才走 generic。
+- `ambient_group_reply_probability` 弃用，旧配置不再叠加；关键词命中概率保留为独立分支。
+- 全量 444 tests OK。
+
 ## v4.0.1
 
 - 向导增加步骤下拉菜单。

@@ -689,7 +689,7 @@
     "default": false
   },
   "ambient_group_reply_probability": {
-    "description": "非 @ 群消息 ambient 参与概率",
+    "description": "已弃用：不参与决策；普通非 @ 群概率统一使用 reply_probability",
     "type": "float",
     "default": 0.03,
     "slider": {

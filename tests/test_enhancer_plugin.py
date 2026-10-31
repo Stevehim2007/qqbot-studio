@@ -6651,9 +6651,9 @@ class TestAmbientGroupChat(unittest.IsolatedAsyncioTestCase):
         context = FakeContext(responder=lambda kwargs: "我来接一句")
         plugin = make_plugin(
             context,
-            reply_probability=0.0,
+            reply_probability=1.0,
             ambient_group_chat_enabled=True,
-            ambient_group_reply_probability=1.0,
+            ambient_group_reply_probability=0.0,
             ambient_group_min_interval_seconds=0,
             group_identity_context_enabled=True,
         )
@@ -6682,9 +6682,9 @@ class TestAmbientGroupChat(unittest.IsolatedAsyncioTestCase):
         plugin = make_plugin(
             context,
             clock=clock,
-            reply_probability=0.0,
+            reply_probability=1.0,
             ambient_group_chat_enabled=True,
-            ambient_group_reply_probability=1.0,
+            ambient_group_reply_probability=0.0,
             ambient_group_min_interval_seconds=60,
             ambient_group_cache_ttl_seconds=30,
         )
@@ -6884,9 +6884,9 @@ class TestAmbientP1Fixes(unittest.IsolatedAsyncioTestCase):
         context = FakeContext(responder=lambda kwargs: "参与")
         plugin = make_plugin(
             context,
-            reply_probability=0.0,
+            reply_probability=1.0,
             ambient_group_chat_enabled=True,
-            ambient_group_reply_probability=1.0,
+            ambient_group_reply_probability=0.0,
             ambient_group_min_interval_seconds=0,
             ambient_group_cache_limit=3,
             ambient_group_round_interval=5,
@@ -6911,9 +6911,9 @@ class TestAmbientP1Fixes(unittest.IsolatedAsyncioTestCase):
         context = FakeContext(responder=lambda kwargs: "不应参与")
         plugin = make_plugin(
             context,
-            reply_probability=0.0,
+            reply_probability=1.0,
             ambient_group_chat_enabled=True,
-            ambient_group_reply_probability=1.0,
+            ambient_group_reply_probability=0.0,
             ambient_group_min_interval_seconds=0,
             min_message_chars=5,
             ignore_pure_image=True,
@@ -6942,9 +6942,9 @@ class TestAmbientP1Fixes(unittest.IsolatedAsyncioTestCase):
         open_context = FakeContext(responder=lambda kwargs: "图片参与")
         open_plugin = make_plugin(
             open_context,
-            reply_probability=0.0,
+            reply_probability=1.0,
             ambient_group_chat_enabled=True,
-            ambient_group_reply_probability=1.0,
+            ambient_group_reply_probability=0.0,
             ambient_group_min_interval_seconds=0,
             min_message_chars=5,
             ignore_pure_image=False,
@@ -6961,6 +6961,113 @@ class TestAmbientP1Fixes(unittest.IsolatedAsyncioTestCase):
         open_results = await run_handler(open_plugin, image_event)
         self.assertEqual(len(open_results), 1)
         self.assertEqual(len(open_context.calls), 1)
+
+class TestAmbientProbabilityDecisionTree(unittest.IsolatedAsyncioTestCase):
+    async def test_ambient_miss_does_not_fallback_to_generic(self):
+        context = FakeContext(responder=lambda kwargs: "不应该 fallback")
+        plugin = make_plugin(
+            context,
+            reply_probability=1.0,
+            ambient_group_chat_enabled=True,
+            ambient_group_min_interval_seconds=0,
+            ambient_group_round_interval=2,
+        )
+        for index in (1, 2):
+            event = FakeEvent(
+                [Plain(f"第{index}条")],
+                message_str=f"第{index}条",
+                private=False,
+                group_id="990001",
+                sender_id=f"3900{index}",
+                sender_name=f"用户{index}",
+                session_id="ambient-no-fallback",
+            )
+            results = await run_handler(plugin, event)
+            if index == 1:
+                self.assertEqual(results, [])
+                self.assertEqual(context.calls, [])
+        self.assertEqual(len(context.calls), 1)
+
+    async def test_keyword_branch_is_independent_and_old_ambient_probability_is_ignored(self):
+        context = FakeContext(responder=lambda kwargs: "关键词参与")
+        plugin = make_plugin(
+            context,
+            reply_probability=0.0,
+            ambient_group_chat_enabled=True,
+            ambient_group_reply_probability=1.0,
+            ambient_group_keyword_probability=1.0,
+            ambient_group_keywords=["机器人"],
+            ambient_group_min_interval_seconds=0,
+        )
+        keyword_event = FakeEvent(
+            [Plain("机器人你好")],
+            message_str="机器人你好",
+            private=False,
+            group_id="990002",
+            sender_id="39010",
+            sender_name="关键词用户",
+            session_id="ambient-keyword",
+        )
+        results = await run_handler(plugin, keyword_event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(context.calls), 1)
+
+        normal_event = FakeEvent(
+            [Plain("普通聊天")],
+            message_str="普通聊天",
+            private=False,
+            group_id="990003",
+            sender_id="39011",
+            sender_name="普通用户",
+            session_id="ambient-old-prob",
+        )
+        old_prob_results = await run_handler(plugin, normal_event)
+        self.assertEqual(old_prob_results, [])
+        self.assertEqual(len(context.calls), 1)
+
+    async def test_generic_path_uses_reply_probability_only_when_ambient_disabled(self):
+        enabled_context = FakeContext(responder=lambda kwargs: "generic 参与")
+        enabled_plugin = make_plugin(
+            enabled_context,
+            reply_probability=1.0,
+            ambient_group_chat_enabled=False,
+        )
+        enabled_event = FakeEvent(
+            [Plain("普通群消息")],
+            message_str="普通群消息",
+            private=False,
+            group_id="990004",
+            sender_id="39012",
+            sender_name="普通用户",
+            session_id="ambient-generic",
+        )
+        enabled_results = await run_handler(enabled_plugin, enabled_event)
+        self.assertEqual(len(enabled_results), 1)
+        self.assertEqual(len(enabled_context.calls), 1)
+
+        disabled_context = FakeContext(responder=lambda kwargs: "不应回复")
+        disabled_plugin = make_plugin(
+            disabled_context,
+            reply_probability=0.0,
+            ambient_group_chat_enabled=True,
+            ambient_group_reply_probability=1.0,
+        )
+        disabled_event = FakeEvent(
+            [Plain("旧概率不应叠加")],
+            message_str="旧概率不应叠加",
+            private=False,
+            group_id="990005",
+            sender_id="39013",
+            sender_name="普通用户",
+            session_id="ambient-generic-disabled",
+        )
+        disabled_results = await run_handler(disabled_plugin, disabled_event)
+        self.assertEqual(disabled_results, [])
+        self.assertEqual(disabled_context.calls, [])
+
+        option_text = disabled_plugin._build_option_text()
+        self.assertIn("reply_probability（唯一普通概率）", option_text)
+        self.assertIn("ambient 开启时只走 ambient 决策", option_text)
 
 class TestConversationLimitAndDelete(unittest.IsolatedAsyncioTestCase):
     async def test_below_limit_does_not_delete_and_at_limit_prunes_oldest_noncurrent(self):

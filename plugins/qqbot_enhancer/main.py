@@ -114,7 +114,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "2.1.0"
+PLUGIN_FALLBACK_VERSION = "2.2.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -351,21 +351,25 @@ class QQBotEnhancerPlugin(Star):
             explicit = is_private or bot_mentioned
 
             if not explicit:
-                if self._ambient_group_should_participate(
-                    event,
-                    message_text,
-                    components,
-                ):
+                if self._cfg_bool("ambient_group_chat_enabled"):
+                    # Ambient is the single non-@ decision path. A miss must
+                    # not fall through to the old generic probability path.
+                    if not self._ambient_group_should_participate(
+                        event,
+                        message_text,
+                        components,
+                    ):
+                        if self._cfg_bool("block_default_llm_for_group_non_at"):
+                            event.should_call_llm(True)
+                        return
                     mode = "ambient"
                 else:
+                    # Canonical ordinary group probability: reply_probability.
                     eligible = self._group_random_eligible(
                         message_text,
                         components,
                     )
                     if not eligible or not self._random_reply_allowed(event):
-                        # AstrBot 的字段名是 call_llm，但语义是“是否阻断默认 LLM”：
-                        # should_call_llm(True) 才会让 ProcessStage 的 not event.call_llm
-                        # 条件不成立。这里不能传 False。
                         if self._cfg_bool("block_default_llm_for_group_non_at"):
                             event.should_call_llm(True)
                         return
@@ -2440,8 +2444,19 @@ class QQBotEnhancerPlugin(Star):
             self._persona_option_line(),
             self._identity_option_line(),
             (
+                "非 @ 群概率：reply_probability（唯一普通概率）；"
+                "ambient 开启时只走 ambient 决策，关键词用 "
+                "ambient_group_keyword_probability。"
+            ),
+            (
                 "表情收藏：/收藏表情 保存当前消息中的图片到插件数据目录；"
-                "内置 stickers 与用户收藏表情都会参与正常回复。"
+                "内置 stickers 与用户收藏表情都会参与正常回复；"
+                "/表情状态 可只读诊断保存失败原因。"
+            ),
+            (
+                "限制：一个 AstrBot conversation 独立 persona/提示词/记忆；"
+                "工具仅白名单且不控制电脑；一次最多一条文字+一个附件；"
+                "不展示 QQ/群号/绝对路径。"
             ),
         ]
 
@@ -2991,16 +3006,16 @@ class QQBotEnhancerPlugin(Star):
             for keyword in keywords
             if keyword
         )
-        probability_key = (
-            "ambient_group_keyword_probability"
+        probability = (
+            self._cfg_float(
+                "ambient_group_keyword_probability",
+                0.0,
+                1.0,
+            )
             if keyword_hit
-            else "ambient_group_reply_probability"
+            else self._cfg_float("reply_probability", 0.0, 1.0)
         )
-        if self._rng.random() >= self._cfg_float(
-            probability_key,
-            0.0,
-            1.0,
-        ):
+        if self._rng.random() >= probability:
             return False
         self._last_ambient_at[session_key] = now
         return True

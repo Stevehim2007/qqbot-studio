@@ -393,7 +393,7 @@ Studio 更新提示词模板后不必重启 AstrBot：
 
 真实 AstrBot Agent hook、tool marker 输出和 QQ 表情展示 E2E 未验证。
 
-## 代码架构（2.1.0）
+## 代码架构（2.2.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 
