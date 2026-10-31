@@ -21,7 +21,7 @@
 
 ## 3. QA 与版本记录
 
-- [`qa-report-v2.md`](qa-report-v2.md)：当前 v3.12.0 条件验收报告、真实 E2E 待测清单和已知限制。
+- [`qa-report-v2.md`](qa-report-v2.md)：当前 v3.12.1 条件验收报告、真实 E2E 待测清单和已知限制。
 - [`ponytail-audit.md`](ponytail-audit.md)：Ponytail full 第一阶段全仓审计、低风险精简记录、保留/拒绝项和剩余债务。
 - [`ponytail-optimization-phase2.md`](ponytail-optimization-phase2.md)：第二阶段跨页 helper、Git runner 与测试 fixture 精简记录、实际净行数、验证和 Windows 同步影响。
 - [`qa-report.md`](qa-report.md)：旧版单实例 v1 时代的 QA 快照，仅作历史记录；接口和端口不要按它配置。
