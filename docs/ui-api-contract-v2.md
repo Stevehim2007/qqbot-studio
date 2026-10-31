@@ -670,6 +670,10 @@ body: {"mode": "direct"}  或  {"mode": "astrbot"}
   数据卷中，可按会话管理功能查看。两命令都不提供跨群共享知识库；长期记忆边界是 AstrBot 的会话存储，
   不是无限期全局记忆。
 - 兼容别名：`GET/POST /api/memory?instance=<id>`，POST 请求体相同。
+- 插件配置写入会同时原子更新 `<qqbot_enhancer_config>.bak` 最近良好快照（0600）。
+  主配置损坏时读取优先回退 backup；无 backup 时回退内存 cached 值或 Studio 当前
+  `memory_mode` 镜像，并返回明确 `error/warning`，不会把默认 `direct` 写回损坏文件。
+  只有显式写操作才允许修复主配置。
 
 ### 8.4 资源统计
 
@@ -1363,6 +1367,8 @@ GET /api/instances/<instance_id>/prompts
     }
   ],
   "active_id": "default",
+  "default_prompt_id": "default",
+  "default_profile": {"id": "default", "name": "默认提示词", "prompt": "…", "pinned": true},
   "restart_required": false,
   "conversation_created": false,
   "conversation_pending": false,
@@ -1417,19 +1423,21 @@ X-QB-Token: <token>
 
 - `conversation_created`: 后端当前始终为 `false`，因为 AstrBot conversation 只能由插件在下一轮
   消息中创建；不伪造“已创建”。
-- `conversation_pending`: `action=activate` 且增强插件当前 `memory_mode=astrbot` 时为 `true`。
+- `conversation_pending`: 兼容字段，当前恒为 `false`；activate 不再触发待创建会话。
 - `restart_required`: 插件配置未能在线热重载时的明确提示；本地状态仍已原子保存。
 - `message` / `warning` / `warnings` / `error`。
 
 行为：
 
-- `activate` 会把目标 profile 设为唯一 pinned，并同步 `config.prompt` 镜像和插件 state。
-- direct 模式下一轮直接使用新 active prompt。
-- astrbot memory 模式：插件在下一轮检测任何有效 persona id/prompt 变化（active profile、
-  group 精确映射或 default 映射），通过官方 `ConversationManager.new_conversation(..., persona_id=...)`
-  新建会话并绑定专用 Persona；`conversation_pending=true` 表示该动作延迟到插件下一轮，
-  而不是后端假称已完成。ConversationManager/PersonaManager 不可用或绑定失败时安全拒绝注入新人格，
-  不会把新人格接到旧会话历史上。
+- profile 是“新建会话模板库”；pinned profile 是新建会话默认模板库的唯一默认项。
+- GET/POST 返回的 `prompts` 始终把 pinned profile 排在第一，其余 profile 保持稳定顺序；
+  同一实例始终最多一个 `pinned=true`。`active_id` 保留为兼容字段，等价于 pinned/default id。
+- `activate` 只把目标 profile 设为唯一 pinned，更新 `config.prompt` 镜像与插件 state；
+  **不会**创建/切换/重置任何当前 AstrBot conversation。
+- `conversation_created` 恒为 false；`conversation_pending` 保留为兼容字段但恒为 false，
+  “激活后下一轮强制新会话”的旧语义已删除。插件/前端如需新建 conversation，由插件在实际
+  新建会话时读取 pinned/default profile 信息执行，不由 backend API 伪造。
+- API 额外返回 `default_prompt_id` 和 `default_profile`，供 conversation 创建/切换逻辑使用。
 - AstrBot 不在线或插件配置 API 不可用时：返回 `restart_required=true`/warning，本地配置仍保存，不返回 500。
 - 删除 active profile 时自动选择剩余的第一个 profile；删除最后一个返回 `ok:false`。
 - 写入使用原子 JSON + 0600；不记录 prompt、Key、用户 ID 到日志。

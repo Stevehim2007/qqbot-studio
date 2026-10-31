@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**3.12.1**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**3.13.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
 

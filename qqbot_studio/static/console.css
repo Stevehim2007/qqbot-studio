@@ -1026,13 +1026,13 @@ body.console-modal-open { overflow: hidden; }
 .prompt-manager-loading, .prompt-manager-empty { padding: 24px 8px; color: var(--ink-500); text-align: center; font-size: 10px; }
 .prompt-manager-list { display: grid; gap: 8px; }
 .prompt-item { min-width: 0; padding: 11px 12px; background: #fff; border: 1px solid #e1eaf2; border-radius: 9px; }
-.prompt-item.is-active { background: #f2fcf8; border-color: #a9e5d5; box-shadow: inset 3px 0 0 var(--mint-500); }
+.prompt-item.is-default { background: #f2fcf8; border-color: #a9e5d5; box-shadow: inset 3px 0 0 var(--mint-500); }
 .prompt-item-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .prompt-item-title-wrap { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 5px; }
 .prompt-item-name { color: var(--ink-800); font-size: 10.5px; overflow-wrap: anywhere; }
 .prompt-item-badge { padding: 1px 5px; border-radius: 999px; font-size: 7.5px; font-weight: 760; white-space: nowrap; }
 .prompt-item-badge.is-pinned { color: #805e18; background: #fff3d4; }
-.prompt-item-badge.is-active { color: #136a54; background: var(--mint-100); }
+.prompt-item-badge.is-default { color: #136a54; background: var(--mint-100); }
 .prompt-item-time { flex: 0 0 auto; color: var(--ink-400); font-size: 8px; white-space: nowrap; }
 .prompt-item-summary { margin-top: 5px; color: var(--ink-500); font-size: 8.8px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .prompt-item-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
@@ -1069,3 +1069,12 @@ body.console-modal-open { overflow: hidden; }
 .prompt-manager-cancel-busy, #prompt-manager-cancel-busy { min-height: 29px; padding: 4px 9px; font-size: 8.5px; }
 .prompt-delete-btn.is-confirm { color: #a52e3b; background: #fff2f4; border-color: #eab7bf; font-weight: 780; }
 .prompt-manager-modal:focus-visible, #prompt-manager-title:focus-visible { outline: 3px solid rgba(32, 201, 151, .55); outline-offset: 3px; }
+/* task-88：读取失败保留上次选择并提供重试 */
+.memory-refresh-btn,
+.ai-tools-retry {
+  align-self: flex-start;
+  margin-top: 7px;
+}
+.ai-tools-retry[hidden] { display: none !important; }
+.prompt-item.is-default { background: #f2fcf8; border-color: #a9e5d5; box-shadow: inset 3px 0 0 var(--mint-500); }
+.prompt-item-badge.is-default { color: #136a54; background: var(--mint-100); }

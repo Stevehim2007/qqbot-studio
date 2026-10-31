@@ -21,6 +21,7 @@ import html as html_lib
 import inspect
 import json
 import math
+import os
 import random
 import re
 import tempfile
@@ -112,7 +113,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.21.0"
+PLUGIN_FALLBACK_VERSION = "1.22.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -1087,23 +1088,60 @@ class QQBotEnhancerPlugin(Star):
         self,
         event: AstrMessageEvent,
         title: str,
+        prompt_profile: Any = None,
     ) -> str:
         manager = self._conversation_manager()
         if manager is None or not callable(
             getattr(manager, "new_conversation", None)
         ):
             raise RuntimeError("conversation manager unsupported")
-        persona_id = ""
-        target = self._agent_group_persona_target(event)
         bridge = getattr(self, "_agent_persona_bridge", None)
-        if target is not None and bridge is not None:
-            prompt, _name, _source, candidate_id = target
-            try:
-                ensured = await bridge.ensure_persona(candidate_id, prompt)
-                if ensured:
+        persona_id = ""
+        fallback_target = None
+        if prompt_profile is not None:
+            candidate_id = persona_bridge_engine.persona_id_for_profile(
+                prompt_profile.id
+            )
+            if not candidate_id or bridge is None:
+                raise RuntimeError("prompt persona unsupported")
+            ensured = await bridge.ensure_persona(
+                candidate_id,
+                prompt_profile.prompt,
+            )
+            if not ensured:
+                raise RuntimeError("prompt persona unavailable")
+            persona_id = candidate_id
+        else:
+            # No explicit template: use pinned/default template if available,
+            # otherwise only the explicitly configured group persona fallback.
+            config = self._parse_prompt_profiles_config()
+            pinned = config.default
+            if pinned is not None:
+                candidate_id = persona_bridge_engine.persona_id_for_profile(
+                    pinned.id
+                )
+                if not candidate_id or bridge is None:
+                    raise RuntimeError("pinned persona unsupported")
+                ensured = await bridge.ensure_persona(
+                    candidate_id,
+                    pinned.prompt,
+                )
+                if not ensured:
+                    raise RuntimeError("pinned persona unavailable")
+                persona_id = candidate_id
+            else:
+                fallback_target = self._agent_group_persona_target(event)
+                if fallback_target is not None:
+                    prompt, _name, _source, candidate_id = fallback_target
+                    if bridge is None:
+                        raise RuntimeError("group persona unsupported")
+                    ensured = await bridge.ensure_persona(
+                        candidate_id,
+                        prompt,
+                    )
+                    if not ensured:
+                        raise RuntimeError("group persona unavailable")
                     persona_id = candidate_id
-            except Exception:
-                persona_id = ""
         value = await self._await_conversation_api(
             manager.new_conversation(
                 str(event.unified_msg_origin),
@@ -1124,20 +1162,12 @@ class QQBotEnhancerPlugin(Star):
                 cid,
             )
         )
-        if target is not None:
-            # The new conversation was created with the expected persona.
-            # Do not run bind_conversation here: a fresh PersonaManager write
-            # marks the persona as changed and could create a second hidden
-            # conversation instead of the named one just created.
-            current = await self._current_agent_conversation(
-                event,
-                cid,
-            )
-            expected_persona = target[3]
+        if persona_id:
+            current = await self._current_agent_conversation(event, cid)
             if (
                 current is not None
                 and conversation_engine.conversation_persona_id(current)
-                != expected_persona
+                != persona_id
             ):
                 raise RuntimeError("created conversation persona mismatch")
         return cid
@@ -1167,35 +1197,19 @@ class QQBotEnhancerPlugin(Star):
         event: AstrMessageEvent,
         cid: str,
         target_conversation: Any = None,
-    ) -> str:
+    ) -> bool:
         manager = self._conversation_manager()
         if manager is None or not cid:
-            return "unsupported"
-        expected_target = self._agent_group_persona_target(event)
-        expected_persona = (
-            expected_target[3] if expected_target is not None else ""
-        )
-        if expected_persona:
-            actual = conversation_engine.conversation_persona_id(
-                target_conversation
-            )
-            if actual != expected_persona:
-                return "persona_conflict"
+            return False
+        # A named conversation always keeps its own persona/prompt/memory.
+        # Never replace it with the current group persona.
         await self._await_conversation_api(
             manager.switch_conversation(
                 str(event.unified_msg_origin),
                 cid,
             )
         )
-        if expected_persona:
-            current = await self._current_agent_conversation(event, cid)
-            if (
-                current is not None
-                and conversation_engine.conversation_persona_id(current)
-                != expected_persona
-            ):
-                return "persona_conflict_after_switch"
-        return "ok"
+        return True
 
     def _conversation_title_from_command(
         self,
@@ -1208,8 +1222,49 @@ class QQBotEnhancerPlugin(Star):
             max_chars=self._cfg_int("conversation_title_max_chars", 1),
         )
 
+    def _new_conversation_arguments(
+        self,
+        event: AstrMessageEvent,
+    ) -> tuple[str | None, str | None]:
+        raw = self._collect_command_argument(
+            event,
+            ("新会话",),
+        ).strip()
+        if not raw:
+            return None, None
+        parts = raw.split(None, 1)
+        title = conversation_engine.normalize_title(
+            parts[0],
+            max_chars=self._cfg_int("conversation_title_max_chars", 1),
+        )
+        prompt_title = parts[1].strip() if len(parts) > 1 else ""
+        return title, prompt_title or None
+
+    def _prompt_profile_for_template(self, reference: str):
+        config = self._parse_prompt_profiles_config()
+        return persona_engine.find_prompt_profile(config, reference)
+
+    def _default_prompt_profile(self):
+        config = self._parse_prompt_profiles_config()
+        return config.default
+
+    def _conversation_prompt_label(self, persona_id: str) -> str:
+        value = str(persona_id or "").strip()
+        if not value:
+            return "默认/未绑定"
+        config = self._parse_prompt_profiles_config()
+        for profile in config.profiles:
+            if (
+                persona_bridge_engine.persona_id_for_profile(profile.id)
+                == value
+            ):
+                return profile.name
+        if value.startswith(persona_bridge_engine.AGENT_PERSONA_PREFIX):
+            return "群人格"
+        return "自定义人格"
+
     def _conversation_usage_reply(self) -> str:
-        return "用法：/会话列表；/会话 名称；/新会话 名称"
+        return "用法：/会话列表；/会话 名称（只切换已有）；/新会话 名称 [提示词标题]"
 
     def _conversation_unsupported_reply(self) -> str:
         return "当前 AstrBot 后端没有可用的官方会话管理 API，未执行切换。"
@@ -1255,8 +1310,14 @@ class QQBotEnhancerPlugin(Star):
                 title = conversation_engine.conversation_title(conversation)
                 title = title or "（未命名会话）"
                 marker = " ← 当前" if cid and cid == current else ""
+                prompt_label = self._conversation_prompt_label(
+                    conversation_engine.conversation_persona_id(
+                        conversation
+                    )
+                )
                 lines.append(
-                    f"- {title} [id:{conversation_engine.short_id(cid)}]{marker}"
+                    f"- {title} [id:{conversation_engine.short_id(cid)}] "
+                    f"提示词：{prompt_label}{marker}"
                 )
             yield event.plain_result("\n".join(lines))
         except Exception:
@@ -1317,40 +1378,22 @@ class QQBotEnhancerPlugin(Star):
                 found = matches[0] if matches else None
                 if found is not None:
                     cid = conversation_engine.conversation_id(found)
-                    switch_status = await self._switch_agent_conversation(
+                    if not await self._switch_agent_conversation(
                         event,
                         cid,
                         found,
-                    )
-                    if switch_status == "persona_conflict":
-                        yield event.plain_result(
-                            "该会话的人格与当前群人格不同，不能直接切换；"
-                            "请用 /新会话 <名称> 新建，或先修改该群人格。"
-                        )
-                        return
-                    if switch_status == "persona_conflict_after_switch":
-                        yield event.plain_result(
-                            "切换后实际会话人格与当前群人格不一致，"
-                            "已保留目标会话但未声称人格接管；"
-                            "请用 /新会话 <名称> 或先修改该群人格。"
-                        )
-                        return
-                    if switch_status != "ok":
+                    ):
                         yield event.plain_result(
                             self._conversation_unsupported_reply()
                         )
                         return
                     yield event.plain_result(f"已切换到会话「{title}」。")
                     return
-                if not self._cfg_bool(
-                    "conversation_auto_create_enabled"
-                ):
-                    yield event.plain_result(
-                        f"没有找到会话「{title}」，未执行切换。"
-                    )
-                    return
-                await self._new_agent_conversation(event, title)
-                yield event.plain_result(f"已新建并切换到会话「{title}」。")
+                yield event.plain_result(
+                    f"没有找到会话「{title}」，未执行切换；"
+                    f"请用 /新会话 {title} 创建。"
+                )
+                return
         except Exception:
             logger.info("qqbot_enhancer /会话 切换失败")
             yield event.plain_result("会话切换失败，当前会话保持不变。")
@@ -1373,13 +1416,23 @@ class QQBotEnhancerPlugin(Star):
             if event.is_private_chat():
                 yield event.plain_result("私聊默认使用当前会话，无需切换。")
                 return
-            title = self._conversation_title_from_command(
-                event,
-                ("新会话",),
-            )
+            title, prompt_title = self._new_conversation_arguments(event)
             if title is None:
                 yield event.plain_result(self._conversation_usage_reply())
                 return
+            prompt_profile = None
+            if prompt_title:
+                prompt_profile = self._prompt_profile_for_template(
+                    prompt_title
+                )
+                if prompt_profile is None:
+                    yield event.plain_result(
+                        f"未找到提示词模板「{prompt_title}」，"
+                        "未创建会话。"
+                    )
+                    return
+            else:
+                prompt_profile = self._default_prompt_profile()
             manager = self._conversation_manager()
             if manager is None:
                 yield event.plain_result(
@@ -1398,8 +1451,19 @@ class QQBotEnhancerPlugin(Star):
                         f"同名会话「{title}」已存在，可用 /会话 {title} 切换。"
                     )
                     return
-                await self._new_agent_conversation(event, title)
-                yield event.plain_result(f"已新建并切换到会话「{title}」。")
+                await self._new_agent_conversation(
+                    event,
+                    title,
+                    prompt_profile,
+                )
+                prompt_suffix = (
+                    f"\n提示词：{prompt_profile.name}"
+                    if prompt_profile is not None
+                    else ""
+                )
+                yield event.plain_result(
+                    f"已新建并切换到会话「{title}」。{prompt_suffix}"
+                )
         except Exception:
             logger.info("qqbot_enhancer /新会话 创建失败")
             yield event.plain_result("新会话创建失败，当前会话保持不变。")
@@ -1490,6 +1554,67 @@ class QQBotEnhancerPlugin(Star):
                 )
             except Exception:
                 logger.exception("qqbot_enhancer 收藏表情错误回复发送失败")
+        finally:
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("表情状态", alias={"表情诊断"}, priority=110)
+    async def sticker_status_command(self, event: AstrMessageEvent):
+        """Read-only diagnostic for sticker collection; never calls LLM."""
+
+        event.should_call_llm(True)
+        try:
+            lines = ["表情状态："]
+            if not self._cfg_bool("collected_sticker_enabled"):
+                lines.append("- 收藏功能：未启用")
+            else:
+                lines.append("- 收藏功能：已启用")
+            root = self._collected_root
+            if root is None:
+                lines.append("- 存储：不可用（数据目录未就绪）")
+            elif not root.exists():
+                lines.append("- 存储：目录不存在，可尝试创建")
+            elif not os.access(root, os.W_OK):
+                lines.append("- 存储：权限不足，无法写入")
+            else:
+                lines.append("- 存储：可用")
+            entries = self._valid_collected_entries()
+            lines.append(
+                f"- 已收藏：{len(entries)} 张 / "
+                f"上限 {self._cfg_int('collected_sticker_max_count', 1)} 张"
+            )
+            lines.append(
+                "- 单图上限："
+                f"{self._cfg_int('collected_sticker_max_file_bytes', 1)} 字节"
+            )
+            status, _payload = await self._extract_collectible_image_payload(
+                event
+            )
+            if status == "ok":
+                lines.append("- 当前消息：有可保存图片，/收藏表情 可保存")
+            elif status == "no_image":
+                lines.append(
+                    "- 当前消息：没有图片；可引用图片或直接发送图片后再试"
+                )
+            elif status == "face":
+                lines.append("- 当前消息：只有 QQ 表情，不支持收藏为图片")
+            elif status == "too_large":
+                lines.append("- 当前消息：图片超过大小上限")
+            else:
+                lines.append("- 当前消息：图片无法解码或格式不支持")
+            cached = self._get_recent_user_media(event.unified_msg_origin)
+            lines.append(
+                "- 最近媒体缓存：" + ("有" if cached is not None else "无")
+            )
+            yield event.plain_result("\n".join(lines))
+        except Exception:
+            logger.info("qqbot_enhancer /表情状态 诊断失败")
+            yield event.plain_result("表情状态读取失败，请稍后再试。")
         finally:
             event.stop_event()
 
@@ -1887,8 +2012,10 @@ class QQBotEnhancerPlugin(Star):
             bridge = getattr(self, "_agent_persona_bridge", None)
             if bridge is not None and bridge.supported:
                 return (
-                    "群人格：memory_mode=astrbot 将按每个 AstrBot 会话（UMO）绑定独立"
-                    " Persona，复用当前默认 DeepSeek provider/API Key，不改其它群人格。"
+                    "群人格：memory_mode=astrbot 不再每轮自动改写会话；"
+                    "新会话默认使用 pinned 提示词模板，未配置模板时才显式使用"
+                    "群人格 fallback。每个 AstrBot conversation 保留自己的"
+                    " persona/提示词/记忆。"
                 )
             return (
                 "群人格：已配置映射，但当前 AstrBot 缺少 PersonaManager/"
@@ -1897,8 +2024,8 @@ class QQBotEnhancerPlugin(Star):
             )
         if prompt_profiles is not None and prompt_profiles.active is not None:
             return (
-                "提示词：已加载 active profile；"
-                f"共 {len(prompt_profiles.profiles)} 个，优先级与群人格规则见 /option 文档。"
+                f"提示词：已加载 {len(prompt_profiles.profiles)} 个模板；"
+                "pinned 仅作为 /新会话 默认模板，active 变化不会自动新建会话。"
             )
         return persona_engine.persona_summary(parsed)
 
@@ -1944,6 +2071,7 @@ class QQBotEnhancerPlugin(Star):
             "/会话 <名称>（群聊切换/自动新建）",
             "/新会话 <名称>（群聊新建并切换）",
             "/收藏表情 [分类]",
+            "/表情状态（别名 /表情诊断）",
             "/表情分类",
             "/表情列表 [分类]",
             "/发表情 [分类]",
@@ -4167,11 +4295,15 @@ class QQBotEnhancerPlugin(Star):
         except Exception:
             logger.warning("qqbot_enhancer 会话 persona 绑定失败，保留当前 AstrBot 人格")
 
-    @filter.on_waiting_llm_request()
     async def bind_agent_group_persona(self, event: AstrMessageEvent) -> None:
-        """Bind current per-UMO conversation before AstrBot builds the request."""
+        """Explicit compatibility binding helper (not a per-turn hook).
 
-        await self._sync_agent_group_persona(event)
+        Task-87 removes automatic on_waiting persona switching.  AstrBot
+        conversations keep their own persona/prompt/memory; only /新会话 may
+        create and bind a selected template.
+        """
+
+        return None
 
     @filter.on_llm_request()
     async def inject_agent_group_persona_prompt(
@@ -6226,7 +6358,15 @@ class QQBotEnhancerPlugin(Star):
                 "path": final_path,
             }
             old_entries = list(self._collected_entries)
-            self._atomic_write_bytes(final_path, payload["data"])
+            try:
+                self._atomic_write_bytes(final_path, payload["data"])
+            except OSError:
+                return (
+                    "storage",
+                    self._cfg_str(
+                        "collected_sticker_storage_unavailable_reply"
+                    ),
+                )
             self._collected_entries = old_entries + [entry]
             try:
                 self._save_collected_sticker_index()
@@ -6236,7 +6376,12 @@ class QQBotEnhancerPlugin(Star):
                     final_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-                raise
+                return (
+                    "storage",
+                    self._cfg_str(
+                        "collected_sticker_storage_unavailable_reply"
+                    ),
+                )
             self._last_collected_by_session[event.unified_msg_origin] = {
                 "sha256": str(payload["sha256"]),
                 "category": category,

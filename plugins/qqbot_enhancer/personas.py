@@ -188,6 +188,7 @@ class PromptProfile:
     id: str
     name: str
     prompt: str
+    pinned: bool = False
 
 
 @dataclass(slots=True)
@@ -199,6 +200,16 @@ class PromptProfileConfig:
     @property
     def active(self) -> PromptProfile | None:
         return next((item for item in self.profiles if item.id == self.active_id), None)
+
+    @property
+    def default(self) -> PromptProfile | None:
+        """Pinned profile is the explicit default for new conversations."""
+
+        return (
+            next((item for item in self.profiles if item.pinned), None)
+            or self.active
+            or (self.profiles[0] if self.profiles else None)
+        )
 
 
 def parse_prompt_profiles(
@@ -246,7 +257,14 @@ def parse_prompt_profiles(
             max_chars=max_name_chars,
             allow_newlines=False,
         ) or f"提示词 {len(profiles) + 1}"
-        profiles.append(PromptProfile(id=profile_id, name=name, prompt=prompt))
+        profiles.append(
+            PromptProfile(
+                id=profile_id,
+                name=name,
+                prompt=prompt,
+                pinned=raw_item.get("pinned") is True,
+            )
+        )
         seen.add(profile_id)
     if (
         sum(len(item.prompt) for item in profiles)
@@ -271,3 +289,34 @@ def resolve_prompt_profile(
         return active.prompt, active.name, active.id, "profile"
     legacy = str(legacy_prompt or "")
     return legacy, "", "", "legacy"
+
+
+def find_prompt_profile(
+    config: PromptProfileConfig,
+    reference: str,
+) -> PromptProfile | None:
+    """Resolve a template by exact profile name or id (case-insensitive)."""
+
+    wanted = str(reference or "").strip().casefold()
+    if not wanted:
+        return None
+    for profile in config.profiles:
+        if profile.name.strip().casefold() == wanted:
+            return profile
+    for profile in config.profiles:
+        if profile.id.strip().casefold() == wanted:
+            return profile
+    return None
+
+
+def resolve_default_prompt_profile(
+    config: PromptProfileConfig,
+    *,
+    legacy_prompt: str = "",
+) -> tuple[str, str, str, str]:
+    """Return pinned/default template, falling back to legacy prompt."""
+
+    profile = config.default
+    if profile is not None:
+        return profile.prompt, profile.name, profile.id, "profile"
+    return str(legacy_prompt or ""), "", "", "legacy"

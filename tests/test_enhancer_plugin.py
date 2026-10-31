@@ -629,6 +629,13 @@ async def run_collect_sticker_command(plugin, event):
     return results
 
 
+async def run_sticker_status_command(plugin, event):
+    results = []
+    async for result in plugin.sticker_status_command(event):
+        results.append(result)
+    return results
+
+
 async def run_categories_command(plugin, event):
     results = []
     async for result in plugin.collected_categories_command(event):
@@ -3579,6 +3586,8 @@ class TestModuleArchitecture(unittest.TestCase):
         parsed = personas.parse_prompt_profiles(raw, "p_one")
         self.assertEqual(parsed.errors, 0)
         self.assertEqual(parsed.active.prompt, prompt)
+        self.assertTrue(parsed.profiles[0].pinned)
+        self.assertIs(parsed.default, parsed.profiles[0])
         resolved = personas.resolve_prompt_profile(parsed, legacy_prompt="legacy")
         self.assertEqual(resolved[0], prompt)
         self.assertEqual(resolved[3], "profile")
@@ -5582,7 +5591,7 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("B群专属人格", text)
         self.assertEqual(context.calls, [])
 
-    async def test_astrbot_mode_binds_group_personas_to_separate_sessions(self):
+    async def test_astrbot_mode_new_sessions_bind_group_personas_separately(self):
         persona_mgr = FakePersonaManager()
         conv_mgr = FakeConversationManager()
         context = FakeContext(
@@ -5597,21 +5606,21 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
             system_prompt="全局旧提示词",
         )
         event_a = FakeEvent(
-            [At("10001"), Plain("你好")],
-            message_str="你好",
+            [Plain("/新会话 会话A")],
+            message_str="/新会话 会话A",
             private=False,
             group_id="111111",
             session_id="agent-a",
         )
         event_b = FakeEvent(
-            [At("10001"), Plain("你好")],
-            message_str="你好",
+            [Plain("/新会话 会话B")],
+            message_str="/新会话 会话B",
             private=False,
             group_id="222222",
             session_id="agent-b",
         )
-        await plugin.bind_agent_group_persona(event_a)
-        await plugin.bind_agent_group_persona(event_b)
+        await run_conversation_new_command(plugin, event_a)
+        await run_conversation_new_command(plugin, event_b)
 
         self.assertEqual(
             sorted(item[0] for item in persona_mgr.created),
@@ -5628,14 +5637,7 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.calls, [])
         self.assertNotIn("api_key", plugin.config)
 
-        req_a = SimpleNamespace(
-            system_prompt="AstrBot global persona",
-            conversation=conv_a,
-        )
-        await plugin.inject_agent_group_persona_prompt(event_a, req_a)
-        self.assertNotIn("Group Persona Instructions", req_a.system_prompt)
-
-    async def test_astrbot_unknown_group_uses_default_or_keeps_global_persona(self):
+    async def test_astrbot_unknown_group_new_session_uses_default_or_global(self):
         persona_mgr = FakePersonaManager()
         conv_mgr = FakeConversationManager()
         context = FakeContext(
@@ -5649,13 +5651,13 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
             group_personas=self._persona_json(),
         )
         unknown_with_default = FakeEvent(
-            [At("10001"), Plain("你好")],
-            message_str="你好",
+            [Plain("/新会话 默认会话")],
+            message_str="/新会话 默认会话",
             private=False,
             group_id="999999",
             session_id="agent-unknown-default",
         )
-        await plugin.bind_agent_group_persona(unknown_with_default)
+        await run_conversation_new_command(plugin, unknown_with_default)
         conv = conv_mgr.conversations[
             (
                 unknown_with_default.unified_msg_origin,
@@ -5684,8 +5686,8 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
             system_prompt="插件旧提示词",
         )
         no_default_event = FakeEvent(
-            [At("10001"), Plain("你好")],
-            message_str="你好",
+            [Plain("/新会话 无模板")],
+            message_str="/新会话 无模板",
             private=False,
             group_id="999999",
             session_id="agent-unknown-nodefault",
@@ -5693,12 +5695,18 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             no_default_plugin._agent_group_persona_target(no_default_event)
         )
-        await no_default_plugin.bind_agent_group_persona(no_default_event)
+        await run_conversation_new_command(
+            no_default_plugin,
+            no_default_event,
+        )
         self.assertEqual(no_default_mgr.created, [])
-        self.assertEqual(no_default_conv_mgr.current, {})
-        req = SimpleNamespace(system_prompt="AstrBot global persona", conversation=None)
-        await no_default_plugin.inject_agent_group_persona_prompt(no_default_event, req)
-        self.assertEqual(req.system_prompt, "AstrBot global persona")
+        created_conv = no_default_conv_mgr.conversations[
+            (
+                no_default_event.unified_msg_origin,
+                no_default_conv_mgr.current[no_default_event.unified_msg_origin],
+            )
+        ]
+        self.assertIsNone(created_conv.persona_id)
 
     async def test_astrbot_llm_request_fallback_without_manager_api(self):
         context = FakeContext()
@@ -5777,7 +5785,7 @@ class TestPromptProfilesPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIn("群专属人格优先", context.calls[-1]["system_prompt"])
         self.assertNotIn("第二套提示词", context.calls[-1]["system_prompt"])
 
-    async def test_astrbot_profile_switch_creates_new_conversation_and_persona(self):
+    async def test_astrbot_active_change_does_not_create_and_new_session_uses_pinned(self):
         persona_mgr = FakePersonaManager()
         conv_mgr = FakeConversationManager()
         context = FakeContext(
@@ -5788,17 +5796,21 @@ class TestPromptProfilesPlugin(unittest.IsolatedAsyncioTestCase):
             context,
             memory_mode="astrbot",
             prompt_profiles=self._profiles_json(),
-            prompt_profile_active_id="p_one",
+            prompt_profile_active_id="p_two",
             group_persona_enabled=False,
         )
         event = FakeEvent(
-            [At("10001"), Plain("你好")],
-            message_str="你好",
+            [Plain("/新会话 会话一")],
+            message_str="/新会话 会话一",
             private=False,
             group_id="111111",
             session_id="profile-agent",
         )
         await plugin.bind_agent_group_persona(event)
+        self.assertNotIn(event.unified_msg_origin, conv_mgr.current)
+
+        first_results = await run_conversation_new_command(plugin, event)
+        self.assertIn("提示词：profile-one", first_results[0].text)
         first_cid = conv_mgr.current[event.unified_msg_origin]
         first_conv = conv_mgr.conversations[(event.unified_msg_origin, first_cid)]
         self.assertEqual(first_conv.persona_id, "qqbot_enhancer_prompt_p_one")
@@ -5808,14 +5820,8 @@ class TestPromptProfilesPlugin(unittest.IsolatedAsyncioTestCase):
 
         plugin._config_reader.config["prompt_profile_active_id"] = "p_two"
         await plugin.bind_agent_group_persona(event)
-        second_cid = conv_mgr.current[event.unified_msg_origin]
-        self.assertNotEqual(first_cid, second_cid)
-        second_conv = conv_mgr.conversations[(event.unified_msg_origin, second_cid)]
-        self.assertEqual(second_conv.persona_id, "qqbot_enhancer_prompt_p_two")
-        self.assertEqual(second_conv.persona_id, "qqbot_enhancer_prompt_p_two")
-        self.assertIn(
-            "第二套提示词", persona_mgr.personas[second_conv.persona_id].system_prompt
-        )
+        self.assertEqual(conv_mgr.current[event.unified_msg_origin], first_cid)
+        self.assertEqual(conv_mgr.counter, 1)
         self.assertEqual(context.provider_id, "deepseek-flash")
         self.assertEqual(context.calls, [])
 
@@ -5878,7 +5884,7 @@ class TestPromptProfilesPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIn("安全拒绝", option_text)
         self.assertNotIn("不可泄漏的超长人格", option_text)
 
-    async def test_group_persona_prompt_update_starts_new_conversation(self):
+    async def test_group_persona_prompt_update_does_not_auto_create_conversation(self):
         persona_mgr = FakePersonaManager()
         conv_mgr = FakeConversationManager()
         context = FakeContext(
@@ -5894,29 +5900,23 @@ class TestPromptProfilesPlugin(unittest.IsolatedAsyncioTestCase):
             ),
         )
         event = FakeEvent(
-            [At("10001"), Plain("你好")],
-            message_str="你好",
+            [Plain("/新会话 固定会话")],
+            message_str="/新会话 固定会话",
             private=False,
             group_id="111111",
             session_id="persona-change",
         )
-        await plugin.bind_agent_group_persona(event)
+        await run_conversation_new_command(plugin, event)
         first_cid = conv_mgr.current[event.unified_msg_origin]
         plugin._config_reader.config["group_personas"] = json_module.dumps(
             {"groups": {"111111": "群人格 v2"}}
         )
         await plugin.bind_agent_group_persona(event)
-        second_cid = conv_mgr.current[event.unified_msg_origin]
-        self.assertNotEqual(first_cid, second_cid)
-        second_conv = conv_mgr.conversations[(event.unified_msg_origin, second_cid)]
-        self.assertEqual(second_conv.persona_id, "qqbot_enhancer_group_111111")
-        self.assertIn(
-            "群人格 v2",
-            persona_mgr.personas[second_conv.persona_id].system_prompt,
-        )
+        self.assertEqual(conv_mgr.current[event.unified_msg_origin], first_cid)
+        self.assertEqual(conv_mgr.counter, 1)
         self.assertEqual(context.calls, [])
 
-    async def test_group_persona_switch_from_profile_starts_new_conversation(self):
+    async def test_group_persona_switch_from_profile_does_not_auto_create(self):
         persona_mgr = FakePersonaManager()
         conv_mgr = FakeConversationManager()
         context = FakeContext(
@@ -5932,28 +5932,21 @@ class TestPromptProfilesPlugin(unittest.IsolatedAsyncioTestCase):
             prompt_profile_active_id="p_one",
         )
         event = FakeEvent(
-            [At("10001"), Plain("你好")],
-            message_str="你好",
+            [Plain("/新会话 配置不变")],
+            message_str="/新会话 配置不变",
             private=False,
             group_id="111111",
             session_id="persona-source-change",
         )
-        await plugin.bind_agent_group_persona(event)
+        await run_conversation_new_command(plugin, event)
         profile_cid = conv_mgr.current[event.unified_msg_origin]
         plugin._config_reader.config["group_personas"] = json_module.dumps(
             {"groups": {"111111": "群专属切换"}}
         )
         await plugin.bind_agent_group_persona(event)
-        group_cid = conv_mgr.current[event.unified_msg_origin]
-        self.assertNotEqual(profile_cid, group_cid)
-        group_conv = conv_mgr.conversations[(event.unified_msg_origin, group_cid)]
-        self.assertEqual(group_conv.persona_id, "qqbot_enhancer_group_111111")
-        self.assertIn(
-            "群专属切换",
-            persona_mgr.personas[group_conv.persona_id].system_prompt,
-        )
+        self.assertEqual(conv_mgr.current[event.unified_msg_origin], profile_cid)
+        self.assertEqual(conv_mgr.counter, 1)
 
-class TestGroupIdentityContext(unittest.IsolatedAsyncioTestCase):
     async def test_two_users_in_same_group_are_distinguishable_in_prompt(self):
         context = FakeContext(responder=lambda kwargs: "回复")
         plugin = make_plugin(
@@ -6336,7 +6329,7 @@ class TestConversationSwitchCommands(unittest.IsolatedAsyncioTestCase):
         self.assertIn("未自动取第一个", results[0].text)
         self.assertEqual(conv_mgr.current[umo], current_before)
 
-    async def test_named_switch_rejects_missing_or_different_target_persona(self):
+    async def test_named_switch_uses_existing_target_own_persona_without_creating(self):
         persona_mgr = FakePersonaManager()
         conv_mgr = FakeConversationManager()
         context = FakeContext(
@@ -6356,31 +6349,21 @@ class TestConversationSwitchCommands(unittest.IsolatedAsyncioTestCase):
             message_str="/会话 复盘",
             private=False,
             group_id="111111",
-            session_id="persona-switch-conflict",
+            session_id="persona-switch-existing",
         )
         umo = event.unified_msg_origin
-        expected = "qqbot_enhancer_group_111111"
-        conv_mgr.current[umo] = "current"
-        current = FakeConversation("current", persona_id=expected, title="当前")
+        current = FakeConversation("current", persona_id=None, title="当前")
         target_none = FakeConversation("target-none", persona_id=None, title="复盘")
-        target_other = FakeConversation("target-other", persona_id="other-persona", title="复盘")
-        for target_id, target in (
-            ("target-none", target_none),
-            ("target-other", target_other),
-        ):
-            conv_mgr.conversations = {
-                (umo, "current"): current,
-                (umo, target_id): target,
-            }
-            conv_mgr.current[umo] = "current"
-            before_counter = conv_mgr.counter
-            results = await run_conversation_switch_command(plugin, event)
-            self.assertIn("人格与当前群人格不同", results[0].text)
-            self.assertNotIn("已切换到会话", results[0].text)
-            self.assertEqual(conv_mgr.current[umo], "current")
-            self.assertEqual(conv_mgr.counter, before_counter)
-            self.assertIsNone(target_none.persona_id)
-            self.assertEqual(target_other.persona_id, "other-persona")
+        conv_mgr.conversations = {
+            (umo, "current"): current,
+            (umo, "target-none"): target_none,
+        }
+        conv_mgr.current[umo] = "current"
+        results = await run_conversation_switch_command(plugin, event)
+        self.assertIn("已切换到会话", results[0].text)
+        self.assertEqual(conv_mgr.current[umo], "target-none")
+        self.assertIsNone(target_none.persona_id)
+        self.assertEqual(conv_mgr.counter, 0)
 
     async def test_ambient_private_hook_never_injects_group_context(self):
         context = FakeContext()
@@ -6413,6 +6396,87 @@ class TestConversationSwitchCommands(unittest.IsolatedAsyncioTestCase):
             event.get_extra("qqbot_enhancer_ambient_context_injected")
         )
 
+    async def test_new_session_explicit_template_switches_immediately_and_list_labels(self):
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        context = FakeContext(
+            persona_manager=persona_mgr,
+            conversation_manager=conv_mgr,
+        )
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            prompt_profiles=json_module.dumps(
+                [
+                    {
+                        "id": "p_one",
+                        "name": "模板一",
+                        "prompt": "提示词一",
+                        "pinned": True,
+                    },
+                    {
+                        "id": "p_two",
+                        "name": "模板二",
+                        "prompt": "提示词二",
+                        "pinned": False,
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            prompt_profile_active_id="p_one",
+        )
+        event = FakeEvent(
+            [Plain("/新会话 讨论 模板二")],
+            message_str="/新会话 讨论 模板二",
+            private=False,
+            group_id="111112",
+            session_id="conversation-template",
+        )
+        results = await run_conversation_new_command(plugin, event)
+        self.assertIn("已新建并切换", results[0].text)
+        self.assertIn("提示词：模板二", results[0].text)
+        umo = event.unified_msg_origin
+        self.assertEqual(conv_mgr.counter, 1)
+        cid = conv_mgr.current[umo]
+        conv = conv_mgr.conversations[(umo, cid)]
+        self.assertEqual(conv.title, "讨论")
+        self.assertEqual(conv.persona_id, "qqbot_enhancer_prompt_p_two")
+        self.assertIn("提示词二", persona_mgr.personas[conv.persona_id].system_prompt)
+
+        # Simulate another existing conversation using the same prompt persona.
+        conv_mgr.conversations[(umo, "same-template")] = FakeConversation(
+            "same-template",
+            persona_id="qqbot_enhancer_prompt_p_two",
+            title="同一模板",
+        )
+        list_event = FakeEvent(
+            [Plain("/会话列表")],
+            message_str="/会话列表",
+            private=False,
+            group_id="111112",
+            session_id="conversation-template",
+        )
+        list_results = await run_conversation_list_command(plugin, list_event)
+        list_text = list_results[0].text
+        self.assertEqual(list_text.count("提示词：模板二"), 2)
+        self.assertIn("讨论", list_text)
+        self.assertIn("同一模板", list_text)
+        self.assertIn("← 当前", list_text)
+
+        missing_event = FakeEvent(
+            [Plain("/新会话 不创建 不存在模板")],
+            message_str="/新会话 不创建 不存在模板",
+            private=False,
+            group_id="111112",
+            session_id="conversation-template",
+        )
+        missing_results = await run_conversation_new_command(
+            plugin,
+            missing_event,
+        )
+        self.assertIn("未找到提示词模板", missing_results[0].text)
+        self.assertEqual(conv_mgr.counter, 1)
+
     async def test_auto_create_private_validation_unsupported_and_api_error(self):
         conv_mgr = FakeConversationManager()
         context = FakeContext(conversation_manager=conv_mgr)
@@ -6432,7 +6496,21 @@ class TestConversationSwitchCommands(unittest.IsolatedAsyncioTestCase):
             plugin,
             auto_event,
         )
-        self.assertIn("已新建并切换", auto_results[0].text)
+        self.assertIn("没有找到会话", auto_results[0].text)
+        self.assertIn("请用 /新会话", auto_results[0].text)
+        self.assertNotIn(auto_event.unified_msg_origin, conv_mgr.current)
+        create_event = FakeEvent(
+            [Plain("/新会话 新主题")],
+            message_str="/新会话 新主题",
+            private=False,
+            group_id="333333",
+            session_id="conversation-create",
+        )
+        create_results = await run_conversation_new_command(
+            plugin,
+            create_event,
+        )
+        self.assertIn("已新建并切换", create_results[0].text)
 
         private_event = FakeEvent(
             [Plain("/新会话 私密")],
@@ -6867,6 +6945,123 @@ class TestAmbientP1Fixes(unittest.IsolatedAsyncioTestCase):
         open_results = await run_handler(open_plugin, image_event)
         self.assertEqual(len(open_results), 1)
         self.assertEqual(len(open_context.calls), 1)
+
+class TestStickerStatusDiagnostic(unittest.IsolatedAsyncioTestCase):
+    async def test_status_reports_disabled_no_image_face_and_no_paths(self):
+        plugin = make_plugin(
+            FakeContext(),
+            collected_sticker_enabled=False,
+        )
+        event = FakeEvent(
+            [Plain("/表情状态")],
+            message_str="/表情状态",
+            private=False,
+            group_id="950001",
+            sender_id="35001",
+            sender_name="状态用户",
+            session_id="sticker-status-disabled",
+        )
+        results = await run_sticker_status_command(plugin, event)
+        self.assertIn("收藏功能：未启用", results[0].text)
+        self.assertNotIn(str(plugin._collected_root), results[0].text)
+        self.assertNotIn("35001", results[0].text)
+
+        enabled_plugin = make_plugin(
+            FakeContext(),
+            collected_sticker_enabled=True,
+        )
+        no_image_event = FakeEvent(
+            [Plain("/表情状态")],
+            message_str="/表情状态",
+            private=False,
+            group_id="950002",
+            sender_id="35002",
+            sender_name="无图用户",
+            session_id="sticker-status-no-image",
+        )
+        no_image_results = await run_sticker_status_command(
+            enabled_plugin,
+            no_image_event,
+        )
+        self.assertIn("没有图片", no_image_results[0].text)
+        self.assertNotIn(str(enabled_plugin._collected_root), no_image_results[0].text)
+
+        face_event = FakeEvent(
+            [Face(21)],
+            message_str="",
+            private=False,
+            group_id="950003",
+            sender_id="35003",
+            sender_name="表情用户",
+            session_id="sticker-status-face",
+        )
+        face_results = await run_sticker_status_command(
+            enabled_plugin,
+            face_event,
+        )
+        self.assertIn("只有 QQ 表情", face_results[0].text)
+        self.assertNotIn("35003", face_results[0].text)
+
+    async def test_save_storage_error_returns_clear_reason_without_raising(self):
+        plugin = make_plugin(
+            FakeContext(),
+            collected_sticker_enabled=True,
+        )
+        event = FakeEvent(
+            [Image(data=make_test_png(32, 32, b"storage-fail"))],
+            message_str="",
+            private=False,
+            group_id="950005",
+            sender_id="35005",
+            sender_name="存储失败",
+            session_id="sticker-status-storage-fail",
+        )
+        data = make_test_png(32, 32, b"storage-fail")
+        payload = {
+            "data": data,
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "extension": ".png",
+            "size": len(data),
+            "mime": "image/png",
+        }
+        with mock.patch.object(
+            plugin,
+            "_atomic_write_bytes",
+            side_effect=OSError("permission denied"),
+        ):
+            status, message = await plugin._save_collected_payload(
+                event,
+                "猫猫",
+                payload,
+            )
+        self.assertEqual(status, "storage")
+        self.assertIn("存储", message)
+        self.assertNotIn("permission denied", message)
+        self.assertNotIn(str(plugin._collected_root), message)
+
+    async def test_status_and_save_success_reports_clear_reason(self):
+        plugin = make_plugin(
+            FakeContext(),
+            collected_sticker_enabled=True,
+            auto_collect_user_sticker_enabled=False,
+            collected_sticker_max_count=10,
+        )
+        event = FakeEvent(
+            [Image(data=make_test_png(32, 32, b"status-save"))],
+            message_str="",
+            private=False,
+            group_id="950004",
+            sender_id="35004",
+            sender_name="保存用户",
+            session_id="sticker-status-save",
+        )
+        await run_collect_sticker_command(plugin, event)
+        status_results = await run_sticker_status_command(plugin, event)
+        text = status_results[0].text
+        self.assertIn("收藏功能：已启用", text)
+        self.assertIn("已收藏：1 张", text)
+        self.assertIn("有可保存图片", text)
+        self.assertNotIn("35004", text)
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):

@@ -10,10 +10,10 @@ AstrBot v4.29 自动加载插件，提供：
 - @/私聊支持保守自然语言找图，如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，命中后复用同一搜索下载流程并阻断默认 LLM；
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的授权音频并用 `Comp.Record` 发送，不调用 LLM，不烧 token；
 - 可选群聊 ambient：默认关闭；启用后缓存全群消息并按低频概率/关键词/轮次参与，回复优先用官方 `Comp.At` @ 发言人，失败降级 `@昵称`，默认有限冷却防刷屏；
-- `/会话列表`、`/会话 名称`、`/新会话 名称`（仅群聊）通过 AstrBot 官方 ConversationManager 列出/切换/新建命名会话，并绑定当前群人格；API 缺失时明确降级不伪造成功；
+- `/会话列表`、`/会话 名称`、`/新会话 名称 [提示词标题]`（仅群聊）通过 AstrBot 官方 ConversationManager 操作命名会话：每个 conversation 保留自己的 persona/提示词/记忆；新会话可用模板并立即切换，已有会话只切换不新建；API 缺失时明确降级不伪造成功；
 - `/food 火锅`、`/food 南关区 火锅`（别名 `/吃什么`、`/饭店`）通过固定 HTTPS host `food.dlsz.top` 公开只读 API 查询最多 5 家餐厅，格式化店名/地点/标签/均分/口味/性价比/评价数/最新日期，带超时、大小、冷却和中文降级，不调用 LLM；
-- `group_personas` 实例级群人格映射：direct 模式按群 ID 注入不同 system prompt，私聊/未知群 fallback default；astrbot memory 模式通过官方 PersonaManager/ConversationManager 为每个 UMO 绑定专用 Persona，任何有效 Persona/prompt 变化都会新建 conversation，无法保证时安全拒绝切换而不复用旧历史。
-- Studio 提示词 profiles/active：direct 使用 active prompt；astrbot 使用专用 profile Persona 并在变化时新建 conversation；与 group_personas 的优先级为 精确群映射 > active profile > group default > 旧 system_prompt。
+- `group_personas` 实例级群人格映射：direct 模式按群 ID 注入不同 system prompt，私聊/未知群 fallback default；astrbot memory 模式不再每轮强制覆盖已有 conversation，只在 `/新会话` 没有提示词模板时作为显式 fallback。
+- Studio 提示词 profiles/active/pinned：提示词是模板库，pinned 是 `/新会话` 未指定模板时的默认；active 变化不会自动新建或切换会话。direct 仍使用 active prompt；astrbot 已有 conversation 保留自己的 persona/提示词/记忆。
 - 提示词容量统一：最多 100 个 profile，每个 prompt 最多 12000 字符，`prompt_profiles` JSON 最多 2600000 字符；9×12000 合法，100×12000 在总上限内。Studio prompt/plugin config 请求体对该场景使用受控 8 MiB 上限，其它 API 仍使用更小的默认请求体限制。
 - direct 模式群聊身份上下文：prompt 包含群号、发送者昵称/QQ 和最近消息 `[昵称(QQ)]` 前缀，避免多人混为同一人；QQ/昵称仅用于本次 LLM 理解，回复中自动脱敏；astrbot memory 模式无稳定逐消息 hook 时安全降级。
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式与配置入口，并用 AstrBot 公开的 `Context.get_all_stars()` 列出已加载插件元数据；不暴露 Key，不枚举不稳定的内部 handler。
@@ -24,7 +24,7 @@ AstrBot v4.29 自动加载插件，提供：
 - 受限安全工具意图路由：模型只能输出白名单 marker，调用 search_images / send_sticker / collect_sticker / list_sticker_categories；禁止任意文件路径、URL 下载、shell/命令、电脑控制或任意插件函数。
 - 显式 @/私聊自然语言发表情：如“给我发个嘲讽表情包”“来一个开心的表情”“发张猫猫表情包”“发个表情”，直接选安全内置/收藏表情，不调用 LLM；非 @ 群聊不触发。
 - 显式 @/私聊自然语言重分类最近收藏：如“刚刚的表情包是嘲讽的意思”，按本地情绪映射或当前会话 provider 受控分类，把最近收藏安全移动到新分类；无缓存时明确“没有找到”，不会谎称没保存。
-- `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]` 管理用户收藏表情，保存到 AstrBot 插件数据目录；收藏表情也参与正常回复。
+- `/收藏表情 [分类]`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]` 管理用户收藏表情，保存到 AstrBot 插件数据目录；`/表情状态`（别名 `/表情诊断`）只读说明保存失败原因；收藏表情也参与正常回复。
 - `/收藏表情` 优先保存引用消息里的图片；没有引用时使用本会话内存中最近 3 张图片缓存（TTL 300 秒，不落盘、不记录用户文字/ID）。自动收藏默认关闭。
 
 ## 文件
@@ -305,14 +305,14 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 ```
 
 - `memory_mode=direct`：插件根据 `event.unified_msg_origin` 对应的群 ID 选择 prompt；私聊和未知群使用 `default`；无 `default` 时回退旧 `system_prompt`。
-- `memory_mode=astrbot`：使用 AstrBot v4.29.3 官方 `PersonaManager`、`ConversationManager.new_conversation/update_conversation` 和 `on_waiting_llm_request/on_llm_request` hook。为每个会话创建专用 Persona（不改全局 default），persona id/prompt 变化时新建 conversation，避免旧历史串人格；官方 manager API 不完整时安全拒绝切换/注入并提示降级，不假装按群隔离。
+- `memory_mode=astrbot`：不再用 `on_waiting_llm_request` 每轮把 group persona 覆盖到已有会话；一个 conversation 保留自己的 persona/提示词/记忆。只有 `/新会话` 才用官方 `ConversationManager.new_conversation(title=..., persona_id=...)` 创建并立即切换，`/会话` 只切换已有。群 persona 仅作为无提示词模板时的显式 fallback；官方 manager API 不完整时安全拒绝创建/绑定，不假装按群隔离。
 - 安全限制：群 ID 仅数字 1–20 位；默认/群 prompt 长度、数量、名称长度由 `group_persona_*` 限制；非法 JSON/非法群 ID/超长 prompt 被忽略并回退旧配置；不记录 prompt 到日志。
 - 旧的 `system_prompt` 配置继续有效；`group_personas={}` 时不改变任何行为。direct 模式不携带跨群会话历史，避免记忆污染。
 - 配置 API（已有 Studio/AstrBot token 保护，不新增无鉴权接口）：
   - `GET /api/instances/<instance>/plugins/qqbot_enhancer/config`
   - `POST /api/instances/<instance>/plugins/qqbot_enhancer/config`，body `{"values":{"group_personas":"{...}"},"restart":false}`
   - 请求头 `X-QB-Token: <管理服务 token>`；不要使用用户输入/cookie 作为 token。
-- 真实 AstrBot 多群人格 E2E 未验证；Agent 模式只能在宿主 AstrBot 支持时另行实现，当前明确降级。
+- 真实 AstrBot 多群人格/ConversationManager E2E 未验证；Agent 模式只能在宿主 AstrBot 支持时另行实现，当前明确降级。
 
 ## 群聊身份上下文
 
@@ -335,7 +335,7 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `memory_mode=astrbot`：通过 AstrBot 官方 `on_llm_request(event, req)` 只向**当前轮** `req.system_prompt` 追加群号/昵称/QQ 和“不要输出身份”的短说明；不修改 event 文本、conversation history、provider/model/key。历史消息仍没有逐消息身份前缀，这是当前轮安全增强，不是彻底修复。
 - 不新增 LLM tool/电脑控制；QQ 号不能作为工具参数或文件路径。真实 AstrBot/QQ 多群身份 E2E 未验证。
 
-## 群聊会话切换
+## 群聊会话切换（会话级提示词/人格/记忆）
 
 仅群聊命令，调用 AstrBot v4.29.3 官方 `ConversationManager`，不直接改数据库：
 
@@ -343,32 +343,28 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 /会话列表
 /会话 复盘
 /切换会话 复盘
-/新会话 2026-05
+/新会话 复盘
+/新会话 复盘 猫猫提示词
 ```
 
-- `/会话列表`：显示当前群会话标题和安全短 id，标记当前会话；最多 `conversation_list_limit` 条。
-- `/会话 名称`：按标题精确查找；切换前校验目标会话 persona 与当前群/active profile 解析出的 persona 一致。目标 persona 为空或不同则拒绝并提示 `/新会话`/先改群人格，绝不静默 update 或新建；未找到且 `conversation_auto_create_enabled=true` 时新建并切换。
-- `/新会话 名称`：同名已存在则拒绝重复创建；否则 `new_conversation(umo, title=..., persona_id=...)` 并切换。
-- 切换/新建后调用现有 persona bridge 绑定当前群人格（官方 PersonaManager/ConversationManager）；同一 `unified_msg_origin`，不同群会话隔离。
-- 标题仅普通短文本，拒绝控制字符/路径分隔符，长度 `conversation_title_max_chars`；API 缺失/异常时明确中文降级，不伪称成功；不直接改数据库。
-- 私聊命令回复“私聊默认使用当前会话”，不操作群会话。
-- 配置：`conversation_switch_enabled`、`conversation_title_max_chars`、`conversation_list_limit`、`conversation_auto_create_enabled`。真实 AstrBot/QQ E2E 未验证。
+规则：
+- 一个 conversation = 一个 persona + 一份提示词 + 一段记忆；`/会话 名称` 只切换到已有会话，**不再自动新建**，保留目标自己的 persona/提示词/记忆。
+- `/新会话 名称 [提示词标题]`：
+  - 不写提示词标题时使用 pinned 模板；没有 pinned 时回退 active/首个模板；
+  - 指定标题时按模板名称/id 精确选择；
+  - 创建时传 `title` + `persona_id`，立即 `switch_conversation`，不额外创建隐藏会话；
+  - 模板不存在的命令不会创建任何会话。
+- `/会话列表` 显示标题、提示词名称、安全短 id 和当前标记；同一 prompt persona id 始终映射同一提示词名称。
+- active/pinned 配置变化不会自动新建/切换 conversation；`on_waiting_llm_request` 不再每轮覆盖 group persona。
+- 群人格只用于 direct 模式或 `/新会话` 未找到提示词模板时的显式 fallback。
+- 同名多会话拒绝自动取第一个；API 缺失/异常时明确失败，不伪称已切换。
+- 真实 AstrBot ConversationManager/PersonaManager E2E 未验证。
 
-## 群聊 ambient 低频参与
+## 表情保存诊断
 
-`ambient_group_chat_enabled` **默认 false**，关闭时完全保持旧的 @/概率回复行为。
+`/表情状态` / `/表情诊断` 只读输出：收藏开关、存储目录权限、已收藏数量/上限、单图大小上限、当前消息是可保存图片/无图片/QQ 表情/超大/无法解码、最近媒体缓存有无。不会显示绝对路径、QQ 或用户文字；保存写入失败会明确提示存储不可用，不抛到用户侧通用异常。
 
-启用后：
-- 每条群消息进入内存短期缓存（昵称/QQ/时间/文本/图片占位），受 `ambient_group_cache_limit`、`ambient_group_cache_ttl_seconds` 限制；不写盘、不写身份到日志。
-- 非 @ 消息按低频 `ambient_group_reply_probability`、关键词 `ambient_group_keywords`（命中用 `ambient_group_keyword_probability`）、可选 `ambient_group_round_interval` 轮次门控和 `ambient_group_min_interval_seconds` 冷却决定是否参与；默认约 3%。
-- 明确 @ 机器人仍必回；ambient 不改变旧 @/私聊必回和防重复。
-- 参与回复优先使用官方 `Comp.At(qq=...)` @ 当前发言人；组件不可用/异常时降级为 `@昵称` 文本，不伪造 API。
-- direct 复用群身份上下文与 persona/工具/表情；memory 模式通过官方 `on_llm_request` 只对**群聊**当前请求注入受控群缓存（昵称/时间/文本/图片占位），私聊绝不出现 ambient group 文案/缓存；不改 conversation history，并给 Agent 结果加当前发言人或保留已有 At；一次回复仍最多一条文字+一个附件。
-- QQ/群号只在 LLM 上下文/官方 At 使用，不以文本泄露；接口/异常安全回退。
-- 轮次使用独立每群消息计数，`round_interval > cache_limit` 仍可在第 N 条触发；参与前复用 `min_message_chars`、`ignore_pure_image`、`ignore_pure_face` 过滤。
-- 配置：`ambient_group_chat_enabled=false`、概率、关键词、轮次、缓存条数/TTL、最小间隔、memory 上下文最大字符。真实 AstrBot/OneBot/QQ E2E 未验证。
-
-## 代码架构（1.21.0）
+## 代码架构（1.22.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 

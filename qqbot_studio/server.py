@@ -301,6 +301,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "ok": False,
             "prompts": [],
             "active_id": "",
+            "default_prompt_id": "",
+            "default_profile": None,
             "restart_required": False,
             "conversation_created": False,
             "conversation_pending": False,

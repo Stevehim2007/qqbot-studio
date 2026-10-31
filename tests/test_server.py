@@ -42,6 +42,8 @@ class FakeManager:
             "ok": True,
             "prompts": [dict(item) for item in self.prompt_profiles],
             "active_id": "default",
+            "default_prompt_id": "default",
+            "default_profile": dict(self.prompt_profiles[0]),
             "restart_required": False,
             "conversation_created": False,
             "conversation_pending": False,
@@ -837,6 +839,9 @@ class ServerTests(unittest.TestCase):
         self.assertIn("conversation_created", payload)
         self.assertIn("prompt_plugin_sync_pending", payload)
         self.assertFalse(payload["prompt_plugin_sync_pending"])
+        self.assertEqual(payload["default_prompt_id"], "default")
+        self.assertEqual(payload["default_profile"]["id"], "default")
+        self.assertFalse(payload["conversation_pending"])
 
         status, body = self._post(
             "/api/instances/bot-1/prompts",

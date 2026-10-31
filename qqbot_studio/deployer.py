@@ -189,6 +189,7 @@ class DeployManager:
         except (OSError, ValueError):
             pass
         self.data_dir = self.store.data_dir
+        self._enhancer_config_cache: dict[str, Any] | None = None
         try:
             self._migrate_enhancer_config_defaults()
         except (OSError, ValueError):
@@ -274,6 +275,15 @@ class DeployManager:
                     tmp.unlink()
                 except OSError:
                     pass
+        if path.name == f"{ENHANCER_PLUGIN_ID}_config.json":
+            backup = path.with_name(path.name + ".bak")
+            try:
+                DeployManager._write_private_json(backup, value)
+            except OSError:
+                # The primary write is already atomic and valid; a backup
+                # failure must not turn a successful config update into data
+                # loss.  The caller can still retry on the next write.
+                pass
 
     def _load_persisted_job(self, job_id: str) -> dict[str, Any] | None:
         try:
@@ -1145,6 +1155,13 @@ class DeployManager:
                     tmp.unlink()
                 except OSError:
                     pass
+        if path.name == f"{ENHANCER_PLUGIN_ID}_config.json":
+            backup = path.with_name(path.name + ".bak")
+            try:
+                DeployManager._write_private_json(backup, value)
+            except OSError:
+                # The primary write is already valid; backup is best-effort.
+                pass
 
     @classmethod
     def _merged_enhancer_config(cls, loaded: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1181,6 +1198,12 @@ class DeployManager:
         return self.astrbot_data_dir / "config" / f"{ENHANCER_PLUGIN_ID}_config.json"
 
     @property
+    def enhancer_config_backup_path(self) -> Path:
+        return self.enhancer_config_path.with_name(
+            self.enhancer_config_path.name + ".bak"
+        )
+
+    @property
     def astrbot_cmd_config_path(self) -> Path:
         return self.astrbot_data_dir / "cmd_config.json"
 
@@ -1203,43 +1226,95 @@ class DeployManager:
             "persistence": "AstrBot 历史存储在其本机 SQLite 数据卷中，跨 AstrBot 重启保留；它不是跨群共享的永久知识库。",
         }
 
-    def _migrate_enhancer_config_defaults(self) -> bool:
-        """Create/fill enhancer config defaults without replacing user values.
+    def _read_enhancer_config_with_recovery(
+        self,
+    ) -> tuple[dict[str, Any], str, str]:
+        """Read plugin config with last-good backup/cache fallback.
 
-        This runs when an old instance is first managed after an update.  The
-        config is only created when the plugin is actually installed, avoiding
-        stray files for instances that never used qqbot_enhancer.
+        Returns ``(config, warning, source)`` where source is primary/backup/
+        cache/fallback.  A damaged primary file is never rewritten by this read
+        path.
         """
+
+        primary = self.enhancer_config_path
+        backup = self.enhancer_config_backup_path
+        primary_exists = primary.exists()
+        raw, primary_error = self._read_json_object_with_error(primary)
+        if primary_exists and not primary_error and raw is not None:
+            merged = self._merged_enhancer_config(raw)
+            self._enhancer_config_cache = copy.deepcopy(merged)
+            return merged, "", "primary"
+        backup_exists = backup.exists()
+        backup_raw, backup_error = self._read_json_object_with_error(backup)
+        if backup_exists and not backup_error and backup_raw is not None:
+            merged = self._merged_enhancer_config(backup_raw)
+            self._enhancer_config_cache = copy.deepcopy(merged)
+            warning = (
+                "插件主配置缺失或损坏，已使用最近一次成功快照（backup）；"
+                "未覆盖损坏文件。"
+            )
+            return merged, warning, "backup"
+        if self._enhancer_config_cache is not None:
+            warning = "插件配置读取失败，未使用默认 direct；已保留内存中的最近有效值。"
+            return copy.deepcopy(self._enhancer_config_cache), warning, "cache"
+        merged = self._merged_enhancer_config({})
+        store_mode = self.store.load_config().get("memory_mode")
+        if str(store_mode or "").strip().lower() in MEMORY_MODES:
+            merged["memory_mode"] = str(store_mode).strip().lower()
+        warning = ""
+        if primary_exists or backup.exists():
+            warning = (
+                "插件配置及 backup 均无法解析；已保留 cached/Studio 当前记忆模式，"
+                "未写入默认 direct，也未覆盖损坏文件。"
+            )
+        return merged, warning, "fallback"
+
+    def _migrate_enhancer_config_defaults(self) -> bool:
+        """Create/fill enhancer config defaults without replacing user values."""
 
         plugin_dir = self.astrbot_data_dir / "plugins" / ENHANCER_PLUGIN_ID
         config_path = self.enhancer_config_path
         if not plugin_dir.is_dir() and not config_path.exists():
             return False
-        loaded = self._read_json_object(config_path)
-        merged = self._merged_enhancer_config(loaded)
-        if not loaded:
+        if config_path.exists():
+            loaded, warning, source = self._read_enhancer_config_with_recovery()
+            if source != "primary":
+                # Read/migration must not overwrite a damaged primary file.
+                return False
+            raw_loaded, _raw_error = self._read_json_object_with_error(config_path)
+            raw_loaded = raw_loaded if isinstance(raw_loaded, dict) else {}
+        else:
+            raw_loaded, warning, source = {}, "", "missing"
+        merged = self._merged_enhancer_config(raw_loaded)
+        if not raw_loaded:
             prompt = str(self.store.load_config().get("prompt") or "")
             if prompt.strip():
                 merged["system_prompt"] = prompt
-        if loaded != merged:
+        if raw_loaded != merged:
             self._write_private_json(config_path, merged)
+            self._enhancer_config_cache = copy.deepcopy(merged)
             return True
         return False
 
     def _read_enhancer_config(self) -> dict[str, Any]:
-        return self._merged_enhancer_config(self._read_json_object(self.enhancer_config_path))
+        config, _warning, _source = self._read_enhancer_config_with_recovery()
+        return config
 
     def _effective_memory_mode(self) -> tuple[str, str]:
-        """Return (mode, error). The plugin config wins over the Studio mirror."""
+        """Return (mode, error). Never overwrite a valid mode on read failure."""
 
-        config = self._read_enhancer_config()
+        config, recovery_warning, source = self._read_enhancer_config_with_recovery()
         raw = config.get("memory_mode")
-        error = ""
+        error = recovery_warning
         if raw is None:
             raw = self.store.load_config().get("memory_mode", DEFAULT_MEMORY_MODE)
         normalised = self._normalise_memory_mode(raw)
         if str(raw or "").strip().lower() not in MEMORY_MODES:
-            error = f"memory_mode 值无效：{raw!r}；已按 direct 显示，不会自动覆盖原值。"
+            error = (
+                f"memory_mode 值无效：{raw!r}；已按 direct 显示，不会自动覆盖原值。"
+                if not error
+                else error + f" memory_mode 值无效：{raw!r}。"
+            )
         return normalised, error
 
     def _unique_session_state(self) -> tuple[bool | None, str]:
@@ -1592,7 +1667,7 @@ class DeployManager:
         if value not in MEMORY_MODES:
             raise DeploymentError("记忆模式只能是 direct 或 astrbot。")
 
-        loaded = self._read_json_object(self.enhancer_config_path)
+        loaded, loaded_warning, loaded_source = self._read_enhancer_config_with_recovery()
         merged = self._merged_enhancer_config(loaded)
         # Preserve every user-tuned value.  The explicit mode selected here is
         # the only field intentionally overwritten.
@@ -1660,6 +1735,8 @@ class DeployManager:
             messages.append("已关闭 AstrBot 的 unique_session，使同一群共享会话；重启 AstrBot 后生效。")
         if value == "astrbot" and not self.astrbot_cmd_config_path.exists():
             messages.append("尚未生成 AstrBot cmd_config.json；部署时会补上共享会话默认配置。")
+        if loaded_warning:
+            messages.append(f"插件配置恢复警告：{loaded_warning}")
         if api_error:
             messages.append(f"AstrBot 在线配置接口暂不可用：{api_error}")
         if unique_error:
@@ -1671,6 +1748,8 @@ class DeployManager:
         # response into a failure.  Keep it machine-readable as warnings while
         # preserving the old restart_required/behavior fields.
         warnings: list[str] = []
+        if loaded_warning:
+            warnings.append(loaded_warning)
         if api_error:
             warnings.append(f"AstrBot 在线配置接口暂不可用：{api_error}")
         if unique_error:
@@ -2073,11 +2152,20 @@ class DeployManager:
         if not path.exists():
             return {}, "", False
         raw, read_error = self._read_json_object_with_error(path)
+        if not read_error and isinstance(raw, dict):
+            return raw, "", True
+        backup = path.with_name(path.name + ".bak")
+        backup_raw, backup_error = self._read_json_object_with_error(backup)
+        if (
+            backup.exists()
+            and not backup_error
+            and isinstance(backup_raw, dict)
+        ):
+            # Read-only recovery: do not overwrite the damaged primary.
+            return backup_raw, "", True
         if read_error:
-            return {}, f"本地插件配置读取失败：{read_error}", True
-        if not isinstance(raw, dict):
-            return {}, "本地插件配置顶层必须是 JSON object。", True
-        return raw, "", True
+            return {}, f"本地插件配置读取失败：{read_error}（backup 也不可用）", True
+        return {}, "本地插件配置顶层必须是 JSON object。", True
 
     @staticmethod
     def _plugin_defaults(schema: dict[str, Any]) -> dict[str, Any]:
@@ -2492,6 +2580,8 @@ class DeployManager:
             "ok": False,
             "prompts": prompts,
             "active_id": active_id,
+            "default_prompt_id": active_id,
+            "default_profile": copy.deepcopy(prompts[0]) if prompts else None,
             "restart_required": False,
             "conversation_created": False,
             "conversation_pending": False,
@@ -2501,6 +2591,16 @@ class DeployManager:
             "message": message,
             "error": str(detail or message),
         }
+
+    @staticmethod
+    def _sort_prompt_profiles(
+        profiles: list[dict[str, Any]], active_id: str
+    ) -> list[dict[str, Any]]:
+        """Pinned/default profile first, preserving stable order for the rest."""
+
+        pinned = [item for item in profiles if item.get("id") == active_id]
+        others = [item for item in profiles if item.get("id") != active_id]
+        return pinned + others
 
     @staticmethod
     def _validate_prompt_profiles_capacity(
@@ -2629,6 +2729,10 @@ class DeployManager:
                 if bool(item["pinned"]) != expected:
                     item["pinned"] = expected
                     changed = True
+            sorted_profiles = self._sort_prompt_profiles(profiles, active_id)
+            if sorted_profiles != profiles:
+                profiles = sorted_profiles
+                changed = True
         else:
             active_id = ""
         if config.get("prompt_profiles") != profiles:
@@ -2690,9 +2794,18 @@ class DeployManager:
         hot-reload save.
         """
 
-        plugin_config, read_error = self._read_json_object_with_error(self.enhancer_config_path)
-        if read_error:
-            return False, f"插件配置读取失败，提示词状态仅保存在 Studio：{read_error}", False
+        plugin_config, recovery_warning, recovery_source = (
+            self._read_enhancer_config_with_recovery()
+        )
+        if (
+            recovery_source == "fallback"
+            and self.enhancer_config_path.exists()
+        ):
+            return (
+                False,
+                f"插件配置损坏且没有可用 backup：{recovery_warning}",
+                False,
+            )
         merged = self._merged_enhancer_config(plugin_config)
         serialized_profiles = json.dumps(profiles, ensure_ascii=False)
         if len(serialized_profiles) > PROMPT_PROFILES_MAX_JSON_CHARS:
@@ -2734,6 +2847,12 @@ class DeployManager:
                         raise RuntimeError("AstrBot 插件配置返回格式异常")
             except Exception as exc:  # noqa: BLE001 - local write remains unconfirmed
                 api_error = self.redact_sensitive_text(str(exc) or exc.__class__.__name__)
+        if recovery_warning:
+            api_error = (
+                recovery_warning
+                if not api_error
+                else f"{recovery_warning}；{api_error}"
+            )
         return api_available, api_error, True
 
     @staticmethod
@@ -2828,6 +2947,8 @@ class DeployManager:
                     "ok": True,
                     "prompts": profiles,
                     "active_id": active_id,
+                    "default_prompt_id": active_id,
+                    "default_profile": copy.deepcopy(profiles[0]) if profiles else None,
                     "restart_required": bool(deployed and pending),
                     "conversation_created": False,
                     "conversation_pending": False,
@@ -2949,6 +3070,7 @@ class DeployManager:
                     return failure
                 for item in profiles:
                     item["pinned"] = item["id"] == active_id
+                profiles = self._sort_prompt_profiles(profiles, active_id)
                 active_prompt = next(
                     item["prompt"] for item in profiles if item["id"] == active_id
                 )
@@ -2969,12 +3091,9 @@ class DeployManager:
                     api_available=api_available,
                 )
                 self.store.save_config(config)
-                plugin_state = self._read_json_object(self.enhancer_config_path)
-                memory_mode = self._normalise_memory_mode(
-                    plugin_state.get("memory_mode", config.get("memory_mode"))
-                )
-                if action == "activate" and memory_mode == "astrbot":
-                    conversation_pending = True
+                # Profiles are a new-conversation template library.  Activating
+                # a pin does not create or switch any live AstrBot conversation.
+                conversation_pending = False
                 warnings: list[str] = []
                 if sync_error:
                     warnings.append(sync_error)
@@ -2984,11 +3103,7 @@ class DeployManager:
                     "create": "提示词已创建。",
                     "update": "提示词已更新。",
                     "delete": "提示词已删除。",
-                    "activate": (
-                        "提示词已激活；AstrBot 模式将在下一轮消息创建新会话并绑定人格。"
-                        if conversation_pending
-                        else "提示词已激活；下一轮回复使用新提示词。"
-                    ),
+                    "activate": "提示词已设为新会话默认模板；当前会话不会被重置。",
                 }[action]
                 if not deployed:
                     message += " 实例尚未部署，部署/启动后生效。"
@@ -2998,6 +3113,8 @@ class DeployManager:
                     "ok": bool(action_ok),
                     "prompts": profiles,
                     "active_id": active_id,
+                    "default_prompt_id": active_id,
+                    "default_profile": copy.deepcopy(profiles[0]) if profiles else None,
                     "restart_required": bool(deployed and pending),
                     "conversation_created": False,
                     "conversation_pending": conversation_pending,

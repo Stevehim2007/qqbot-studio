@@ -240,6 +240,178 @@ class PromptProfilesTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn(str(PROMPT_PROFILES_MAX_JSON_CHARS), result["error"])
 
+    def test_pinned_profile_is_sorted_first_and_unique_on_read(self):
+        profiles = [
+            {
+                "id": "p1",
+                "name": "one",
+                "prompt": "prompt one",
+                "pinned": False,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "id": "p2",
+                "name": "two",
+                "prompt": "prompt two",
+                "pinned": True,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "id": "p3",
+                "name": "three",
+                "prompt": "prompt three",
+                "pinned": False,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            },
+        ]
+        config = self.store.load_config()
+        config["prompt_profiles"] = profiles
+        config["prompt_profiles_active_id"] = "p2"
+        self.store.save_config(config)
+        result = self.manager.get_prompt_profiles()
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual([item["id"] for item in result["prompts"]], ["p2", "p1", "p3"])
+        self.assertEqual(sum(bool(item["pinned"]) for item in result["prompts"]), 1)
+        self.assertEqual(result["default_prompt_id"], "p2")
+        self.assertEqual(result["default_profile"]["id"], "p2")
+
+    def test_activate_only_changes_pinned_default_not_conversation(self):
+        self.manager.get_prompt_profiles()
+        created = self.manager.update_prompt_profiles(
+            {"action": "create", "name": "new", "prompt": "new prompt"}
+        )
+        new_id = created["prompts"][1]["id"]
+        activated = self.manager.update_prompt_profiles(
+            {"action": "activate", "profile_id": new_id}
+        )
+        self.assertTrue(activated["ok"], activated.get("error"))
+        self.assertFalse(activated["conversation_pending"])
+        self.assertFalse(activated["conversation_created"])
+        self.assertEqual(activated["prompts"][0]["id"], new_id)
+        self.assertEqual(activated["default_profile"]["prompt"], "new prompt")
+        self.assertIn("新会话默认模板", activated["message"])
+        self.assertIn("当前会话不会被重置", activated["message"])
+
+    def test_plugin_config_backup_is_created_private_and_readable(self):
+        saved = self.manager.set_plugin_config(
+            "qqbot_enhancer",
+            {"safe_tools_enabled": False, "memory_mode": "astrbot"},
+        )
+        self.assertTrue(saved["ok"], saved.get("error"))
+        primary = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        backup = primary.with_name(primary.name + ".bak")
+        self.assertTrue(primary.exists())
+        self.assertTrue(backup.exists())
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            json.loads(primary.read_text(encoding="utf-8")),
+            json.loads(backup.read_text(encoding="utf-8")),
+        )
+
+    def test_plugin_config_get_falls_back_to_backup_without_overwriting(self):
+        saved = self.manager.set_plugin_config(
+            "qqbot_enhancer",
+            {"safe_tools_enabled": False, "memory_mode": "astrbot"},
+        )
+        self.assertTrue(saved["ok"], saved.get("error"))
+        primary = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        backup = primary.with_name(primary.name + ".bak")
+        primary.write_text('{"broken": ', encoding="utf-8")
+        corrupt_before = primary.read_text(encoding="utf-8")
+        with mock.patch("qqbot_studio.deployer.time.sleep"):
+            loaded = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertIs(loaded["values"]["safe_tools_enabled"], False)
+        self.assertEqual(loaded["values"]["memory_mode"], "astrbot")
+        self.assertEqual(primary.read_text(encoding="utf-8"), corrupt_before)
+        self.assertTrue(backup.exists())
+
+    def test_concurrent_atomic_enhancer_config_writes_keep_primary_and_backup_valid(self):
+        import threading
+
+        primary = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        errors: list[BaseException] = []
+
+        def writer(index: int):
+            try:
+                DeployManager._write_private_json(
+                    primary,
+                    {
+                        "memory_mode": "astrbot" if index % 2 else "direct",
+                        "system_prompt": f"prompt-{index}",
+                        "writer": index,
+                    },
+                )
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+        backup = primary.with_name(primary.name + ".bak")
+        primary_data = json.loads(primary.read_text(encoding="utf-8"))
+        backup_data = json.loads(backup.read_text(encoding="utf-8"))
+        self.assertIn(primary_data["memory_mode"], {"direct", "astrbot"})
+        self.assertIn(backup_data["memory_mode"], {"direct", "astrbot"})
+        self.assertIn("writer", primary_data)
+        self.assertIn("writer", backup_data)
+
+    def test_memory_mode_uses_last_good_backup_and_does_not_overwrite_corrupt_file(self):
+        self.manager.set_memory_mode("astrbot")
+        store_config = self.store.load_config()
+        store_config["memory_mode"] = "direct"  # mirror must not win over backup
+        self.store.save_config(store_config)
+        primary = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        backup = primary.with_name(primary.name + ".bak")
+        self.assertTrue(backup.exists())
+        primary.write_text('{"broken": ', encoding="utf-8")
+        corrupt_before = primary.read_text(encoding="utf-8")
+        with mock.patch("qqbot_studio.deployer.time.sleep"):
+            reopened = DeployManager(
+                store=Store(self.root), docker=DockerController(self.root)
+            )
+            memory = reopened.get_memory_mode()
+        self.assertEqual(memory["mode"], "astrbot")
+        self.assertIn("快照", memory["error"])
+        self.assertEqual(primary.read_text(encoding="utf-8"), corrupt_before)
+        self.assertIsNotNone(reopened._enhancer_config_cache)
+
+    def test_memory_mode_without_backup_keeps_studio_current_mode(self):
+        plugin_path = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        plugin_path.parent.mkdir(parents=True, exist_ok=True)
+        plugin_path.write_text('{"broken": ', encoding="utf-8")
+        backup = plugin_path.with_name(plugin_path.name + ".bak")
+        if backup.exists():
+            backup.unlink()
+        config = self.store.load_config()
+        config["memory_mode"] = "astrbot"
+        self.store.save_config(config)
+        corrupt_before = plugin_path.read_text(encoding="utf-8")
+        with mock.patch("qqbot_studio.deployer.time.sleep"):
+            reopened = DeployManager(
+                store=Store(self.root), docker=DockerController(self.root)
+            )
+            memory = reopened.get_memory_mode()
+        self.assertEqual(memory["mode"], "astrbot")
+        self.assertIn("未写入默认 direct", memory["error"])
+        self.assertEqual(plugin_path.read_text(encoding="utf-8"), corrupt_before)
+
     def test_old_plugin_system_prompt_migrates_before_store_prompt(self):
         plugin_path = (
             self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
@@ -289,7 +461,9 @@ class PromptProfilesTests(unittest.TestCase):
             {"action": "update", "profile_id": second["id"], "prompt": updated_prompt}
         )
         self.assertTrue(updated["ok"], updated.get("error"))
-        self.assertEqual(updated["prompts"][1]["prompt"], updated_prompt)
+        self.assertEqual(updated["prompts"][0]["id"], second["id"])
+        self.assertEqual(updated["prompts"][0]["prompt"], updated_prompt)
+        self.assertTrue(updated["prompts"][0]["pinned"])
         self.assertEqual(self.store.load_config()["prompt"], updated_prompt)
 
         deleted = self.manager.update_prompt_profiles(
@@ -323,7 +497,7 @@ class PromptProfilesTests(unittest.TestCase):
         self.assertFalse(invalid["ok"])
         self.assertIn("action", invalid["message"])
 
-    def test_astrbot_activation_is_deferred_to_plugin_next_turn(self):
+    def test_activate_sets_new_session_default_without_pending_conversation(self):
         config = self.store.load_config()
         config["memory_mode"] = "astrbot"
         self.store.save_config(config)
@@ -344,9 +518,14 @@ class PromptProfilesTests(unittest.TestCase):
             {"action": "activate", "profile_id": profile_id}
         )
         self.assertTrue(result["ok"], result.get("error"))
-        self.assertTrue(result["conversation_pending"])
+        self.assertFalse(result["conversation_pending"])
         self.assertFalse(result["conversation_created"])
-        self.assertIn("下一轮", result["message"])
+        self.assertEqual(result["prompts"][0]["id"], profile_id)
+        self.assertTrue(result["prompts"][0]["pinned"])
+        self.assertEqual(result["default_prompt_id"], profile_id)
+        self.assertEqual(result["default_profile"]["id"], profile_id)
+        self.assertIn("新会话默认模板", result["message"])
+        self.assertIn("当前会话不会被重置", result["message"])
         self.assertIn("restart_required", result)
 
 

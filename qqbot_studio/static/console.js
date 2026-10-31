@@ -36,6 +36,9 @@
   const pluginInputText = pluginConfigService.pluginInputText;
   const pluginDefaultText = pluginConfigService.pluginDefaultText;
 
+  const lastKnownAiToolsValues = new Map();
+  const lastKnownMemoryModes = new Map();
+
   const state = {
     instances: [],
     settings: null,
@@ -84,6 +87,8 @@
       requestSeq: 0,
       actionSeq: 0,
       deleteArmedId: '',
+      profilesAvailable: false,
+      profilesInstanceId: '',
       trigger: null
     },
     globalResourceStats: null,
@@ -808,11 +813,17 @@
 
   async function loadMemoryForInstance(instance) {
     const previous = previousV3State(instance);
-    const previousMemory = previous && previous.memory ? previous.memory : emptyMemoryState(instance.memory_mode_hint || '');
+    const preservedMode = lastKnownMemoryModes.get(instance.id)
+      || normaliseMemoryMode(instance.memory_mode_hint)
+      || '';
+    const previousMemory = previous && previous.memory
+      ? { ...previous.memory, mode: previous.memory.mode || preservedMode }
+      : emptyMemoryState(preservedMode);
     if (state.optionalSupport.memory === false) {
       return {
         ...previousMemory,
         status: 'unsupported',
+        mode: previousMemory.mode || preservedMode,
         error: '当前后端未提供记忆模式接口，记忆模式显示为未知。'
       };
     }
@@ -822,19 +833,30 @@
         instancePath('/api/memory', instance.id)
       ]);
       state.optionalSupport.memory = true;
-      return normaliseMemoryPayload(data, previousMemory.mode || instance.memory_mode_hint || '');
+      const resolved = normaliseMemoryPayload(data, previousMemory.mode || preservedMode);
+      if (resolved.status !== 'ok') {
+        return {
+          ...resolved,
+          mode: previousMemory.mode || preservedMode || resolved.mode,
+          error: resolved.error || '记忆模式读取失败。'
+        };
+      }
+      if (resolved.mode) lastKnownMemoryModes.set(instance.id, resolved.mode);
+      return resolved;
     } catch (error) {
       if (isMissingEndpointError(error)) {
         state.optionalSupport.memory = false;
         return {
           ...previousMemory,
           status: 'unsupported',
+          mode: previousMemory.mode || preservedMode,
           error: '当前后端未提供记忆模式接口，记忆模式显示为未知。'
         };
       }
       return {
         ...previousMemory,
         status: 'error',
+        mode: previousMemory.mode || preservedMode,
         error: formatError(error, '记忆模式读取失败。')
       };
     }
@@ -1215,7 +1237,7 @@
     try {
       const result = await pluginConfigService.load(instance.id, plugin.id);
       if (!config.open || seq !== config.requestSeq) return;
-      const snapshot = result.snapshot;
+      const snapshot = filterLegacyPromptSnapshot(result.snapshot, instance.id);
       config.snapshot = snapshot;
       config.loading = false;
       config.apiAvailable = snapshot.apiAvailable;
@@ -1301,6 +1323,7 @@
     const values = {};
     let firstInvalid = null;
     for (const entry of config.entries) {
+      if (entry.legacyHidden) continue;
       clearPluginConfigFieldError(entry);
       const result = entry.readValue ? entry.readValue() : { ok: false, message: '无法读取该参数。' };
       if (!result.ok) {
@@ -1598,6 +1621,7 @@
     if (ui.saveButton) ui.saveButton.disabled = disabledBase;
     if (ui.controls) ui.controls.hidden = !ui.supported;
     if (ui.actions) ui.actions.hidden = !ui.supported;
+    if (ui.retryButton) ui.retryButton.hidden = !(ui.loadFailed || ui.unsupportedReason);
     if (ui.section) {
       ui.section.classList.toggle('is-plugin-disabled', !ui.pluginEnabled);
       ui.section.classList.toggle('is-busy', Boolean(ui.loadingConfig || ui.saving));
@@ -1744,6 +1768,22 @@
     error.setAttribute('role', 'alert');
     error.hidden = true;
     section.appendChild(error);
+    const retryButton = makeElement('button', 'btn btn-quiet btn-small ai-tools-retry', '刷新重试');
+    retryButton.type = 'button';
+    retryButton.setAttribute('id', 'ai-tools-retry');
+    retryButton.hidden = true;
+    section.appendChild(retryButton);
+    const cachedValues = lastKnownAiToolsValues.get(instance.id) || null;
+    if (cachedValues) {
+      for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
+        if (inputs[permission.key]) inputs[permission.key].checked = boolOrUndefined(cachedValues[permission.key]) === true;
+      }
+      for (const field of AI_STICKER_NUMBERS) {
+        if (numberInputs[field.key] && cachedValues[field.key] !== undefined) {
+          numberInputs[field.key].value = pluginConfigService.pluginInputText(cachedValues[field.key]);
+        }
+      }
+    }
 
     const ui = {
       section,
@@ -1752,13 +1792,15 @@
       saveButton,
       status,
       error,
+      retryButton,
       hint,
       loading,
       pluginState,
       inputs,
       numberInputs,
-      supported: false,
+      supported: Boolean(cachedValues),
       unsupportedReason: '',
+      loadFailed: false,
       pluginEnabled,
       loadingConfig: true,
       saving: false
@@ -1793,6 +1835,7 @@
       });
     }
     saveButton.addEventListener('click', () => void saveAiToolsConfig(instance, ui));
+    retryButton.addEventListener('click', () => void loadAiToolsConfig(instance, ui));
     syncAiToolsControlState(ui);
     void loadAiToolsConfig(instance, ui);
     return section;
@@ -1800,11 +1843,10 @@
 
   async function loadAiToolsConfig(instance, ui) {
     ui.loadingConfig = true;
-    ui.supported = false;
+    ui.loadFailed = false;
+    ui.supported = Boolean(lastKnownAiToolsValues.get(instance.id));
     ui.unsupportedReason = '';
     ui.loading.hidden = false;
-    ui.controls.hidden = true;
-    ui.actions.hidden = true;
     setAiToolsError(ui, '');
     setAiToolsStatus(ui, '', '');
     syncAiToolsControlState(ui);
@@ -1815,6 +1857,8 @@
       const availableKeys = new Set((snapshot.schema || []).map((field) => field.key));
       const missing = AI_ALL_CONFIG_KEYS.filter((key) => !availableKeys.has(key));
       if (missing.length > 0) {
+        ui.loadFailed = true;
+        ui.supported = Boolean(lastKnownAiToolsValues.get(instance.id));
         ui.unsupportedReason = '当前插件版本未提供完整的 AI 工具权限或自动表情参数，请先更新 qqbot_enhancer 插件。';
         ui.loadingConfig = false;
         ui.loading.hidden = true;
@@ -1830,7 +1874,17 @@
         const input = ui.numberInputs[field.key];
         if (input) input.value = aiStickerNumberValue(snapshot, field);
       }
+      const cachedValues = {};
+      for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
+        if (ui.inputs[permission.key]) cachedValues[permission.key] = Boolean(ui.inputs[permission.key].checked);
+      }
+      for (const field of AI_STICKER_NUMBERS) {
+        const input = ui.numberInputs[field.key];
+        if (input) cachedValues[field.key] = Number(input.value);
+      }
+      lastKnownAiToolsValues.set(instance.id, cachedValues);
       ui.supported = true;
+      ui.loadFailed = false;
       ui.loadingConfig = false;
       ui.loading.hidden = true;
       if (!snapshot.apiAvailable) {
@@ -1843,6 +1897,8 @@
       ui.loading.hidden = true;
       const unsupported = isMissingEndpointError(error)
         || pluginConfigUnsupportedMessage(error instanceof ApiError ? error.message : '');
+      ui.loadFailed = true;
+      ui.supported = Boolean(lastKnownAiToolsValues.get(instance.id));
       ui.unsupportedReason = unsupported
         ? '当前后端不支持 AI 工具权限。'
         : formatError(error, 'AI 工具权限读取失败。');
@@ -1881,6 +1937,7 @@
       const response = asRecord(data);
       const restart = boolOrUndefined(response.restart_required) === true;
       const apiAvailable = boolOrUndefined(response.api_available) !== false;
+      lastKnownAiToolsValues.set(instance.id, { ...values });
       const outcome = restart
         ? '已保存；AstrBot 需要重启后生效。'
         : apiAvailable
@@ -1934,6 +1991,51 @@
     });
   }
 
+  const LEGACY_PROMPT_FIELD_KEYS = new Set(['system_prompt', 'prompt_profiles', 'prompt_profile_active_id']);
+
+  function isLegacyPromptProfileField(key) {
+    return LEGACY_PROMPT_FIELD_KEYS.has(textValue(key, '').trim().toLowerCase());
+  }
+
+  function filterLegacyPromptSnapshot(snapshot, instanceId) {
+    if (!snapshot || !state.promptManager.profilesAvailable || state.promptManager.profilesInstanceId !== instanceId) return snapshot;
+    const schema = (snapshot.schema || []).filter((field) => !isLegacyPromptProfileField(field.key));
+    if (schema.length === (snapshot.schema || []).length) return snapshot;
+    const values = {};
+    for (const field of schema) {
+      if (Object.prototype.hasOwnProperty.call(snapshot.values || {}, field.key)) values[field.key] = snapshot.values[field.key];
+    }
+    return { ...snapshot, schema, values };
+  }
+
+  function hideLegacyPromptFieldsInOpenEditor(instanceId) {
+    const config = state.pluginConfig;
+    if (!config.open || config.instanceId !== instanceId || config.saving) return;
+    for (const entry of config.entries) {
+      if (isLegacyPromptProfileField(entry.key)) {
+        entry.legacyHidden = true;
+        entry.element.hidden = true;
+      }
+    }
+    if (config.snapshot) config.snapshot = filterLegacyPromptSnapshot(config.snapshot, instanceId);
+  }
+
+  async function probePromptProfiles(instance) {
+    if (!instance || !instance.id) return false;
+    if (state.promptManager.profilesAvailable && state.promptManager.profilesInstanceId === instance.id) return true;
+    try {
+      const data = await withPromptTimeout(apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`));
+      const normalised = data && data.ok !== false ? normalisePromptPayload(data) : null;
+      if (!normalised) return false;
+      state.promptManager.profilesAvailable = true;
+      state.promptManager.profilesInstanceId = instance.id;
+      hideLegacyPromptFieldsInOpenEditor(instance.id);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   function promptIdValue(value) {
     const record = asRecord(value);
     return textValue(record.id || record.profile_id || value, '').trim();
@@ -1957,12 +2059,18 @@
     else if (Array.isArray(root.items)) promptItems = root.items;
     else if (Array.isArray(root.profiles)) promptItems = root.profiles;
     if (!promptItems) return null;
-    const prompts = promptItems.map(normalisePromptRecord).filter((item) => item.id || item.name || item.prompt);
+    let prompts = promptItems.map(normalisePromptRecord).filter((item) => item.id || item.name || item.prompt);
     let activeId = promptIdValue(root.active_id ?? root.activeId ?? root.active_profile_id ?? root.activeProfileId ?? root.current_id ?? root.currentId ?? root.current);
-    if (!activeId) {
-      const pinned = prompts.find((item) => item.pinned);
-      if (pinned) activeId = pinned.id;
+    let pinnedIndex = prompts.findIndex((item) => item.id && item.id === activeId);
+    if (pinnedIndex < 0) pinnedIndex = prompts.findIndex((item) => item.pinned);
+    if (pinnedIndex >= 0) {
+      activeId = prompts[pinnedIndex].id;
+      prompts = prompts.map((item, index) => ({ ...item, pinned: index === pinnedIndex }));
+    } else {
+      activeId = '';
+      prompts = prompts.map((item) => ({ ...item, pinned: false }));
     }
+    prompts.sort((left, right) => Number(right.pinned) - Number(left.pinned));
     return { prompts, activeId };
   }
 
@@ -1984,10 +2092,12 @@
     return text.length > 180 ? `${text.slice(0, 180)}…` : text;
   }
 
-  function promptActionFeedback(data) {
+  function promptActionFeedback(data, action = '') {
     const root = asRecord(data);
-    const parts = [sanitisePluginText(root.message) || '提示词列表已更新。'];
-    if (boolOrUndefined(root.conversation_created) === true) parts.push('已开始新会话，后续消息使用新的当前提示词。');
+    const message = action === 'activate'
+      ? '已设为默认模板；仅影响之后新建的会话，不会切换或重建已有会话。'
+      : sanitisePluginText(root.message);
+    const parts = [message || '提示词模板已更新。'];
     if (boolOrUndefined(root.restart_required) === true) parts.push('需要重启 AstrBot 后生效。');
     return { message: parts.join(' '), restart: boolOrUndefined(root.restart_required) === true };
   }
@@ -2085,7 +2195,7 @@
     clearPromptDeleteArm();
     setPromptManagerBusy(false);
     setPromptManagerError('');
-    setPromptManagerStatus('已取消等待；如果服务端请求稍后完成，请重新打开提示词列表确认。', false);
+    setPromptManagerStatus('已取消等待；如果服务端请求稍后完成，请重新打开提示词模板库确认。', false);
     return true;
   }
 
@@ -2137,7 +2247,7 @@
     const saveButton = $('prompt-editor-save');
     if (!form || !nameInput || !promptInput) return;
     form.hidden = false;
-    if (title) title.textContent = mode === 'create' ? '新增提示词' : mode === 'rename' ? '重命名提示词' : '编辑提示词';
+    if (title) title.textContent = mode === 'create' ? '新增提示词模板' : mode === 'rename' ? '重命名提示词模板' : '编辑提示词模板';
     if (promptField) promptField.hidden = mode === 'rename';
     nameInput.value = textValue(prompt.name, '');
     promptInput.value = textValue(prompt.prompt, '');
@@ -2169,30 +2279,30 @@
     if (newButton) newButton.disabled = config.busy || config.loading || config.unsupported || !config.open;
     if (empty) {
       empty.hidden = config.loading || config.unsupported || config.prompts.length > 0;
-      empty.textContent = '尚无提示词，点击“新增提示词”创建。';
+      empty.textContent = '尚无提示词模板，点击“新增模板”创建。';
     }
     list.replaceChildren();
     if (config.unsupported || config.loading) return;
-    for (const prompt of config.prompts) {
-      const row = makeElement('article', `prompt-item${prompt.id && prompt.id === config.activeId ? ' is-active' : ''}`);
+    const orderedPrompts = [...config.prompts].sort((left, right) => Number(right.pinned) - Number(left.pinned));
+    for (const prompt of orderedPrompts) {
+      const isDefault = Boolean(prompt.pinned || (prompt.id && prompt.id === config.activeId));
+      const row = makeElement('article', `prompt-item${isDefault ? ' is-default' : ''}`);
       row.dataset.promptId = prompt.id;
       row.setAttribute('role', 'listitem');
       const top = makeElement('div', 'prompt-item-top');
       const titleWrap = makeElement('div', 'prompt-item-title-wrap');
       titleWrap.appendChild(makeElement('strong', 'prompt-item-name', prompt.name));
-      if (prompt.pinned) titleWrap.appendChild(makeElement('span', 'prompt-item-badge is-pinned', '置顶'));
-      if (prompt.id && prompt.id === config.activeId) titleWrap.appendChild(makeElement('span', 'prompt-item-badge is-active', '当前使用'));
+      if (isDefault) titleWrap.appendChild(makeElement('span', 'prompt-item-badge is-default', '默认模板'));
       top.appendChild(titleWrap);
       top.appendChild(makeElement('span', 'prompt-item-time', formatPromptTime(prompt.updatedAt)));
       row.appendChild(top);
       row.appendChild(makeElement('p', 'prompt-item-summary', promptSummary(prompt.prompt)));
       const actions = makeElement('div', 'prompt-item-actions');
-      const isActive = Boolean(prompt.id && prompt.id === config.activeId);
-      const activateButton = makeElement('button', 'btn btn-quiet btn-small', isActive ? '当前使用' : '置顶使用');
+      const activateButton = makeElement('button', 'btn btn-quiet btn-small', isDefault ? '默认模板' : '设为默认/置顶');
       activateButton.type = 'button';
-      activateButton.disabled = config.busy || !prompt.id || isActive || config.unsupported;
-      if (!isActive) activateButton.title = '切换后会开始新会话';
-      if (!isActive) activateButton.addEventListener('click', () => void mutatePrompt('activate', prompt));
+      activateButton.disabled = config.busy || !prompt.id || isDefault || config.unsupported;
+      if (!isDefault) activateButton.title = '设为新建会话的默认提示词；不会切换或重建已有会话';
+      if (!isDefault) activateButton.addEventListener('click', () => void mutatePrompt('activate', prompt));
       actions.appendChild(activateButton);
       const editButton = makeElement('button', 'btn btn-quiet btn-small', '编辑');
       editButton.type = 'button';
@@ -2263,7 +2373,7 @@
       const data = await withPromptTimeout(apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`));
       if (!config.open || seq !== config.requestSeq) return false;
       if (!data || data.ok === false) {
-        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词列表读取失败。', { data });
+        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词模板库读取失败。', { data });
       }
       const normalised = normalisePromptPayload(data);
       if (!normalised) {
@@ -2278,6 +2388,9 @@
       config.prompts = normalised.prompts;
       config.activeId = normalised.activeId;
       config.unsupported = false;
+      config.profilesAvailable = true;
+      config.profilesInstanceId = instance.id;
+      hideLegacyPromptFieldsInOpenEditor(instance.id);
       config.loading = false;
       renderPromptList();
       return true;
@@ -2288,8 +2401,12 @@
         || pluginConfigUnsupportedMessage(error instanceof ApiError ? error.message : '')
         || /提示词.*(?:未提供|不支持|不存在)|(?:未提供|不支持|不存在).*提示词/i.test(error instanceof ApiError ? error.message : '');
       config.unsupported = unsupported;
-      if (unsupported) config.prompts = [];
-      setPromptManagerError(unsupported ? '当前后端不支持提示词列表。' : formatError(error, '提示词列表读取失败。'));
+      if (unsupported) {
+        config.prompts = [];
+        config.profilesAvailable = false;
+        config.profilesInstanceId = '';
+      }
+      setPromptManagerError(unsupported ? '当前后端不支持提示词列表。' : formatError(error, '提示词模板库读取失败。'));
       renderPromptList();
       return false;
     }
@@ -2312,8 +2429,8 @@
     clearPromptDeleteArm();
     const overlay = $('prompt-manager-overlay');
     if (overlay) overlay.hidden = false;
-    setText('prompt-manager-title', '提示词列表');
-    setText('prompt-manager-subtitle', `实例：${instance.name || instance.id} · ${instance.id}`);
+    setText('prompt-manager-title', '提示词模板库');
+    setText('prompt-manager-subtitle', `实例：${instance.name || instance.id} · ${instance.id} · 置顶模板仅作为新会话默认值`);
     const list = $('prompt-manager-list');
     if (list) list.replaceChildren();
     const form = $('prompt-manager-form');
@@ -2411,10 +2528,10 @@
       const data = await withPromptTimeout(apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`, { method: 'POST', body: payload }));
       if (!config.open || config.actionSeq !== actionSeq) return;
       if (!data || data.ok === false) {
-        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词保存失败。', { data });
+        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词模板保存失败。', { data });
       }
       closePromptEditor();
-      const feedback = promptActionFeedback(data);
+      const feedback = promptActionFeedback(data, payload.action);
       const loaded = await loadPromptList(instance, { keepFeedback: true });
       if (loaded && config.actionSeq === actionSeq) setPromptManagerStatus(feedback.message, feedback.restart);
     } catch (error) {
@@ -2426,7 +2543,7 @@
         setPromptManagerError('当前后端不支持提示词列表。');
         renderPromptList();
       } else {
-        setPromptManagerError(formatError(error, '提示词保存失败。'));
+        setPromptManagerError(formatError(error, '提示词模板保存失败。'));
       }
     } finally {
       if (config.open && config.actionSeq === actionSeq) setPromptManagerBusy(false);
@@ -2448,14 +2565,14 @@
     clearPromptDeleteArm();
     setPromptManagerBusy(true);
     setPromptManagerError('');
-    setPromptManagerStatus(action === 'delete' ? '正在删除提示词…' : '正在切换当前提示词…', false);
+    setPromptManagerStatus(action === 'delete' ? '正在删除提示词模板…' : '正在设置默认提示词模板…', false);
     try {
       const data = await withPromptTimeout(apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`, { method: 'POST', body: payload }));
       if (!config.open || config.actionSeq !== actionSeq) return;
       if (!data || data.ok === false) {
-        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词操作失败。', { data });
+        throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词模板操作失败。', { data });
       }
-      const feedback = promptActionFeedback(data);
+      const feedback = promptActionFeedback(data, action);
       const loaded = await loadPromptList(instance, { keepFeedback: true });
       if (loaded && config.actionSeq === actionSeq) setPromptManagerStatus(feedback.message, feedback.restart);
     } catch (error) {
@@ -2467,7 +2584,7 @@
         setPromptManagerError('当前后端不支持提示词列表。');
         renderPromptList();
       } else {
-        setPromptManagerError(formatError(error, '提示词操作失败。'));
+        setPromptManagerError(formatError(error, '提示词模板操作失败。'));
       }
     } finally {
       if (config.open && config.actionSeq === actionSeq) setPromptManagerBusy(false);
@@ -2481,17 +2598,18 @@
     icon.appendChild(makeIcon('c-i-edit'));
     heading.appendChild(icon);
     const headingCopy = makeElement('div', 'instance-v3-section-copy');
-    headingCopy.appendChild(makeElement('h4', '', '提示词列表'));
-    headingCopy.appendChild(makeElement('p', '', '管理多套系统提示词。置顶或切换当前提示词后，新消息会开始新会话。'));
+    headingCopy.appendChild(makeElement('h4', '', '提示词模板库'));
+    headingCopy.appendChild(makeElement('p', '', '管理多套提示词模板。置顶模板只作为新建会话的默认值，不会影响已有会话。'));
     heading.appendChild(headingCopy);
     section.appendChild(heading);
-    const note = makeElement('p', 'prompt-manager-section-note', '切换当前提示词会影响后续会话；旧的会话历史不会自动带过去。');
+    const note = makeElement('p', 'prompt-manager-section-note', '置顶模板仅作为新建会话的默认提示词；发送 /新会话 时可通过插件选择模板，已有会话不会自动切换。');
     section.appendChild(note);
-    const openButton = makeElement('button', 'btn btn-secondary btn-small', '打开提示词列表');
+    const openButton = makeElement('button', 'btn btn-secondary btn-small', '打开提示词模板库');
     openButton.type = 'button';
     openButton.id = 'prompt-manager-open';
     openButton.addEventListener('click', () => void openPromptManager(instance, openButton));
     section.appendChild(openButton);
+    void probePromptProfiles(instance);
     return section;
   }
 
@@ -2549,7 +2667,12 @@
   }
 
   function buildMemorySection(instance) {
-    const memory = (instance.v3 && instance.v3.memory) || emptyMemoryState(instance.memory_mode_hint || '');
+    const sourceMemory = (instance.v3 && instance.v3.memory) || emptyMemoryState(instance.memory_mode_hint || '');
+    const memoryMode = lastKnownMemoryModes.get(instance.id)
+      || sourceMemory.mode
+      || normaliseMemoryMode(instance.memory_mode_hint)
+      || '';
+    const memory = { ...sourceMemory, mode: memoryMode };
     const section = makeElement('section', 'instance-v3-section');
     const heading = makeElement('div', 'instance-v3-section-heading');
     const icon = makeElement('span', 'instance-v3-section-icon');
@@ -2604,6 +2727,13 @@
       setV3Status(statusElement, '服务端未返回当前记忆模式；可选择后保存。', 'info');
     }
     section.appendChild(statusElement);
+    if (memory.status === 'error' || memory.status === 'unsupported') {
+      const retryButton = makeElement('button', 'btn btn-quiet btn-small memory-refresh-btn', '刷新重试');
+      retryButton.type = 'button';
+      retryButton.title = '重新读取记忆模式；失败时保留上次已知选择';
+      retryButton.addEventListener('click', () => void loadConsole({ silent: true }));
+      section.appendChild(retryButton);
+    }
     return section;
   }
 
@@ -2628,6 +2758,7 @@
       const resolvedMode = normaliseMemoryMode(data.mode) || mode;
       const restartRequired = boolOrUndefined(data.restart_required) === true;
       const message = textValue(data.message, `记忆模式已切换为 ${resolvedMode}。`);
+      lastKnownMemoryModes.set(instance.id, resolvedMode);
       if (instance.v3) {
         instance.v3.memory = {
           ...(instance.v3.memory || emptyMemoryState()),

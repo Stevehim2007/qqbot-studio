@@ -252,25 +252,25 @@
         <div class="prompt-manager-heading">
           <span class="prompt-manager-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-edit"></use></svg></span>
           <div>
-            <span class="prompt-manager-kicker">实例设置 · 提示词</span>
-            <h2 id="prompt-manager-title" tabindex="-1">提示词列表</h2>
-            <p id="prompt-manager-subtitle">管理当前实例的多套提示词</p>
+            <span class="prompt-manager-kicker">实例设置 · 提示词模板</span>
+            <h2 id="prompt-manager-title" tabindex="-1">提示词模板库</h2>
+            <p id="prompt-manager-subtitle">管理当前实例的多套提示词模板</p>
           </div>
         </div>
         <button id="prompt-manager-close" class="prompt-manager-close" type="button">关闭</button>
       </header>
       <div class="prompt-manager-toolbar">
-        <p id="prompt-manager-warning" class="prompt-manager-warning" role="note">置顶或切换当前使用提示词后，新消息会开始一个新会话；旧会话历史不会自动带过去。</p>
-        <button id="prompt-manager-new" class="btn btn-primary btn-small" type="button">新增提示词</button>
+        <p id="prompt-manager-warning" class="prompt-manager-warning" role="note">这里保存的是提示词模板。置顶模板仅作为新建会话的默认提示词，不会切换、重建或影响已有会话；发送 /新会话 时可通过插件选择模板。</p>
+        <button id="prompt-manager-new" class="btn btn-primary btn-small" type="button">新增模板</button>
       </div>
       <div class="prompt-manager-body">
-        <p id="prompt-manager-loading" class="prompt-manager-loading" role="status">正在读取提示词列表…</p>
+        <p id="prompt-manager-loading" class="prompt-manager-loading" role="status">正在读取提示词模板库…</p>
         <div id="prompt-manager-list" class="prompt-manager-list" role="list"></div>
-        <p id="prompt-manager-empty" class="prompt-manager-empty" hidden>尚无提示词，点击“新增提示词”创建。</p>
+        <p id="prompt-manager-empty" class="prompt-manager-empty" hidden>尚无提示词模板，点击“新增模板”创建。</p>
         <form id="prompt-manager-form" class="prompt-manager-form" novalidate hidden>
-          <h3 id="prompt-editor-title">新增提示词</h3>
+          <h3 id="prompt-editor-title">新增提示词模板</h3>
           <div class="prompt-editor-field">
-            <label for="prompt-editor-name">名称</label>
+            <label for="prompt-editor-name">模板名称</label>
             <input id="prompt-editor-name" type="text" maxlength="80" autocomplete="off" placeholder="例如：日常聊天 / 客服模式" aria-describedby="prompt-editor-name-error">
             <p id="prompt-editor-name-error" class="field-error" role="alert" hidden></p>
           </div>

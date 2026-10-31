@@ -420,13 +420,18 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "payload.profile_id", "payload.prompt = promptText",
             "const payload = { action, profile_id: prompt.id };",
             "mutatePrompt('activate'", "mutatePrompt('delete'",
-            "conversation_created", "restart_required",
+            "restart_required",
             "root.items", "root.profiles", "item.profile_id", "item.content",
             "active_id", "updated_at", "config.prompts.length <= 1",
-            "已开始新会话", "需要重启 AstrBot 后生效",
+            "模板库",
+            "置顶模板仅作为新建会话的默认提示词",
+            "/新会话",
+            "默认模板", "设为默认/置顶",
+            "Number(right.pinned) - Number(left.pinned)",
+            "is-default",
+            "需要重启 AstrBot 后生效",
             "当前后端不支持提示词列表。",
             "至少保留一个提示词，不能删除最后一个",
-            "切换后会开始新会话",
             "PROMPT_NAME_MAX_LENGTH = 80", "PROMPT_TEXT_MAX_LENGTH = 12000",
             "PROMPT_REQUEST_TIMEOUT_MS = 15000", "PROMPT_DELETE_CONFIRM_MS = 5000",
             "withPromptTimeout", "requestPromptDelete", "deleteArmedId",
@@ -440,6 +445,7 @@ class ControlAssistantStaticTests(unittest.TestCase):
         for style in (
             ".prompt-manager-overlay", ".prompt-manager-modal", ".prompt-manager-body",
             ".prompt-item", ".prompt-manager-form", ".prompt-item-summary",
+            ".prompt-item.is-default", ".prompt-item-badge.is-default",
         ):
             self.assertIn(style, self.console_css)
         summary_start = self.console_css.index(".prompt-item-summary {")
@@ -449,6 +455,38 @@ class ControlAssistantStaticTests(unittest.TestCase):
         for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
             self.assertNotIn(forbidden, self.console_js)
         self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
+
+    def test_prompt_templates_and_read_error_state_preservation(self) -> None:
+        for token in (
+            "模板库",
+            "置顶模板仅作为新建会话的默认提示词",
+            "/新会话",
+            "默认模板",
+            "设为默认/置顶",
+            "Number(right.pinned) - Number(left.pinned)",
+            "system_prompt",
+            "prompt_profiles",
+            "prompt_profile_active_id",
+            "仅影响之后新建的会话",
+            "filterLegacyPromptSnapshot",
+            "probePromptProfiles",
+            "profilesAvailable",
+            "lastKnownAiToolsValues",
+            "lastKnownMemoryModes",
+            "memory-refresh-btn",
+            "ai-tools-retry",
+            "刷新重试",
+            "ui.loadFailed",
+        ):
+            self.assertIn(token, self.console_js)
+        self.assertNotIn("切换后会开始新会话", self.console_js + self.console_html)
+        self.assertNotIn("下一轮创建会话", self.console_js + self.console_html)
+        self.assertNotIn("conversation_created", self.console_js)
+        self.assertNotIn("conversation_pending", self.console_js)
+        self.assertIn("memoryMode", self.console_js)
+        self.assertIn("lastKnownMemoryModes.get(instance.id)", self.console_js)
+        for style in (".memory-refresh-btn", ".ai-tools-retry", ".prompt-item.is-default", ".prompt-item-badge.is-default"):
+            self.assertIn(style, self.console_css)
 
     def test_console_plugin_parameter_editor_contract(self) -> None:
         required = {
