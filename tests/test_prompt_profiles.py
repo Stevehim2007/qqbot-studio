@@ -328,6 +328,11 @@ class PromptProfilesTests(unittest.TestCase):
         with mock.patch("qqbot_studio.deployer.time.sleep"):
             loaded = self.manager.get_plugin_config("qqbot_enhancer")
         self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertTrue(loaded["recovered"])
+        self.assertEqual(loaded["recovery_source"], "backup")
+        self.assertIn("请检查并保存", loaded["message"])
+        self.assertIn("只有显式保存", loaded["warning"])
+        self.assertTrue(Path(loaded["corrupt_snapshot"]).exists())
         self.assertIs(loaded["values"]["safe_tools_enabled"], False)
         self.assertEqual(loaded["values"]["memory_mode"], "astrbot")
         self.assertEqual(primary.read_text(encoding="utf-8"), corrupt_before)
@@ -411,6 +416,129 @@ class PromptProfilesTests(unittest.TestCase):
         self.assertEqual(memory["mode"], "astrbot")
         self.assertIn("未写入默认 direct", memory["error"])
         self.assertEqual(plugin_path.read_text(encoding="utf-8"), corrupt_before)
+
+    def test_plugin_config_recovery_uses_cache_when_backup_missing(self):
+        saved = self.manager.set_plugin_config(
+            "qqbot_enhancer",
+            {"safe_tools_enabled": True, "memory_mode": "astrbot"},
+        )
+        self.assertTrue(saved["ok"], saved.get("error"))
+        primary = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        backup = primary.with_name(primary.name + ".bak")
+        backup.unlink()
+        primary.write_text('{"broken": ', encoding="utf-8")
+        corrupt_before = primary.read_text(encoding="utf-8")
+        with mock.patch("qqbot_studio.deployer.time.sleep"):
+            loaded = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertTrue(loaded["recovered"])
+        self.assertEqual(loaded["recovery_source"], "cache")
+        self.assertEqual(loaded["values"]["memory_mode"], "astrbot")
+        self.assertEqual(primary.read_text(encoding="utf-8"), corrupt_before)
+        self.assertTrue(Path(loaded["corrupt_snapshot"]).exists())
+
+    def test_plugin_config_recovery_uses_studio_mirror_without_fake_direct(self):
+        primary = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        primary.write_text('{"broken": ', encoding="utf-8")
+        backup = primary.with_name(primary.name + ".bak")
+        if backup.exists():
+            backup.unlink()
+        config = self.store.load_config()
+        config["memory_mode"] = "astrbot"
+        config["prompt"] = "Studio mirror prompt"
+        self.store.save_config(config)
+        # Use a fresh manager so no in-memory plugin config cache exists.
+        reopened = DeployManager(
+            store=Store(self.root), docker=DockerController(self.root)
+        )
+        with mock.patch("qqbot_studio.deployer.time.sleep"):
+            loaded = reopened.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertTrue(loaded["recovered"])
+        self.assertEqual(loaded["recovery_source"], "studio")
+        self.assertEqual(loaded["values"]["memory_mode"], "astrbot")
+        self.assertEqual(loaded["values"]["system_prompt"], "Studio mirror prompt")
+        self.assertEqual(primary.read_text(encoding="utf-8"), '{"broken": ')
+
+    def test_plugin_config_recovery_uses_schema_defaults_last(self):
+        plugin_id = "recovery_schema_plugin"
+        plugin_dir = self.root / "data" / "astrbot" / "plugins" / plugin_id
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "_conf_schema.json").write_text(
+            json.dumps(
+                {
+                    "custom_flag": {
+                        "type": "bool",
+                        "default": True,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        config_path = (
+            self.root / "data" / "astrbot" / "config" / f"{plugin_id}_config.json"
+        )
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('{"custom_flag": ', encoding="utf-8")
+        backup = config_path.with_name(config_path.name + ".bak")
+        if backup.exists():
+            backup.unlink()
+        with mock.patch("qqbot_studio.deployer.time.sleep"):
+            loaded = self.manager.get_plugin_config(plugin_id)
+        self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertTrue(loaded["recovered"])
+        self.assertEqual(loaded["recovery_source"], "schema")
+        self.assertIs(loaded["values"]["custom_flag"], True)
+        self.assertTrue(Path(loaded["corrupt_snapshot"]).exists())
+
+    def test_memory_mode_without_any_history_is_unknown_not_direct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            primary = (
+                root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+            )
+            primary.parent.mkdir(parents=True, exist_ok=True)
+            primary.write_text('{"broken": ', encoding="utf-8")
+            corrupt_before = primary.read_text(encoding="utf-8")
+            with mock.patch("qqbot_studio.deployer.time.sleep"):
+                manager = DeployManager(
+                    store=Store(root), docker=DockerController(root)
+                )
+                memory = manager.get_memory_mode()
+            after_read = primary.read_text(encoding="utf-8")
+        self.assertEqual(memory["mode"], "unknown")
+        self.assertEqual(memory["memory_mode"], "unknown")
+        self.assertIn("无法确定", memory["message"])
+        self.assertIn("未写入默认 direct", memory["error"])
+        self.assertEqual(after_read, corrupt_before)
+
+    def test_consecutive_corrupt_plugin_get_keeps_ok_and_saves_repair(self):
+        primary = (
+            self.root / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        )
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        primary.write_text('{"broken": ', encoding="utf-8")
+        with mock.patch("qqbot_studio.deployer.time.sleep"):
+            first = self.manager.get_plugin_config("qqbot_enhancer")
+            second = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertTrue(first["recovered"])
+        self.assertTrue(second["recovered"])
+        self.assertIn(second["recovery_source"], {"backup", "cache", "studio", "schema"})
+        saved = self.manager.set_plugin_config(
+            "qqbot_enhancer", {"safe_tools_enabled": False}
+        )
+        self.assertTrue(saved["ok"], saved.get("error"))
+        repaired = json.loads(primary.read_text(encoding="utf-8"))
+        self.assertIs(repaired["safe_tools_enabled"], False)
+        corrupt_snapshots = list(primary.parent.glob(primary.name + ".corrupt-*"))
+        self.assertTrue(corrupt_snapshots)
 
     def test_old_plugin_system_prompt_migrates_before_store_prompt(self):
         plugin_path = (

@@ -245,23 +245,19 @@
 
           <div class="card form-card">
             <div class="card-heading">
-              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-pen"></use></svg></span>
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></span>
               <div>
-                <h3>预设提示词</h3>
-                <p>这是机器人的人格设定，部署前可以直接编辑。部署后也能在完成页修改。</p>
+                <h3>机器人提示词（只读）</h3>
+                <p>提示词模板请在控制台提示词模板库管理，向导不可修改。</p>
               </div>
             </div>
 
             <div class="field">
               <div class="label-row">
-                <label for="prompt">机器人提示词 <span class="required-mark" aria-hidden="true">*</span></label>
-                <span id="prompt-count" class="character-count">0 / 12000</span>
+                <span class="prompt-label">部署时将使用的机器人提示词</span>
               </div>
-              <textarea id="prompt" name="prompt" rows="9" maxlength="12000" aria-describedby="prompt-help prompt-error" required></textarea>
-              <div class="field-footer">
-                <p id="prompt-help" class="field-help">提示词会写入本机 AstrBot 配置。请勿在提示词中放入密码、验证码或 API Key。</p>
-                <button id="restore-prompt" class="btn btn-link btn-small" type="button">恢复默认</button>
-              </div>
+              <pre id="prompt-preview" class="prompt-preview prompt-preview--readonly" tabindex="0" aria-label="只读机器人提示词" aria-describedby="prompt-help prompt-error">正在读取机器人提示词…</pre>
+              <p id="prompt-help" class="field-help">部署会使用这份只读提示词并原样保留换行。提示词模板请在控制台提示词模板库管理，向导不可修改。</p>
               <p id="prompt-error" class="field-error" role="alert" hidden></p>
             </div>
           </div>
@@ -535,21 +531,10 @@
 
           <div class="card control-card">
             <div class="card-heading">
-              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-pen"></use></svg></span>
-              <div><h3>机器人提示词</h3><p>修改 AstrBot 中的人格设定</p></div>
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></span>
+              <div><h3>机器人提示词（只读）</h3><p>提示词模板请在控制台提示词模板库管理，向导不可修改</p></div>
             </div>
-            <p id="persona-preview" class="prompt-preview">尚未读取提示词。</p>
-            <button id="edit-prompt" class="btn btn-secondary btn-small" type="button"><svg class="icon" aria-hidden="true"><use href="#i-pen"></use></svg>编辑提示词</button>
-            <form id="persona-form" class="persona-form" novalidate hidden>
-              <label class="sr-only" for="persona-input">机器人提示词</label>
-              <textarea id="persona-input" rows="7" maxlength="12000" required></textarea>
-              <p id="persona-error" class="field-error" role="alert" hidden></p>
-              <div class="persona-actions">
-                <button id="persona-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
-                <button id="persona-save" class="btn btn-primary btn-small" type="submit">保存提示词</button>
-              </div>
-              <p id="persona-status" class="inline-status" role="status" hidden></p>
-            </form>
+            <pre id="deployment-prompt-preview" class="prompt-preview prompt-preview--readonly" tabindex="0" aria-label="当前机器人提示词">尚未读取提示词。</pre>
           </div>
 
           <div class="card control-card control-card--logs">

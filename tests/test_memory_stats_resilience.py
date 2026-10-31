@@ -131,19 +131,28 @@ class PluginConfigReadRetryTests(unittest.TestCase):
         self.assertTrue(reread["ok"], reread.get("error"))
         self.assertEqual(reread["values"]["reply_probability"], 0.5)
 
-    def test_stable_corrupt_local_plugin_config_is_rejected_without_overwrite(self):
+    def test_stable_corrupt_local_plugin_config_recovers_then_save_repairs(self):
         self.config_path.write_text('{"reply_probability": ', encoding="utf-8")
         original = self.config_path.read_text(encoding="utf-8")
         with mock.patch("qqbot_studio.deployer.time.sleep"):
             loaded = self.manager.get_plugin_config("qqbot_enhancer")
-            rejected = self.manager.set_plugin_config(
+            after_get = self.config_path.read_text(encoding="utf-8")
+            saved = self.manager.set_plugin_config(
                 "qqbot_enhancer", {"reply_probability": 0.3}
             )
-        self.assertFalse(loaded["ok"])
-        self.assertIn("本地插件配置", loaded["error"])
-        self.assertFalse(rejected["ok"])
-        self.assertIn("损坏", rejected["message"])
-        self.assertEqual(self.config_path.read_text(encoding="utf-8"), original)
+        self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertTrue(loaded["recovered"])
+        self.assertIn(loaded["recovery_source"], {"cache", "studio", "schema"})
+        self.assertIn("已从", loaded["message"])
+        self.assertEqual(loaded["warning"], loaded["warnings"][0] if loaded["warnings"] else "")
+        self.assertTrue(loaded["corrupt_snapshot"])
+        self.assertTrue(Path(loaded["corrupt_snapshot"]).exists())
+        self.assertEqual(after_get, original)
+        self.assertTrue(saved["ok"], saved.get("error"))
+        repaired = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(repaired["reply_probability"], 0.3)
+        self.assertTrue((self.config_path.with_name(self.config_path.name + ".bak")).exists())
+        self.assertTrue(Path(loaded["corrupt_snapshot"]).exists())
 
 
 class MemoryModeNonFatalWarningTests(unittest.TestCase):

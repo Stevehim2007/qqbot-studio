@@ -1270,6 +1270,17 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
 - `source` 为 `astrbot` / `local` / `schema`；
 - `schema` 和 `values` 会过滤掉字段名或 schema 标记中带 `api_key`、`token`、`password`、
   `secret`、`credential` 等敏感语义的 Key 类字段。
+- 本地插件配置坏 JSON 时不再返回整体 `ok:false` 阻塞 AI 工具权限。服务端会保留原文件及
+  `.corrupt-<UTC时间>` 快照，按 `.bak` → 内存 cached → Studio `memory_mode`/镜像字段 →
+  schema defaults 顺序恢复，返回 `ok:true`、可用 schema/values，以及：
+  - `recovered: true`
+  - `recovery_source: backup|cache|studio|schema`
+  - `warning` / `warnings`
+  - `corrupt_snapshot`
+  消息明确提示“已恢复，请检查并保存”。读取路径不删除、不覆盖损坏主文件；只有用户显式保存
+  才通过原子写修复主文件（并刷新 `.bak`）。
+- 记忆模式遇到相同的坏 JSON 也走恢复链，不默认回落 `direct`；确实没有任何历史值时返回
+  `mode="unknown"` + 明确 error，而不是伪造 direct。
 
 ### 11.2 保存插件参数
 

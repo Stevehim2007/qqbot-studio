@@ -284,3 +284,25 @@ def inject_ambient_group_context(
     block = "\n".join(lines)
     req.system_prompt = existing.rstrip() + "\n\n" + block + "\n"
     return True
+
+
+STICKER_TOOL_MARKER = "# Sticker Tool Catalog"
+
+
+def inject_sticker_tool_catalog(req: Any, instruction: str) -> bool:
+    """Inject one idempotent short sticker/tool catalog into a request prompt."""
+
+    if req is None or not str(instruction or "").strip():
+        return False
+    existing = str(getattr(req, "system_prompt", "") or "")
+    if STICKER_TOOL_MARKER in existing:
+        existing = existing.split(STICKER_TOOL_MARKER, 1)[0].rstrip()
+    req.system_prompt = (
+        existing.rstrip()
+        + "\n\n"
+        + STICKER_TOOL_MARKER
+        + "\n"
+        + str(instruction).strip()
+        + "\n"
+    )
+    return True

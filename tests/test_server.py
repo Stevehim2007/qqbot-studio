@@ -122,6 +122,11 @@ class FakeManager:
             "schema_path": "/tmp/qqbot-studio/plugins/qqbot_enhancer/_conf_schema.json",
             "config_path": "/tmp/qqbot-studio/qqbot_enhancer_config.json",
             "source": "local",
+            "recovered": False,
+            "recovery_source": "local",
+            "warning": "",
+            "warnings": [],
+            "corrupt_snapshot": "",
             "api_available": False,
             "restart_required": False,
             "message": "插件配置已读取。",
@@ -877,6 +882,9 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(payload["values"]["reply_probability"], 0.12)
         self.assertEqual(payload["schema_source"], "local")
         self.assertIn("_conf_schema.json", payload["schema_path"])
+        self.assertFalse(payload["recovered"])
+        self.assertEqual(payload["recovery_source"], "local")
+        self.assertIn("corrupt_snapshot", payload)
 
         secret = "sk-plugin-config-request-secret"
         status, body = self._post(

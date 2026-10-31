@@ -190,6 +190,8 @@ class DeployManager:
             pass
         self.data_dir = self.store.data_dir
         self._enhancer_config_cache: dict[str, Any] | None = None
+        self._enhancer_memory_mode_known = True
+        self._plugin_config_cache: dict[str, dict[str, Any]] = {}
         try:
             self._migrate_enhancer_config_defaults()
         except (OSError, ValueError):
@@ -1226,6 +1228,18 @@ class DeployManager:
             "persistence": "AstrBot 历史存储在其本机 SQLite 数据卷中，跨 AstrBot 重启保留；它不是跨群共享的永久知识库。",
         }
 
+    def _studio_explicit_memory_mode(self) -> str:
+        """Return only an explicitly persisted Studio memory_mode mirror."""
+
+        try:
+            raw = self.store.read_json(self.store.config_path, {})
+        except (OSError, ValueError):
+            return ""
+        if not isinstance(raw, dict) or "memory_mode" not in raw:
+            return ""
+        mode = str(raw.get("memory_mode") or "").strip().lower()
+        return mode if mode in MEMORY_MODES else ""
+
     def _read_enhancer_config_with_recovery(
         self,
     ) -> tuple[dict[str, Any], str, str]:
@@ -1240,33 +1254,63 @@ class DeployManager:
         backup = self.enhancer_config_backup_path
         primary_exists = primary.exists()
         raw, primary_error = self._read_json_object_with_error(primary)
+        corrupt_snapshot = ""
+        snapshot_error = ""
+        if primary_exists and primary_error:
+            corrupt_snapshot, snapshot_error = self._preserve_corrupt_json(primary)
         if primary_exists and not primary_error and raw is not None:
             merged = self._merged_enhancer_config(raw)
             self._enhancer_config_cache = copy.deepcopy(merged)
+            self._enhancer_memory_mode_known = True
             return merged, "", "primary"
         backup_exists = backup.exists()
         backup_raw, backup_error = self._read_json_object_with_error(backup)
         if backup_exists and not backup_error and backup_raw is not None:
             merged = self._merged_enhancer_config(backup_raw)
+            store_mode = self._studio_explicit_memory_mode()
+            if "memory_mode" not in backup_raw and store_mode:
+                merged["memory_mode"] = store_mode
+            self._enhancer_memory_mode_known = bool(
+                "memory_mode" in backup_raw or store_mode
+            )
             self._enhancer_config_cache = copy.deepcopy(merged)
             warning = (
                 "插件主配置缺失或损坏，已使用最近一次成功快照（backup）；"
                 "未覆盖损坏文件。"
+                + (f" 损坏快照：{corrupt_snapshot}。" if corrupt_snapshot else "")
+                + (f" {snapshot_error}" if snapshot_error else "")
             )
             return merged, warning, "backup"
         if self._enhancer_config_cache is not None:
+            self._enhancer_memory_mode_known = True
             warning = "插件配置读取失败，未使用默认 direct；已保留内存中的最近有效值。"
+            if corrupt_snapshot:
+                warning += f" 损坏快照：{corrupt_snapshot}。"
+            if snapshot_error:
+                warning += f" {snapshot_error}"
             return copy.deepcopy(self._enhancer_config_cache), warning, "cache"
         merged = self._merged_enhancer_config({})
-        store_mode = self.store.load_config().get("memory_mode")
-        if str(store_mode or "").strip().lower() in MEMORY_MODES:
-            merged["memory_mode"] = str(store_mode).strip().lower()
+        store_mode = self._studio_explicit_memory_mode()
+        has_store_mode = bool(store_mode)
+        if has_store_mode:
+            merged["memory_mode"] = store_mode
+        self._enhancer_memory_mode_known = has_store_mode
         warning = ""
         if primary_exists or backup.exists():
-            warning = (
-                "插件配置及 backup 均无法解析；已保留 cached/Studio 当前记忆模式，"
-                "未写入默认 direct，也未覆盖损坏文件。"
-            )
+            if has_store_mode:
+                warning = (
+                    "插件配置及 backup 均无法解析；已保留 Studio 当前记忆模式，"
+                    "未写入默认 direct，也未覆盖损坏文件。"
+                )
+            else:
+                warning = (
+                    "插件配置及 backup 均无法解析，且没有 cached/Studio 记忆模式；"
+                    "当前记忆模式未知，未写入默认 direct，也未覆盖损坏文件。"
+                )
+        if corrupt_snapshot:
+            warning += f" 损坏快照：{corrupt_snapshot}。"
+        if snapshot_error:
+            warning += f" {snapshot_error}"
         return merged, warning, "fallback"
 
     def _migrate_enhancer_config_defaults(self) -> bool:
@@ -1306,6 +1350,14 @@ class DeployManager:
         config, recovery_warning, source = self._read_enhancer_config_with_recovery()
         raw = config.get("memory_mode")
         error = recovery_warning
+        if source == "fallback" and not getattr(
+            self, "_enhancer_memory_mode_known", False
+        ):
+            return "unknown", (
+                error
+                or "插件配置读取失败且没有可用的记忆模式历史；当前模式未知，"
+                "不会伪装成 direct。"
+            )
         if raw is None:
             raw = self.store.load_config().get("memory_mode", DEFAULT_MEMORY_MODE)
         normalised = self._normalise_memory_mode(raw)
@@ -1630,7 +1682,12 @@ class DeployManager:
         mode, read_error = self._effective_memory_mode()
         unique_session, unique_error = self._unique_session_state()
         scope = "session" if mode == "astrbot" else "none"
-        if mode == "astrbot":
+        if mode == "unknown":
+            message = (
+                "无法确定当前记忆模式：插件配置及 backup/cache 不可用；"
+                "不会伪装成 direct，请检查配置后显式保存。"
+            )
+        elif mode == "astrbot":
             message = (
                 "astrbot 模式使用 AstrBot 当前会话：同一群共享一条会话记忆，"
                 "私聊按用户会话隔离；/reset 清空当前会话历史，/new 切换到新会话。"
@@ -2063,6 +2120,11 @@ class DeployManager:
             "schema_path": schema_path,
             "config_path": config_path,
             "source": source,
+            "recovered": False,
+            "recovery_source": "none",
+            "warning": "",
+            "warnings": [],
+            "corrupt_snapshot": "",
             "api_available": bool(api_available),
             "restart_required": bool(restart_required),
             "message": str(message or "插件配置操作失败。"),
@@ -2147,7 +2209,111 @@ class DeployManager:
         schema, error, _source, _path = self._load_plugin_schema_with_source(plugin_id)
         return schema, error
 
+    @staticmethod
+    def _preserve_corrupt_json(path: Path) -> tuple[str, str]:
+        """Copy a corrupt config aside without modifying/deleting the primary."""
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        target = path.with_name(f"{path.name}.corrupt-{stamp}")
+        try:
+            if not target.exists():
+                target.write_bytes(path.read_bytes())
+                chmod_best_effort(target, 0o600)
+            return str(target), ""
+        except OSError as exc:
+            return "", f"无法保存损坏配置快照：{exc}"
+
+    def _read_local_plugin_config_with_recovery(
+        self,
+        plugin_id: str,
+        schema: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, bool, bool, str, str, str]:
+        """Read local plugin config with corrupt-file recovery.
+
+        Returns (data, error, exists, recovered, source, warning, snapshot).
+        The damaged primary file is never rewritten/deleted by this read path.
+        """
+
+        path = self._plugin_config_path(plugin_id)
+        if not path.exists():
+            return {}, "", False, False, "none", "", ""
+        raw, read_error = self._read_json_object_with_error(path)
+        if not read_error and isinstance(raw, dict):
+            self._plugin_config_cache[plugin_id] = copy.deepcopy(raw)
+            return raw, "", True, False, "local", "", ""
+        snapshot, snapshot_error = self._preserve_corrupt_json(path)
+        warnings: list[str] = []
+        recovery_source = "schema"
+        recovered_data: dict[str, Any] = {}
+
+        backup = path.with_name(path.name + ".bak")
+        backup_raw, backup_error = self._read_json_object_with_error(backup)
+        if backup.exists() and not backup_error and isinstance(backup_raw, dict):
+            recovered_data = backup_raw
+            recovery_source = "backup"
+            self._plugin_config_cache[plugin_id] = copy.deepcopy(backup_raw)
+        elif plugin_id in self._plugin_config_cache:
+            recovered_data = copy.deepcopy(self._plugin_config_cache[plugin_id])
+            recovery_source = "cache"
+        else:
+            store_config = self.store.load_config()
+            mirror: dict[str, Any] = {}
+            for key, item in schema.items():
+                if not isinstance(item, dict) or _plugin_field_is_sensitive(key, item):
+                    continue
+                if key == "system_prompt" and isinstance(store_config.get("prompt"), str):
+                    mirror[key] = store_config["prompt"]
+                elif key == "prompt_profiles" and isinstance(
+                    store_config.get("prompt_profiles"), list
+                ):
+                    mirror[key] = json.dumps(
+                        store_config["prompt_profiles"], ensure_ascii=False
+                    )
+                elif key == "prompt_profile_active_id":
+                    mirror[key] = str(
+                        store_config.get("prompt_profiles_active_id") or ""
+                    )
+                elif key == "memory_mode":
+                    explicit_mode = self._studio_explicit_memory_mode()
+                    if explicit_mode:
+                        mirror[key] = explicit_mode
+                elif key in store_config:
+                    mirror[key] = copy.deepcopy(store_config[key])
+            if mirror:
+                recovered_data = mirror
+                recovery_source = "studio"
+            else:
+                recovered_data = self._plugin_defaults(schema)
+                recovery_source = "schema"
+
+        warning = (
+            "本地插件配置损坏，已保留原始文件"
+            + (f"及快照 {snapshot}" if snapshot else "")
+            + f"；已从 {recovery_source} 恢复，请检查并保存。"
+            "只有显式保存会原子修复主文件。"
+        )
+        if snapshot_error:
+            warning += f" {snapshot_error}"
+        if read_error:
+            warnings.append(read_error)
+        if warnings:
+            warning += " 读取错误：" + "；".join(warnings)
+        return (
+            recovered_data,
+            "",
+            True,
+            True,
+            recovery_source,
+            warning,
+            snapshot,
+        )
+
     def _read_local_plugin_config(self, plugin_id: str) -> tuple[dict[str, Any], str, bool]:
+        data, error, exists, _recovered, _source, _warning, _snapshot = (
+            self._read_local_plugin_config_with_recovery(plugin_id, {})
+        )
+        return data, error, exists
+
         path = self._plugin_config_path(plugin_id)
         if not path.exists():
             return {}, "", False
@@ -2297,11 +2463,19 @@ class DeployManager:
                         schema_path=schema_path,
                     )
                 config_path = str(self._plugin_config_path(requested_id))
-                local_config, local_error, local_exists = self._read_local_plugin_config(requested_id)
+                (
+                    local_config,
+                    local_error,
+                    local_exists,
+                    recovered,
+                    recovery_source,
+                    recovery_warning,
+                    corrupt_snapshot,
+                ) = self._read_local_plugin_config_with_recovery(requested_id, schema)
                 if local_error:
                     return self._plugin_config_failure(
                         requested_id,
-                        "本地插件配置损坏，已停止读取以避免覆盖。",
+                        "本地插件配置读取失败。",
                         detail=local_error,
                         schema=_public_plugin_schema(schema),
                         config_path=config_path,
@@ -2333,7 +2507,16 @@ class DeployManager:
                     "source": source,
                     "api_available": bool(api_available),
                     "restart_required": False,
-                    "message": message,
+                    "message": (
+                        message + " " + recovery_warning
+                        if recovery_warning
+                        else message
+                    ),
+                    "recovered": bool(recovered),
+                    "recovery_source": recovery_source,
+                    "warning": recovery_warning,
+                    "warnings": [recovery_warning] if recovery_warning else [],
+                    "corrupt_snapshot": corrupt_snapshot,
                     "error": "",
                     "api_error": api_error,
                 }
@@ -2453,11 +2636,19 @@ class DeployManager:
                             schema_path=schema_path,
                         )
 
-                local_config, local_error, _local_exists = self._read_local_plugin_config(requested_id)
+                (
+                    local_config,
+                    local_error,
+                    _local_exists,
+                    recovered_local,
+                    recovery_source,
+                    recovery_warning,
+                    corrupt_snapshot,
+                ) = self._read_local_plugin_config_with_recovery(requested_id, schema)
                 if local_error:
                     return self._plugin_config_failure(
                         requested_id,
-                        "本地插件配置损坏，已拒绝写入以避免覆盖。",
+                        "本地插件配置读取失败，已拒绝写入。",
                         detail=local_error,
                         schema=public_schema,
                         config_path=config_path,
@@ -2470,6 +2661,7 @@ class DeployManager:
                 local_merged.update(validated_values)
                 try:
                     self._write_private_json(config_path_obj, local_merged)
+                    self._plugin_config_cache[requested_id] = copy.deepcopy(local_merged)
                 except OSError as exc:
                     return self._plugin_config_failure(
                         requested_id,
@@ -2525,6 +2717,8 @@ class DeployManager:
                     )
                     if api_error:
                         message += " 在线接口警告：" + api_error
+                if recovered_local:
+                    message += " 已原子修复损坏的主配置，并保留原始损坏文件/快照。"
                 return {
                     "ok": True,
                     "plugin_id": requested_id,
@@ -2536,6 +2730,13 @@ class DeployManager:
                     "source": source,
                     "api_available": bool(api_available),
                     "restart_required": restart_required,
+                    "recovered": bool(recovered_local),
+                    "recovery_source": (
+                        "saved" if recovered_local else recovery_source
+                    ),
+                    "warning": recovery_warning,
+                    "warnings": [recovery_warning] if recovery_warning else [],
+                    "corrupt_snapshot": corrupt_snapshot,
                     "message": message,
                     "error": "",
                     "api_error": api_error,

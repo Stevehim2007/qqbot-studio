@@ -1,8 +1,8 @@
-# QQ Bot Studio v2
+# QQ Bot Studio v4
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**3.13.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**4.0.0**。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
 
@@ -34,6 +34,7 @@
   - [Docker 安装不完整、Docker daemon 启不来](#faq-docker-install)
   - [部署进度、浏览器关闭和后台服务](#faq-deploy-progress)
 - [第四部分：项目关系、声明与致谢](#part-4)
+- [更新日志](#changelog)
 - [文档索引](#docs-index)
 
 ---
@@ -772,6 +773,19 @@ tail -n 150 ~/.local/share/qqbot-studio/studio-server.log
 感谢 AstrBot、SnowLuma、OneBot v11、DeepSeek 及所有上游贡献者和社区用户。也感谢提交真实故障日志、复现步骤、文档修正和测试反馈的用户；这些踩坑记录被保留在 [排错指南](docs/server-troubleshooting.md) 和 [常见问题](#part-3) 中。
 
 <a id="docs-index"></a>
+
+<a id="changelog"></a>
+### v4.0.0 重点更新
+
+- 会话级提示词模板：一个 AstrBot conversation 绑定一个提示词、一个 persona 和一段独立记忆。
+- 置顶模板只作为新建会话默认值；切换/置顶模板不再自动重建当前会话。
+- `/新会话 名称 [提示词标题]` 创建并立即切换会话；`/会话 名称` 只切换已有会话。
+- `/会话列表` 显示会话数量/上限；超过上限自动清理最老非当前会话；`/删除会话 名称|ID` 可手动删除。
+- 向导中的机器人提示词改为只读，提示词统一在控制台模板库管理。
+- 损坏的插件配置会自动从最近良好备份/缓存/Studio 镜像/schema 恢复，不再阻塞 AI 工具权限；记忆模式不会被错误重置为 `direct`。
+- 新增 `/表情状态`、会话清理、`/option` 更新、详细配置恢复提示。
+- 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 更多文档
 
 完整文档索引见 [`docs/README.md`](docs/README.md)：

@@ -144,6 +144,8 @@ DEFAULTS: dict[str, Any] = {
     "conversation_title_max_chars": 32,
     "conversation_list_limit": 20,
     "conversation_auto_create_enabled": True,
+    "conversation_max_per_group": 10,
+    "conversation_auto_prune_enabled": True,
     "ambient_group_chat_enabled": False,
     "ambient_group_reply_probability": 0.03,
     "ambient_group_keyword_probability": 0.5,

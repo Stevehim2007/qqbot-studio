@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "qqbot_studio" / "static"
 INDEX = STATIC / "index.html"
 APP = STATIC / "app.js"
+STYLES = STATIC / "styles.css"
 
 
 def _extract_function(source: str, name: str) -> str:
@@ -54,6 +55,7 @@ class WizardPlatformStaticTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.index_html = INDEX.read_text(encoding="utf-8")
         cls.app_js = APP.read_text(encoding="utf-8")
+        cls.styles_css = STYLES.read_text(encoding="utf-8")
         cls.functions = "\n\n".join(
             _extract_function(cls.app_js, name)
             for name in (
@@ -228,6 +230,118 @@ class WizardPlatformStaticTests(unittest.TestCase):
             self.app_js,
             r"else if \(summary\.ready\) \{[\s\S]{0,700}?nextButton\.disabled = false;",
         )
+
+    def test_wizard_prompt_is_read_only_and_template_managed_elsewhere(self) -> None:
+        for element_id in (
+            "prompt-preview", "prompt-help", "prompt-error",
+            "deployment-prompt-preview",
+        ):
+            self.assertIn(f'id="{element_id}"', self.index_html)
+        self.assertIn("提示词模板请在控制台提示词模板库管理，向导不可修改", self.index_html)
+        for forbidden_markup in (
+            '<textarea id="prompt"',
+            'id="restore-prompt"',
+            'id="prompt-count"',
+            'id="edit-prompt"',
+            'id="persona-form"',
+            '<textarea id="persona-input"',
+            'id="persona-save"',
+            'id="persona-cancel"',
+        ):
+            self.assertNotIn(forbidden_markup, self.index_html)
+        for forbidden_js in (
+            "/api/persona",
+            "handlePersonaSubmit",
+            "personaBusy",
+            "persona-form",
+            "persona-input",
+            "restore-prompt",
+            "edit-prompt",
+            "updatePromptCount",
+        ):
+            self.assertNotIn(forbidden_js, self.app_js)
+        for token in (
+            "currentWizardPrompt",
+            "setWizardPrompt",
+            "prompt-preview",
+            "textContent",
+            "body: payload",
+            "prompt,",
+            "setWizardPrompt(deployment.prompt || DEFAULT_PROMPT)",
+            "setDefaultPrompt();",
+        ):
+            self.assertIn(token, self.app_js)
+        self.assertIn(".prompt-preview--readonly", self.styles_css)
+        readonly_block = self.styles_css[
+            self.styles_css.index(".prompt-preview--readonly {"):
+            self.styles_css.index("}", self.styles_css.index(".prompt-preview--readonly {")) + 1
+        ]
+        self.assertIn("white-space: pre-wrap", readonly_block)
+        self.assertIn("overflow: auto", readonly_block)
+        self.assertIn("max-height: 320px", readonly_block)
+        self.assertIn("@media (max-width: 700px)", self.styles_css)
+        self.assertNotIn(".persona-", self.styles_css)
+
+    def _run_wizard_prompt_validation(self, prompt_text: str) -> dict:
+        if not shutil.which("node"):
+            self.skipTest("node is not installed")
+        functions = "\n\n".join(
+            _extract_function(self.app_js, name)
+            for name in ("currentWizardPrompt", "validateConfigForm")
+        )
+        prelude = r"""
+        const elements = {
+          'qq-account': { value: '123456789' },
+          'deepseek-key': { value: 'sk-test' },
+          'prompt-preview': { textContent: '', setAttribute() {}, removeAttribute() {}, focus() {} },
+          'accept-risk': { checked: true },
+          'qq-account-error': {},
+          'deepseek-key-error': {},
+          'prompt-error': {},
+          'risk-error': {},
+          'config-heading': { scrollIntoView() {} },
+        };
+        function $(id) { return elements[id] || null; }
+        function clearFormError() {}
+        function clearFieldError(input, errorElement) {
+          if (input && input.removeAttribute) input.removeAttribute('aria-invalid');
+          if (errorElement) { errorElement.textContent = ''; errorElement.hidden = true; }
+        }
+        function setFieldError(input, errorElement, message) {
+          if (input && input.setAttribute) input.setAttribute('aria-invalid', 'true');
+          if (errorElement) { errorElement.textContent = message; errorElement.hidden = false; }
+        }
+        function showToast() {}
+        elements['prompt-preview'].textContent = __PROMPT_TEXT__;
+        const result = validateConfigForm();
+        console.log(JSON.stringify({ result, promptError: elements['prompt-error'].textContent || '' }));
+        """.replace("__PROMPT_TEXT__", json.dumps(prompt_text, ensure_ascii=False))
+        script = prelude + "\n" + functions + "\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "prompt-validation-test.js"
+            path.write_text(script, encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    def test_wizard_deploy_payload_uses_readonly_prompt_and_preserves_newlines(self) -> None:
+        prompt = "\n第一行\n第二行\n"
+        data = self._run_wizard_prompt_validation(prompt)
+        self.assertIsNotNone(data["result"])
+        self.assertEqual(data["result"]["prompt"], prompt)
+        self.assertEqual(data["result"]["qq_account"], "123456789")
+        self.assertEqual(data["result"]["deepseek_api_key"], "sk-test")
+        self.assertTrue(data["result"]["accept_risk"])
+
+    def test_wizard_prompt_undetermined_shows_error_instead_of_edit(self) -> None:
+        data = self._run_wizard_prompt_validation("   \n  ")
+        self.assertIsNone(data["result"])
+        self.assertIn("无法确定部署提示词", data["promptError"])
+        self.assertIn("控制台提示词模板库", data["promptError"])
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_app_javascript_syntax(self) -> None:

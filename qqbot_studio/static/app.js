@@ -94,7 +94,6 @@
     deployBusy: false,
     testBusy: false,
     actionBusy: false,
-    personaBusy: false,
     snowlumaResetBusy: false,
     snowlumaResetArmed: false,
     logLoading: false,
@@ -401,17 +400,20 @@
     return true;
   }
 
-  function setDefaultPrompt() {
-    const prompt = $('prompt');
-    if (prompt) prompt.value = DEFAULT_PROMPT;
-    updatePromptCount();
+  function currentWizardPrompt() {
+    const preview = $('prompt-preview');
+    return preview ? preview.textContent : '';
   }
 
-  function updatePromptCount() {
-    const prompt = $('prompt');
-    const counter = $('prompt-count');
-    if (!prompt || !counter) return;
-    counter.textContent = `${prompt.value.length} / ${prompt.maxLength || 12000}`;
+  function setWizardPrompt(prompt) {
+    const preview = $('prompt-preview');
+    const value = typeof prompt === 'string' && prompt ? prompt : DEFAULT_PROMPT;
+    if (preview) preview.textContent = value;
+    clearFieldError(preview, $('prompt-error'));
+  }
+
+  function setDefaultPrompt() {
+    setWizardPrompt(DEFAULT_PROMPT);
   }
 
   function setFieldError(input, errorElement, message) {
@@ -449,18 +451,20 @@
     clearFormError();
     const qqInput = $('qq-account');
     const keyInput = $('deepseek-key');
-    const promptInput = $('prompt');
+    const promptPreview = $('prompt-preview');
     const riskInput = $('accept-risk');
     const invalidFields = [];
 
     clearFieldError(qqInput, $('qq-account-error'));
     clearFieldError(keyInput, $('deepseek-key-error'));
-    clearFieldError(promptInput, $('prompt-error'));
+    clearFieldError(promptPreview, $('prompt-error'));
     clearFieldError(riskInput, $('risk-error'));
 
     const qqAccount = qqInput ? qqInput.value.trim() : '';
     const apiKey = keyInput ? keyInput.value.trim() : '';
-    const prompt = promptInput ? promptInput.value.trim() : '';
+    const prompt = currentWizardPrompt();
+    const promptText = prompt.trim();
+    const promptLength = Array.from(prompt).length;
 
     if (!qqAccount) {
       setFieldError(qqInput, $('qq-account-error'), '请输入机器人 QQ 号。');
@@ -475,12 +479,12 @@
       invalidFields.push(keyInput);
     }
 
-    if (!prompt) {
-      setFieldError(promptInput, $('prompt-error'), '提示词不能为空，可以点击“恢复默认”使用预设内容。');
-      invalidFields.push(promptInput);
-    } else if (prompt.length > 12000) {
-      setFieldError(promptInput, $('prompt-error'), '提示词不能超过 12000 个字符。');
-      invalidFields.push(promptInput);
+    if (!promptText) {
+      setFieldError(promptPreview, $('prompt-error'), '无法确定部署提示词。请先回到控制台提示词模板库确认可用模板。');
+      invalidFields.push(promptPreview);
+    } else if (promptLength > 12000) {
+      setFieldError(promptPreview, $('prompt-error'), '只读提示词超过 12000 个字符，请到控制台提示词模板库修正。');
+      invalidFields.push(promptPreview);
     }
 
     if (!riskInput || !riskInput.checked) {
@@ -1400,8 +1404,10 @@
     }
 
     if (!app.formInitialised) {
-      if (!deployment.deployed) setDefaultPrompt();
+      setWizardPrompt(deployment.prompt || DEFAULT_PROMPT);
       app.formInitialised = true;
+    } else if (deployment.prompt) {
+      setWizardPrompt(deployment.prompt);
     }
 
     if (deployment.deployed || app.jobCompleted) renderDashboard();
@@ -1907,14 +1913,9 @@
     setText('novnc-password', fallbackDisplay(credentials.vnc_password));
     setOpenLink($('novnc-open'), urls.novnc);
 
-    const promptPreview = $('persona-preview');
+    const promptPreview = $('deployment-prompt-preview');
     if (promptPreview) {
-      promptPreview.textContent = deployment.prompt || '尚未读取提示词。可点击“编辑提示词”填写并保存。';
-    }
-    const personaForm = $('persona-form');
-    const personaInput = $('persona-input');
-    if (personaInput && (!personaForm || personaForm.hidden)) {
-      personaInput.value = deployment.prompt || '';
+      promptPreview.textContent = deployment.prompt || '尚未读取提示词。提示词模板请在控制台提示词模板库管理。';
     }
 
     updateActionButtons();
@@ -2015,53 +2016,6 @@
     } finally {
       app.snowlumaResetBusy = false;
       resetSnowlumaButtonLabel();
-    }
-  }
-
-  async function handlePersonaSubmit(event) {
-    event.preventDefault();
-    if (app.personaBusy) return;
-    const input = $('persona-input');
-    const errorElement = $('persona-error');
-    const status = $('persona-status');
-    const prompt = input ? input.value.trim() : '';
-
-    clearFieldError(input, errorElement);
-    hideInlineStatus(status);
-    if (!prompt) {
-      setFieldError(input, errorElement, '提示词不能为空。');
-      if (input) input.focus();
-      return;
-    }
-
-    app.personaBusy = true;
-    const saveButton = $('persona-save');
-    setButtonBusy(saveButton, true, '保存中…');
-    setInlineStatus(status, '正在写入本机 AstrBot 配置…', 'info');
-
-    try {
-      const data = await apiRequest('/api/persona', {
-        method: 'POST',
-        body: { prompt }
-      });
-      if (data && data.ok === false) {
-        throw new ApiError(textValue(data.message, '提示词保存失败。'));
-      }
-      const message = textValue(data && data.message, '提示词已保存。');
-      showToast(message, 'success');
-      const personaForm = $('persona-form');
-      if (personaForm) personaForm.hidden = true;
-      const preview = $('persona-preview');
-      if (preview) preview.textContent = prompt;
-      await loadState({ silent: true });
-      renderDashboard();
-    } catch (error) {
-      const message = formatError(error, '提示词保存失败。');
-      setInlineStatus(status, message, 'error');
-      showToast(message, 'error', 6000);
-    } finally {
-      app.personaBusy = false;
-      setButtonBusy(saveButton, false);
     }
   }
 
@@ -2186,27 +2140,6 @@
     const testKeyButton = $('test-key');
     if (testKeyButton) testKeyButton.addEventListener('click', handleTestKey);
 
-    const prompt = $('prompt');
-    if (prompt) {
-      prompt.addEventListener('input', () => {
-        updatePromptCount();
-        clearFieldError(prompt, $('prompt-error'));
-        clearFormError();
-      });
-    }
-    const restorePrompt = $('restore-prompt');
-    if (restorePrompt) {
-      restorePrompt.addEventListener('click', () => {
-        const promptInput = $('prompt');
-        if (!promptInput) return;
-        promptInput.value = DEFAULT_PROMPT;
-        updatePromptCount();
-        clearFieldError(promptInput, $('prompt-error'));
-        promptInput.focus();
-        showToast('已恢复默认提示词。', 'success', 2600);
-      });
-    }
-
     const riskInput = $('accept-risk');
     if (riskInput) {
       riskInput.addEventListener('change', () => {
@@ -2264,38 +2197,6 @@
     $$('[data-service-action]').forEach((button) => {
       button.addEventListener('click', () => handleServiceAction(button.dataset.serviceAction));
     });
-
-    const editPrompt = $('edit-prompt');
-    if (editPrompt) {
-      editPrompt.addEventListener('click', () => {
-        const formElement = $('persona-form');
-        const input = $('persona-input');
-        if (!formElement || !input) return;
-        formElement.hidden = false;
-        input.value = app.state.deployment.prompt || '';
-        clearFieldError(input, $('persona-error'));
-        hideInlineStatus($('persona-status'));
-        input.focus();
-      });
-    }
-    const personaForm = $('persona-form');
-    if (personaForm) personaForm.addEventListener('submit', handlePersonaSubmit);
-    const personaInput = $('persona-input');
-    if (personaInput) {
-      personaInput.addEventListener('input', () => {
-        clearFieldError(personaInput, $('persona-error'));
-        hideInlineStatus($('persona-status'));
-      });
-    }
-    const personaCancel = $('persona-cancel');
-    if (personaCancel) {
-      personaCancel.addEventListener('click', () => {
-        const formElement = $('persona-form');
-        if (formElement) formElement.hidden = true;
-        clearFieldError($('persona-input'), $('persona-error'));
-        hideInlineStatus($('persona-status'));
-      });
-    }
 
     $$('.log-service-btn').forEach((button) => {
       button.addEventListener('click', () => loadDashboardLogs(button.dataset.logService));

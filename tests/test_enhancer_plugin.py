@@ -371,10 +371,11 @@ class FakePersonaManager:
 
 
 class FakeConversation:
-    def __init__(self, cid, persona_id=None, title=None):
+    def __init__(self, cid, persona_id=None, title=None, created_at=None):
         self.cid = cid
         self.persona_id = persona_id
         self.title = title or ""
+        self.created_at = created_at
 
 
 class FakeConversationManager:
@@ -400,6 +401,7 @@ class FakeConversationManager:
             cid,
             persona_id,
             title=title,
+            created_at=self.counter,
         )
         return cid
 
@@ -414,6 +416,13 @@ class FakeConversationManager:
         if (umo, conversation_id) not in self.conversations:
             raise ValueError("conversation not found")
         self.current[umo] = conversation_id
+
+    async def delete_conversation(self, umo, conversation_id):
+        if (umo, conversation_id) not in self.conversations:
+            raise ValueError("conversation not found")
+        del self.conversations[(umo, conversation_id)]
+        if self.current.get(umo) == conversation_id:
+            self.current.pop(umo, None)
 
     async def update_conversation(
         self, umo, conversation_id=None, history=None, title=None, persona_id=None
@@ -604,6 +613,13 @@ async def run_conversation_switch_command(plugin, event):
 async def run_conversation_new_command(plugin, event):
     results = []
     async for result in plugin.conversation_new_command(event):
+        results.append(result)
+    return results
+
+
+async def run_conversation_delete_command(plugin, event):
+    results = []
+    async for result in plugin.conversation_delete_command(event):
         results.append(result)
     return results
 
@@ -6946,6 +6962,266 @@ class TestAmbientP1Fixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(open_results), 1)
         self.assertEqual(len(open_context.calls), 1)
 
+class TestConversationLimitAndDelete(unittest.IsolatedAsyncioTestCase):
+    async def test_below_limit_does_not_delete_and_at_limit_prunes_oldest_noncurrent(self):
+        conv_mgr = FakeConversationManager()
+        plugin = make_plugin(
+            FakeContext(conversation_manager=conv_mgr),
+            memory_mode="direct",
+            conversation_max_per_group=2,
+            conversation_auto_prune_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("/新会话 新会话")],
+            message_str="/新会话 新会话",
+            private=False,
+            group_id="960001",
+            session_id="conversation-limit-prune",
+        )
+        umo = event.unified_msg_origin
+        conv_mgr.conversations[(umo, "c1")] = FakeConversation(
+            "c1", title="旧会话", created_at=1
+        )
+        conv_mgr.current[umo] = "c1"
+        conv_mgr.counter = 1
+        early_results = await run_conversation_new_command(plugin, event)
+        self.assertIn("已新建并切换", early_results[0].text)
+        self.assertEqual(conv_mgr.counter, 2)
+        self.assertIn((umo, "c1"), conv_mgr.conversations)
+
+        # Now there are two conversations; the oldest non-current is c1.
+        conv_mgr.conversations[(umo, "c2")] = FakeConversation(
+            "c2", title="当前会话", created_at=2
+        )
+        conv_mgr.current[umo] = "c2"
+        conv_mgr.counter = 2
+        prune_event = FakeEvent(
+            [Plain("/新会话 再建")],
+            message_str="/新会话 再建",
+            private=False,
+            group_id="960001",
+            session_id="conversation-limit-prune",
+        )
+        await run_conversation_new_command(plugin, prune_event)
+        self.assertNotIn((umo, "c1"), conv_mgr.conversations)
+        self.assertIn((umo, "c2"), conv_mgr.conversations)
+        self.assertEqual(conv_mgr.current[umo], "conv-3")
+
+    async def test_current_oldest_is_preserved_and_deletion_failure_aborts(self):
+        conv_mgr = FakeConversationManager()
+        plugin = make_plugin(
+            FakeContext(conversation_manager=conv_mgr),
+            memory_mode="direct",
+            conversation_max_per_group=2,
+            conversation_auto_prune_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("/新会话 第三个")],
+            message_str="/新会话 第三个",
+            private=False,
+            group_id="960002",
+            session_id="conversation-current-oldest",
+        )
+        umo = event.unified_msg_origin
+        conv_mgr.conversations[(umo, "old-current")] = FakeConversation(
+            "old-current", title="当前最老", created_at=1
+        )
+        conv_mgr.conversations[(umo, "newer")] = FakeConversation(
+            "newer", title="较新", created_at=2
+        )
+        conv_mgr.current[umo] = "old-current"
+        conv_mgr.counter = 2
+        await run_conversation_new_command(plugin, event)
+        self.assertNotIn((umo, "newer"), conv_mgr.conversations)
+        self.assertIn((umo, "old-current"), conv_mgr.conversations)
+        self.assertEqual(conv_mgr.current[umo], "conv-3")
+
+        class DeleteFailingManager(FakeConversationManager):
+            async def delete_conversation(self, umo, conversation_id):
+                raise OSError("delete denied")
+
+        fail_mgr = DeleteFailingManager()
+        fail_plugin = make_plugin(
+            FakeContext(conversation_manager=fail_mgr),
+            memory_mode="direct",
+            conversation_max_per_group=2,
+            conversation_auto_prune_enabled=True,
+        )
+        fail_event = FakeEvent(
+            [Plain("/新会话 不创建")],
+            message_str="/新会话 不创建",
+            private=False,
+            group_id="960003",
+            session_id="conversation-delete-fail",
+        )
+        fail_umo = fail_event.unified_msg_origin
+        fail_mgr.conversations[(fail_umo, "a")] = FakeConversation(
+            "a", title="A", created_at=1
+        )
+        fail_mgr.conversations[(fail_umo, "b")] = FakeConversation(
+            "b", title="B", created_at=2
+        )
+        fail_mgr.current[fail_umo] = "b"
+        fail_mgr.counter = 2
+        fail_results = await run_conversation_new_command(
+            fail_plugin,
+            fail_event,
+        )
+        self.assertIn("自动删除最老会话失败", fail_results[0].text)
+        self.assertEqual(fail_mgr.counter, 2)
+        self.assertIn((fail_umo, "a"), fail_mgr.conversations)
+        self.assertIn((fail_umo, "b"), fail_mgr.conversations)
+
+    async def test_delete_by_title_short_id_duplicate_current_last_and_isolation(self):
+        conv_mgr = FakeConversationManager()
+        plugin = make_plugin(
+            FakeContext(conversation_manager=conv_mgr),
+            memory_mode="direct",
+            conversation_max_per_group=10,
+        )
+        event = FakeEvent(
+            [Plain("/删除会话 旧会话")],
+            message_str="/删除会话 旧会话",
+            private=False,
+            group_id="960004",
+            session_id="conversation-delete",
+        )
+        umo = event.unified_msg_origin
+        conv_mgr.conversations[(umo, "old")] = FakeConversation(
+            "old", title="旧会话", created_at=1
+        )
+        conv_mgr.conversations[(umo, "keep")] = FakeConversation(
+            "keep", title="保留会话", created_at=2
+        )
+        conv_mgr.conversations[(umo, "newest")] = FakeConversation(
+            "newest", title="最新会话", created_at=3
+        )
+        conv_mgr.current[umo] = "keep"
+        by_title = await run_conversation_delete_command(plugin, event)
+        self.assertIn("已删除会话", by_title[0].text)
+        self.assertNotIn((umo, "old"), conv_mgr.conversations)
+        self.assertEqual(conv_mgr.current[umo], "keep")
+
+        short_event = FakeEvent(
+            [Plain("/删除会话 ewest")],
+            message_str="/删除会话 ewest",
+            private=False,
+            group_id="960004",
+            session_id="conversation-delete",
+        )
+        # Use the actual short id rather than relying on a coincidental name.
+        short_raw = MODULE.conversation_engine.short_id("newest")
+        short_event = FakeEvent(
+            [Plain("/删除会话 " + short_raw)],
+            message_str="/删除会话 " + short_raw,
+            private=False,
+            group_id="960004",
+            session_id="conversation-delete",
+        )
+        by_short = await run_conversation_delete_command(plugin, short_event)
+        self.assertIn("已删除会话", by_short[0].text)
+        self.assertNotIn((umo, "newest"), conv_mgr.conversations)
+
+        conv_mgr.conversations[(umo, "dup-a")] = FakeConversation(
+            "dup-a", title="同名", created_at=4
+        )
+        conv_mgr.conversations[(umo, "dup-b")] = FakeConversation(
+            "dup-b", title="同名", created_at=5
+        )
+        duplicate_event = FakeEvent(
+            [Plain("/删除会话 同名")],
+            message_str="/删除会话 同名",
+            private=False,
+            group_id="960004",
+            session_id="conversation-delete",
+        )
+        duplicate = await run_conversation_delete_command(
+            plugin,
+            duplicate_event,
+        )
+        self.assertIn("多个同名会话", duplicate[0].text)
+        self.assertIn((umo, "dup-a"), conv_mgr.conversations)
+        self.assertIn((umo, "dup-b"), conv_mgr.conversations)
+
+        current_event = FakeEvent(
+            [Plain("/删除会话 保留会话")],
+            message_str="/删除会话 保留会话",
+            private=False,
+            group_id="960004",
+            session_id="conversation-delete",
+        )
+        before = conv_mgr.current[umo]
+        current_delete = await run_conversation_delete_command(
+            plugin,
+            current_event,
+        )
+        self.assertIn("已删除会话", current_delete[0].text)
+        self.assertNotEqual(conv_mgr.current[umo], before)
+        self.assertIn(conv_mgr.current[umo], [key[1] for key in conv_mgr.conversations])
+
+        last_umo = "aiocqhttp:GroupMessage:conversation-delete-last"
+        last_mgr = FakeConversationManager()
+        last_mgr.conversations[(last_umo, "only")] = FakeConversation(
+            "only", title="唯一", created_at=1
+        )
+        last_mgr.current[last_umo] = "only"
+        last_plugin = make_plugin(
+            FakeContext(conversation_manager=last_mgr),
+            memory_mode="direct",
+        )
+        last_event = FakeEvent(
+            [Plain("/删除会话 唯一")],
+            message_str="/删除会话 唯一",
+            private=False,
+            group_id="960005",
+            session_id="conversation-delete-last",
+        )
+        last_results = await run_conversation_delete_command(
+            last_plugin,
+            last_event,
+        )
+        self.assertIn("不能删除最后一个会话", last_results[0].text)
+
+        other_umo = "aiocqhttp:GroupMessage:conversation-delete-other"
+        conv_mgr.conversations[(other_umo, "other")] = FakeConversation(
+            "other", title="其它群", created_at=1
+        )
+        conv_mgr.current[other_umo] = "other"
+        await run_conversation_delete_command(plugin, event)
+        self.assertIn((other_umo, "other"), conv_mgr.conversations)
+
+    async def test_list_shows_count_limit_and_option_text_has_delete_command(self):
+        conv_mgr = FakeConversationManager()
+        plugin = make_plugin(
+            FakeContext(conversation_manager=conv_mgr),
+            memory_mode="direct",
+            conversation_max_per_group=2,
+        )
+        event = FakeEvent(
+            [Plain("/会话列表")],
+            message_str="/会话列表",
+            private=False,
+            group_id="960006",
+            session_id="conversation-list-limit",
+        )
+        umo = event.unified_msg_origin
+        conv_mgr.conversations[(umo, "a")] = FakeConversation(
+            "a", title="甲"
+        )
+        conv_mgr.conversations[(umo, "b")] = FakeConversation(
+            "b", title="乙"
+        )
+        conv_mgr.current[umo] = "a"
+        results = await run_conversation_list_command(plugin, event)
+        self.assertIn("2 / 上限 2", results[0].text)
+        self.assertIn("自动清理", results[0].text)
+        option_text = plugin._build_option_text()
+        self.assertIn("/删除会话", option_text)
+        self.assertIn("/会话列表", option_text)
+        self.assertIn("/表情状态", option_text)
+        self.assertIn("/food", option_text)
+        self.assertNotIn("conversation_pending", option_text)
+
 class TestStickerStatusDiagnostic(unittest.IsolatedAsyncioTestCase):
     async def test_status_reports_disabled_no_image_face_and_no_paths(self):
         plugin = make_plugin(
@@ -7059,9 +7335,358 @@ class TestStickerStatusDiagnostic(unittest.IsolatedAsyncioTestCase):
         status_results = await run_sticker_status_command(plugin, event)
         text = status_results[0].text
         self.assertIn("收藏功能：已启用", text)
-        self.assertIn("已收藏：1 张", text)
+        self.assertIn("收藏：1 张", text)
         self.assertIn("有可保存图片", text)
         self.assertNotIn("35004", text)
+
+class TestPromptProfileDiskHotReload(unittest.IsolatedAsyncioTestCase):
+    def _disk_env(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        data_root = Path(temp.name) / "data"
+        previous = MODULE.StarTools.data_dir
+        MODULE.StarTools.data_dir = data_root
+        self.addCleanup(setattr, MODULE.StarTools, "data_dir", previous)
+        config_dir = data_root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return data_root, config_dir / "qqbot_enhancer_config.json"
+
+    @staticmethod
+    def _write_config(path, profiles, active_id="p_new"):
+        path.write_text(
+            json_module.dumps(
+                {
+                    "prompt_profiles": json_module.dumps(
+                        profiles,
+                        ensure_ascii=False,
+                    ),
+                    "prompt_profile_active_id": active_id,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _profiles(name="新模板", profile_id="p_new"):
+        return [
+            {
+                "id": profile_id,
+                "name": name,
+                "prompt": f"{name}提示词",
+                "pinned": True,
+            }
+        ]
+
+    @staticmethod
+    def _old_profiles():
+        return json_module.dumps(
+            [
+                {
+                    "id": "p_old",
+                    "name": "旧模板",
+                    "prompt": "旧模板提示词",
+                    "pinned": True,
+                }
+            ],
+            ensure_ascii=False,
+        )
+
+    async def test_disk_rename_is_immediate_and_unchanged_file_uses_cache(self):
+        _data_root, config_path = self._disk_env()
+        self._write_config(config_path, self._profiles("旧模板", "p_old"))
+        plugin = make_plugin(
+            FakeContext(),
+            memory_mode="direct",
+            prompt_profiles=self._old_profiles(),
+            prompt_profile_active_id="p_old",
+        )
+        first = plugin._parse_prompt_profiles_config()
+        self.assertEqual(first.active.name, "旧模板")
+
+        self._write_config(config_path, self._profiles("改名后模板", "p_new"))
+        # Ensure a distinct stat key even on coarse filesystems.
+        current = config_path.stat()
+        os.utime(
+            config_path,
+            ns=(current.st_atime_ns, current.st_mtime_ns + 1_000_000),
+        )
+        second = plugin._parse_prompt_profiles_config()
+        self.assertEqual(second.active.name, "改名后模板")
+        self.assertEqual(second.active.id, "p_new")
+
+        plugin._prompt_profile_disk_cache_loaded = False
+        original_read_bytes = Path.read_bytes
+        calls = 0
+
+        def counted_read_bytes(path_obj):
+            nonlocal calls
+            calls += 1
+            return original_read_bytes(path_obj)
+
+        with mock.patch.object(Path, "read_bytes", counted_read_bytes):
+            plugin._parse_prompt_profiles_config()
+            plugin._parse_prompt_profiles_config()
+        self.assertEqual(calls, 1)
+
+    async def test_bad_missing_symlink_and_oversize_fall_back_safely(self):
+        _data_root, config_path = self._disk_env()
+        plugin = make_plugin(
+            FakeContext(),
+            memory_mode="direct",
+            prompt_profiles=self._old_profiles(),
+            prompt_profile_active_id="p_old",
+        )
+        self.assertFalse(config_path.exists())
+        missing = plugin._parse_prompt_profiles_config()
+        self.assertEqual(missing.active.name, "旧模板")
+
+        config_path.write_text("{bad json", encoding="utf-8")
+        bad = plugin._parse_prompt_profiles_config()
+        self.assertEqual(bad.active.name, "旧模板")
+
+        config_path.unlink()
+        outside = config_path.parent.parent / "outside_prompt_config.json"
+        outside.write_text(
+            json_module.dumps(
+                {
+                    "prompt_profiles": self._profiles("目标外模板", "p_out"),
+                    "prompt_profile_active_id": "p_out",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        config_path.symlink_to(outside)
+        symlink_fallback = plugin._parse_prompt_profiles_config()
+        self.assertEqual(symlink_fallback.active.name, "旧模板")
+
+        config_path.unlink()
+        config_path.write_bytes(b"x" * (MODULE.PROMPT_PROFILE_DISK_MAX_BYTES + 1))
+        oversized = plugin._parse_prompt_profiles_config()
+        self.assertEqual(oversized.active.name, "旧模板")
+
+    async def test_new_session_uses_disk_name_and_old_name_id_remain_available(self):
+        _data_root, config_path = self._disk_env()
+        profiles = [
+            {
+                "id": "p_old",
+                "name": "旧模板",
+                "prompt": "旧模板提示词",
+                "pinned": False,
+            },
+            {
+                "id": "p_new",
+                "name": "新模板",
+                "prompt": "新模板提示词",
+                "pinned": True,
+            },
+        ]
+        self._write_config(config_path, profiles)
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        plugin = make_plugin(
+            FakeContext(
+                persona_manager=persona_mgr,
+                conversation_manager=conv_mgr,
+            ),
+            memory_mode="astrbot",
+            prompt_profiles=self._old_profiles(),
+            prompt_profile_active_id="p_old",
+        )
+        by_name = plugin._prompt_profile_for_template("新模板")
+        by_id = plugin._prompt_profile_for_template("p_old")
+        self.assertIsNotNone(by_name)
+        self.assertIsNotNone(by_id)
+        self.assertEqual(by_id.name, "旧模板")
+
+        event = FakeEvent(
+            [Plain("/新会话 热更新 新模板")],
+            message_str="/新会话 热更新 新模板",
+            private=False,
+            group_id="970001",
+            session_id="prompt-disk-hot",
+        )
+        results = await run_conversation_new_command(plugin, event)
+        self.assertIn("已新建并切换", results[0].text)
+        self.assertIn("新模板", results[0].text)
+        umo = event.unified_msg_origin
+        conv = conv_mgr.conversations[(umo, conv_mgr.current[umo])]
+        self.assertEqual(conv.persona_id, "qqbot_enhancer_prompt_p_new")
+        self.assertIn(
+            "新模板提示词",
+            persona_mgr.personas[conv.persona_id].system_prompt,
+        )
+
+        missing_event = FakeEvent(
+            [Plain("/新会话 不存在 不存在模板")],
+            message_str="/新会话 不存在 不存在模板",
+            private=False,
+            group_id="970001",
+            session_id="prompt-disk-hot",
+        )
+        missing = await run_conversation_new_command(plugin, missing_event)
+        self.assertIn("未找到提示词模板", missing[0].text)
+        self.assertIn("新模板", missing[0].text)
+        self.assertIn("旧模板", missing[0].text)
+        self.assertNotIn(str(config_path), missing[0].text)
+
+class TestStickerToolCatalogMemory(unittest.IsolatedAsyncioTestCase):
+    async def test_memory_catalog_injected_idempotently_and_direct_skips(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            collected_sticker_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("来张表情")],
+            message_str="来张表情",
+            private=False,
+            group_id="980001",
+            sender_id="38001",
+            sender_name="测试用户",
+            session_id="sticker-catalog-memory",
+        )
+        req = SimpleNamespace(
+            system_prompt="base agent persona",
+            provider_id="deepseek-flash",
+            model="deepseek-chat",
+        )
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertIn("# Sticker Tool Catalog", req.system_prompt)
+        self.assertIn("send_sticker", req.system_prompt)
+        self.assertIn("内置表情 8 个", req.system_prompt)
+        self.assertIn("不要声称没有表情素材", req.system_prompt)
+        self.assertIn("一次最多一个附件", req.system_prompt)
+        self.assertEqual(req.provider_id, "deepseek-flash")
+        self.assertEqual(req.model, "deepseek-chat")
+        self.assertEqual(context.calls, [])
+
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertEqual(
+            req.system_prompt.count("# Sticker Tool Catalog"),
+            1,
+        )
+        self.assertEqual(context.calls, [])
+
+        disabled = make_plugin(
+            FakeContext(),
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            safe_tools_enabled=False,
+            safe_tools_allow_send_sticker=True,
+        )
+        disabled_req = SimpleNamespace(system_prompt="base")
+        await disabled.inject_agent_current_sender_identity(
+            event,
+            disabled_req,
+        )
+        self.assertNotIn("# Sticker Tool Catalog", disabled_req.system_prompt)
+
+        direct = make_plugin(
+            FakeContext(),
+            memory_mode="direct",
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+        )
+        direct_req = SimpleNamespace(system_prompt="direct base")
+        await direct.inject_agent_current_sender_identity(event, direct_req)
+        self.assertEqual(direct_req.system_prompt, "direct base")
+
+        no_material = make_plugin(
+            FakeContext(),
+            memory_mode="astrbot",
+            sticker_enabled=False,
+            collected_sticker_enabled=False,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+        )
+        no_material_req = SimpleNamespace(system_prompt="base no material")
+        await no_material.inject_agent_current_sender_identity(
+            event,
+            no_material_req,
+        )
+        self.assertNotIn("# Sticker Tool Catalog", no_material_req.system_prompt)
+
+    async def test_memory_send_sticker_marker_replaces_agent_text_with_one_image(self):
+        plugin = make_plugin(
+            FakeContext(),
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            ai_unified_tool_protocol_enabled=True,
+            collected_sticker_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("来张表情")],
+            message_str="来张表情",
+            private=True,
+            session_id="sticker-memory-send",
+        )
+        event.set_extra("qqbot_enhancer_memory_reply", True)
+        event.set_extra("qqbot_enhancer_sticker_text", "来张表情")
+        event.result = FakeResult(
+            [Plain('好呀 [[tool:send_sticker emotion="happy"]]')]
+        )
+        await plugin.attach_memory_mode_sticker(event)
+        images = [
+            component
+            for component in event.result.chain
+            if isinstance(component, Image)
+        ]
+        self.assertEqual(len(images), 1)
+        self.assertNotIn("[[tool:", event.result.text)
+        self.assertIn("给你一个表情", event.result.text)
+
+    async def test_status_reports_tool_catalog_injection_and_material_counts(self):
+        memory_plugin = make_plugin(
+            FakeContext(),
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            collected_sticker_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("/表情状态")],
+            message_str="/表情状态",
+            private=False,
+            group_id="980002",
+            sender_id="38002",
+            sender_name="状态用户",
+            session_id="sticker-catalog-status",
+        )
+        results = await run_sticker_status_command(memory_plugin, event)
+        text = results[0].text
+        self.assertIn("memory_mode=astrbot 已注入", text)
+        self.assertIn("内置表情：8 个", text)
+        self.assertIn("可用情绪", text)
+        self.assertNotIn("38002", text)
+
+        direct_plugin = make_plugin(
+            FakeContext(),
+            memory_mode="direct",
+            sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+        )
+        direct_results = await run_sticker_status_command(
+            direct_plugin,
+            event,
+        )
+        self.assertIn("direct 模式使用既有系统提示", direct_results[0].text)
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):

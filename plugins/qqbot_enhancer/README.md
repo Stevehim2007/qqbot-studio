@@ -10,7 +10,7 @@ AstrBot v4.29 自动加载插件，提供：
 - @/私聊支持保守自然语言找图，如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，命中后复用同一搜索下载流程并阻断默认 LLM；
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的授权音频并用 `Comp.Record` 发送，不调用 LLM，不烧 token；
 - 可选群聊 ambient：默认关闭；启用后缓存全群消息并按低频概率/关键词/轮次参与，回复优先用官方 `Comp.At` @ 发言人，失败降级 `@昵称`，默认有限冷却防刷屏；
-- `/会话列表`、`/会话 名称`、`/新会话 名称 [提示词标题]`（仅群聊）通过 AstrBot 官方 ConversationManager 操作命名会话：每个 conversation 保留自己的 persona/提示词/记忆；新会话可用模板并立即切换，已有会话只切换不新建；API 缺失时明确降级不伪造成功；
+- `/会话列表`、`/会话 名称`、`/新会话 名称 [提示词标题]`、`/删除会话 名称|短ID`（仅群聊）通过 AstrBot 官方 ConversationManager 操作命名会话：每个 conversation 保留自己的 persona/提示词/记忆；新会话可用模板并立即切换，已有会话只切换不新建；每群最多 `conversation_max_per_group=10`，达到上限新建前自动清理最老非当前，删除失败中止；API 缺失时明确降级不伪造成功；
 - `/food 火锅`、`/food 南关区 火锅`（别名 `/吃什么`、`/饭店`）通过固定 HTTPS host `food.dlsz.top` 公开只读 API 查询最多 5 家餐厅，格式化店名/地点/标签/均分/口味/性价比/评价数/最新日期，带超时、大小、冷却和中文降级，不调用 LLM；
 - `group_personas` 实例级群人格映射：direct 模式按群 ID 注入不同 system prompt，私聊/未知群 fallback default；astrbot memory 模式不再每轮强制覆盖已有 conversation，只在 `/新会话` 没有提示词模板时作为显式 fallback。
 - Studio 提示词 profiles/active/pinned：提示词是模板库，pinned 是 `/新会话` 未指定模板时的默认；active 变化不会自动新建或切换会话。direct 仍使用 active prompt；astrbot 已有 conversation 保留自己的 persona/提示词/记忆。
@@ -345,10 +345,15 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 /切换会话 复盘
 /新会话 复盘
 /新会话 复盘 猫猫提示词
+/删除会话 复盘
+/删除会话 a1b2c3d4
 ```
 
 规则：
 - 一个 conversation = 一个 persona + 一份提示词 + 一段记忆；`/会话 名称` 只切换到已有会话，**不再自动新建**，保留目标自己的 persona/提示词/记忆。
+- 每群/UMO 最多 `conversation_max_per_group`（默认 10，1-50）。达到上限时 `/新会话` 在创建前用官方 `delete_conversation(umo,cid)` 删除最老的非 current 会话，再创建；删除失败或没有安全候选则中止，不超出上限、不删 current。
+- `/删除会话 名称|短ID`：精确匹配；同名多会话拒绝并要求短 ID；删除当前会话时先切换到剩余最新会话并确认，随后删除；拒绝删除最后一个会话；异常不删错群、不伪造成功。
+- `/会话列表` 显示“当前 x / 上限 y”，接近/达到上限时提示自动清理或先删除。
 - `/新会话 名称 [提示词标题]`：
   - 不写提示词标题时使用 pinned 模板；没有 pinned 时回退 active/首个模板；
   - 指定标题时按模板名称/id 精确选择；
@@ -364,12 +369,36 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 
 `/表情状态` / `/表情诊断` 只读输出：收藏开关、存储目录权限、已收藏数量/上限、单图大小上限、当前消息是可保存图片/无图片/QQ 表情/超大/无法解码、最近媒体缓存有无。不会显示绝对路径、QQ 或用户文字；保存写入失败会明确提示存储不可用，不抛到用户侧通用异常。
 
-## 代码架构（1.22.0）
+## 提示词模板热更新
+
+Studio 更新提示词模板后不必重启 AstrBot：
+
+- 插件每次解析模板或执行 `/新会话 名称 [提示词标题]` 时，从固定只读路径 `data/config/qqbot_enhancer_config.json` 检查最新 `prompt_profiles` / `prompt_profile_active_id`。
+- 路径由 `StarTools.get_data_dir(plugin_name="qqbot_enhancer")` 推导，只读该固定文件，不接受命令/用户输入路径。
+- 缓存键为 `(mtime_ns, size)`：文件未变化直接复用内存结果；改名、替换或 Studio 原子写入后立即重读。坏 JSON/缺文件/不可读/符号链接/超过大小上限会安全回退 AstrBot 配置对象，不崩溃、不读取任意路径。
+- 找不到用户输入的新模板时，诊断会列出当前实际可用模板名称/id，不泄露文件路径或 Key。
+- pinned/active、profile 容量、persona 绑定、旧模板名/id 和已有 conversation 仍兼容。
+
+## AstrBot memory 表情/工具 catalog
+
+`memory_mode=astrbot` 时 Agent 自己构建 system prompt，插件无法依赖 direct 的系统提示。为避免模型误说“没有表情素材”：
+
+- safe_tools 开启、marker 开启、`send_sticker` 允许且当前有可用内置/收藏素材时，官方 `on_llm_request` 注入短 `# Sticker Tool Catalog`。
+- catalog 说明有本地内置/收藏表情、可调用一次统一安全协议：
+  `[[tool:send_sticker emotion="happy"]]` / `category="..."` / `tag="..."`，一次最多一个附件；不暴露路径/QQ/群号，最多列安全情绪/分类/标签。
+- 注入幂等：替换旧 marker，不堆叠；不修改 conversation history/provider/model/key，不额外调用 LLM。
+- safe_tools 关闭、send_sticker 被禁用或没有可用素材时静默不注入，`/表情状态` 明确显示注入状态/素材数量。
+- direct 模式继续走既有 `_effective_system_prompt`，不重复注入 catalog。
+- memory Agent 返回的 `[[tool:send_sticker ...]]` 由 `on_decorating_result` 解析并替换为一条文字+一张本地表情；非法/禁用/无匹配 marker 回退纯文本。
+
+真实 AstrBot Agent hook、tool marker 输出和 QQ 表情展示 E2E 未验证。
+
+## 代码架构（2.1.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 
 - `interfaces.py`：`StickerRepository`、`MediaDecoder`、`ImageSearchProvider`、`SongRepository`、`LLMService` 等 Protocol 和 `MediaPayload`/`StickerRecord`/`ImageCandidate` 数据对象。
-- `config.py`：191 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
+- `config.py`：193 个默认配置集中定义 + `ConfigReader` 类型读取/旧 config 兼容。
 - `media.py`：图片 magic/尺寸、base64、媒体引用和公网 HTTP(S) URL 安全过滤。
 - `image_search.py`：中/日/英文相关性规范化、别名/阈值过滤。
 - `songs.py`：本地授权音频的安全路径解析/列表仓库。
@@ -380,7 +409,7 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - `safe_tools.py`：白名单工具 marker 解析、参数 schema/路径/URL/命令拒绝、指令文本生成。
 - `__init__.py`：让插件目录可作为 Python package 部署，`main.py` 优先相对导入；测试 harness 也支持同目录模块 fallback。
 
-未变：所有配置键、schema 191 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
+未变：所有配置键、schema 193 项、命令、收藏 index 格式、8 张内置 stickers 和现有行为；没有引入第三方依赖。`main.py` 因 AstrBot 装饰器/事件处理仍需保留，未把命令 handler 全部搬出。真实 AstrBot 实例部署与 QQ 端到端显示未验证。
 
 ## 依赖
 

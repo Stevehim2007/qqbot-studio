@@ -109,11 +109,12 @@ except ImportError:  # Loaded directly by a test harness.
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 STICKER_DIR = PLUGIN_DIR / "stickers"
+PROMPT_PROFILE_DISK_MAX_BYTES = 8 * 1024 * 1024
 STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.22.0"
+PLUGIN_FALLBACK_VERSION = "2.1.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -186,6 +187,11 @@ class QQBotEnhancerPlugin(Star):
         super().__init__(context)
         self.config: dict[str, Any] = config if isinstance(config, dict) else {}
         self._config_reader = ConfigReader(self.config)
+        # Prompt templates may be updated by Studio in the AstrBot config file
+        # without refreshing AstrBot's in-memory plugin config object.
+        self._prompt_profile_disk_cache_loaded = False
+        self._prompt_profile_disk_cache_key: tuple[int, int] | None = None
+        self._prompt_profile_disk_cache_value: tuple[Any, str] | None = None
 
         # 可注入的时钟/随机源让单元测试不必真的 sleep。
         self._clock = time.monotonic
@@ -1084,6 +1090,148 @@ class QQBotEnhancerPlugin(Star):
                 "qqbot_enhancer 会话切换后群人格绑定失败，保留当前人格"
             )
 
+    def _conversation_limit(self) -> int:
+        return min(
+            50,
+            max(1, self._cfg_int("conversation_max_per_group", 1)),
+        )
+
+    async def _prepare_conversation_slot(
+        self,
+        event: AstrMessageEvent,
+    ) -> tuple[bool, str]:
+        """Ensure one more conversation fits, pruning oldest non-current."""
+
+        manager = self._conversation_manager()
+        if manager is None:
+            return False, "unsupported"
+        conversations = await self._list_agent_conversations(
+            str(event.unified_msg_origin)
+        )
+        limit = self._conversation_limit()
+        if len(conversations) < limit:
+            return True, "ok"
+        if not self._cfg_bool("conversation_auto_prune_enabled"):
+            return False, "limit"
+        current = await self._current_agent_conversation_id(
+            str(event.unified_msg_origin)
+        )
+        if not current:
+            # Without a verified current id we must not risk deleting it.
+            return False, "no_candidate"
+        delete = getattr(manager, "delete_conversation", None)
+        if not callable(delete):
+            return False, "unsupported_delete"
+        needed = len(conversations) - limit + 1
+        candidates = [
+            conversation
+            for conversation in conversations
+            if conversation_engine.conversation_id(conversation) != current
+        ]
+        candidates.sort(
+            key=conversation_engine.conversation_created_at
+        )
+        if len(candidates) < needed:
+            return False, "no_candidate"
+        for conversation in candidates[:needed]:
+            cid = conversation_engine.conversation_id(conversation)
+            if not cid:
+                return False, "no_candidate"
+            try:
+                result = await self._await_conversation_api(
+                    delete(
+                        str(event.unified_msg_origin),
+                        cid,
+                    )
+                )
+                if result is False:
+                    return False, "delete_failed"
+            except Exception:
+                return False, "delete_failed"
+        return True, "pruned"
+
+    async def _delete_agent_conversation(
+        self,
+        event: AstrMessageEvent,
+        target_conversation: Any,
+    ) -> tuple[str, str]:
+        manager = self._conversation_manager()
+        if manager is None:
+            return "unsupported", ""
+        delete = getattr(manager, "delete_conversation", None)
+        if not callable(delete):
+            return "unsupported", ""
+        target_cid = conversation_engine.conversation_id(
+            target_conversation
+        )
+        if not target_cid:
+            return "not_found", ""
+        title = conversation_engine.conversation_title(
+            target_conversation
+        ) or "（未命名会话）"
+        conversations = await self._list_agent_conversations(
+            str(event.unified_msg_origin)
+        )
+        current = await self._current_agent_conversation_id(
+            str(event.unified_msg_origin)
+        )
+        switched = False
+        if target_cid == current:
+            remaining = [
+                conversation
+                for conversation in conversations
+                if conversation_engine.conversation_id(conversation)
+                != target_cid
+            ]
+            if not remaining:
+                return "last", title
+            remaining.sort(
+                key=conversation_engine.conversation_created_at,
+                reverse=True,
+            )
+            replacement = conversation_engine.conversation_id(
+                remaining[0]
+            )
+            if not replacement:
+                return "last", title
+            try:
+                await self._await_conversation_api(
+                    manager.switch_conversation(
+                        str(event.unified_msg_origin),
+                        replacement,
+                    )
+                )
+            except Exception:
+                return "switch_failed", title
+            switched = True
+            confirmed = await self._current_agent_conversation_id(
+                str(event.unified_msg_origin)
+            )
+            if confirmed and confirmed != replacement:
+                return "switch_failed", title
+        try:
+            result = await self._await_conversation_api(
+                delete(
+                    str(event.unified_msg_origin),
+                    target_cid,
+                )
+            )
+            if result is False:
+                raise RuntimeError("delete returned false")
+        except Exception:
+            if switched:
+                try:
+                    await self._await_conversation_api(
+                        manager.switch_conversation(
+                            str(event.unified_msg_origin),
+                            target_cid,
+                        )
+                    )
+                except Exception:
+                    pass
+            return "delete_failed", title
+        return "deleted", title
+
     async def _new_agent_conversation(
         self,
         event: AstrMessageEvent,
@@ -1264,7 +1412,10 @@ class QQBotEnhancerPlugin(Star):
         return "自定义人格"
 
     def _conversation_usage_reply(self) -> str:
-        return "用法：/会话列表；/会话 名称（只切换已有）；/新会话 名称 [提示词标题]"
+        return (
+            "用法：/会话列表；/会话 名称（只切换已有）；"
+            "/新会话 名称 [提示词标题]；/删除会话 名称|短ID"
+        )
 
     def _conversation_unsupported_reply(self) -> str:
         return "当前 AstrBot 后端没有可用的官方会话管理 API，未执行切换。"
@@ -1304,7 +1455,16 @@ class QQBotEnhancerPlugin(Star):
                 50,
                 max(1, self._cfg_int("conversation_list_limit", 1)),
             )
-            lines = [f"当前群会话（最多显示 {limit} 个）："]
+            limit_total = self._conversation_limit()
+            lines = [
+                f"当前群会话：{len(conversations)} / 上限 {limit_total} "
+                f"（列表最多显示 {limit} 个）"
+            ]
+            if len(conversations) >= limit_total:
+                if self._cfg_bool("conversation_auto_prune_enabled"):
+                    lines.append("已接近/达到上限；新建时会自动清理最老非当前会话。")
+                else:
+                    lines.append("已接近/达到上限；请用 /删除会话 清理。")
             for conversation in conversations[:limit]:
                 cid = conversation_engine.conversation_id(conversation)
                 title = conversation_engine.conversation_title(conversation)
@@ -1429,6 +1589,7 @@ class QQBotEnhancerPlugin(Star):
                     yield event.plain_result(
                         f"未找到提示词模板「{prompt_title}」，"
                         "未创建会话。"
+                        f"\n{self._prompt_template_diagnostic()}"
                     )
                     return
             else:
@@ -1451,6 +1612,29 @@ class QQBotEnhancerPlugin(Star):
                         f"同名会话「{title}」已存在，可用 /会话 {title} 切换。"
                     )
                     return
+                prepared, prepare_reason = (
+                    await self._prepare_conversation_slot(event)
+                )
+                if not prepared:
+                    if prepare_reason == "limit":
+                        yield event.plain_result(
+                            "已达到当前会话上限，自动清理未启用；"
+                            "请先 /删除会话 或调高上限。"
+                        )
+                    elif prepare_reason in (
+                        "delete_failed",
+                        "unsupported_delete",
+                    ):
+                        yield event.plain_result(
+                            "会话数量已达上限，自动删除最老会话失败；"
+                            "已中止创建，现有会话保持不变。"
+                        )
+                    else:
+                        yield event.plain_result(
+                            "会话数量已达上限，且没有可安全删除的非当前会话；"
+                            "已中止创建。"
+                        )
+                    return
                 await self._new_agent_conversation(
                     event,
                     title,
@@ -1467,6 +1651,132 @@ class QQBotEnhancerPlugin(Star):
         except Exception:
             logger.info("qqbot_enhancer /新会话 创建失败")
             yield event.plain_result("新会话创建失败，当前会话保持不变。")
+        finally:
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
+    @filter.command("删除会话", alias={"会话删除"}, priority=110)
+    async def conversation_delete_command(self, event: AstrMessageEvent):
+        event.should_call_llm(True)
+        try:
+            if not self._cfg_bool("conversation_switch_enabled"):
+                yield event.plain_result("会话切换功能当前未启用。")
+                return
+            if event.is_private_chat():
+                yield event.plain_result("私聊默认使用当前会话，无需切换。")
+                return
+            raw = self._collect_command_argument(
+                event,
+                ("删除会话", "会话删除"),
+            ).strip()
+            if not raw:
+                yield event.plain_result(
+                    "用法：/删除会话 名称|短ID"
+                )
+                return
+            manager = self._conversation_manager()
+            delete_allowed = (
+                manager is not None
+                and callable(
+                    getattr(manager, "delete_conversation", None)
+                )
+            )
+            if not delete_allowed:
+                yield event.plain_result(
+                    "当前 AstrBot 后端没有可用的官方会话删除 API，"
+                    "未删除任何会话。"
+                )
+                return
+            async with self._conversation_switch_lock:
+                conversations = await self._list_agent_conversations(
+                    str(event.unified_msg_origin)
+                )
+                title_matches = conversation_engine.find_all_by_title(
+                    conversations,
+                    raw,
+                )
+                if len(title_matches) > 1:
+                    ids = "、".join(
+                        conversation_engine.short_id(
+                            conversation_engine.conversation_id(item)
+                        )
+                        for item in title_matches[:5]
+                    )
+                    yield event.plain_result(
+                        f"找到多个同名会话「{raw}」（id:{ids}），"
+                        "请使用唯一短 ID 删除，未删除任何会话。"
+                    )
+                    return
+                matches = title_matches
+                if not matches:
+                    wanted = raw.casefold()
+                    matches = [
+                        conversation
+                        for conversation in conversations
+                        if (
+                            conversation_engine.short_id(
+                                conversation_engine.conversation_id(
+                                    conversation
+                                )
+                            ).casefold()
+                            == wanted
+                            or conversation_engine.conversation_id(
+                                conversation
+                            ).casefold()
+                            == wanted
+                        )
+                    ]
+                if len(matches) > 1:
+                    yield event.plain_result(
+                        "短 ID 匹配到多个会话，请使用更完整的 ID；"
+                        "未删除任何会话。"
+                    )
+                    return
+                if not matches:
+                    yield event.plain_result(
+                        f"没有找到会话「{raw}」，未删除任何会话。"
+                    )
+                    return
+                status, deleted_title = await self._delete_agent_conversation(
+                    event,
+                    matches[0],
+                )
+                if status == "last":
+                    yield event.plain_result(
+                        "不能删除最后一个会话；当前会话保持不变。"
+                    )
+                    return
+                if status == "switch_failed":
+                    yield event.plain_result(
+                        "删除当前会话前切换失败，未删除任何会话。"
+                    )
+                    return
+                if status == "unsupported":
+                    yield event.plain_result(
+                        "当前 AstrBot 后端没有可用的官方会话删除 API，"
+                        "未删除任何会话。"
+                    )
+                    return
+                if status == "delete_failed":
+                    yield event.plain_result(
+                        "删除会话失败，未伪造删除成功；请稍后再试。"
+                    )
+                    return
+                remaining = await self._list_agent_conversations(
+                    str(event.unified_msg_origin)
+                )
+                yield event.plain_result(
+                    f"已删除会话「{deleted_title}」；"
+                    f"当前剩余 {len(remaining)} 个会话。"
+                )
+        except Exception:
+            logger.info("qqbot_enhancer /删除会话 处理失败")
+            yield event.plain_result("删除会话失败，未删除任何会话。")
         finally:
             event.stop_event()
 
@@ -1584,10 +1894,45 @@ class QQBotEnhancerPlugin(Star):
             else:
                 lines.append("- 存储：可用")
             entries = self._valid_collected_entries()
+            builtin_count = sum(
+                1
+                for entry in self._sticker_entries
+                if isinstance(entry.get("path"), Path)
+                and entry["path"].is_file()
+            )
             lines.append(
-                f"- 已收藏：{len(entries)} 张 / "
+                f"- 内置表情：{builtin_count} 个；"
+                f"收藏：{len(entries)} 张 / "
                 f"上限 {self._cfg_int('collected_sticker_max_count', 1)} 张"
             )
+            catalog = self._sticker_tool_catalog_instruction()
+            if self._memory_mode() == "astrbot":
+                if catalog:
+                    lines.append(
+                        "- AI 工具协议：memory_mode=astrbot 已注入 sticker/tool catalog"
+                    )
+                else:
+                    lines.append(
+                        "- AI 工具协议：memory_mode=astrbot 未注入"
+                        "（safe_tools/表情开关关闭或当前无可用素材）"
+                    )
+            else:
+                lines.append(
+                    "- AI 工具协议：direct 模式使用既有系统提示注入，"
+                    "不重复 catalog"
+                )
+            emotions = sorted(
+                {
+                    str(entry.get("emotion", "") or "").strip()
+                    for entry in self._sticker_entries
+                    if str(entry.get("emotion", "") or "").strip()
+                }
+            )[:12]
+            category_names = sorted(self._collected_category_counts())[:12]
+            if emotions:
+                lines.append("- 可用情绪：" + "、".join(emotions))
+            if category_names:
+                lines.append("- 可用收藏分类：" + "、".join(category_names))
             lines.append(
                 "- 单图上限："
                 f"{self._cfg_int('collected_sticker_max_file_bytes', 1)} 字节"
@@ -2068,10 +2413,11 @@ class QQBotEnhancerPlugin(Star):
             "/唱歌 [文件名关键词]（别名 /点歌）",
             "/food <关键词> [地点]（别名 /吃什么、/饭店）",
             "/会话列表（群聊查看 AstrBot 会话）",
-            "/会话 <名称>（群聊切换/自动新建）",
-            "/新会话 <名称>（群聊新建并切换）",
-            "/收藏表情 [分类]",
+            "/会话 <名称>（群聊只切换已有）",
+            "/新会话 <名称> [提示词标题]（群聊新建并切换）",
+            "/删除会话 <名称|短ID>（群聊删除）",
             "/表情状态（别名 /表情诊断）",
+            "/收藏表情 [分类]",
             "/表情分类",
             "/表情列表 [分类]",
             "/发表情 [分类]",
@@ -4137,6 +4483,80 @@ class QQBotEnhancerPlugin(Star):
             sorted(self._sticker_ai_available_tags())
         )
 
+    def _sticker_tool_catalog_instruction(self) -> str:
+        """Short memory-mode catalog; direct mode gets its existing prompt."""
+
+        if self._memory_mode() != "astrbot":
+            return ""
+        if not (
+            self._cfg_bool("safe_tools_enabled")
+            and self._cfg_bool("safe_tools_marker_enabled")
+            and self._cfg_bool("safe_tools_allow_send_sticker")
+        ):
+            return ""
+        builtin_count = (
+            sum(
+                1
+                for entry in self._sticker_entries
+                if isinstance(entry.get("path"), Path)
+                and entry["path"].is_file()
+            )
+            if self._cfg_bool("sticker_enabled")
+            else 0
+        )
+        collected_count = (
+            sum(
+                1
+                for entry in self._valid_collected_entries()
+                if isinstance(entry.get("path"), Path)
+                and entry["path"].is_file()
+            )
+            if self._cfg_bool("sticker_enabled")
+            and self._cfg_bool("collected_sticker_enabled")
+            else 0
+        )
+        if builtin_count <= 0 and collected_count <= 0:
+            # Silence is safer than claiming a catalog that has no payload.
+            return ""
+        emotions = sorted(
+            {
+                str(entry.get("emotion", "") or "").strip()
+                for entry in self._sticker_entries
+                if str(entry.get("emotion", "") or "").strip()
+            }
+        )[:12]
+        categories: list[str] = []
+        tags: set[str] = set()
+        if self._cfg_bool("collected_sticker_enabled"):
+            for entry in self._valid_collected_entries():
+                for category in self._entry_categories(entry):
+                    if (
+                        STICKER_AI_TAG_RE.fullmatch(category)
+                        and category not in categories
+                    ):
+                        categories.append(category)
+                for raw_tag in entry.get("tags", []):
+                    tag = str(raw_tag or "").strip()
+                    if STICKER_AI_TAG_RE.fullmatch(tag):
+                        tags.add(tag)
+                if len(categories) >= 12:
+                    break
+        parts = [
+            f"本地已有内置表情 {builtin_count} 个、收藏表情 {collected_count} 个；"
+            "不要声称没有表情素材或未安装素材。",
+            '需要发表情时只调用一次统一安全协议，例如：'
+            '[[tool:send_sticker emotion="happy"]]，也可使用 '
+            'category="猫猫" 或 tag="嘲讽"（三选一）。',
+            "只允许白名单字段，一次最多一个附件；不要输出文件路径、QQ 或群号。",
+        ]
+        if emotions:
+            parts.append("可用情绪：" + "、".join(emotions))
+        if categories:
+            parts.append("可用收藏分类：" + "、".join(categories[:12]))
+        if tags:
+            parts.append("可用标签：" + "、".join(sorted(tags)[:12]))
+        return "\n".join(parts)
+
     def _enabled_safe_tool_names(self) -> list[str]:
         if not self._cfg_bool("safe_tools_enabled"):
             return []
@@ -4175,16 +4595,108 @@ class QQBotEnhancerPlugin(Star):
             ),
         )
 
+    def _prompt_profile_disk_path(self) -> Path | None:
+        """Resolve only the fixed AstrBot config path; never user input."""
+
+        try:
+            plugin_data = Path(
+                StarTools.get_data_dir(plugin_name="qqbot_enhancer")
+            )
+        except Exception:
+            return None
+        if plugin_data.name == "qqbot_enhancer" and plugin_data.parent.name == "plugin_data":
+            data_root = plugin_data.parent.parent
+        else:
+            # Test harnesses and older adapters may return data/<plugin>.
+            data_root = plugin_data.parent
+        return data_root / "config" / "qqbot_enhancer_config.json"
+
+    def _read_prompt_profile_state_from_disk(
+        self,
+    ) -> tuple[list[Any], str] | None:
+        """Read fresh prompt templates from the fixed Studio config file.
+
+        Cache key is (mtime_ns, size). Missing/symlink files are checked on
+        every call so a later atomic replacement is noticed. Bad existing
+        files are cached by their stat key and safely fall back to the
+        AstrBot config object.
+        """
+
+        path = self._prompt_profile_disk_path()
+        if path is None:
+            return None
+        try:
+            if path.is_symlink() or not path.is_file():
+                return None
+            stat = path.stat()
+            key = (int(stat.st_mtime_ns), int(stat.st_size))
+            if (
+                self._prompt_profile_disk_cache_loaded
+                and self._prompt_profile_disk_cache_key == key
+            ):
+                return self._prompt_profile_disk_cache_value
+            if stat.st_size > PROMPT_PROFILE_DISK_MAX_BYTES:
+                state = None
+            else:
+                root = json.loads(path.read_bytes().decode("utf-8"))
+                if not isinstance(root, dict):
+                    state = None
+                else:
+                    raw_profiles = root.get(
+                        "prompt_profiles",
+                        root.get("prompt_profiles_json"),
+                    )
+                    if isinstance(raw_profiles, str):
+                        raw_profiles = json.loads(raw_profiles)
+                    if not isinstance(raw_profiles, list):
+                        state = None
+                    else:
+                        active = root.get(
+                            "prompt_profile_active_id",
+                            root.get(
+                                "prompt_profiles_active_id",
+                                root.get("active_id", ""),
+                            ),
+                        )
+                        state = (raw_profiles, str(active or ""))
+        except (OSError, UnicodeDecodeError, ValueError, TypeError):
+            state = None
+            try:
+                stat = path.stat()
+                key = (int(stat.st_mtime_ns), int(stat.st_size))
+            except OSError:
+                key = (0, 0)
+        self._prompt_profile_disk_cache_loaded = True
+        self._prompt_profile_disk_cache_key = key
+        self._prompt_profile_disk_cache_value = state
+        return state
+
     def _parse_prompt_profiles_config(self):
+        disk_state = self._read_prompt_profile_state_from_disk()
+        if disk_state is not None:
+            raw_profiles, active_id = disk_state
+        else:
+            raw_profiles = self._cfg_str("prompt_profiles")
+            active_id = self._cfg_str("prompt_profile_active_id")
         config = persona_engine.parse_prompt_profiles(
-            self._cfg_str("prompt_profiles"),
-            self._cfg_str("prompt_profile_active_id"),
+            raw_profiles,
+            active_id,
             max_profiles=100,
             max_prompt_chars=PROMPT_PROFILE_MAX_PROMPT_CHARS,
             max_name_chars=80,
         )
         self._prompt_profile_parse_error = bool(config.errors)
         return config
+
+    def _prompt_template_diagnostic(self) -> str:
+        config = self._parse_prompt_profiles_config()
+        visible = config.profiles[:10]
+        if not visible:
+            return "当前没有可用提示词模板（配置缺失/无效）。"
+        names = "、".join(
+            f"{profile.name}({profile.id})" for profile in visible
+        )
+        return f"当前可用模板：{names}"
 
     def _active_prompt_profile(self) -> tuple[str, str, str, str]:
         config = self._parse_prompt_profiles_config()
@@ -4393,6 +4905,12 @@ class QQBotEnhancerPlugin(Star):
                         "qqbot_enhancer_ambient_context_injected",
                         False,
                     )
+            catalog = self._sticker_tool_catalog_instruction()
+            if catalog:
+                persona_bridge_engine.inject_sticker_tool_catalog(
+                    req,
+                    catalog,
+                )
         except Exception:
             event.set_extra(
                 "qqbot_enhancer_ambient_context_injected",

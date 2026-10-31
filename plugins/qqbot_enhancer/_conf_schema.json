@@ -668,6 +668,21 @@
     "type": "bool",
     "default": true
   },
+  "conversation_max_per_group": {
+    "description": "每个群/UMO 最多保留的 AstrBot 会话数（1-50）",
+    "type": "int",
+    "default": 10,
+    "slider": {
+      "min": 1,
+      "max": 50,
+      "step": 1
+    }
+  },
+  "conversation_auto_prune_enabled": {
+    "description": "达到会话上限时，新建前自动删除最老非当前会话",
+    "type": "bool",
+    "default": true
+  },
   "ambient_group_chat_enabled": {
     "description": "启用群聊低频 ambient 参与（默认关闭）",
     "type": "bool",

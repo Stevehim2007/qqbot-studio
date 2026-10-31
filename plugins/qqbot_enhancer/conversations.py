@@ -73,3 +73,18 @@ def conversation_persona_id(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("persona_id", "") or "")
     return str(getattr(value, "persona_id", "") or "")
+
+
+def conversation_created_at(value: Any) -> float:
+    """Return a sortable creation timestamp; unknown values sort last."""
+
+    if isinstance(value, dict):
+        raw = value.get("created_at") or value.get("updated_at")
+    else:
+        raw = getattr(value, "created_at", None)
+        if raw is None:
+            raw = getattr(value, "updated_at", None)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float("inf")
