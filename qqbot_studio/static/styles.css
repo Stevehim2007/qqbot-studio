@@ -168,6 +168,42 @@ code, pre { font-family: var(--mono); }
 .brand-name span { color: var(--mint-300); font-weight: 650; }
 .brand-tagline { margin-top: 1px; color: #8eabc2; font-size: 11px; letter-spacing: .06em; }
 .wizard-nav { flex: 1; }
+.wizard-step-picker { margin-bottom: 14px; }
+.wizard-step-select-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #91adc1;
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .06em;
+}
+.wizard-step-select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 30px 8px 10px;
+  color: #e7fffa;
+  background: #0d2d4b;
+  border: 1px solid #2a5275;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.wizard-step-select:hover:not(:disabled) { border-color: rgba(115, 234, 202, .55); }
+.wizard-step-select:focus-visible {
+  outline: 3px solid rgba(115, 234, 202, .28);
+  outline-offset: 2px;
+  border-color: var(--mint-300);
+}
+.wizard-step-select option { color: #edf8ff; background: #0d2d4b; }
+.wizard-step-select option:disabled { color: #69859c; }
+.wizard-step-lock-note {
+  margin: 7px 1px 0;
+  color: #f2d69a;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.wizard-step-lock-note[hidden] { display: none; }
 .stepper { position: relative; margin: 0; padding: 0; list-style: none; }
 .stepper::before {
   content: "";
@@ -967,6 +1003,8 @@ code, pre { font-family: var(--mono); }
   .brand-mark { width: 42px; height: 42px; }
   .brand-name { font-size: 16px; }
   .brand-tagline { font-size: 10px; }
+  .wizard-step-picker { margin-bottom: 10px; }
+  .wizard-step-select { min-height: 36px; font-size: 12px; }
   .stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .stepper::before { display: none; }
   .step-item + .step-item { margin-top: 0; }
@@ -975,6 +1013,7 @@ code, pre { font-family: var(--mono); }
   .step-index { width: 28px; height: 28px; flex-basis: 28px; font-size: 11px; }
   .step-label { font-size: 11.5px; }
   .step-hint { display: none; }
+  .wizard-step-lock-note { font-size: 10.5px; }
   .sidebar-footer { display: none; }
   .main-content { padding-top: 27px; }
   .welcome-card { grid-template-columns: minmax(0, 1fr) 160px; min-height: 220px; }

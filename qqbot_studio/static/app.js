@@ -321,9 +321,18 @@
     if (element) element.textContent = text;
   }
 
+  function deploymentStepsLocked() {
+    return app.state.deployment.deployed === true || app.jobCompleted === true;
+  }
+
   function updatePageCopy(step) {
     const meta = STEP_META[step];
     if (!meta) return;
+    if (step === 'done' && deploymentStepsLocked()) {
+      setText('page-title', '机器人已部署');
+      setText('page-subtitle', '机器人已部署，环境/账号/部署步骤已锁定；扫码登录、服务控制与日志仍可在完成页使用。');
+      return;
+    }
     setText('page-title', meta.title);
     setText('page-subtitle', meta.subtitle);
   }
@@ -344,15 +353,13 @@
 
   function isStepAvailable(step) {
     if (!STEP_META[step]) return false;
-    if (app.currentStep === step) return true;
-    if (step === 'env' || step === 'config') return true;
-    if (step === 'deploy') return app.unlockedDeploy === true || app.jobStarted || Boolean(app.activeJobId);
-    if (step === 'done') return app.unlockedDone === true || app.jobCompleted || app.state.deployment.deployed;
-    return false;
+    if (deploymentStepsLocked()) return step === 'done';
+    return true;
   }
 
   function updateStepNavigation() {
     const currentIndex = STEP_META[app.currentStep] ? STEP_META[app.currentStep].index : 0;
+    const locked = deploymentStepsLocked();
     $$('.step-item').forEach((item) => {
       const step = item.dataset.stepItem;
       const button = item.querySelector('.step-button');
@@ -361,13 +368,26 @@
       const active = step === app.currentStep;
       const available = isStepAvailable(step);
       button.disabled = !available;
-      button.title = available ? '' : '请先完成前序步骤';
+      button.title = available ? '' : '机器人已部署，环境/账号/部署步骤已锁定';
       if (active) button.setAttribute('aria-current', 'step');
       else button.removeAttribute('aria-current');
       item.classList.toggle('is-active', active);
       const complete = Boolean(meta) && meta.index < currentIndex;
       item.classList.toggle('is-complete', complete && !active);
     });
+
+    const stepSelect = $('wizard-step-select');
+    if (stepSelect) {
+      Array.from(stepSelect.options || []).forEach((option) => {
+        option.disabled = !isStepAvailable(option.value);
+      });
+      stepSelect.value = app.currentStep;
+      stepSelect.title = locked
+        ? '机器人已部署，环境/账号/部署步骤已锁定，只能进入完成与运行'
+        : '选择要查看的部署步骤';
+    }
+    const lockNote = $('wizard-step-lock-note');
+    if (lockNote) lockNote.hidden = !locked;
   }
 
   function showStep(step, options = {}) {
@@ -1420,7 +1440,7 @@
     const jobId = deployment.active_job_id || app.activeJobId;
     const stateKind = statusKind(deployment.active_job_status);
 
-    if (deployment.deployed || stateKind === 'success') {
+    if (deployment.deployed || stateKind === 'success' || app.jobCompleted) {
       app.unlockedDone = true;
       app.unlockedDeploy = true;
       app.jobCompleted = true;
@@ -2087,12 +2107,24 @@
       button.addEventListener('click', () => {
         const step = button.dataset.step;
         if (!isStepAvailable(step)) {
-          showToast('请先完成前序步骤。', 'warning');
+          showToast('机器人已部署，前三个步骤已锁定，只能进入完成与运行。', 'warning');
           return;
         }
         showStep(step);
       });
     });
+    const stepSelect = $('wizard-step-select');
+    if (stepSelect) {
+      stepSelect.addEventListener('change', () => {
+        const step = stepSelect.value;
+        if (!isStepAvailable(step)) {
+          showToast('机器人已部署，前三个步骤已锁定，只能进入完成与运行。', 'warning');
+          stepSelect.value = app.currentStep;
+          return;
+        }
+        if (!showStep(step)) stepSelect.value = app.currentStep;
+      });
+    }
 
     const refreshState = $('refresh-state');
     if (refreshState) refreshState.addEventListener('click', () => loadState({ silent: false }));

@@ -53,6 +53,16 @@
       </div>
 
       <nav class="wizard-nav" aria-label="部署步骤">
+        <div class="wizard-step-picker">
+          <label for="wizard-step-select" class="wizard-step-select-label">快速跳转步骤</label>
+          <select id="wizard-step-select" class="wizard-step-select" aria-label="选择部署步骤">
+            <option value="env" selected>1. 检查环境</option>
+            <option value="config">2. 账号与模型</option>
+            <option value="deploy">3. 部署进度</option>
+            <option value="done">4. 完成与运行</option>
+          </select>
+          <p id="wizard-step-lock-note" class="wizard-step-lock-note" role="status" hidden>机器人已部署，环境/账号/部署步骤已锁定</p>
+        </div>
         <ol class="stepper">
           <li class="step-item is-active" data-step-item="env">
             <button class="step-button" type="button" data-step="env" aria-current="step">

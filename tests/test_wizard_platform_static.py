@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -207,6 +208,7 @@ class WizardPlatformStaticTests(unittest.TestCase):
             "page-title", "page-subtitle", "env-step-hint", "env-heading",
             "env-intro", "env-platform-note", "env-help-title", "env-help-text",
             "requirements-grid", "requirements-summary", "env-next",
+            "wizard-step-select", "wizard-step-lock-note",
         ):
             self.assertIn(f'id="{element_id}"', self.index_html)
         for token in (
@@ -219,6 +221,8 @@ class WizardPlatformStaticTests(unittest.TestCase):
             "winget install --id Docker.DockerDesktop",
             "部署时本地服务会再次校验",
             "evaluateRequirements",
+            "wizard-step-select", "部署进度", "完成与运行",
+            "isStepAvailable", "showStep",
         ):
             self.assertIn(token, self.app_js)
         self.assertNotIn("value.includes('Windows')", self.app_js)
@@ -342,6 +346,176 @@ class WizardPlatformStaticTests(unittest.TestCase):
         self.assertIsNone(data["result"])
         self.assertIn("无法确定部署提示词", data["promptError"])
         self.assertIn("控制台提示词模板库", data["promptError"])
+
+    def test_wizard_step_dropdown_and_locked_navigation(self) -> None:
+        self.assertIn('id="wizard-step-select"', self.index_html)
+        for label in ("1. 检查环境", "2. 账号与模型", "3. 部署进度", "4. 完成与运行"):
+            self.assertIn(label, self.index_html)
+        for token in (
+            "function deploymentStepsLocked",
+            "deployment.deployed === true || app.jobCompleted === true",
+            "return step === 'done'",
+            "wizard-step-select",
+            "wizard-step-lock-note",
+            "机器人已部署，环境/账号/部署步骤已锁定",
+            "stepSelect.addEventListener('change'",
+            "showStep('done', { focus: false })",
+            "app.jobCompleted",
+        ):
+            self.assertIn(token, self.app_js)
+        if not shutil.which("node"):
+            self.skipTest("node is not installed")
+        functions = "\n\n".join(
+            _extract_function(self.app_js, name)
+            for name in ("deploymentStepsLocked", "isStepAvailable", "updateStepNavigation")
+        )
+        prelude = r"""
+        const STEP_META = {
+          env: { index: 0 }, config: { index: 1 }, deploy: { index: 2 }, done: { index: 3 }
+        };
+        const app = {
+          currentStep: 'config',
+          jobCompleted: false,
+          state: { deployment: { deployed: false } }
+        };
+        const steps = ['env', 'config', 'deploy', 'done'];
+        function button() {
+          return {
+            disabled: false,
+            title: '',
+            setAttribute() {},
+            removeAttribute() {},
+          };
+        }
+        const buttons = Object.fromEntries(steps.map((step) => [step, button()]));
+        const items = steps.map((step) => ({
+          dataset: { stepItem: step },
+          querySelector() { return buttons[step]; },
+          classList: { toggle() {} },
+        }));
+        const options = steps.map((step) => ({ value: step, disabled: false }));
+        const select = { options, value: '', title: '' };
+        const lockNote = { hidden: true };
+        function $(id) {
+          if (id === 'wizard-step-select') return select;
+          if (id === 'wizard-step-lock-note') return lockNote;
+          return null;
+        }
+        function $$(selector) { return selector === '.step-item' ? items : []; }
+
+        updateStepNavigation();
+        const unlocked = {
+          buttons: Object.fromEntries(steps.map((step) => [step, buttons[step].disabled])),
+          options: Object.fromEntries(steps.map((step) => [step, options.find((item) => item.value === step).disabled])),
+          selected: select.value,
+          lockHidden: lockNote.hidden,
+        };
+
+        app.currentStep = 'done';
+        app.state.deployment.deployed = true;
+        updateStepNavigation();
+        const deployedLocked = {
+          buttons: Object.fromEntries(steps.map((step) => [step, buttons[step].disabled])),
+          options: Object.fromEntries(steps.map((step) => [step, options.find((item) => item.value === step).disabled])),
+          selected: select.value,
+          lockHidden: lockNote.hidden,
+          lockTitle: select.title,
+        };
+
+        app.state.deployment.deployed = false;
+        app.jobCompleted = true;
+        updateStepNavigation();
+        const completedLocked = {
+          buttons: Object.fromEntries(steps.map((step) => [step, buttons[step].disabled])),
+          options: Object.fromEntries(steps.map((step) => [step, options.find((item) => item.value === step).disabled])),
+          selected: select.value,
+          lockHidden: lockNote.hidden,
+        };
+        console.log(JSON.stringify({ unlocked, deployedLocked, completedLocked }));
+        """
+        script = prelude + "\n" + functions + "\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "wizard-nav-test.js"
+            path.write_text(script, encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(set(data["unlocked"]["buttons"].values()), {False})
+        self.assertEqual(set(data["unlocked"]["options"].values()), {False})
+        for locked_key in ("deployedLocked", "completedLocked"):
+            locked = data[locked_key]
+            for step in ("env", "config", "deploy"):
+                self.assertTrue(locked["buttons"][step], f"{locked_key} button {step} should be disabled")
+                self.assertTrue(locked["options"][step], f"{locked_key} option {step} should be disabled")
+            self.assertFalse(locked["buttons"]["done"])
+            self.assertFalse(locked["options"]["done"])
+            self.assertEqual(locked["selected"], "done")
+            self.assertFalse(locked["lockHidden"])
+        self.assertIn("机器人已部署", data["deployedLocked"]["lockTitle"])
+
+    def test_wizard_step_select_ids_are_unique_and_mobile_readable(self) -> None:
+        ids = re.findall(r'\bid="([^"]+)"', self.index_html)
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn(".wizard-step-select", self.styles_css)
+        self.assertIn("@media (max-width: 850px)", self.styles_css)
+        mobile_block = self.styles_css[
+            self.styles_css.index("@media (max-width: 850px)"):
+            self.styles_css.index("@media (max-width: 700px)")
+        ]
+        self.assertIn(".wizard-step-select", mobile_block)
+        self.assertIn("font-size: 12px", mobile_block)
+
+    def test_wizard_deployed_refresh_restores_done(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is not installed")
+        source = self.app_js.replace(
+            "function restoreNavigationFromState(options = {})",
+            "function restoreNavigationFromState(options)",
+        )
+        function = _extract_function(source, "restoreNavigationFromState")
+        prelude = r"""
+        const app = {
+          currentStep: 'env',
+          jobCompleted: false,
+          activeJobId: '',
+          unlockedDone: false,
+          unlockedDeploy: false,
+          state: {
+            deployment: {
+              deployed: true,
+              active_job_id: '',
+              active_job_status: 'success'
+            }
+          }
+        };
+        const shown = [];
+        function showStep(step) { shown.push(step); app.currentStep = step; return true; }
+        function renderDashboard() {}
+        function statusKind() { return 'success'; }
+        function isInterruptedJobStatus() { return false; }
+        function resetJobProgress() {}
+        function startJobPolling() {}
+        function showInterruptedJob() {}
+        restoreNavigationFromState({ initial: true });
+        console.log(JSON.stringify({ shown, currentStep: app.currentStep }));
+        """
+        script = prelude + "\n" + function + "\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "wizard-restore-test.js"
+            path.write_text(script, encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertIn("done", data["shown"])
+        self.assertEqual(data["currentStep"], "done")
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_app_javascript_syntax(self) -> None:
