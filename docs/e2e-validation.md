@@ -278,4 +278,4 @@ rm -rf /tmp/qqbot-studio-e2e-<随机后缀>
 python3 -m unittest discover -s tests -v
 ```
 
-结果：`Ran 403 tests in 27.705s`，`OK`。E2E 脚本不纳入普通 `unittest discover`，不会在无 Docker 的 CI 中误触发容器。
+结果：`Ran 408 tests in 28.103s`，`OK`。E2E 脚本不纳入普通 `unittest discover`，不会在无 Docker 的 CI 中误触发容器。

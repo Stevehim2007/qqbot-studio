@@ -94,7 +94,7 @@ node --check <all static/*.js + assistant inline scripts>
 python3 -m py_compile qqbot_studio/*.py plugins/qqbot_enhancer/*.py tests/*.py tests/e2e/*.py
 python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 bash -n start.sh console.sh install.sh scripts/*.sh
-python3 -m qqbot_studio --version              # qqbot-studio 3.12.0
+python3 -m qqbot_studio --version              # qqbot-studio 3.12.1 (baseline run was 3.12.0)
 git diff --check
 ```
 

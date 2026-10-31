@@ -1065,4 +1065,4 @@ python3 -m unittest tests.test_enhancer_plugin -v
 
 第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
 
-本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **403 tests OK**；其中本插件 191 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。
+本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **408 tests OK**；其中本插件 191 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。

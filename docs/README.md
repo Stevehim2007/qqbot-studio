@@ -48,3 +48,5 @@
 - 本项目不保存 QQ 密码，不绕过 QQ 官方设备/短信/滑块/安全验证。
 - API Key、访问令牌、SnowLuma/VNC 密码不要贴到公开 issue、聊天截图或日志中。
 - Windows 是独立项目，不能与 Linux 主项目共用数据目录或自动更新；AI 助手 B 也是独立可选项目，主项目不会自动启动它或传递它的 API Key。
+
+- [`qa-report-final.md`](qa-report-final.md)：Ponytail 第二阶段后的最终 QA（v3.12.1，0 P0/P1）
