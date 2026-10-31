@@ -79,6 +79,10 @@ class FakeApi:
         self.prompts.append(prompt)
 
 
+class OfflineApi(FakeApi):
+    def wait_until_ready(self, timeout=180):
+        raise RuntimeError("AstrBot 不可达")
+
 
 class FakePluginApi(FakeApi):
     """In-memory stand-in for AstrBot's v4.29 plugin/config routes."""
@@ -603,10 +607,6 @@ class DeployerTests(unittest.TestCase):
         plugin_dir.mkdir(parents=True, exist_ok=True)
         (plugin_dir / "metadata.yaml").write_text("name: qqbot_enhancer\nversion: 1.4.1\n", encoding="utf-8")
 
-        class OfflineApi(FakeApi):
-            def wait_until_ready(self, timeout=180):
-                raise RuntimeError("AstrBot 不可达")
-
         self.manager._api_client_factory = lambda base, user, password: OfflineApi()
         listing = self.manager.get_plugins()
         self.assertFalse(listing["ok"])
@@ -642,10 +642,6 @@ class DeployerTests(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
-
-        class OfflineApi(FakeApi):
-            def wait_until_ready(self, timeout=180):
-                raise RuntimeError("AstrBot 不可达")
 
         self.manager._api_client_factory = lambda base, user, password: OfflineApi()
         listing = self.manager.get_plugins()
@@ -756,10 +752,6 @@ class DeployerTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-
-        class OfflineApi(FakeApi):
-            def wait_until_ready(self, timeout=180):
-                raise RuntimeError("AstrBot 不可达")
 
         self.manager._api_client_factory = lambda base, user, password: OfflineApi()
         loaded = self.manager.get_plugin_config("qqbot_enhancer")

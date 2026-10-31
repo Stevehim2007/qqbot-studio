@@ -18,6 +18,11 @@
   const apiRequest = apiClient.request;
   const requestWithFallback = apiClient.requestWithFallback;
   const isMissingEndpointError = apiClient.isMissingEndpointError;
+  const { asRecord, textValue, safeHttpUrl } = apiNamespace;
+  const boolOrUndefined = apiNamespace.createBoolParser(
+    ['true', '1', 'yes', 'on', 'running', 'deployed', 'ok', 'enabled', 'active', 'available', 'connected'],
+    ['false', '0', 'no', 'off', 'stopped', 'not_deployed', 'error', 'disabled', 'inactive', 'unavailable', 'disconnected']
+  );
 
   const pluginConfigNamespace = studioNamespace.services && studioNamespace.services.pluginConfig;
   if (!pluginConfigNamespace || typeof pluginConfigNamespace.createPluginConfigService !== 'function') {
@@ -117,27 +122,6 @@
     onVisibilityChange: () => syncConsoleModalLock()
   });
 
-  function asRecord(value) {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  }
-
-  function textValue(value, fallback = '') {
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-    return fallback;
-  }
-
-  function boolOrUndefined(value) {
-    if (typeof value === 'boolean') return value;
-    if (value === 1 || value === 0) return value === 1;
-    if (typeof value === 'string') {
-      const normalised = value.trim().toLowerCase();
-      if (['true', '1', 'yes', 'on', 'running', 'deployed', 'ok', 'enabled', 'active', 'available', 'connected'].includes(normalised)) return true;
-      if (['false', '0', 'no', 'off', 'stopped', 'not_deployed', 'error', 'disabled', 'inactive', 'unavailable', 'disconnected'].includes(normalised)) return false;
-    }
-    return undefined;
-  }
-
   function formatError(error, fallback = '操作失败，请稍后重试。') {
     if (error instanceof ApiError) {
       if (error.status === 401 || error.status === 403) {
@@ -164,18 +148,6 @@
 
   function wizardUrl(instanceId) {
     return `/wizard?instance=${encodeURIComponent(instanceId)}`;
-  }
-
-  function safeHttpUrl(value) {
-    const raw = textValue(value, '').trim();
-    if (!raw) return '';
-    try {
-      const parsed = new URL(raw);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
-    } catch (error) {
-      return '';
-    }
-    return '';
   }
 
   function makeIcon(symbolId) {
@@ -2243,10 +2215,6 @@
       row.appendChild(actions);
       list.appendChild(row);
     }
-  }
-
-  function syncPromptManagerBusyUi(busy) {
-    setPromptManagerBusy(busy);
   }
 
   function requestPromptDelete(profile) {

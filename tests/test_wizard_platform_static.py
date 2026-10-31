@@ -221,6 +221,9 @@ class WizardPlatformStaticTests(unittest.TestCase):
             self.assertIn(token, self.app_js)
         self.assertNotIn("value.includes('Windows')", self.app_js)
         self.assertNotIn("value: /ubuntu/i.test(osValue)", self.app_js)
+        self.assertIn('<script src="/services/api.js"></script>', self.index_html)
+        self.assertLess(self.index_html.index('/services/api.js'), self.index_html.index('app.js'))
+        self.assertIn("createApiClient", self.app_js)
         self.assertRegex(
             self.app_js,
             r"else if \(summary\.ready\) \{[\s\S]{0,700}?nextButton\.disabled = false;",

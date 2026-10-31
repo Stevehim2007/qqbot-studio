@@ -1,8 +1,11 @@
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from qqbot_studio.gitutil import run_git
 from qqbot_studio.updater import check_update
 
 
@@ -75,6 +78,23 @@ class UpdaterTests(unittest.TestCase):
             result = check_update(tmp)
         self.assertFalse(result["ok"])
         self.assertIn("不是 Git 仓库", result["message"])
+
+    def test_shared_git_runner_is_noninteractive_and_captures_output(self):
+        completed = subprocess.CompletedProcess(["git", "status"], 0, "clean", "")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "qqbot_studio.gitutil.subprocess.run", return_value=completed
+        ) as run:
+            result = run_git(["git", "status"], self.root, 12, {"EXTRA": "1"})
+        self.assertEqual(result.stdout, "clean")
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], ["git", "status"])
+        self.assertEqual(kwargs["cwd"], str(self.root))
+        self.assertTrue(kwargs["capture_output"])
+        self.assertEqual(kwargs["env"]["GIT_TERMINAL_PROMPT"], "0")
+        self.assertEqual(kwargs["env"]["EXTRA"], "1")
+        if os.name != "nt":
+            self.assertEqual(kwargs["env"]["GIT_ASKPASS"], "/bin/true")
+            self.assertIn("BatchMode=yes", kwargs["env"]["GIT_SSH_COMMAND"])
 
 
 if __name__ == "__main__":

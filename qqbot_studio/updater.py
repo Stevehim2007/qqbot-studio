@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Sequence
 
+from .gitutil import run_git
 from .store import default_data_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -17,41 +18,13 @@ class UpdateError(RuntimeError):
     """User-facing update failure."""
 
 
-def _default_git_runner(
-    argv: Sequence[str],
-    cwd: Path,
-    timeout: int,
-) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    if os.name != "nt":
-        env.setdefault("GIT_ASKPASS", "/bin/true")
-        # Avoid an unattended management server hanging on an SSH host-key
-        # prompt.  The Windows Git port does not use /bin/true; leave its
-        # configured credential helper and SSH agent untouched.
-        env.setdefault(
-            "GIT_SSH_COMMAND",
-            "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
-            "-o ConnectTimeout=15 -o ControlMaster=no -o ControlPath=none",
-        )
-    return subprocess.run(
-        [str(item) for item in argv],
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-
-
 def _git(
     root: Path,
     *args: str,
     timeout: int = 60,
     runner: GitRunner | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return (runner or _default_git_runner)(
+    return (runner or run_git)(
         ["git", "-C", str(root), *args],
         root,
         timeout,

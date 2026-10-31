@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from .gitutil import GitRunner, run_git
+
 ASSISTANT_REPO_URL = "https://github.com/Stevehim2007/qqbot-studio-ai-assistant.git"
 ASSISTANT_DIR_NAME = "ai-assistant"
 ASSISTANT_ENTRY_FILE = "assistant.py"
@@ -41,43 +43,6 @@ ASSISTANT_PORT_MAX = 10000
 ASSISTANT_KEY_SOURCES = ("independent", "instance")
 ASSISTANT_INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 ASSISTANT_MAX_KEY_LENGTH = 4096
-
-GitRunner = Callable[
-    [Sequence[str], Path, int, Mapping[str, str] | None],
-    subprocess.CompletedProcess[str],
-]
-
-
-def _default_git_runner(
-    argv: Sequence[str],
-    cwd: Path,
-    timeout: int,
-    extra_env: Mapping[str, str] | None,
-) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    # Main server processes may be detached from a terminal.  Never let git
-    # stop on a credential or host-key prompt.
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    if os.name != "nt":
-        env.setdefault("GIT_ASKPASS", "/bin/true")
-        env.setdefault(
-            "GIT_SSH_COMMAND",
-            "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
-            "-o ConnectTimeout=15 -o ControlMaster=no -o ControlPath=none",
-        )
-    if extra_env:
-        env.update({str(key): str(value) for key, value in extra_env.items()})
-    return subprocess.run(
-        [str(item) for item in argv],
-        cwd=str(cwd),
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
-        shell=False,
-    )
 
 
 class AssistantExtensionManager:
@@ -112,7 +77,7 @@ class AssistantExtensionManager:
         self.start_timeout = max(0.1, float(start_timeout))
         self.stop_timeout = max(0.1, float(stop_timeout))
         self.poll_interval = max(0.01, float(poll_interval))
-        self._runner = runner or _default_git_runner
+        self._runner = runner or run_git
         self._popen_factory = popen_factory or subprocess.Popen
         self._health_checker = health_checker
         self._listener_probe = listener_probe

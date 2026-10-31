@@ -165,7 +165,7 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertIn(".console-assistant-link", self.console_css)
 
     def test_console_browser_safety_and_css_cleanliness(self) -> None:
-        for source in (self.console_js, self.api_service_js, self.plugin_config_service_js, self.instance_settings_component_js):
+        for source in (self.console_js, self.api_service_js, self.plugin_config_service_js, self.instance_settings_component_js, self.assistant_js):
             for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
                 self.assertNotIn(forbidden, source)
             self.assertNotRegex(source, r"\balert\s*\(|\bconfirm\s*\(")
@@ -193,15 +193,16 @@ class ControlAssistantStaticTests(unittest.TestCase):
                 script_path.write_text(script, encoding="utf-8")
                 subprocess.run(["node", "--check", str(script_path)], check=True)
 
-    def test_assistant_page_self_contained_and_token_placeholder(self) -> None:
+    def test_assistant_page_shared_asset_and_token_placeholder(self) -> None:
         self.assertEqual(self.assistant_parser.external_assets, [])
-        self.assertEqual(self.assistant_parser.script_sources, [])
+        self.assertEqual(self.assistant_parser.script_sources, ["/services/api.js"])
         self.assertEqual(self.assistant_parser.stylesheet_links, [])
         self.assertGreaterEqual(len(self.assistant_scripts), 2)
         self.assertIn('window.QB_TOKEN = "{{TOKEN}}";', self.assistant_html)
         self.assertIn('aria-label="AI 助手页面"', self.assistant_html)
         self.assertIn('href="/console"', self.assistant_html)
-        self.assertIn("X-QB-Token", self.assistant_js)
+        self.assertIn("createApiClient", self.assistant_js)
+        self.assertIn("X-QB-Token", self.api_service_js)
         self.assertNotIn("console.js", self.assistant_html)
         self.assertNotIn("使用助手", self.assistant_html)
 

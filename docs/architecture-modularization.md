@@ -1,6 +1,6 @@
 # QQ Bot Studio 模块化 / 接口化架构
 
-> 状态：Phase 0（后端契约/资源统计）、Phase 4 第二阶段（前端 service/component 低风险提取）已实现；Ponytail full 全仓审计与低风险精简已完成（详见 [ponytail-audit.md](ponytail-audit.md)）。
+> 状态：Phase 0（后端契约/资源统计）、Phase 4 第二阶段（前端 service/component 低风险提取）已实现；Ponytail full 第一阶段与第二阶段低风险精简已完成（详见 [ponytail-audit.md](ponytail-audit.md)、[ponytail-optimization-phase2.md](ponytail-optimization-phase2.md)）。
 > 本文描述目标架构、现有耦合、分阶段迁移方案、回滚方式和兼容边界。
 > 所有阶段均**不改变**现有用户可见 API、页面 URL、实例数据、文件路径或安全策略。
 
@@ -295,14 +295,17 @@ Native 版本不能依赖 `/proc`、`sudo`、`/etc/localtime`、Compose 服务�
 - `console.js`：实例列表/卡片 action、实例设置 modal、插件启停、插件参数编辑器、
   记忆模式、资源统计、更新/删除、AI 助手入口、30 分钟刷新。
 - `app.js`：向导环境检查、账号/模型表单、部署轮询、完成页和镜像节点；仍为单文件。
-- `assistant.html`：自包含 AI 助手 B 管理页；仍为单文件，保持 token 注入和自包含约束。
+- `assistant.html`：AI 助手 B 管理页；页内应用脚本仍为单文件，但已复用同源
+  `/services/api.js`，保持 token 注入、无 CDN 和经典脚本约束。
 
 #### 4B 已提取（Phase 4 第二阶段）
 
 1. [`static/services/api.js`](../qqbot_studio/static/services/api.js)
-   - `createApiClient({ token, fetchImpl? })`；
+   - `createApiClient({ token, fetchImpl?, connectionErrorMessage? })`；
    - 统一 `X-QB-Token`、JSON body、`ApiError`、404/405 fallback、HTTP 错误解析；
-   - token 只存在闭包，不写 localStorage，不暴露 token getter。
+   - token 只存在闭包，不写 localStorage，不暴露 token getter；
+   - 第二阶段导出 `asRecord`、`textValue`、`createBoolParser`、`safeHttpUrl`，
+     供向导、控制台、插件配置 service 和独立助手页复用，避免各页复制纯函数。
 2. [`static/services/plugin-config.js`](../qqbot_studio/static/services/plugin-config.js)
    - schema 类型/options/labels/slider/default/description/hint 归一化；
    - 敏感 Key/token/password/secret/credential 字段过滤；
@@ -322,7 +325,11 @@ Native 版本不能依赖 `/proc`、`sudo`、`/etc/localtime`、Compose 服务�
   - `window.QQBotStudio.components.instanceSettings`
 - 暂不引入打包器，也未把 `console.js` 改为 ES module：当前页面依赖 `window.QB_TOKEN`
   同步注入、经典脚本顺序和 Node `--check`；先以低风险方式提取边界，避免一次性改变加载语义。
-- `/console` 新增本地静态资源路由：
+- `/console`、`/wizard` 和 `/assistant` 均先加载同源 `/services/api.js`：
+  - 向导通过自定义 `fetchImpl` 保留 `?instance=` query；
+  - 控制台和独立助手页复用同一 token/错误/JSON/fallback 契约；
+  - 页面仍各自保留 DOM 状态、渲染和差异化的中文错误文案。
+- 本地静态资源路由：
   - `/services/*.js`
   - `/components/*.js`
   - 只允许 `.js`，解析后必须位于 static 目录内；无 CDN/网络依赖。
@@ -331,16 +338,17 @@ Native 版本不能依赖 `/proc`、`sudo`、`/etc/localtime`、Compose 服务�
 #### 4D 兼容与回滚
 
 - 现有 DOM ID、ARIA、API 路径、响应字段和旧后端降级不变。
-- 新增脚本都在 `console.js` 之前按固定顺序加载；组件缺失会在初始化时显式报错，静态测试保证顺序。
-- 回滚：恢复上一版 `console.js` / `console.html` 并移除 `/services`、`/components`
-  目录与静态路由即可；无数据/API 迁移。
+- 新增脚本都在对应页面应用脚本之前按固定顺序加载；依赖缺失会在初始化时显式报错，
+  静态测试保证 `/console`、`/wizard` 和 `/assistant` 的脚本顺序。
+- 回滚：恢复上一版页面脚本/HTML 与 `services/api.js` 即可；无数据/API 迁移。
 
 #### 4E Phase 4 剩余债务
 
 - 插件参数编辑器 DOM 渲染/搜索结果/表单控件生成仍在 `console.js`，可继续拆为
   `plugin-config-editor` 组件。
 - 实例卡片、资源统计、记忆切换、更新/删除仍是 `console.js` 内部渲染函数。
-- `app.js` 和 `assistant.html` 尚未提取 service/component，独立助手页仍保持自包含。
+- `app.js` 和 `assistant.html` 已复用共享 API/数据 helper，但 DOM 渲染、页面状态和组件边界
+  仍未拆分；独立助手页不再是完全内联的自包含脚本，依赖同源 `services/api.js`。
 - 尚未引入原生 ES module/import map；待组件 API 稳定后再迁移。
 
 ### Phase 5：Windows 发行版同步
@@ -415,6 +423,8 @@ Phase 0 完成了“可替换接口 + 可独立测试平台无关模块”的目
 
 ## 10. Ponytail full 全仓审计与低风险精简进度
 
+### 10.1 第一阶段：删除无调用的私有叶子
+
 日期：2026-10-30。规则：DSH Ponytail `full` + `ponytail-audit` 七级阶梯（YAGNI、复用、
 stdlib/native、既有依赖、一行化、最小实现）。
 
@@ -429,4 +439,22 @@ sticker/tool marker 分叉和 Windows vendored core 暂不做跨边界合并。W
 
 验收：`python3 -m unittest discover -s tests -v` 通过 **357 tests**；插件专项
 **161 tests**；`node --check`、`py_compile`、`bash -n` 和 Markdown 链接检查通过。
+
+### 10.2 第二阶段：跨页 helper 与重复 runner/fixture
+
+第二阶段以 `ae10104`（v3.12.0）为基线，在保留页面错误文案、API/数据/安全语义的前提下：
+
+- 复用 `services/api.js` 作为经典脚本公共入口，向向导、控制台、插件配置 service 和
+  AI 助手 B 页提供对象/字符串/布尔/安全 URL helper 与统一 API client；
+- 新增标准库 `gitutil.py`，合并 updater 与 assistant extension 的 non-interactive
+  Git runner，并保留两种测试注入签名；
+- 合并测试中的重复 `FakeProcess`/`StuckProcess` 与 `OfflineApi`；
+- 删除零调用的 `syncPromptManagerBusyUi()` 包装，保留有测试断言的兼容别名。
+
+实际行为承载代码/测试为 **+198/-393，净减 195 行**（源码净减 157、测试净减 38；
+新增 1 个 43 行标准库 helper 文件，0 新增依赖）。全量 **408 tests OK**。
+拒绝合并页面级错误文案、DOM builder、双实现 `FakeContext`、原子 JSON 写入、
+plugin schema 双校验、marker 协议与 Windows vendored core。详细记录见
+[`ponytail-optimization-phase2.md`](ponytail-optimization-phase2.md)。
+
 后续触发条件：出现真实第二个 runtime/组件实现，或重复逻辑已产生缺陷/测试漂移时再拆。

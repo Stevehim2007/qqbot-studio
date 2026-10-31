@@ -28,6 +28,26 @@ def result(argv, returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(list(argv), returncode, stdout, stderr)
 
 
+class FakeProcess:
+    def __init__(self, pid=43210):
+        self.pid = pid
+        self.terminated = False
+        self.return_code = None
+
+    def poll(self):
+        return self.return_code
+
+    def terminate(self):
+        self.terminated = True
+        self.return_code = -15
+
+    def wait(self, timeout=None):
+        return self.return_code
+
+    def kill(self):
+        self.return_code = -9
+
+
 class FakeGitRunner:
     def __init__(
         self,
@@ -501,26 +521,6 @@ class AssistantConfigStartTests(unittest.TestCase):
         health = {"running": False}
         processes = []
 
-        class FakeProcess:
-            pid = 43210
-
-            def __init__(self):
-                self.terminated = False
-                self.return_code = None
-
-            def poll(self):
-                return self.return_code
-
-            def terminate(self):
-                self.terminated = True
-                self.return_code = -15
-
-            def wait(self, timeout=None):
-                return self.return_code
-
-            def kill(self):
-                self.return_code = -9
-
         def factory(command, **kwargs):
             health["running"] = True
             process = FakeProcess()
@@ -570,27 +570,7 @@ class AssistantConfigStartTests(unittest.TestCase):
     def test_start_failure_is_clear_and_cleans_pid(self):
         health = {"running": False}
 
-        class StuckProcess:
-            pid = 43211
-
-            def __init__(self):
-                self.terminated = False
-                self.return_code = None
-
-            def poll(self):
-                return self.return_code
-
-            def terminate(self):
-                self.terminated = True
-                self.return_code = -15
-
-            def wait(self, timeout=None):
-                return self.return_code
-
-            def kill(self):
-                self.return_code = -9
-
-        process = StuckProcess()
+        process = FakeProcess(pid=43211)
 
         def factory(command, **kwargs):
             return process
@@ -630,28 +610,13 @@ class AssistantConfigStartTests(unittest.TestCase):
         health = {"running": False}
         health_urls = []
 
-        class FakeProcess:
-            pid = 43213
-
-            def poll(self):
-                return None
-
-            def terminate(self):
-                pass
-
-            def wait(self, timeout=None):
-                return 0
-
-            def kill(self):
-                pass
-
         def checker(url, timeout):
             health_urls.append(url)
             return health["running"]
 
         def factory(command, **kwargs):
             health["running"] = True
-            return FakeProcess()
+            return FakeProcess(pid=43213)
 
         manager = self._make_installed_manager(
             health_checker=checker,
@@ -690,24 +655,9 @@ class AssistantConfigStartTests(unittest.TestCase):
     def test_stop_uses_tracked_pid_and_is_clean(self):
         health = {"running": False}
 
-        class FakeProcess:
-            pid = 43212
-
-            def poll(self):
-                return None
-
-            def terminate(self):
-                pass
-
-            def wait(self, timeout=None):
-                return 0
-
-            def kill(self):
-                pass
-
         def factory(command, **kwargs):
             health["running"] = True
-            return FakeProcess()
+            return FakeProcess(pid=43212)
 
         manager = self._make_installed_manager(
             health_checker=lambda url, timeout: health["running"],
@@ -863,29 +813,9 @@ class AssistantConfigStartTests(unittest.TestCase):
         health = {"running": False}
         processes = []
 
-        class FakeProcess:
-            pid = 43214
-
-            def __init__(self):
-                self.terminated = False
-                self.return_code = None
-
-            def poll(self):
-                return self.return_code
-
-            def terminate(self):
-                self.terminated = True
-                self.return_code = -15
-
-            def wait(self, timeout=None):
-                return self.return_code
-
-            def kill(self):
-                self.return_code = -9
-
         def factory(command, **kwargs):
             health["running"] = True
-            process = FakeProcess()
+            process = FakeProcess(pid=43214)
             processes.append(process)
             return process
 

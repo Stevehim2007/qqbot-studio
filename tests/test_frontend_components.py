@@ -51,7 +51,8 @@ class FrontendComponentTests(unittest.TestCase):
                 function response(data, status = 200) {{
                   return {{ ok: status >= 200 && status < 300, status, async text() {{ return JSON.stringify(data); }} }};
                 }}
-                const api = window.QQBotStudio.services.api.createApiClient({{
+                const sharedApi = window.QQBotStudio.services.api;
+                const api = sharedApi.createApiClient({{
                   token: 'local-test-token',
                   fetchImpl: async (path, options) => {{
                     calls.push({{ path, options }});
@@ -72,6 +73,20 @@ class FrontendComponentTests(unittest.TestCase):
                   try {{ await api.request('/fail'); }} catch (error) {{ apiError = error; }}
                   if (!(apiError instanceof api.ApiError) || apiError.status !== 400 || apiError.data.message !== 'bad request') {{
                     throw new Error('ApiError contract failed');
+                  }}
+                  const parser = sharedApi.createBoolParser(['yes', 'running'], ['no', 'stopped']);
+                  if (parser(' YES ') !== true || parser('stopped') !== false || parser('other') !== undefined) throw new Error('boolean parser contract failed');
+                  if (sharedApi.safeHttpUrl('javascript:alert(1)') !== '' || sharedApi.safeHttpUrl('https://example.com/a') !== 'https://example.com/a') {{
+                    throw new Error('safe URL contract failed');
+                  }}
+                  const offline = sharedApi.createApiClient({{
+                    connectionErrorMessage: '自定义连接失败',
+                    fetchImpl: async () => {{ throw new Error('offline'); }}
+                  }});
+                  let offlineError = null;
+                  try {{ await offline.request('/offline'); }} catch (error) {{ offlineError = error; }}
+                  if (!(offlineError instanceof api.ApiError) || offlineError.status !== 0 || offlineError.message !== '自定义连接失败') {{
+                    throw new Error('connection error message contract failed');
                   }}
                   console.log('api-service PASS');
                 }})().catch((error) => {{ console.error(error); process.exit(1); }});
@@ -111,6 +126,7 @@ class FrontendComponentTests(unittest.TestCase):
                     }};
                   }}
                 }};
+                eval(fs.readFileSync({json.dumps(str(API_JS))}, 'utf8'));
                 eval(fs.readFileSync({json.dumps(str(PLUGIN_CONFIG_JS))}, 'utf8'));
                 const service = window.QQBotStudio.services.pluginConfig.createPluginConfigService({{ api }});
                 (async () => {{

@@ -5,26 +5,15 @@
 (function (global) {
   'use strict';
 
-  function asRecord(value) {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const apiNamespace = global.QQBotStudio && global.QQBotStudio.services && global.QQBotStudio.services.api;
+  if (!apiNamespace || typeof apiNamespace.createBoolParser !== 'function') {
+    throw new Error('缺少共享 API service：请确认 /services/api.js 已加载。');
   }
-
-  function textValue(value, fallback = '') {
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-    return fallback;
-  }
-
-  function boolOrUndefined(value) {
-    if (typeof value === 'boolean') return value;
-    if (value === 1 || value === 0) return value === 1;
-    if (typeof value === 'string') {
-      const normalised = value.trim().toLowerCase();
-      if (['true', '1', 'yes', 'on', 'running', 'deployed', 'ok', 'enabled', 'active', 'available', 'connected'].includes(normalised)) return true;
-      if (['false', '0', 'no', 'off', 'stopped', 'not_deployed', 'error', 'disabled', 'inactive', 'unavailable', 'disconnected'].includes(normalised)) return false;
-    }
-    return undefined;
-  }
+  const { asRecord, textValue, createBoolParser } = apiNamespace;
+  const boolOrUndefined = createBoolParser(
+    ['true', '1', 'yes', 'on', 'running', 'deployed', 'ok', 'enabled', 'active', 'available', 'connected'],
+    ['false', '0', 'no', 'off', 'stopped', 'not_deployed', 'error', 'disabled', 'inactive', 'unavailable', 'disconnected']
+  );
 
   function pluginNumberValue(value) {
     if (value === null || value === undefined || value === '') return undefined;

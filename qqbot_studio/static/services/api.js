@@ -15,6 +15,33 @@
     return fallback;
   }
 
+  function createBoolParser(trueValues, falseValues) {
+    const truthy = Array.isArray(trueValues) ? trueValues : [];
+    const falsy = Array.isArray(falseValues) ? falseValues : [];
+    return function boolOrUndefined(value) {
+      if (typeof value === 'boolean') return value;
+      if (value === 1 || value === 0) return value === 1;
+      if (typeof value === 'string') {
+        const normalised = value.trim().toLowerCase();
+        if (truthy.includes(normalised)) return true;
+        if (falsy.includes(normalised)) return false;
+      }
+      return undefined;
+    };
+  }
+
+  function safeHttpUrl(value) {
+    const raw = textValue(value, '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
+    } catch (error) {
+      return '';
+    }
+    return '';
+  }
+
   class ApiError extends Error {
     constructor(message, options = {}) {
       super(message);
@@ -28,6 +55,9 @@
     const token = typeof options.token === 'string' ? options.token : '';
     const suppliedFetch = typeof options.fetchImpl === 'function' ? options.fetchImpl : null;
     const fetchImpl = suppliedFetch || (typeof global.fetch === 'function' ? global.fetch.bind(global) : null);
+    const connectionErrorMessage = typeof options.connectionErrorMessage === 'string' && options.connectionErrorMessage
+      ? options.connectionErrorMessage
+      : '无法连接本地服务，请确认本地启动器仍在运行。';
 
     async function request(path, requestOptions = {}) {
       if (!fetchImpl) {
@@ -55,7 +85,7 @@
       try {
         response = await fetchImpl(path, fetchOptions);
       } catch (error) {
-        throw new ApiError('无法连接本地服务，请确认本地启动器仍在运行。', { status: 0 });
+        throw new ApiError(connectionErrorMessage, { status: 0 });
       }
 
       const rawText = await response.text();
@@ -104,5 +134,5 @@
 
   const namespace = global.QQBotStudio = global.QQBotStudio || {};
   namespace.services = namespace.services || {};
-  namespace.services.api = Object.freeze({ createApiClient, ApiError });
+  namespace.services.api = Object.freeze({ createApiClient, ApiError, asRecord, textValue, createBoolParser, safeHttpUrl });
 })(typeof window !== 'undefined' ? window : globalThis);

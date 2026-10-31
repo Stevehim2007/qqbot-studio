@@ -28,6 +28,20 @@
     }
   })();
 
+  const apiNamespace = window.QQBotStudio && window.QQBotStudio.services && window.QQBotStudio.services.api;
+  if (!apiNamespace || typeof apiNamespace.createApiClient !== 'function') {
+    throw new Error('缺少共享 API service：请确认 /services/api.js 已加载。');
+  }
+  const { ApiError, asRecord, textValue, safeHttpUrl } = apiNamespace;
+  const boolOrUndefined = apiNamespace.createBoolParser(
+    ['true', '1', 'yes', 'on', 'ok', 'connected', 'running', 'logged_in', 'success'],
+    ['false', '0', 'no', 'off', 'disconnected', 'stopped', 'logged_out', 'error', 'failed']
+  );
+  const apiRequest = apiNamespace.createApiClient({
+    token: QB_TOKEN,
+    fetchImpl: (path, fetchOptions) => fetch(apiPath(path), fetchOptions)
+  }).request;
+
   const STEP_META = {
     env: {
       title: '开始搭建你的 QQ 智能助手',
@@ -50,15 +64,6 @@
       index: 3
     }
   };
-
-  class ApiError extends Error {
-    constructor(message, options = {}) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = Number(options.status) || 0;
-      this.data = options.data || null;
-    }
-  }
 
   const app = {
     currentStep: 'env',
@@ -99,27 +104,6 @@
 
   const $ = (id) => document.getElementById(id);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
-
-  function asRecord(value) {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  }
-
-  function textValue(value, fallback = '') {
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-    return fallback;
-  }
-
-  function boolOrUndefined(value) {
-    if (typeof value === 'boolean') return value;
-    if (value === 1 || value === 0) return value === 1;
-    if (typeof value === 'string') {
-      const normalised = value.trim().toLowerCase();
-      if (['true', '1', 'yes', 'on', 'ok', 'connected', 'running', 'logged_in', 'success'].includes(normalised)) return true;
-      if (['false', '0', 'no', 'off', 'disconnected', 'stopped', 'logged_out', 'error', 'failed'].includes(normalised)) return false;
-    }
-    return undefined;
-  }
 
   function normaliseState(raw) {
     const root = asRecord(raw);
@@ -187,58 +171,6 @@
       return '无法连接本地服务，请确认本地启动器仍在运行。';
     }
     return error && typeof error.message === 'string' && error.message ? error.message : fallback;
-  }
-
-  async function apiRequest(path, options = {}) {
-    const method = String(options.method || 'GET').toUpperCase();
-    const headers = {
-      Accept: 'application/json',
-      ...(options.headers || {})
-    };
-    if (QB_TOKEN) headers['X-QB-Token'] = QB_TOKEN;
-    if (method !== 'GET' && method !== 'HEAD') {
-      // 所有修改请求都显式携带本地访问令牌；即使为空也让服务端给出明确拒绝。
-      headers['X-QB-Token'] = QB_TOKEN || '';
-      if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-    }
-
-    const fetchOptions = {
-      method,
-      headers,
-      cache: 'no-store',
-      credentials: 'same-origin'
-    };
-    if (options.body !== undefined) fetchOptions.body = JSON.stringify(options.body);
-
-    let response;
-    try {
-      response = await fetch(apiPath(path), fetchOptions);
-    } catch (error) {
-      throw new ApiError('无法连接本地服务，请确认本地启动器仍在运行。', { status: 0 });
-    }
-
-    const rawText = await response.text();
-    let data = {};
-    if (rawText) {
-      try {
-        data = JSON.parse(rawText);
-      } catch (error) {
-        if (response.ok) {
-          throw new ApiError('本地服务返回了无法识别的数据。', { status: response.status });
-        }
-      }
-    }
-
-    if (!response.ok) {
-      const responseData = asRecord(data);
-      const message = textValue(responseData.message || responseData.error, '');
-      throw new ApiError(message || `本地服务返回 HTTP ${response.status}。`, {
-        status: response.status,
-        data
-      });
-    }
-
-    return data;
   }
 
   function apiPath(path) {
@@ -349,18 +281,6 @@
       showToast('复制失败，请手动选择文本。', 'error');
       return false;
     }
-  }
-
-  function safeHttpUrl(value) {
-    const raw = textValue(value, '').trim();
-    if (!raw) return '';
-    try {
-      const parsed = new URL(raw);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
-    } catch (error) {
-      return '';
-    }
-    return '';
   }
 
   function setOpenLink(anchor, url) {

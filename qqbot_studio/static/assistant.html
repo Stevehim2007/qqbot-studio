@@ -467,6 +467,7 @@
   </main>
 
   <script>window.QB_TOKEN = "{{TOKEN}}";</script>
+  <script src="/services/api.js"></script>
   <script>
   (() => {
     'use strict';
@@ -513,33 +514,23 @@
     const $ = (id) => document.getElementById(id);
     const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-    class ApiError extends Error {
-      constructor(message, options = {}) {
-        super(message);
-        this.name = 'ApiError';
-        this.status = Number(options.status) || 0;
-        this.data = options.data || null;
-      }
+    const apiNamespace = window.QQBotStudio && window.QQBotStudio.services && window.QQBotStudio.services.api;
+    if (!apiNamespace || typeof apiNamespace.createApiClient !== 'function') {
+      throw new Error('缺少共享 API service：请确认 /services/api.js 已加载。');
     }
+    const { ApiError, asRecord, textValue, createBoolParser } = apiNamespace;
+    const boolOrUndefined = createBoolParser(
+      ['true', '1', 'yes', 'on', 'running', 'installed', 'configured', 'enabled'],
+      ['false', '0', 'no', 'off', 'stopped', 'not_installed', 'disabled']
+    );
+    const apiClient = apiNamespace.createApiClient({
+      token: TOKEN,
+      connectionErrorMessage: '无法连接本地服务，请确认启动器仍在运行。'
+    });
+    const apiRequest = apiClient.request;
+    const requestWithFallback = apiClient.requestWithFallback;
+    const isMissingEndpoint = apiClient.isMissingEndpointError;
 
-    function asRecord(value) {
-      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    }
-    function textValue(value, fallback = '') {
-      if (typeof value === 'string') return value;
-      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-      return fallback;
-    }
-    function boolOrUndefined(value) {
-      if (typeof value === 'boolean') return value;
-      if (value === 1 || value === 0) return value === 1;
-      if (typeof value === 'string') {
-        const v = value.trim().toLowerCase();
-        if (['true', '1', 'yes', 'on', 'running', 'installed', 'configured', 'enabled'].includes(v)) return true;
-        if (['false', '0', 'no', 'off', 'stopped', 'not_installed', 'disabled'].includes(v)) return false;
-      }
-      return undefined;
-    }
     function numberOrUndefined(value) {
       if (value === null || value === undefined || value === '') return undefined;
       const n = Number(value);
@@ -558,45 +549,8 @@
       if (error instanceof TypeError) return '无法连接本地服务，请确认本地启动器仍在运行。';
       return error && error.message ? error.message : fallback;
     }
-    function isMissingEndpoint(error) {
-      return error instanceof ApiError && (error.status === 404 || error.status === 405);
-    }
     function isUnsupportedMessage(message) {
       return /未提供.*(?:接口|扩展|安装|管理|配置|启停)|不支持.*(?:扩展|功能|安装|配置)|unsupported/i.test(textValue(message, ''));
-    }
-    async function apiRequest(path, options = {}) {
-      const method = String(options.method || 'GET').toUpperCase();
-      const headers = { Accept: 'application/json', 'X-QB-Token': TOKEN || '', ...(options.headers || {}) };
-      const fetchOptions = { method, headers, cache: 'no-store', credentials: 'same-origin' };
-      if (options.body !== undefined) {
-        headers['Content-Type'] = 'application/json';
-        fetchOptions.body = JSON.stringify(options.body);
-      }
-      let response;
-      try { response = await fetch(path, fetchOptions); }
-      catch (error) { throw new ApiError('无法连接本地服务，请确认启动器仍在运行。', { status: 0 }); }
-      const raw = await response.text();
-      let data = {};
-      if (raw) {
-        try { data = JSON.parse(raw); }
-        catch (error) { if (response.ok) throw new ApiError('本地服务返回了无法识别的数据。', { status: response.status }); }
-      }
-      if (!response.ok) {
-        const record = asRecord(data);
-        throw new ApiError(textValue(record.message || record.error, `本地服务返回 HTTP ${response.status}。`), { status: response.status, data });
-      }
-      return data;
-    }
-    async function requestWithFallback(paths, options = {}) {
-      let last = null;
-      for (const path of paths) {
-        try { return await apiRequest(path, options); }
-        catch (error) {
-          last = error;
-          if (!isMissingEndpoint(error)) throw error;
-        }
-      }
-      throw last || new ApiError('本地服务未提供该功能。', { status: 404 });
     }
 
     function makeElement(tag, className, text) {
