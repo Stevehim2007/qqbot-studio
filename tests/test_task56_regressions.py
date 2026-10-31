@@ -57,7 +57,7 @@ class PluginSchemaFallbackTests(unittest.TestCase):
         self.assertEqual(reread["schema_source"], "bundled")
         self.assertEqual(reread["values"]["reply_probability"], 0.5)
 
-    def test_instance_schema_takes_precedence_over_bundled_fallback(self):
+    def test_builtin_enhancer_uses_bundled_schema_even_with_local_schema(self):
         self.instance_plugin_dir.mkdir(parents=True, exist_ok=True)
         local_schema_path = self.instance_plugin_dir / "_conf_schema.json"
         local_schema_path.write_text(
@@ -74,10 +74,138 @@ class PluginSchemaFallbackTests(unittest.TestCase):
         )
         result = self.manager.get_plugin_config("qqbot_enhancer")
         self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["schema_source"], "bundled")
+        self.assertTrue(result["schema_path"].endswith(
+            "plugins/qqbot_enhancer/_conf_schema.json"
+        ))
+        self.assertIn("image_search_enabled", result["schema"])
+        self.assertNotIn("local_only", result["schema"])
+        self.assertEqual(result["schema_warning"], "")
+
+    def test_other_plugin_keeps_local_schema_first(self):
+        plugin_id = "third_party_schema_plugin"
+        plugin_dir = (
+            self.root / "data" / "astrbot" / "plugins" / plugin_id
+        )
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        local_schema = plugin_dir / "_conf_schema.json"
+        local_schema.write_text(
+            json.dumps({"local_only": {"type": "bool", "default": True}}),
+            encoding="utf-8",
+        )
+        result = self.manager.get_plugin_config(plugin_id)
+        self.assertTrue(result["ok"], result.get("error"))
         self.assertEqual(result["schema_source"], "local")
-        self.assertEqual(Path(result["schema_path"]), local_schema_path)
+        self.assertEqual(Path(result["schema_path"]), local_schema)
         self.assertIn("local_only", result["schema"])
-        self.assertNotIn("image_search_enabled", result["schema"])
+
+    def test_local_schema_corrupt_half_written_empty_or_permission_uses_bundled(self):
+        self.instance_plugin_dir.mkdir(parents=True, exist_ok=True)
+        local_schema_path = self.instance_plugin_dir / "_conf_schema.json"
+        for content in ("", "{}", "[]", '{"half": ', "not-json"):
+            with self.subTest(content=content):
+                local_schema_path.write_text(content, encoding="utf-8")
+                with mock.patch("qqbot_studio.deployer.time.sleep"):
+                    result = self.manager.get_plugin_config("qqbot_enhancer")
+                self.assertTrue(result["ok"], result.get("error"))
+                self.assertEqual(result["schema_source"], "bundled")
+                self.assertTrue(result["schema_warning"])
+                self.assertIn("image_search_enabled", result["schema"])
+
+        original_read_text = Path.read_text
+
+        def deny_local_schema(path, *args, **kwargs):
+            if Path(path) == local_schema_path:
+                raise PermissionError("denied by test")
+            return original_read_text(path, *args, **kwargs)
+
+        with mock.patch("qqbot_studio.deployer.time.sleep"), mock.patch.object(
+            Path, "read_text", deny_local_schema
+        ):
+            denied = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(denied["ok"], denied.get("error"))
+        self.assertEqual(denied["schema_source"], "bundled")
+        self.assertIn("权限不足", denied["schema_warning"])
+
+    def test_local_schema_retries_transient_half_write(self):
+        plugin_id = "third_party_retry_plugin"
+        plugin_dir = self.root / "data" / "astrbot" / "plugins" / plugin_id
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        schema_path = plugin_dir / "_conf_schema.json"
+        schema_path.write_text(
+            json.dumps({"retry_flag": {"type": "bool", "default": True}}),
+            encoding="utf-8",
+        )
+        original_read_text = Path.read_text
+        reads = {"count": 0}
+
+        def transient_read(path, *args, **kwargs):
+            if Path(path) == schema_path:
+                reads["count"] += 1
+                if reads["count"] <= 2:
+                    return '{"half": '
+            return original_read_text(path, *args, **kwargs)
+
+        with mock.patch("qqbot_studio.deployer.time.sleep"), mock.patch.object(
+            Path, "read_text", transient_read
+        ):
+            result = self.manager.get_plugin_config(plugin_id)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["schema_source"], "local")
+        self.assertEqual(reads["count"], 3)
+        self.assertIn("retry_flag", result["schema"])
+
+    def test_builtin_bundled_invalid_falls_back_to_local_with_warning(self):
+        self.instance_plugin_dir.mkdir(parents=True, exist_ok=True)
+        local_schema = self.instance_plugin_dir / "_conf_schema.json"
+        local_schema.write_text(
+            json.dumps({"local_only": {"type": "bool", "default": True}}),
+            encoding="utf-8",
+        )
+        bad_bundled = self.root / "bad-bundled-schema.json"
+        bad_bundled.write_text('{"broken": ', encoding="utf-8")
+        with mock.patch("qqbot_studio.deployer.time.sleep"), mock.patch.object(
+            self.manager,
+            "_bundled_plugin_schema_path",
+            return_value=bad_bundled,
+        ):
+            result = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["schema_source"], "local")
+        self.assertEqual(Path(result["schema_path"]), local_schema)
+        self.assertIn("local_only", result["schema"])
+        self.assertIn("主项目内置", result["schema_warning"])
+
+    def test_save_hot_reload_corrupt_schema_does_not_break_consecutive_gets(self):
+        saved = self.manager.set_plugin_config(
+            "qqbot_enhancer", {"reply_probability": 0.5}
+        )
+        self.assertTrue(saved["ok"], saved.get("error"))
+        self.instance_plugin_dir.mkdir(parents=True, exist_ok=True)
+        (self.instance_plugin_dir / "_conf_schema.json").write_text(
+            '{"hot-reload": ', encoding="utf-8"
+        )
+        first = self.manager.get_plugin_config("qqbot_enhancer")
+        second = self.manager.get_plugin_config("qqbot_enhancer")
+        for result in (first, second):
+            self.assertTrue(result["ok"], result.get("error"))
+            self.assertEqual(result["schema_source"], "bundled")
+            self.assertEqual(result["values"]["reply_probability"], 0.5)
+            self.assertTrue(result["schema_warning"])
+
+    def test_builtin_both_schema_paths_missing_returns_actionable_error(self):
+        missing_bundled = self.root / "missing-bundled-schema.json"
+        with mock.patch("qqbot_studio.deployer.time.sleep"), mock.patch.object(
+            self.manager,
+            "_bundled_plugin_schema_path",
+            return_value=missing_bundled,
+        ):
+            result = self.manager.get_plugin_config("qqbot_enhancer")
+        self.assertFalse(result["ok"])
+        self.assertIn("无法读取插件", result["error"])
+        self.assertIn("实例路径", result["error"])
+        self.assertIn("主项目内置路径", result["error"])
+        self.assertIn(str(missing_bundled), result["error"])
 
     def test_missing_both_schemas_returns_actionable_non_crash_error(self):
         missing_id = "no_such_bundled_plugin_123"

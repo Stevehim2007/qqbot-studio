@@ -9,6 +9,14 @@
 
 
 
+
+## v4.0.3
+
+- 内置 `qqbot_enhancer` 优先使用 bundled schema；实例 schema 权限拒绝/半写/损坏/空时自动回退并重试。
+- 保存插件参数触发 AstrBot 热重载后，再次打开参数页不再因 schema 暂时不可读而阻塞。
+- 移除 V1 根目录自动导入/移动；V1 文件不再被改写，当前 v4 实例保持不变。
+- 全量 450 tests OK。
+
 ## v4.0.2
 
 - 合并非 @ 群聊双概率：`reply_probability` 成为唯一普通参与概率。

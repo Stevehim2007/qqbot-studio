@@ -42,6 +42,8 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 QQ_ACCOUNT_RE = re.compile(r"^\d{5,12}$")
 PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
+SCHEMA_READ_ATTEMPTS = 3
+SCHEMA_READ_RETRY_DELAY_SECONDS = 0.05
 MAX_PROMPT_LENGTH = 12_000
 PROMPT_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 PROMPT_PROFILE_MAX_COUNT = 100
@@ -2110,6 +2112,7 @@ class DeployManager:
         restart_required: bool = False,
         schema_source: str = "",
         schema_path: str = "",
+        schema_warning: str = "",
     ) -> dict[str, Any]:
         return {
             "ok": False,
@@ -2118,6 +2121,7 @@ class DeployManager:
             "values": values or {},
             "schema_source": schema_source,
             "schema_path": schema_path,
+            "schema_warning": schema_warning,
             "config_path": config_path,
             "source": source,
             "recovered": False,
@@ -2146,67 +2150,134 @@ class DeployManager:
         plugin_id: str,
         source: str,
     ) -> tuple[dict[str, Any], str]:
-        try:
-            parsed = json.loads(schema_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}, "missing"
-        except OSError as exc:
-            return {}, f"无法读取{source}插件 {plugin_id} 的配置 schema：{exc}"
-        except ValueError as exc:
-            return {}, f"{source}插件 {plugin_id} 的配置 schema 不是有效 JSON：{exc}"
-        if not isinstance(parsed, dict) or not parsed:
-            return {}, f"{source}插件 {plugin_id} 的配置 schema 必须是非空 JSON object。"
-        schema = {
-            str(key): dict(item)
-            for key, item in parsed.items()
-            if isinstance(item, dict)
-        }
-        if not schema:
-            return {}, f"{source}插件 {plugin_id} 的配置 schema 没有可用字段。"
-        return schema, ""
+        """Read a non-empty JSON-object schema with three short retries."""
+
+        last_error = "missing"
+        for attempt in range(SCHEMA_READ_ATTEMPTS):
+            try:
+                parsed = json.loads(schema_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                last_error = "missing"
+                if attempt + 1 < SCHEMA_READ_ATTEMPTS:
+                    time.sleep(SCHEMA_READ_RETRY_DELAY_SECONDS)
+                    continue
+                return {}, last_error
+            except PermissionError:
+                last_error = f"无法读取{source}插件 {plugin_id} 的配置 schema：权限不足"
+                if attempt + 1 < SCHEMA_READ_ATTEMPTS:
+                    time.sleep(SCHEMA_READ_RETRY_DELAY_SECONDS)
+                    continue
+                return {}, last_error
+            except OSError as exc:
+                last_error = f"无法读取{source}插件 {plugin_id} 的配置 schema：{exc}"
+                if attempt + 1 < SCHEMA_READ_ATTEMPTS:
+                    time.sleep(SCHEMA_READ_RETRY_DELAY_SECONDS)
+                    continue
+                return {}, last_error
+            except ValueError:
+                last_error = f"{source}插件 {plugin_id} 的配置 schema 不是有效 JSON"
+                if attempt + 1 < SCHEMA_READ_ATTEMPTS:
+                    time.sleep(SCHEMA_READ_RETRY_DELAY_SECONDS)
+                    continue
+                return {}, last_error
+            if not isinstance(parsed, dict) or not parsed:
+                last_error = f"{source}插件 {plugin_id} 的配置 schema 必须是非空 JSON object"
+                if attempt + 1 < SCHEMA_READ_ATTEMPTS:
+                    time.sleep(SCHEMA_READ_RETRY_DELAY_SECONDS)
+                    continue
+                return {}, last_error
+            schema = {
+                str(key): dict(item)
+                for key, item in parsed.items()
+                if isinstance(item, dict)
+            }
+            if not schema:
+                last_error = f"{source}插件 {plugin_id} 的配置 schema 没有可用字段"
+                if attempt + 1 < SCHEMA_READ_ATTEMPTS:
+                    time.sleep(SCHEMA_READ_RETRY_DELAY_SECONDS)
+                    continue
+                return {}, last_error
+            return schema, ""
+        return {}, last_error
 
     def _load_plugin_schema_with_source(
         self,
         plugin_id: str,
-    ) -> tuple[dict[str, Any], str, str, str]:
-        """Load local schema, falling back to the read-only bundled schema.
+    ) -> tuple[dict[str, Any], str, str, str, str]:
+        """Load schema with bundled/local fallback and a safe warning.
 
-        Older instances may not have the plugin directory copied yet.  The
-        bundled fallback is never copied into the instance and never replaces
-        instance-owned files.
+        Built-in qqbot_enhancer uses the repository bundled schema first so a
+        plugin hot-reload that briefly replaces/locks/writes the instance schema
+        cannot break config UI.  Other plugins keep local-first semantics.
+        Returns (schema, error, source, path, schema_warning).
         """
 
         if not PLUGIN_ID_RE.fullmatch(str(plugin_id or "")):
-            return {}, "plugin_id 无效，只允许字母、数字、点、下划线和连字符。", "", ""
+            return {}, "plugin_id 无效，只允许字母、数字、点、下划线和连字符。", "", "", ""
         plugin_dir = self.astrbot_data_dir / "plugins" / plugin_id
-        if plugin_dir.is_symlink():
-            return {}, "插件目录不能是符号链接。", "", ""
         local_path = self._plugin_schema_path(plugin_id)
-        schema, local_error = self._parse_plugin_schema(local_path, plugin_id, "实例")
-        if local_error != "missing":
-            return schema, local_error, "local", str(local_path)
-
         bundled_path = self._bundled_plugin_schema_path(plugin_id)
-        schema, bundled_error = self._parse_plugin_schema(
-            bundled_path, plugin_id, "主项目内置"
+        local_error_prefix = "插件目录不能是符号链接。" if plugin_dir.is_symlink() else ""
+
+        def load_local() -> tuple[dict[str, Any], str]:
+            if local_error_prefix:
+                return {}, local_error_prefix
+            return self._parse_plugin_schema(local_path, plugin_id, "实例")
+
+        def load_bundled() -> tuple[dict[str, Any], str]:
+            return self._parse_plugin_schema(bundled_path, plugin_id, "主项目内置")
+
+        if plugin_id == ENHANCER_PLUGIN_ID:
+            bundled_schema, bundled_error = load_bundled()
+            if not bundled_error:
+                if not local_path.exists() and not local_error_prefix:
+                    warning = "实例 plugin schema 不存在，已使用主项目内置 schema。"
+                else:
+                    _local_schema, local_error = load_local()
+                    warning = (
+                        "实例 plugin schema 不可用，已使用主项目内置 schema；"
+                        f"本地原因：{local_error}。"
+                        if local_error
+                        else ""
+                    )
+                return bundled_schema, "", "bundled", str(bundled_path), warning
+            local_schema, local_error = load_local()
+            if not local_error:
+                warning = (
+                    "主项目内置 schema 不可用，已回退实例 schema；"
+                    f"内置原因：{bundled_error}。"
+                )
+                return local_schema, "", "local", str(local_path), warning
+            error = (
+                f"无法读取插件 {plugin_id} 的配置 schema。"
+                f"实例路径：{local_path}；主项目内置路径：{bundled_path}。"
+                f"实例错误：{local_error}；内置错误：{bundled_error}。"
+            )
+            return {}, error, "", "", ""
+
+        local_schema, local_error = load_local()
+        if not local_error:
+            return local_schema, "", "local", str(local_path), ""
+        bundled_schema, bundled_error = load_bundled()
+        if not bundled_error:
+            warning = (
+                "实例 plugin schema 不可用，已使用主项目内置 schema；"
+                f"本地原因：{local_error}。"
+            )
+            return bundled_schema, "", "bundled", str(bundled_path), warning
+        error = (
+            f"无法读取插件 {plugin_id} 的配置 schema。"
+            f"实例路径：{local_path}；主项目内置路径：{bundled_path}。"
+            f"实例错误：{local_error}；内置错误：{bundled_error}。"
         )
-        if bundled_error != "missing":
-            return schema, bundled_error, "bundled", str(bundled_path)
-        return (
-            {},
-            (
-                f"找不到插件 {plugin_id} 的配置 schema：实例路径 {local_path} "
-                f"和主项目内置路径 {bundled_path} 均不存在。请确认插件已安装，"
-                "或重新部署/同步插件；旧实例可更新主项目后重试。"
-            ),
-            "",
-            "",
-        )
+        return {}, error, "", "", ""
 
     def _load_plugin_schema(self, plugin_id: str) -> tuple[dict[str, Any], str]:
         """Backward-compatible schema loader returning ``(schema, error)``."""
 
-        schema, error, _source, _path = self._load_plugin_schema_with_source(plugin_id)
+        schema, error, _source, _path, _warning = self._load_plugin_schema_with_source(
+            plugin_id
+        )
         return schema, error
 
     @staticmethod
@@ -2453,7 +2524,13 @@ class DeployManager:
         requested_id = str(plugin_id or "").strip()
         with self._lock:
             try:
-                schema, schema_error, schema_source, schema_path = self._load_plugin_schema_with_source(requested_id)
+                (
+                    schema,
+                    schema_error,
+                    schema_source,
+                    schema_path,
+                    schema_warning,
+                ) = self._load_plugin_schema_with_source(requested_id)
                 if schema_error:
                     return self._plugin_config_failure(
                         requested_id,
@@ -2496,6 +2573,9 @@ class DeployManager:
                     if api_available
                     else "AstrBot 不在线；显示本地插件配置和 schema 默认值。"
                 )
+                combined_warning = " ".join(
+                    item for item in (schema_warning, recovery_warning) if item
+                )
                 return {
                     "ok": True,
                     "plugin_id": requested_id,
@@ -2503,19 +2583,22 @@ class DeployManager:
                     "values": public_values,
                     "schema_source": schema_source,
                     "schema_path": schema_path,
+                    "schema_warning": schema_warning,
                     "config_path": config_path,
                     "source": source,
                     "api_available": bool(api_available),
                     "restart_required": False,
                     "message": (
-                        message + " " + recovery_warning
-                        if recovery_warning
+                        message + " " + combined_warning
+                        if combined_warning
                         else message
                     ),
                     "recovered": bool(recovered),
                     "recovery_source": recovery_source,
-                    "warning": recovery_warning,
-                    "warnings": [recovery_warning] if recovery_warning else [],
+                    "warning": combined_warning,
+                    "warnings": [
+                        item for item in (schema_warning, recovery_warning) if item
+                    ],
                     "corrupt_snapshot": corrupt_snapshot,
                     "error": "",
                     "api_error": api_error,
@@ -2539,7 +2622,13 @@ class DeployManager:
         requested_id = str(plugin_id or "").strip()
         with self._lock:
             try:
-                schema, schema_error, schema_source, schema_path = self._load_plugin_schema_with_source(requested_id)
+                (
+                    schema,
+                    schema_error,
+                    schema_source,
+                    schema_path,
+                    schema_warning,
+                ) = self._load_plugin_schema_with_source(requested_id)
                 config_path_obj = self._plugin_config_path(requested_id)
                 config_path = str(config_path_obj)
                 public_schema = _public_plugin_schema(schema)
@@ -2719,6 +2808,11 @@ class DeployManager:
                         message += " 在线接口警告：" + api_error
                 if recovered_local:
                     message += " 已原子修复损坏的主配置，并保留原始损坏文件/快照。"
+                if schema_warning:
+                    message += " " + schema_warning
+                combined_warning = " ".join(
+                    item for item in (schema_warning, recovery_warning) if item
+                )
                 return {
                     "ok": True,
                     "plugin_id": requested_id,
@@ -2726,6 +2820,7 @@ class DeployManager:
                     "values": public_values,
                     "schema_source": schema_source,
                     "schema_path": schema_path,
+                    "schema_warning": schema_warning,
                     "config_path": config_path,
                     "source": source,
                     "api_available": bool(api_available),
@@ -2734,8 +2829,10 @@ class DeployManager:
                     "recovery_source": (
                         "saved" if recovered_local else recovery_source
                     ),
-                    "warning": recovery_warning,
-                    "warnings": [recovery_warning] if recovery_warning else [],
+                    "warning": combined_warning,
+                    "warnings": [
+                        item for item in (schema_warning, recovery_warning) if item
+                    ],
                     "corrupt_snapshot": corrupt_snapshot,
                     "message": message,
                     "error": "",

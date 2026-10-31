@@ -765,11 +765,11 @@ GET /api/instances/<instance_id>/stats
 - 兼容旧字段：没有移除 `/api/state` / `/api/instances` 中任何已有字段。
   `/api/state` 的 `deployment.memory_mode` 和顶层 `memory_mode` 是新增可选提示。
 
-### 8.5 v1/v2 旧数据兼容与迁移
+### 8.5 v2/v4 当前数据兼容
 
-- v1 单实例根目录布局（`config.json`、`secrets.json`、`compose.yml`、`.env`、`jobs/`、`data/`）
-  会在首次启动多实例服务时迁移到 `instances/bot-1`；原 compose、`.env` 和 `cmd_config.json`
-  内容保持不变，旧容器名/网络名会写入实例元数据以便继续管理。
+- V1 单实例根目录布局（`config.json`、`secrets.json`、`compose.yml`、`.env`、`jobs/`、`data/`）
+  的自动导入/移动已移除；这些根目录旧文件不会被删除或改写。需要继续使用的用户应新建当前
+  `instances/<id>` 实例后手动迁移业务数据。
 - v2 实例目录缺少 `instance.json` 时，会从 `compose.yml`/`config.json` 推断并补写最小元数据；
   已有 `instance.json` 字段优先，不删除未知字段。
 - `config.json` 的新增字段采用 additive migration：只补缺失值，不覆盖用户已有的
@@ -1244,8 +1244,9 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
     "reply_probability": 0.12,
     "image_search_enabled": true
   },
-  "schema_source": "local",
-  "schema_path": "/home/user/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugins/qqbot_enhancer/_conf_schema.json",
+  "schema_source": "bundled",
+  "schema_path": "/opt/qqbot-studio/plugins/qqbot_enhancer/_conf_schema.json",
+  "schema_warning": "",
   "config_path": "/home/user/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_enhancer_config.json",
   "source": "astrbot",
   "api_available": true,
@@ -1257,16 +1258,22 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
 
 读取规则：
 
-- 先读取 `<astrbot_data>/plugins/<plugin_id>/_conf_schema.json` 的默认值；
-- 如果实例插件目录缺少 schema，只读回退到主项目 `plugins/<plugin_id>/_conf_schema.json`，
-  不会复制或覆盖实例文件；响应新增 `schema_source` 为 `local` / `bundled`，
-  `schema_path` 为实际读取路径。两条路径都不存在时返回可操作错误，不返回 500；
+- 内置 `qqbot_enhancer` **优先**读取主项目 `plugins/qqbot_enhancer/_conf_schema.json`（bundled，版本固定）；
+  实例 `<astrbot_data>/plugins/qqbot_enhancer/_conf_schema.json` 仅作备用，不复制、不覆盖。
+- 其它插件保持实例 schema 优先；实例 schema 不可用时回退 bundled。
+- 对 missing、PermissionError/OSError、半写 JSON、损坏 JSON、空 object/无字段 schema 做最多 3 次短重试；
+  本地 schema 失败但 bundled 成功时仍返回 HTTP 200 + `ok:true`，UI 可正常编辑。
+- 响应字段：
+  - `schema_source`: `bundled` / `local`
+  - `schema_path`: 实际读取路径
+  - `schema_warning`: 本地 schema 失败但已回退时的安全说明
+  - 只有 bundled 和实例 schema 都不可用时才返回 `ok:false`，错误列出实例路径与主项目内置路径（脱敏、无 Key）。
 - 合并本地 `<astrbot_data>/config/<plugin_id>_config.json`；
 - AstrBot 在线时再以真实 `GET /api/v1/plugins/config` 返回的当前配置为准；
 - AstrBot 离线时仍返回 HTTP 200 + `ok:true`，`api_available:false`、`source:"local"` 或
   `source:"schema"`，不返回 500、不阻塞控制台；
-- 本地插件配置读取会针对临时空文件/半写 JSON 做最多 3 次、约 100ms 间隔的短重试；
-  保存后立即重读不应因并发窗口报“本地插件配置损坏”。稳定损坏的 JSON 仍会报错并拒绝覆盖。
+- 本地插件配置读取会对临时空文件/半写 JSON 做最多 3 次重试；稳定损坏时按下一节恢复链
+  返回 ok:true + recovered/warning，而不是阻塞阅读。读取不会覆盖坏文件。
 - `source` 为 `astrbot` / `local` / `schema`；
 - `schema` 和 `values` 会过滤掉字段名或 schema 标记中带 `api_key`、`token`、`password`、
   `secret`、`credential` 等敏感语义的 Key 类字段。
@@ -1311,7 +1318,8 @@ Content-Type: application/json
   返回 `ok:true, api_available:false, source:"local", restart_required:true`，
   信息中说明需重启 AstrBot；不会返回 500；
 - 返回前会重新读取刚写入的本地配置以构造安全 values；短暂并发/半写读取会重试。
-  真正稳定损坏的本地 JSON 仍返回 `ok:false`，不会用默认值覆盖用户文件。
+  若保存前发现稳定损坏 JSON，会先走 `.bak → cached → Studio mirror → schema defaults`
+  恢复链，用户显式保存后用原子写修复主文件并保留 `.corrupt-*` 快照，不删除损坏证据。
 - 校验失败：HTTP 200 + `ok:false`，`error` 给出中文原因，不写入任何字段。
 
 字段校验（以 schema 为准）：

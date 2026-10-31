@@ -801,6 +801,15 @@ PersonaManager/ConversationManager/Provider。两群必须分别发送消息才�
 
 管理 API 只读写配置值，不记录 token/prompt 到日志。真实 AstrBot 多群人格 E2E、Agent 会话级 persona 能力均未验证。
 
+### 4.20 Studio 插件 schema / V1 兼容边界
+
+- 内置 `qqbot_enhancer` 的插件参数 UI 优先使用主项目 bundled `_conf_schema.json`；实例本地 schema
+  仅备用。本地 schema 缺失、权限拒绝、半写/损坏 JSON、空 schema 均回退 bundled，并对临时读写
+  做 3 次短重试。失败回退返回 `schema_source=bundled` + `schema_warning`，不阻塞 UI；两边都不可用
+  才返回明确错误并列出两条脱敏路径。
+- V1 单实例根目录自动导入/移动已移除。当前 v4 `instances/<id>` 配置不迁移、不删除、不被旧文件覆盖；
+  旧 V1 根目录数据如需保留，请新建 v4 实例后手动迁移。
+
 ### 4.20.1 Studio 提示词 profiles / active 切换
 
 插件配置新增（由 Studio 提示词 API 原子同步，不建议手工编辑）：

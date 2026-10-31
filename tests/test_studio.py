@@ -276,27 +276,24 @@ class StudioV3Tests(unittest.TestCase):
         self.assertNotIn("api_key", json.dumps(diagnosis, ensure_ascii=False).lower())
         self.assertNotIn("sk-", json.dumps(diagnosis, ensure_ascii=False))
 
-    def test_v1_root_layout_is_migrated_without_rewriting_compose_or_env(self):
+    def test_v1_root_layout_is_not_auto_migrated_and_current_v4_stays_safe(self):
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
             (root / "data" / "astrbot" / "config").mkdir(parents=True)
-            (root / "config.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "qq_account": "12345678",
-                        "prompt": "旧提示词",
-                        "ports": {
-                            "astrbot_webui": 16185,
-                            "snowluma_webui": 15099,
-                            "novnc": 16081,
-                        },
-                        "deployed": True,
-                    }
-                ),
-                encoding="utf-8",
+            old_config = json.dumps(
+                {
+                    "schema_version": 1,
+                    "qq_account": "12345678",
+                    "prompt": "旧提示词",
+                    "ports": {
+                        "astrbot_webui": 16185,
+                        "snowluma_webui": 15099,
+                        "novnc": 16081,
+                    },
+                    "deployed": True,
+                }
             )
-            (root / "secrets.json").write_text("{}", encoding="utf-8")
+            (root / "config.json").write_text(old_config, encoding="utf-8")
             old_compose = (
                 "services:\n"
                 "  astrbot:\n"
@@ -308,26 +305,26 @@ class StudioV3Tests(unittest.TestCase):
                 "    name: qqbot-studio-net\n"
             )
             (root / "compose.yml").write_text(old_compose, encoding="utf-8")
-            old_env = "ASTRBOT_WEBUI_PORT=16185\nVNC_PASSWD=oldpass1\n"
-            (root / ".env").write_text(old_env, encoding="utf-8")
-            (root / "data" / "astrbot" / "cmd_config.json").write_text(
-                json.dumps({"platform_settings": {"keep": True}}), encoding="utf-8"
-            )
+            (root / ".env").write_text("VNC_PASSWD=oldpass1\n", encoding="utf-8")
 
             studio = StudioManager(root)
-            instance_dir = root / "instances" / "bot-1"
-            self.assertTrue(instance_dir.is_dir())
-            self.assertFalse((root / "config.json").exists())
-            self.assertEqual((instance_dir / "compose.yml").read_text(encoding="utf-8"), old_compose)
-            self.assertEqual((instance_dir / ".env").read_text(encoding="utf-8"), old_env)
-            meta = studio.get_instance_meta("bot-1")
-            self.assertEqual(meta["project_name"], "qqbot-studio")
-            self.assertEqual(meta["astrbot_container"], "qqbot-astrbot")
-            self.assertEqual(meta["network_name"], "qqbot-studio-net")
-            migrated_config = json.loads((instance_dir / "config.json").read_text(encoding="utf-8"))
-            self.assertEqual(migrated_config["prompt"], "旧提示词")
-            self.assertEqual(migrated_config["memory_mode"], "direct")
-            self.assertEqual(studio.create_instance()["id"], "bot-2")
+            # V1 root layout is intentionally unsupported and must not be
+            # moved/rewritten automatically.
+            self.assertFalse((root / "instances" / "bot-1").exists())
+            self.assertEqual((root / "config.json").read_text(encoding="utf-8"), old_config)
+            self.assertEqual((root / "compose.yml").read_text(encoding="utf-8"), old_compose)
+            self.assertEqual((root / ".env").read_text(encoding="utf-8"), "VNC_PASSWD=oldpass1\n")
+
+            # Current v4 creation remains safe and isolated from the old files.
+            created = studio.create_instance("v4")
+            self.assertEqual(created["id"], "bot-1")
+            self.assertTrue((root / "instances" / "bot-1" / "instance.json").exists())
+            self.assertEqual((root / "config.json").read_text(encoding="utf-8"), old_config)
+            self.assertNotEqual(studio.get_instance_meta("bot-1")["project_name"], "qqbot-studio")
+
+            reopened = StudioManager(root)
+            self.assertEqual([item["id"] for item in reopened.list_instance_metas()], ["bot-1"])
+            self.assertEqual((root / "config.json").read_text(encoding="utf-8"), old_config)
 
 
 if __name__ == "__main__":

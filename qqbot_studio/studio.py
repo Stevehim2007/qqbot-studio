@@ -142,10 +142,8 @@ class StudioManager:
         self._lock = __import__("threading").RLock()
         self._stats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._migration_notes: list[str] = []
-        try:
-            self._migrate_legacy_root_instance()
-        except (OSError, ValueError) as exc:
-            self._migration_notes.append(f"旧实例迁移未完成：{exc}")
+        # V1 single-instance root layout auto-import is intentionally no longer
+        # supported.  Current v4 instances/<id> layouts remain untouched.
         try:
             self.migrate_studio_settings()
         except (OSError, ValueError) as exc:
@@ -447,63 +445,6 @@ class StudioManager:
         if not (path / "config.json").exists() and not (path / "compose.yml").exists():
             return None
         return self._infer_compose_meta(path, instance_id)
-
-    def _migrate_legacy_root_instance(self) -> None:
-        """Import the v1 single-instance layout into ``instances/bot-1``.
-
-        v1 kept ``config.json``, ``secrets.json``, ``compose.yml``, ``.env``,
-        ``jobs/`` and ``data/`` directly in the application data directory.
-        The move is same-filesystem and atomic per item.  Existing v2/v3
-        instances always take precedence and are never touched.
-        """
-
-        if any(self.instances_dir.iterdir()):
-            return
-        if not (self.root / "config.json").exists():
-            return
-        target = self._instance_path("bot-1")
-        if target.exists():
-            return
-        target.mkdir(parents=True, exist_ok=False)
-        chmod_best_effort(target, 0o700)
-        moved: list[str] = []
-        try:
-            for name in (
-                "config.json",
-                "secrets.json",
-                "deploy-state.json",
-                "compose.yml",
-                ".env",
-                "jobs",
-                "data",
-            ):
-                source = self.root / name
-                if not source.exists():
-                    continue
-                destination = target / name
-                try:
-                    os.replace(source, destination)
-                except OSError:
-                    shutil.move(str(source), str(destination))
-                moved.append(name)
-            meta = self._infer_compose_meta(target, "bot-1")
-            self._write_instance_meta(target, meta)
-            store = Store(target)
-            store.migrate_config()
-            settings = self.load_settings()
-            settings["schema_version"] = STUDIO_SCHEMA_VERSION
-            try:
-                settings["next_instance_seq"] = max(2, int(settings.get("next_instance_seq") or 1))
-            except (TypeError, ValueError):
-                settings["next_instance_seq"] = 2
-            self.save_settings(settings)
-            self._migration_notes.append(
-                "已将旧版单实例数据迁移到 instances/bot-1；原 compose/.env/cmd_config 保持不变。"
-            )
-        except OSError as exc:
-            # Do not delete or rewrite moved data.  Keep the remaining root
-            # files so the user can recover manually.
-            raise ValueError(f"迁移旧实例数据时失败：{exc}；已迁移文件位于 {target}") from exc
 
     def migrate_studio_settings(self) -> bool:
         """Persist additive Studio-level defaults for older installations."""

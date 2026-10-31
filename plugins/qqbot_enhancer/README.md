@@ -14,6 +14,7 @@ AstrBot v4.29 自动加载插件，提供：
 - `/food 火锅`、`/food 南关区 火锅`（别名 `/吃什么`、`/饭店`）通过固定 HTTPS host `food.dlsz.top` 公开只读 API 查询最多 5 家餐厅，格式化店名/地点/标签/均分/口味/性价比/评价数/最新日期，带超时、大小、冷却和中文降级，不调用 LLM；
 - `group_personas` 实例级群人格映射：direct 模式按群 ID 注入不同 system prompt，私聊/未知群 fallback default；astrbot memory 模式不再每轮强制覆盖已有 conversation，只在 `/新会话` 没有提示词模板时作为显式 fallback。
 - Studio 提示词 profiles/active/pinned：提示词是模板库，pinned 是 `/新会话` 未指定模板时的默认；active 变化不会自动新建或切换会话。direct 仍使用 active prompt；astrbot 已有 conversation 保留自己的 persona/提示词/记忆。
+- Studio 插件配置 UI 对内置本插件优先读取主项目 bundled `_conf_schema.json`；实例 schema 缺失/权限失败/半写/损坏/空时自动回退 bundled（3 次短重试），返回 `schema_source` 与 `schema_warning`，不阻塞保存后的再次打开。只有 bundled 和实例 schema 都不可用才报错。
 - 提示词容量统一：最多 100 个 profile，每个 prompt 最多 12000 字符，`prompt_profiles` JSON 最多 2600000 字符；9×12000 合法，100×12000 在总上限内。Studio prompt/plugin config 请求体对该场景使用受控 8 MiB 上限，其它 API 仍使用更小的默认请求体限制。
 - direct 模式群聊身份上下文：prompt 包含群号、发送者昵称/QQ 和最近消息 `[昵称(QQ)]` 前缀，避免多人混为同一人；QQ/昵称仅用于本次 LLM 理解，回复中自动脱敏；astrbot memory 模式无稳定逐消息 hook 时安全降级。
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式与配置入口，并用 AstrBot 公开的 `Context.get_all_stars()` 列出已加载插件元数据；不暴露 Key，不枚举不稳定的内部 handler。

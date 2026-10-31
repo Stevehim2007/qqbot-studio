@@ -120,6 +120,7 @@ class FakeManager:
             "values": dict(self.plugin_config_values),
             "schema_source": "local",
             "schema_path": "/tmp/qqbot-studio/plugins/qqbot_enhancer/_conf_schema.json",
+            "schema_warning": "",
             "config_path": "/tmp/qqbot-studio/qqbot_enhancer_config.json",
             "source": "local",
             "recovered": False,
@@ -151,6 +152,7 @@ class FakeManager:
             "values": safe_values,
             "schema_source": "local",
             "schema_path": "/tmp/qqbot-studio/plugins/qqbot_enhancer/_conf_schema.json",
+            "schema_warning": "",
             "config_path": "/tmp/qqbot-studio/qqbot_enhancer_config.json",
             "source": "local",
             "api_available": False,
@@ -882,6 +884,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(payload["values"]["reply_probability"], 0.12)
         self.assertEqual(payload["schema_source"], "local")
         self.assertIn("_conf_schema.json", payload["schema_path"])
+        self.assertIn("schema_warning", payload)
         self.assertFalse(payload["recovered"])
         self.assertEqual(payload["recovery_source"], "local")
         self.assertIn("corrupt_snapshot", payload)
