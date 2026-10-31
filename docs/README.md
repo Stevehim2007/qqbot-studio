@@ -21,7 +21,7 @@
 
 ## 3. QA 与版本记录
 
-- [`qa-report-v2.md`](qa-report-v2.md)：当前 v4.0.3 条件验收报告、真实 E2E 待测清单和已知限制。
+- [`qa-report-v2.md`](qa-report-v2.md)：当前 v4.0.4 条件验收报告、真实 E2E 待测清单和已知限制。
 - [`ponytail-audit.md`](ponytail-audit.md)：Ponytail full 第一阶段全仓审计、低风险精简记录、保留/拒绝项和剩余债务。
 - [`ponytail-optimization-phase2.md`](ponytail-optimization-phase2.md)：第二阶段跨页 helper、Git runner 与测试 fixture 精简记录、实际净行数、验证和 Windows 同步影响。
 - [`qa-report.md`](qa-report.md)：旧版单实例 v1 时代的 QA 快照，仅作历史记录；接口和端口不要按它配置。
@@ -49,6 +49,6 @@
 - API Key、访问令牌、SnowLuma/VNC 密码不要贴到公开 issue、聊天截图或日志中。
 - Windows 是独立项目，不能与 Linux 主项目共用数据目录或自动更新；AI 助手 B 也是独立可选项目，主项目不会自动启动它或传递它的 API Key。
 
-- [`qa-report-final.md`](qa-report-final.md)：Ponytail 第二阶段后的最终 QA（v4.0.3，0 P0/P1）
+- [`qa-report-final.md`](qa-report-final.md)：Ponytail 第二阶段后的最终 QA（v4.0.4，0 P0/P1）
 
 - [CHANGELOG.md](../CHANGELOG.md)：完整版本更新日志

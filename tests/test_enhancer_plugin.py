@@ -3783,7 +3783,8 @@ class TestSafeToolRouter(unittest.IsolatedAsyncioTestCase):
         event = FakeEvent([Plain("你好")], message_str="你好", private=True)
         results = await run_handler(plugin, event)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].text, "普通文本")
+        self.assertIn("普通文本", results[0].text)
+        self.assertIn("未发送表情", results[0].text)
         self.assertEqual(len(results[0].chain), 1)
         self.assertNotIn("passwd", results[0].text)
 
@@ -3800,7 +3801,8 @@ class TestSafeToolRouter(unittest.IsolatedAsyncioTestCase):
         )
         disabled_event = FakeEvent([Plain("你好")], message_str="你好", private=True)
         disabled_results = await run_handler(disabled_plugin, disabled_event)
-        self.assertEqual(disabled_results[0].text, "普通文本")
+        self.assertIn("普通文本", disabled_results[0].text)
+        self.assertIn("未发送表情", disabled_results[0].text)
         self.assertEqual(len(disabled_results[0].chain), 1)
 
     async def test_multiple_tool_markers_do_not_execute(self):
@@ -5215,7 +5217,8 @@ class TestUnifiedAIProtocol(unittest.IsolatedAsyncioTestCase):
         event = FakeEvent([Plain("你好")], message_str="你好", private=True)
         results = await run_handler(plugin, event)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].text, "普通回复")
+        self.assertIn("普通回复", results[0].text)
+        self.assertIn("未发送表情", results[0].text)
         self.assertEqual(len(results[0].chain), 1)
         self.assertNotIn("passwd", results[0].text)
         self.assertFalse(any(isinstance(c, Image) for c in results[0].chain))
@@ -7670,6 +7673,8 @@ class TestStickerToolCatalogMemory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("内置表情 8 个", req.system_prompt)
         self.assertIn("不要声称没有表情素材", req.system_prompt)
         self.assertIn("一次最多一个附件", req.system_prompt)
+        self.assertIn("必须从下列精确列表", req.system_prompt)
+        self.assertIn("不要自创描述性分类", req.system_prompt)
         self.assertEqual(req.provider_id, "deepseek-flash")
         self.assertEqual(req.model, "deepseek-chat")
         self.assertEqual(context.calls, [])
@@ -7794,6 +7799,151 @@ class TestStickerToolCatalogMemory(unittest.IsolatedAsyncioTestCase):
             event,
         )
         self.assertIn("direct 模式使用既有系统提示", direct_results[0].text)
+
+class TestStickerFuzzyAndMarkerPipeline(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _add_entry(root, category, *, tags=None, meaning="", data=b"fuzzy"):
+        category_dir = root / category
+        category_dir.mkdir(parents=True, exist_ok=True)
+        image = make_test_png(48, 48, data)
+        sha = hashlib.sha256(image).hexdigest()
+        filename = sha + ".png"
+        path = category_dir / filename
+        path.write_bytes(image)
+        return {
+            "sha256": sha,
+            "filename": filename,
+            "category": category,
+            "categories": [category],
+            "tags": list(tags or []),
+            "meaning": meaning,
+            "size": len(image),
+            "created_at": 1,
+            "source": "test",
+            "path": path,
+        }
+
+    async def test_fuzzy_category_tag_meaning_and_ambiguity(self):
+        plugin = make_plugin(
+            FakeContext(),
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            cat = self._add_entry(root, "猫猫", tags=["毛茸茸"], data=b"cat")
+            dog = self._add_entry(root, "狗狗", tags=["猫猫"], data=b"dog")
+            animal = self._add_entry(
+                root,
+                "动物",
+                meaning="可爱的猫猫",
+                data=b"animal",
+            )
+            plugin._collected_entries = [cat, dog, animal]
+
+            kind, value = plugin._resolve_sticker_tool_term("可爱的猫猫")
+            self.assertIn((kind, value), {("category", "猫猫"), ("meaning", "可爱的猫猫")})
+            plugin._collected_entries = [cat]
+            kind, value = plugin._resolve_sticker_tool_term("可爱的猫猫")
+            self.assertEqual((kind, value), ("category", "猫猫"))
+
+            plugin._collected_entries = [dog]
+            kind, value = plugin._resolve_sticker_tool_term("可爱的猫猫")
+            self.assertEqual((kind, value), ("tag", "猫猫"))
+
+            plugin._collected_entries = [animal]
+            kind, value = plugin._resolve_sticker_tool_term("可爱的猫猫")
+            self.assertEqual((kind, value), ("meaning", "可爱的猫猫"))
+
+            ambiguous_plugin = make_plugin(
+                FakeContext(),
+                sticker_enabled=True,
+                collected_sticker_enabled=True,
+            )
+            with tempfile.TemporaryDirectory() as temp2:
+                root2 = install_temp_collected_root(ambiguous_plugin, temp2)
+                ambiguous_plugin._collected_entries = [
+                    self._add_entry(root2, "猫猫", data=b"a"),
+                    self._add_entry(root2, "可爱", data=b"b"),
+                ]
+                kind, value = ambiguous_plugin._resolve_sticker_tool_term(
+                    "可爱的猫猫"
+                )
+                self.assertEqual((kind, value), ("", "ambiguous"))
+
+    async def test_memory_marker_without_extra_still_sends_exact_category(self):
+        plugin = make_plugin(
+            FakeContext(),
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+            ai_unified_tool_protocol_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            plugin._collected_entries = [
+                self._add_entry(root, "猫猫", data=b"memory-extra-missing")
+            ]
+            event = FakeEvent(
+                [Plain("来张猫猫")],
+                message_str="来张猫猫",
+                private=True,
+                session_id="fuzzy-memory-no-extra",
+            )
+            event.result = FakeResult(
+                [Plain('好呀 [[tool:send_sticker category="猫猫"]]')]
+            )
+            await plugin.attach_memory_mode_sticker(event)
+            images = [
+                comp for comp in event.result.chain if isinstance(comp, Image)
+            ]
+            self.assertEqual(len(images), 1)
+            self.assertNotIn("[[tool:", event.result.text)
+            self.assertIn("给你一个表情", event.result.text)
+
+    async def test_memory_marker_failure_without_extra_keeps_text_and_status_reason(self):
+        plugin = make_plugin(
+            FakeContext(),
+            memory_mode="astrbot",
+            sticker_enabled=True,
+            collected_sticker_enabled=True,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_send_sticker=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = install_temp_collected_root(plugin, temp_dir)
+            plugin._collected_entries = [
+                self._add_entry(root, "猫猫", data=b"memory-failure")
+            ]
+            event = FakeEvent(
+                [Plain("来张别的")],
+                message_str="来张别的",
+                private=True,
+                session_id="fuzzy-memory-fail-no-extra",
+            )
+            event.result = FakeResult(
+                [Plain('好呀 [[tool:send_sticker category="不存在"]]')]
+            )
+            await plugin.attach_memory_mode_sticker(event)
+            self.assertNotIn("[[tool:", event.result.text)
+            self.assertIn("未发送表情", event.result.text)
+            self.assertIn("猫猫", event.result.text)
+            self.assertEqual(
+                plugin._last_sticker_tool_failure,
+                "not_found",
+            )
+            status_event = FakeEvent(
+                [Plain("/表情状态")],
+                message_str="/表情状态",
+                private=True,
+                session_id="fuzzy-memory-fail-no-extra",
+            )
+            status = await run_sticker_status_command(plugin, status_event)
+            self.assertIn("最近工具失败", status[0].text)
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):

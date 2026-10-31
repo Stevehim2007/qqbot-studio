@@ -390,11 +390,19 @@ Studio 更新提示词模板后不必重启 AstrBot：
 - 注入幂等：替换旧 marker，不堆叠；不修改 conversation history/provider/model/key，不额外调用 LLM。
 - safe_tools 关闭、send_sticker 被禁用或没有可用素材时静默不注入，`/表情状态` 明确显示注入状态/素材数量。
 - direct 模式继续走既有 `_effective_system_prompt`，不重复注入 catalog。
-- memory Agent 返回的 `[[tool:send_sticker ...]]` 由 `on_decorating_result` 解析并替换为一条文字+一张本地表情；非法/禁用/无匹配 marker 回退纯文本。
+- memory Agent 返回的 `[[tool:send_sticker ...]]` 由 `on_decorating_result` 解析并替换为一条文字+一张本地表情；即使 `qqbot_enhancer_memory_reply` extra 丢失，只要结果链含 tool marker 也处理；非法/禁用/无匹配保留安全文本并显示失败原因，不残留 marker。
 
 真实 AstrBot Agent hook、tool marker 输出和 QQ 表情展示 E2E 未验证。
 
-## 代码架构（2.2.0）
+## 表情分类模糊匹配与 memory marker 管线
+
+- `send_sticker` 的 category/emotion/tag 先精确匹配；精确失败后用安全规范化 + 子串/`difflib` 相似度，仅接受唯一最佳且达到阈值，多个相近候选一律拒绝，不随机发无关图。支持 `可爱的猫猫` → 分类/标签 `猫猫`、meaning 包含匹配。
+- catalog 明确要求只能从列出的精确分类/tags/情绪中选择，不能自创描述性分类。
+- 失败不静默：保留模型安全文字并追加“未发送表情：原因 + 可用分类/标签”，`/表情状态` 显示最近失败原因；不输出路径/QQ。
+- `on_decorating_result` 不再依赖 `qqbot_enhancer_memory_reply` extra：结果链存在 `[[tool:send_sticker ...]]` 时也处理；成功替换为一条文字+一张 `Comp.Image`，失败/非法 marker 不残留。
+- direct/memory 均最多一个附件；不新增 LLM 调用。
+
+## 代码架构（2.3.0）
 
 `main.py` 仍是唯一的 AstrBot 入口/组合根，保留 `Star`、`filter` 装饰器、事件编排和依赖装配；可独立单测的业务能力已拆到包内模块：
 

@@ -10,6 +10,15 @@
 
 
 
+
+## v4.0.4
+
+- 修复 AstrBot memory 结果链 marker 丢失 extra 时 `send_sticker` 不发图的问题。
+- `on_decorating_result` 现在无论 memory extra 是否存在，只要发现 tool marker 就执行白名单工具并替换为真实附件。
+- 失败时 marker 不残留，显示原因/可用分类；`/表情状态` 记录最近工具失败。
+- 安全模糊匹配 category/tag/meaning，仅接受唯一最佳候选。
+- 全量 453 tests OK。
+
 ## v4.0.3
 
 - 内置 `qqbot_enhancer` 优先使用 bundled schema；实例 schema 权限拒绝/半写/损坏/空时自动回退并重试。

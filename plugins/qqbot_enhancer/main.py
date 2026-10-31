@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import difflib
 import hashlib
 import html as html_lib
 import inspect
@@ -114,7 +115,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "2.2.0"
+PLUGIN_FALLBACK_VERSION = "2.3.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -213,6 +214,7 @@ class QQBotEnhancerPlugin(Star):
         self._recent_chat_identity: dict[str, list[dict[str, Any]]] = {}
         self._last_ambient_at: dict[str, float] = {}
         self._ambient_group_message_count: dict[str, int] = {}
+        self._last_sticker_tool_failure = ""
         self._sticker_ai_auto_collect_times: dict[str, list[float]] = {}
         self._pending_user_media: dict[str, dict[str, Any]] = {}
         self._song_dir = SONG_DIR
@@ -1937,6 +1939,13 @@ class QQBotEnhancerPlugin(Star):
                 lines.append("- 可用情绪：" + "、".join(emotions))
             if category_names:
                 lines.append("- 可用收藏分类：" + "、".join(category_names))
+            if self._last_sticker_tool_failure:
+                lines.append(
+                    "- 最近工具失败："
+                    + self._sticker_tool_failure_text(
+                        self._last_sticker_tool_failure
+                    )
+                )
             lines.append(
                 "- 单图上限："
                 f"{self._cfg_int('collected_sticker_max_file_bytes', 1)} 字节"
@@ -2236,22 +2245,31 @@ class QQBotEnhancerPlugin(Star):
     async def attach_memory_mode_sticker(self, event: AstrMessageEvent):
         """Add a local sticker after AstrBot default Agent replies in memory mode."""
 
-        if not event.get_extra("qqbot_enhancer_memory_reply"):
-            return
         result = event.get_result()
         chain = getattr(result, "chain", None) if result is not None else None
         if not isinstance(chain, list):
+            return
+        # The memory-reply extra can be lost on some AstrBot versions.  A tool
+        # marker in the Agent result is an authoritative reason to process the
+        # chain even without that extra; otherwise leave unrelated results alone.
+        plain_text = "".join(
+            str(component.text or "")
+            for component in chain
+            if isinstance(component, Comp.Plain)
+        )
+        has_tool_marker = bool(
+            plain_text and safe_tools_engine.TOOL_MARKER_RE.search(plain_text)
+        )
+        if (
+            not event.get_extra("qqbot_enhancer_memory_reply")
+            and not has_tool_marker
+        ):
             return
         if event.get_extra("qqbot_enhancer_ambient_participate"):
             self._prepend_speaker_mention_to_chain(event, chain)
 
         # A memory-mode Agent can still emit the same private marker; parse it
         # before sticker selection so tool failures cleanly fall back to text.
-        plain_text = "".join(
-            str(component.text or "")
-            for component in chain
-            if isinstance(component, Comp.Plain)
-        )
         if plain_text:
             (
                 clean_text,
@@ -4561,7 +4579,9 @@ class QQBotEnhancerPlugin(Star):
             "不要声称没有表情素材或未安装素材。",
             '需要发表情时只调用一次统一安全协议，例如：'
             '[[tool:send_sticker emotion="happy"]]，也可使用 '
-            'category="猫猫" 或 tag="嘲讽"（三选一）。',
+            'category="猫猫" 或 tag="嘲讽"（三选一）。'
+            'category/tag/emotion 必须从下列精确列表或精确情绪名选取，'
+            '不要自创描述性分类；',
             "只允许白名单字段，一次最多一个附件；不要输出文件路径、QQ 或群号。",
         ]
         if emotions:
@@ -5672,20 +5692,180 @@ class QQBotEnhancerPlugin(Star):
             ]
         )
 
+    def _sticker_tool_term_candidates(self) -> list[tuple[str, str]]:
+        if not self._cfg_bool("sticker_enabled"):
+            return []
+        candidates: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(kind: str, value: Any) -> None:
+            text = str(value or "").strip()
+            if not text or not STICKER_AI_TAG_RE.fullmatch(text):
+                return
+            key = (kind, text.casefold())
+            if key not in seen:
+                seen.add(key)
+                candidates.append((kind, text))
+
+        for entry in self._sticker_entries:
+            path = entry.get("path")
+            if isinstance(path, Path) and path.is_file():
+                add("emotion", entry.get("emotion", ""))
+        if self._cfg_bool("collected_sticker_enabled"):
+            for entry in self._valid_collected_entries():
+                path = entry.get("path")
+                if not isinstance(path, Path) or not path.is_file():
+                    continue
+                for category in self._entry_categories(entry):
+                    add("category", category)
+                for raw_tag in entry.get("tags", []):
+                    add("tag", raw_tag)
+                meaning = str(entry.get("meaning", "") or "").strip()
+                if meaning:
+                    add("meaning", meaning[:32])
+                    for part in re.split(r"[\s,，、;；/]+", meaning):
+                        add("meaning", part[:32])
+        return candidates
+
+    def _resolve_sticker_tool_term(
+        self,
+        raw: str,
+    ) -> tuple[str, str]:
+        query = str(raw or "").strip()
+        if not query or not STICKER_AI_TAG_RE.fullmatch(query):
+            return "", "invalid"
+        candidates = self._sticker_tool_term_candidates()
+        if not candidates:
+            return "", "no_material"
+        folded = query.casefold()
+        exact = [
+            (kind, value)
+            for kind, value in candidates
+            if value.casefold() == folded
+        ]
+        if exact:
+            distinct = {value.casefold() for _kind, value in exact}
+            if len(distinct) > 1:
+                return "", "ambiguous"
+            priority = {"category": 0, "tag": 1, "meaning": 2, "emotion": 3}
+            return sorted(exact, key=lambda item: priority.get(item[0], 9))[0]
+        scored: list[tuple[float, str, str]] = []
+        for kind, value in candidates:
+            folded_value = value.casefold()
+            if folded_value in folded or folded in folded_value:
+                score = 0.9
+            else:
+                score = difflib.SequenceMatcher(
+                    None,
+                    folded,
+                    folded_value,
+                ).ratio()
+            if kind == "emotion":
+                for keywords, emotion in sticker_intent_engine.EMOTION_KEYWORDS:
+                    if emotion == folded_value and any(
+                        keyword in query for keyword in keywords
+                    ):
+                        score = max(score, 0.96)
+            scored.append((score, kind, value))
+        if not scored:
+            return "", "not_found"
+        best_score = max(item[0] for item in scored)
+        if best_score < 0.72:
+            return "", "not_found"
+        near_best = [
+            item for item in scored if item[0] >= best_score - 0.03
+        ]
+        distinct_values = {item[2].casefold() for item in near_best}
+        if len(distinct_values) > 1:
+            return "", "ambiguous"
+        priority = {"category": 0, "tag": 1, "meaning": 2, "emotion": 3}
+        best = sorted(
+            near_best,
+            key=lambda item: (priority.get(item[1], 9), -item[0]),
+        )[0]
+        return best[1], best[2]
+
+    def _sticker_tool_available_summary(self) -> str:
+        categories: list[str] = []
+        tags: list[str] = []
+        for kind, value in self._sticker_tool_term_candidates():
+            if kind == "category" and value not in categories:
+                categories.append(value)
+            elif kind == "tag" and value not in tags:
+                tags.append(value)
+        parts: list[str] = []
+        if categories:
+            parts.append("可用分类：" + "、".join(categories[:12]))
+        if tags:
+            parts.append("可用标签：" + "、".join(tags[:12]))
+        return "；".join(parts) or "当前没有可用收藏分类或标签"
+
+    def _sticker_tool_failure_text(self, reason: str) -> str:
+        labels = {
+            "invalid": "分类/标签格式不安全",
+            "ambiguous": "匹配到多个相近分类，已拒绝随机选择",
+            "not_found": "没有匹配到分类/标签",
+            "no_material": "当前没有可用表情素材",
+            "disabled": "表情功能未启用",
+            "cooldown": "表情冷却中",
+            "safe_tools_disabled": "安全工具协议未启用",
+            "permission_denied": "send_sticker 权限未开启",
+            "no_match": "没有匹配到可发送表情",
+        }
+        label = labels.get(reason, "未找到可发送表情")
+        return (
+            f"未发送表情：{label}。"
+            f"{self._sticker_tool_available_summary()}"
+        )
+
+    def _with_sticker_tool_failure(self, clean_text: str, reason: str) -> str:
+        self._last_sticker_tool_failure = reason
+        detail = self._sticker_tool_failure_text(reason)
+        text = str(clean_text or "").strip()
+        return f"{text}\n{detail}".strip() if text else detail
+
     def _select_safe_tool_sticker(
         self,
         event: AstrMessageEvent,
         intent: Any,
     ) -> Path | None:
+        if not self._cfg_bool("sticker_enabled"):
+            self._last_sticker_tool_failure = "disabled"
+            return None
         emotion = str(intent.args.get("emotion", "") or "").strip()
         category = str(intent.args.get("category", "") or "").strip()
         tag = str(intent.args.get("tag", "") or "").strip()
-        return self._select_sticker_from_pool(
+        raw = emotion or category or tag
+        if raw:
+            kind, value = self._resolve_sticker_tool_term(raw)
+            if not kind:
+                self._last_sticker_tool_failure = value
+                return None
+            if kind == "category":
+                category, emotion, tag = value, "", ""
+            elif kind == "emotion":
+                emotion, category, tag = value, "", ""
+            else:
+                tag, category, emotion = value, "", ""
+        path = self._select_sticker_from_pool(
             event,
             emotion=emotion or None,
             category=category or None,
             tag=tag or None,
         )
+        if path is None:
+            now = self._clock()
+            last = self._last_sticker_at.get(event.unified_msg_origin)
+            cooldown = self._cfg_int("sticker_cooldown_seconds", 0)
+            if last is not None and now - last < cooldown:
+                self._last_sticker_tool_failure = "cooldown"
+            elif not self._sticker_tool_term_candidates():
+                self._last_sticker_tool_failure = "no_material"
+            else:
+                self._last_sticker_tool_failure = "no_match"
+        else:
+            self._last_sticker_tool_failure = ""
+        return path
 
     async def _execute_safe_tool(
         self,
@@ -5848,6 +6028,15 @@ class QQBotEnhancerPlugin(Star):
                 "reason=disabled",
                 parsed.intents[0].name if parsed.intents else "invalid",
             )
+            if parsed.intents and parsed.intents[0].name == "send_sticker":
+                return (
+                    self._with_sticker_tool_failure(
+                        clean_text,
+                        "safe_tools_disabled",
+                    ),
+                    None,
+                    True,
+                )
             return clean_text, None, True
         enabled = self._enabled_safe_tool_names()
         max_actions = self._cfg_int("safe_tools_max_actions_per_reply", 1)
@@ -5855,6 +6044,15 @@ class QQBotEnhancerPlugin(Star):
             logger.info(
                 "qqbot_enhancer safe_tool marker rejected reason=count_or_limit"
             )
+            if parsed.intents and parsed.intents[0].name == "send_sticker":
+                return (
+                    self._with_sticker_tool_failure(
+                        clean_text,
+                        "no_match",
+                    ),
+                    None,
+                    True,
+                )
             return clean_text, None, True
         intent = parsed.intents[0]
         if not intent.valid or intent.name not in enabled:
@@ -5863,6 +6061,15 @@ class QQBotEnhancerPlugin(Star):
                 "reason=invalid_or_denied",
                 intent.name,
             )
+            if intent.name == "send_sticker":
+                return (
+                    self._with_sticker_tool_failure(
+                        clean_text,
+                        "permission_denied",
+                    ),
+                    None,
+                    True,
+                )
             return clean_text, None, True
         try:
             result = await self._execute_safe_tool(
@@ -5881,6 +6088,15 @@ class QQBotEnhancerPlugin(Star):
             intent.name,
             result is not None,
         )
+        if result is None and intent.name == "send_sticker":
+            reason = self._last_sticker_tool_failure or "no_match"
+            return (
+                self._with_sticker_tool_failure(clean_text, reason),
+                None,
+                True,
+            )
+        if result is not None and intent.name == "send_sticker":
+            self._last_sticker_tool_failure = ""
         return clean_text, result, True
 
     def _speaker_nickname_for_mention(self, event: AstrMessageEvent) -> str:
