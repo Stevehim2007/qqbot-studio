@@ -27,7 +27,7 @@ from .assistant_ext import (
     ASSISTANT_REPO_URL,
 )
 from .astrbot_api import AstrBotAPIError
-from .deployer import DeploymentError
+from .deployer import PROMPT_PROFILES_MAX_REQUEST_BYTES, DeploymentError
 from .dockerctl import DockerError
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
@@ -35,6 +35,7 @@ from .updater import UpdateError, check_update, start_update
 
 STATIC_DIR = Path(__file__).parent / "static"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost"}
+DEFAULT_REQUEST_BODY_MAX_BYTES = 2 * 1024 * 1024
 
 
 def _read_optional(path: Path, fallback: bytes = b"") -> bytes:
@@ -303,6 +304,9 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "restart_required": False,
             "conversation_created": False,
             "conversation_pending": False,
+            "prompt_plugin_sync_pending": False,
+            "prompt_plugin_sync_pending_at": "",
+            "plugin_sync_required": False,
             "message": "提示词列表接口暂不可用；主控制台和其它功能不受影响。",
             "error": detail,
         }
@@ -746,7 +750,12 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
     # POST routes
     # ------------------------------------------------------------------
-    def _read_json_body(self, *, allow_empty: bool = False) -> dict[str, Any] | None:
+    def _read_json_body(
+        self,
+        *,
+        allow_empty: bool = False,
+        max_bytes: int | None = None,
+    ) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -757,7 +766,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         if content_type != "application/json":
             self._error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "请求必须使用 application/json。")
             return None
-        if length <= 0 or length > 2 * 1024 * 1024:
+        request_limit = int(max_bytes or DEFAULT_REQUEST_BODY_MAX_BYTES)
+        if length <= 0 or length > request_limit:
             self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "请求体为空或过大。")
             return None
         try:
@@ -779,13 +789,29 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             return
         parsed = urlsplit(self.path)
         path = parsed.path
+        stripped_path = path.rstrip("/")
+        large_prompt_payload = (
+            stripped_path.endswith("/prompts")
+            or (
+                stripped_path.endswith("/config")
+                and (
+                    "/plugins/" in stripped_path
+                    or stripped_path in {"/api/plugins/config", "/api/plugin-config"}
+                )
+            )
+        )
         payload = self._read_json_body(
             allow_empty=path in {
                 "/api/assistant/install",
                 "/api/assistant/update",
                 "/api/assistant/start",
                 "/api/assistant/stop",
-            }
+            },
+            max_bytes=(
+                PROMPT_PROFILES_MAX_REQUEST_BYTES
+                if large_prompt_payload
+                else DEFAULT_REQUEST_BODY_MAX_BYTES
+            ),
         )
         if payload is None:
             return

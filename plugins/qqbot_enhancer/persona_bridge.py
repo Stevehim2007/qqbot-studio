@@ -53,6 +53,7 @@ class AgentPersonaBridge:
         self.conversation_manager = conversation_manager
         self.logger = logger
         self._persona_cache: dict[str, str] = {}
+        self.last_persona_changed = False
 
     @property
     def supported(self) -> bool:
@@ -63,11 +64,13 @@ class AgentPersonaBridge:
             and callable(getattr(self.persona_manager, "create_persona", None))
             and callable(getattr(self.persona_manager, "update_persona", None))
             and callable(getattr(self.conversation_manager, "get_curr_conversation_id", None))
+            and callable(getattr(self.conversation_manager, "get_conversation", None))
             and callable(getattr(self.conversation_manager, "new_conversation", None))
             and callable(getattr(self.conversation_manager, "update_conversation", None))
         )
 
     async def ensure_persona(self, persona_id: str, prompt: str) -> bool:
+        self.last_persona_changed = False
         if not persona_id or not prompt or not self.supported:
             return False
         cached = self._persona_cache.get(persona_id)
@@ -80,10 +83,12 @@ class AgentPersonaBridge:
         try:
             if existing is None:
                 await self.persona_manager.create_persona(persona_id, prompt)
+                self.last_persona_changed = True
             elif str(getattr(existing, "system_prompt", "")) != prompt:
                 await self.persona_manager.update_persona(
                     persona_id, system_prompt=prompt
                 )
+                self.last_persona_changed = True
             self._persona_cache[persona_id] = prompt
             return True
         except ValueError:
@@ -93,6 +98,7 @@ class AgentPersonaBridge:
                     persona_id, system_prompt=prompt
                 )
                 self._persona_cache[persona_id] = prompt
+                self.last_persona_changed = True
                 return True
             except Exception:
                 return False
@@ -106,6 +112,7 @@ class AgentPersonaBridge:
         platform_id: str,
         persona_id: str,
         new_conversation_on_persona_change: bool = False,
+        persona_prompt_changed: bool = False,
     ) -> bool:
         if not self.supported or not unified_msg_origin or not persona_id:
             return False
@@ -123,24 +130,18 @@ class AgentPersonaBridge:
             getter = getattr(self.conversation_manager, "get_conversation", None)
             if callable(getter):
                 conversation = await getter(unified_msg_origin, cid)
-                if conversation is not None and str(
-                    getattr(conversation, "persona_id", "") or ""
-                ) == persona_id:
+                if (
+                    conversation is not None
+                    and str(getattr(conversation, "persona_id", "") or "") == persona_id
+                    and not persona_prompt_changed
+                ):
                     return True
-            if new_conversation_on_persona_change:
-                # A different active prompt profile must not inherit the old
-                # persona's conversation history.  new_conversation() switches
-                # to the new conversation and binds the persona atomically from
-                # the caller's perspective.
-                await self.conversation_manager.new_conversation(
-                    unified_msg_origin,
-                    platform_id=platform_id,
-                    persona_id=persona_id,
-                )
-                return True
-            await self.conversation_manager.update_conversation(
+            # Any effective persona id/prompt change must start a fresh
+            # conversation.  Merely updating persona_id would leave old persona
+            # history attached to the new persona.
+            await self.conversation_manager.new_conversation(
                 unified_msg_origin,
-                conversation_id=cid,
+                platform_id=platform_id,
                 persona_id=persona_id,
             )
             return True
@@ -217,5 +218,69 @@ def inject_current_sender_identity(
     block = "\n".join(lines)
     if len(block) > max(1, int(max_chars)):
         block = block[: max(1, int(max_chars)) - 1].rstrip() + "…"
+    req.system_prompt = existing.rstrip() + "\n\n" + block + "\n"
+    return True
+
+
+AMBIENT_GROUP_MARKER = "# Ambient Group Context"
+
+
+def inject_ambient_group_context(
+    req: Any,
+    history: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+    max_chars: int = 1500,
+) -> bool:
+    """Append bounded recent-group messages to this request only.
+
+    This never modifies event text, persisted conversation history or provider
+    settings.  If the hook is unavailable at the AstrBot layer, callers must
+    degrade explicitly rather than inventing history.
+    """
+
+    if req is None or not history:
+        return False
+    existing = str(getattr(req, "system_prompt", "") or "")
+    if AMBIENT_GROUP_MARKER in existing:
+        existing = existing.split(AMBIENT_GROUP_MARKER, 1)[0].rstrip()
+    lines = [
+        AMBIENT_GROUP_MARKER,
+        "Recent messages from this group only. Use them only as context;",
+        "do not expose QQ numbers, group ids, or nicknames in the reply.",
+    ]
+    max_chars = max(1, int(max_chars))
+    used = sum(len(line) + 1 for line in lines)
+    for item in history:
+        nickname = "".join(
+            char
+            for char in str(item.get("nickname", "") or "")
+            if ord(char) >= 32 and ord(char) != 127
+        )[:32].strip() or "未知"
+        qq = "".join(
+            char for char in str(item.get("qq", "") or "") if char.isdigit()
+        )[:20]
+        label = f"{nickname}({qq})" if qq else nickname
+        text = "".join(
+            char
+            for char in str(item.get("text", "") or "")
+            if ord(char) >= 32 or char in ("\n", "\t")
+        )[:200].strip()
+        timestamp = item.get("timestamp")
+        age = ""
+        if now is not None and timestamp is not None:
+            try:
+                seconds = max(0, int(float(now) - float(timestamp)))
+                age = f"{seconds}s ago "
+            except (TypeError, ValueError):
+                age = ""
+        line = f"- {age}[{label}] {text}"
+        if used + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    if len(lines) <= 3:
+        return False
+    block = "\n".join(lines)
     req.system_prompt = existing.rstrip() + "\n\n" + block + "\n"
     return True

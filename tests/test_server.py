@@ -45,6 +45,9 @@ class FakeManager:
             "restart_required": False,
             "conversation_created": False,
             "conversation_pending": False,
+            "plugin_sync_required": False,
+            "prompt_plugin_sync_pending": False,
+            "prompt_plugin_sync_pending_at": "",
             "message": "提示词列表已读取。",
             "error": "",
         }
@@ -810,6 +813,18 @@ class ServerTests(unittest.TestCase):
             status = exc.code
         self.assertEqual(status, 403)
 
+    def test_prompt_profiles_post_has_bounded_large_body_limit(self):
+        # > default 2MiB, but this endpoint is explicitly allowed up to 8MiB.
+        prompt = "x" * (2 * 1024 * 1024)
+        status, body = self._post(
+            "/api/instances/bot-1/prompts",
+            {"action": "create", "name": "large", "prompt": prompt},
+        )
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.studio.manager.prompt_profile_actions[-1]["prompt"], prompt)
+
     def test_instance_prompt_profiles_api_contract_and_token(self):
         status, body = self._get("/api/instances/bot-1/prompts")
         self.assertEqual(status, 200)
@@ -820,6 +835,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(payload["prompts"][0]["prompt"], "第一行\n第二行")
         self.assertIn("restart_required", payload)
         self.assertIn("conversation_created", payload)
+        self.assertIn("prompt_plugin_sync_pending", payload)
+        self.assertFalse(payload["prompt_plugin_sync_pending"])
 
         status, body = self._post(
             "/api/instances/bot-1/prompts",

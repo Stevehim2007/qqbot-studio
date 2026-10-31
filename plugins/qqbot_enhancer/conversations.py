@@ -51,9 +51,25 @@ def short_id(cid: str) -> str:
     return safe[-8:] if safe else "?"
 
 
-def find_by_title(conversations: list[Any], title: str) -> Any | None:
+def find_all_by_title(conversations: list[Any], title: str) -> list[Any]:
     wanted = str(title or "").strip().casefold()
-    for conversation in conversations:
-        if conversation_title(conversation).strip().casefold() == wanted:
-            return conversation
-    return None
+    if not wanted:
+        return []
+    return [
+        conversation
+        for conversation in conversations
+        if conversation_title(conversation).strip().casefold() == wanted
+    ]
+
+
+def find_by_title(conversations: list[Any], title: str) -> Any | None:
+    """Compatibility helper; command handlers must use find_all_by_title."""
+
+    matches = find_all_by_title(conversations, title)
+    return matches[0] if len(matches) == 1 else None
+
+
+def conversation_persona_id(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("persona_id", "") or "")
+    return str(getattr(value, "persona_id", "") or "")

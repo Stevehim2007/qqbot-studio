@@ -44,6 +44,15 @@ PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
 MAX_PROMPT_LENGTH = 12_000
 PROMPT_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+PROMPT_PROFILE_MAX_COUNT = 100
+PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
+PROMPT_PROFILES_MAX_TOTAL_PROMPT_CHARS = (
+    PROMPT_PROFILE_MAX_COUNT * PROMPT_PROFILE_MAX_PROMPT_CHARS
+)
+# 2.6M characters covers 100×12000 plus ids/names/timestamps and JSON
+# escaping. UTF-8 request bytes are bounded separately below.
+PROMPT_PROFILES_MAX_JSON_CHARS = 2_600_000
+PROMPT_PROFILES_MAX_REQUEST_BYTES = 8 * 1024 * 1024
 PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PLUGIN_CONFIG_MAX_FIELDS = 256
 PLUGIN_CONFIG_MAX_REQUEST_BYTES = 512 * 1024
@@ -2303,7 +2312,12 @@ class DeployManager:
                         schema_source=schema_source,
                         schema_path=schema_path,
                     )
-                if encoded_size > PLUGIN_CONFIG_MAX_REQUEST_BYTES:
+                request_limit = PLUGIN_CONFIG_MAX_REQUEST_BYTES
+                if "prompt_profiles" in values:
+                    request_limit = max(
+                        request_limit, PROMPT_PROFILES_MAX_REQUEST_BYTES
+                    )
+                if encoded_size > request_limit:
                     return self._plugin_config_failure(
                         requested_id,
                         "插件配置请求体过大，请减少保存的字段或文本长度。",
@@ -2461,8 +2475,10 @@ class DeployManager:
         text = str(value or "")
         if not text.strip():
             raise ValueError("提示词内容不能为空。")
-        if len(text) > MAX_PROMPT_LENGTH:
-            raise ValueError(f"提示词不能超过 {MAX_PROMPT_LENGTH} 个字符。")
+        if len(text) > PROMPT_PROFILE_MAX_PROMPT_CHARS:
+            raise ValueError(
+                f"提示词不能超过 {PROMPT_PROFILE_MAX_PROMPT_CHARS} 个字符。"
+            )
         return text
 
     @staticmethod
@@ -2479,38 +2495,78 @@ class DeployManager:
             "restart_required": False,
             "conversation_created": False,
             "conversation_pending": False,
+            "prompt_plugin_sync_pending": False,
+            "prompt_plugin_sync_pending_at": "",
+            "plugin_sync_required": False,
             "message": message,
             "error": str(detail or message),
         }
 
+    @staticmethod
+    def _validate_prompt_profiles_capacity(
+        profiles: list[dict[str, Any]],
+    ) -> str:
+        if len(profiles) > PROMPT_PROFILE_MAX_COUNT:
+            return (
+                f"提示词 profile 数量 {len(profiles)} 超过上限 "
+                f"{PROMPT_PROFILE_MAX_COUNT}"
+            )
+        total_prompt_chars = sum(len(str(item.get("prompt") or "")) for item in profiles)
+        if total_prompt_chars > PROMPT_PROFILES_MAX_TOTAL_PROMPT_CHARS:
+            return (
+                f"提示词总字符数 {total_prompt_chars} 超过上限 "
+                f"{PROMPT_PROFILES_MAX_TOTAL_PROMPT_CHARS}"
+            )
+        try:
+            serialized = json.dumps(profiles, ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            return f"提示词 profiles 无法序列化：{exc}"
+        if len(serialized) > PROMPT_PROFILES_MAX_JSON_CHARS:
+            return (
+                f"提示词 profiles JSON 长度 {len(serialized)} 超过上限 "
+                f"{PROMPT_PROFILES_MAX_JSON_CHARS}"
+            )
+        return ""
+
     def _normalise_prompt_profiles(
         self,
         config: dict[str, Any],
-    ) -> tuple[list[dict[str, Any]], str, bool]:
-        """Return normalized profiles/active id and whether config changed."""
+    ) -> tuple[list[dict[str, Any]], str, bool, str]:
+        """Return normalized profiles/active id, changed flag, validation error.
+
+        Existing data is never silently shortened: >100 profiles, overlong
+        prompts and malformed entries produce an actionable error and no save.
+        """
 
         now = utc_now()
         raw_profiles = config.get("prompt_profiles")
         profiles: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
+        validation_errors: list[str] = []
         changed = False
         if isinstance(raw_profiles, list):
             for index, raw in enumerate(raw_profiles):
                 if not isinstance(raw, dict):
-                    changed = True
+                    validation_errors.append(f"第 {index + 1} 项不是 object")
                     continue
                 profile_id = str(raw.get("id") or "").strip()
-                if not PROMPT_PROFILE_ID_RE.fullmatch(profile_id) or profile_id in seen_ids:
-                    changed = True
+                if not PROMPT_PROFILE_ID_RE.fullmatch(profile_id):
+                    validation_errors.append(f"第 {index + 1} 项 id 无效")
+                    continue
+                if profile_id in seen_ids:
+                    validation_errors.append(f"第 {index + 1} 项 id 重复：{profile_id}")
                     continue
                 prompt = str(raw.get("prompt") or "")
                 if not prompt.strip():
-                    changed = True
-                    continue
+                    validation_errors.append(f"profile {profile_id} 的 prompt 为空")
+                elif len(prompt) > PROMPT_PROFILE_MAX_PROMPT_CHARS:
+                    validation_errors.append(
+                        f"profile {profile_id} 的 prompt 为 {len(prompt)} 字符，"
+                        f"超过 {PROMPT_PROFILE_MAX_PROMPT_CHARS} 上限"
+                    )
                 name = str(raw.get("name") or "").strip() or f"提示词 {index + 1}"
                 if len(name) > 80:
-                    name = name[:80]
-                    changed = True
+                    validation_errors.append(f"profile {profile_id} 的名称超过 80 字符")
                 created_at = str(raw.get("created_at") or now)
                 updated_at = str(raw.get("updated_at") or created_at)
                 profiles.append(
@@ -2524,7 +2580,15 @@ class DeployManager:
                     }
                 )
                 seen_ids.add(profile_id)
-        if not profiles:
+        if len(profiles) > PROMPT_PROFILE_MAX_COUNT:
+            validation_errors.append(
+                f"检测到 {len(profiles)} 个提示词 profile，"
+                f"超过上限 {PROMPT_PROFILE_MAX_COUNT}；未截断、未保存"
+            )
+        capacity_error = self._validate_prompt_profiles_capacity(profiles)
+        if capacity_error:
+            validation_errors.append(capacity_error)
+        if not profiles and not validation_errors:
             plugin_config = self._read_json_object(self.enhancer_config_path)
             legacy_prompt = str(
                 plugin_config.get("system_prompt")
@@ -2533,19 +2597,25 @@ class DeployManager:
             )
             if not legacy_prompt.strip():
                 legacy_prompt = DEFAULT_PROMPT
-            profiles = [
-                {
-                    "id": "default",
-                    "name": "默认提示词",
-                    "prompt": legacy_prompt,
-                    "pinned": True,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            ]
-            active_id = "default"
-            changed = True
-        else:
+            if len(legacy_prompt) > PROMPT_PROFILE_MAX_PROMPT_CHARS:
+                validation_errors.append(
+                    f"旧提示词为 {len(legacy_prompt)} 字符，"
+                    f"超过 {PROMPT_PROFILE_MAX_PROMPT_CHARS} 上限；"
+                    "未迁移、未截断，请先缩短旧提示词"
+                )
+            else:
+                profiles = [
+                    {
+                        "id": "default",
+                        "name": "默认提示词",
+                        "prompt": legacy_prompt,
+                        "pinned": True,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                ]
+                changed = True
+        if profiles:
             configured_active = str(config.get("prompt_profiles_active_id") or "").strip()
             active_id = ""
             if configured_active in seen_ids:
@@ -2559,35 +2629,86 @@ class DeployManager:
                 if bool(item["pinned"]) != expected:
                     item["pinned"] = expected
                     changed = True
-        if len(profiles) > 100:
-            profiles = profiles[:100]
-            changed = True
+        else:
+            active_id = ""
         if config.get("prompt_profiles") != profiles:
             changed = True
         if config.get("prompt_profiles_active_id") != active_id:
             changed = True
-        return profiles, active_id, changed
+        return profiles, active_id, changed, "；".join(dict.fromkeys(validation_errors))
+
+    @staticmethod
+    def _plugin_prompt_payload_matches(
+        payload: Any,
+        profiles: list[dict[str, Any]],
+        active_id: str,
+        active_prompt: str,
+    ) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        raw_profiles = payload.get("prompt_profiles")
+        if isinstance(raw_profiles, str):
+            try:
+                raw_profiles = json.loads(raw_profiles or "[]")
+            except ValueError:
+                return False
+        return (
+            raw_profiles == profiles
+            and str(payload.get("prompt_profile_active_id") or "") == active_id
+            and str(payload.get("system_prompt") or "") == active_prompt
+        )
+
+    def _plugin_prompt_state_matches(
+        self,
+        profiles: list[dict[str, Any]],
+        active_id: str,
+        active_prompt: str,
+    ) -> bool:
+        """Return True only when the plugin state reflects Studio state."""
+
+        if not self.enhancer_config_path.exists():
+            return False
+        plugin_config, read_error = self._read_json_object_with_error(
+            self.enhancer_config_path
+        )
+        if read_error or plugin_config is None:
+            return False
+        return self._plugin_prompt_payload_matches(
+            plugin_config, profiles, active_id, active_prompt
+        )
 
     def _sync_prompt_profiles_to_plugin(
         self,
         profiles: list[dict[str, Any]],
         active_id: str,
         active_prompt: str,
-    ) -> tuple[bool, str]:
-        """Write profile state to the enhancer plugin; online hot-reload if possible."""
+    ) -> tuple[bool, str, bool]:
+        """Write local plugin state and optionally confirm/save through AstrBot.
+
+        Returns ``(api_available, error, local_written)``.  ``api_available`` is
+        true only when AstrBot reported matching state or explicitly accepted a
+        hot-reload save.
+        """
 
         plugin_config, read_error = self._read_json_object_with_error(self.enhancer_config_path)
         if read_error:
-            return False, f"插件配置读取失败，提示词状态仅保存在 Studio：{read_error}"
+            return False, f"插件配置读取失败，提示词状态仅保存在 Studio：{read_error}", False
         merged = self._merged_enhancer_config(plugin_config)
-        merged["prompt_profiles"] = json.dumps(profiles, ensure_ascii=False)
+        serialized_profiles = json.dumps(profiles, ensure_ascii=False)
+        if len(serialized_profiles) > PROMPT_PROFILES_MAX_JSON_CHARS:
+            return (
+                False,
+                f"提示词 profiles JSON 超过上限 {PROMPT_PROFILES_MAX_JSON_CHARS}，未写入插件",
+                False,
+            )
+        merged["prompt_profiles"] = serialized_profiles
         merged["prompt_profile_active_id"] = active_id
         # Keep the legacy direct/system prompt mirror in sync.
         merged["system_prompt"] = active_prompt
         try:
             self._write_private_json(self.enhancer_config_path, merged)
         except OSError as exc:
-            return False, f"无法写入插件提示词状态：{exc}"
+            return False, f"无法写入插件提示词状态：{exc}", False
 
         api_available = False
         api_error = ""
@@ -2596,16 +2717,52 @@ class DeployManager:
                 client = self._memory_api_client(timeout=6, wait_for_ready=False)
                 if client is not None:
                     live = self._get_plugin_config_via_api(client, ENHANCER_PLUGIN_ID)
-                    if isinstance(live, dict):
+                    if self._plugin_prompt_payload_matches(
+                        live, profiles, active_id, active_prompt
+                    ):
+                        # Actual live AstrBot state already matches; no save is
+                        # needed and the pending-restart marker can be cleared.
+                        api_available = True
+                    elif isinstance(live, dict):
                         merged = {**merged, **live}
-                        merged["prompt_profiles"] = json.dumps(profiles, ensure_ascii=False)
+                        merged["prompt_profiles"] = serialized_profiles
                         merged["prompt_profile_active_id"] = active_id
                         merged["system_prompt"] = active_prompt
-                    self._save_plugin_config_via_api(client, ENHANCER_PLUGIN_ID, merged)
-                    api_available = True
-            except Exception as exc:  # noqa: BLE001 - local state remains authoritative
+                        self._save_plugin_config_via_api(client, ENHANCER_PLUGIN_ID, merged)
+                        api_available = True
+                    else:
+                        raise RuntimeError("AstrBot 插件配置返回格式异常")
+            except Exception as exc:  # noqa: BLE001 - local write remains unconfirmed
                 api_error = self.redact_sensitive_text(str(exc) or exc.__class__.__name__)
-        return api_available, api_error
+        return api_available, api_error, True
+
+    @staticmethod
+    def _apply_prompt_sync_pending(
+        config: dict[str, Any],
+        *,
+        deployed: bool,
+        local_written: bool,
+        api_available: bool,
+    ) -> bool:
+        """Update and return the persistent prompt hot-reload pending flag."""
+
+        previous = bool(config.get("prompt_plugin_sync_pending"))
+        if not deployed:
+            pending = False
+        elif api_available:
+            pending = False
+        elif local_written:
+            pending = True
+        else:
+            # Local plugin write failed: do not claim it was synchronized.
+            pending = previous
+        config["prompt_plugin_sync_pending"] = pending
+        if pending:
+            if not previous or not config.get("prompt_plugin_sync_pending_at"):
+                config["prompt_plugin_sync_pending_at"] = utc_now()
+        else:
+            config["prompt_plugin_sync_pending_at"] = ""
+        return pending
 
     def get_prompt_profiles(self) -> dict[str, Any]:
         """Return safe prompt profiles for the current instance."""
@@ -2613,24 +2770,82 @@ class DeployManager:
         with self._lock:
             try:
                 config = self.store.load_config()
-                profiles, active_id, changed = self._normalise_prompt_profiles(config)
+                profiles, active_id, changed, migration_error = self._normalise_prompt_profiles(config)
+                if migration_error:
+                    failure = self._prompt_profile_failure(
+                        profiles,
+                        active_id,
+                        "提示词配置迁移失败；未修改、未截断任何 profile，请按提示修复后重试。",
+                        migration_error,
+                    )
+                    failure["validation_errors"] = migration_error.split("；")
+                    failure["limit_exceeded"] = len(profiles) > 100
+                    return failure
+                active_prompt = next(
+                    (item["prompt"] for item in profiles if item["id"] == active_id),
+                    "",
+                )
                 if changed:
                     config["prompt_profiles"] = profiles
                     config["prompt_profiles_active_id"] = active_id
-                    active_prompt = next(
-                        item["prompt"] for item in profiles if item["id"] == active_id
-                    )
                     config["prompt"] = active_prompt
                     self.store.save_config(config)
-                    self._sync_prompt_profiles_to_plugin(profiles, active_id, active_prompt)
+                deployed = bool(config.get("deployed"))
+                pending_before_flag = bool(config.get("prompt_plugin_sync_pending"))
+                pending_before_at = str(config.get("prompt_plugin_sync_pending_at") or "")
+                plugin_current = self._plugin_prompt_state_matches(
+                    profiles, active_id, active_prompt
+                )
+                pending_before = bool(deployed and pending_before_flag)
+                api_available = False
+                sync_error = ""
+                local_written = False
+                if not plugin_current or pending_before:
+                    api_available, sync_error, local_written = (
+                        self._sync_prompt_profiles_to_plugin(
+                            profiles, active_id, active_prompt
+                        )
+                    )
+                pending = self._apply_prompt_sync_pending(
+                    config,
+                    deployed=deployed,
+                    local_written=local_written,
+                    api_available=api_available,
+                )
+                pending_fields_changed = (
+                    bool(config.get("prompt_plugin_sync_pending")) != pending_before_flag
+                    or str(config.get("prompt_plugin_sync_pending_at") or "")
+                    != pending_before_at
+                )
+                if changed or pending_fields_changed:
+                    self.store.save_config(config)
+                warnings: list[str] = []
+                if sync_error:
+                    warnings.append(sync_error)
+                if pending:
+                    warnings.append("AstrBot 需重启或成功热重载后生效。")
                 return {
                     "ok": True,
                     "prompts": profiles,
                     "active_id": active_id,
-                    "restart_required": False,
+                    "restart_required": bool(deployed and pending),
                     "conversation_created": False,
                     "conversation_pending": False,
-                    "message": "提示词列表已读取。",
+                    "api_available": bool(api_available),
+                    "plugin_sync_required": bool(pending or sync_error),
+                    "prompt_plugin_sync_pending": bool(pending),
+                    "prompt_plugin_sync_pending_at": str(
+                        config.get("prompt_plugin_sync_pending_at") or ""
+                    ),
+                    "message": (
+                        "提示词列表已读取；本地插件状态已更新，但 AstrBot 热重载未确认，需重启后生效。"
+                        if pending
+                        else "提示词列表已读取，并已修复插件中的过期提示词状态。"
+                        if not plugin_current and not sync_error
+                        else "提示词列表已读取。"
+                    ),
+                    "warning": " ".join(warnings),
+                    "warnings": warnings,
                     "error": "",
                 }
             except Exception as exc:  # noqa: BLE001 - endpoint isolation
@@ -2646,16 +2861,28 @@ class DeployManager:
         with self._lock:
             try:
                 config = self.store.load_config()
-                profiles, active_id, _changed = self._normalise_prompt_profiles(config)
+                profiles, active_id, _changed, migration_error = self._normalise_prompt_profiles(config)
+                if migration_error:
+                    failure = self._prompt_profile_failure(
+                        profiles,
+                        active_id,
+                        "提示词配置迁移失败；未执行本次修改，也未截断任何 profile。",
+                        migration_error,
+                    )
+                    failure["validation_errors"] = migration_error.split("；")
+                    failure["limit_exceeded"] = len(profiles) > 100
+                    return failure
                 active_prompt = next(
                     item["prompt"] for item in profiles if item["id"] == active_id
                 )
                 action_ok = False
                 conversation_pending = False
                 if action == "create":
-                    if len(profiles) >= 100:
+                    if len(profiles) >= PROMPT_PROFILE_MAX_COUNT:
                         return self._prompt_profile_failure(
-                            profiles, active_id, "提示词数量已达上限（100）。"
+                            profiles,
+                            active_id,
+                            f"提示词数量已达上限（{PROMPT_PROFILE_MAX_COUNT}）。",
                         )
                     name = self._prompt_profile_name(incoming.get("name"), len(profiles))
                     prompt = self._prompt_profile_prompt(incoming.get("prompt"))
@@ -2710,6 +2937,16 @@ class DeployManager:
                         profiles, active_id, "action 只能是 create/update/delete/activate。"
                     )
 
+                capacity_error = self._validate_prompt_profiles_capacity(profiles)
+                if capacity_error:
+                    failure = self._prompt_profile_failure(
+                        profiles,
+                        active_id,
+                        "提示词 profiles 总容量超过上限，未保存。",
+                        capacity_error,
+                    )
+                    failure["limit_exceeded"] = True
+                    return failure
                 for item in profiles:
                     item["pinned"] = item["id"] == active_id
                 active_prompt = next(
@@ -2719,16 +2956,30 @@ class DeployManager:
                 config["prompt_profiles_active_id"] = active_id
                 config["prompt"] = active_prompt
                 self.store.save_config(config)
-                api_available, sync_error = self._sync_prompt_profiles_to_plugin(
-                    profiles, active_id, active_prompt
+                deployed = bool(config.get("deployed"))
+                api_available, sync_error, local_written = (
+                    self._sync_prompt_profiles_to_plugin(
+                        profiles, active_id, active_prompt
+                    )
                 )
+                pending = self._apply_prompt_sync_pending(
+                    config,
+                    deployed=deployed,
+                    local_written=local_written,
+                    api_available=api_available,
+                )
+                self.store.save_config(config)
                 plugin_state = self._read_json_object(self.enhancer_config_path)
                 memory_mode = self._normalise_memory_mode(
                     plugin_state.get("memory_mode", config.get("memory_mode"))
                 )
                 if action == "activate" and memory_mode == "astrbot":
                     conversation_pending = True
-                warnings = [sync_error] if sync_error else []
+                warnings: list[str] = []
+                if sync_error:
+                    warnings.append(sync_error)
+                if pending:
+                    warnings.append("AstrBot 需重启或成功热重载后生效。")
                 message = {
                     "create": "提示词已创建。",
                     "update": "提示词已更新。",
@@ -2739,16 +2990,23 @@ class DeployManager:
                         else "提示词已激活；下一轮回复使用新提示词。"
                     ),
                 }[action]
-                if not api_available:
-                    message += " AstrBot 当前不在线，插件将在下次运行时读取新状态。"
+                if not deployed:
+                    message += " 实例尚未部署，部署/启动后生效。"
+                elif pending:
+                    message += " 本地插件状态已更新，但 AstrBot 热重载未确认，需重启后生效。"
                 return {
                     "ok": bool(action_ok),
                     "prompts": profiles,
                     "active_id": active_id,
-                    "restart_required": bool(not api_available),
+                    "restart_required": bool(deployed and pending),
                     "conversation_created": False,
                     "conversation_pending": conversation_pending,
                     "api_available": bool(api_available),
+                    "plugin_sync_required": bool(pending or sync_error),
+                    "prompt_plugin_sync_pending": bool(pending),
+                    "prompt_plugin_sync_pending_at": str(
+                        config.get("prompt_plugin_sync_pending_at") or ""
+                    ),
                     "message": message,
                     "warning": " ".join(warnings),
                     "warnings": warnings,

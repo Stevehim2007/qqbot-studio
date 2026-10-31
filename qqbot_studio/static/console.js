@@ -77,6 +77,8 @@
       editorMode: '',
       editorProfileId: '',
       requestSeq: 0,
+      actionSeq: 0,
+      deleteArmedId: '',
       trigger: null
     },
     globalResourceStats: null,
@@ -1932,6 +1934,34 @@
     }
   }
 
+  const PROMPT_NAME_MAX_LENGTH = 80;
+  const PROMPT_TEXT_MAX_LENGTH = 12000;
+  const PROMPT_REQUEST_TIMEOUT_MS = 15000;
+  const PROMPT_DELETE_CONFIRM_MS = 5000;
+  let promptDeleteConfirmTimer = null;
+
+  function withPromptTimeout(promise, timeoutMs = PROMPT_REQUEST_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('提示词请求超时，请检查本地服务后重试。'));
+      }, timeoutMs);
+      promise.then((value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      }, (error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }
+
   function promptIdValue(value) {
     const record = asRecord(value);
     return textValue(record.id || record.profile_id || value, '').trim();
@@ -2005,6 +2035,88 @@
     status.hidden = !message;
   }
 
+  function syncPromptManagerAriaBusy() {
+    const modal = $('prompt-manager-modal');
+    const config = state.promptManager;
+    if (modal) modal.setAttribute('aria-busy', config.busy || config.loading ? 'true' : 'false');
+  }
+
+  function clearPromptDeleteArm() {
+    if (promptDeleteConfirmTimer) {
+      window.clearTimeout(promptDeleteConfirmTimer);
+      promptDeleteConfirmTimer = null;
+    }
+    state.promptManager.deleteArmedId = '';
+  }
+
+  function promptFocusableElements() {
+    const modal = $('prompt-manager-modal');
+    if (!modal) return [];
+    return Array.from(modal.querySelectorAll('button, input, textarea, select, a[href]')).filter((element) => {
+      if (element.disabled || element.hidden) return false;
+      let ancestor = element;
+      while (ancestor) {
+        if (ancestor.hidden) return false;
+        ancestor = ancestor.parentNode;
+      }
+      return true;
+    });
+  }
+
+  function trapPromptModalFocus(event) {
+    if (event.key !== 'Tab' || !state.promptManager.open) return false;
+    const modal = $('prompt-manager-modal');
+    if (!modal) return false;
+    const focusable = promptFocusableElements();
+    if (focusable.length === 0) {
+      event.preventDefault();
+      modal.focus({ preventScroll: true });
+      return true;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    let inside = false;
+    let node = active;
+    while (node) {
+      if (node === modal) { inside = true; break; }
+      node = node.parentNode;
+    }
+    if (!inside) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus({ preventScroll: true });
+      return true;
+    }
+    if (focusable.indexOf(active) === -1) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus({ preventScroll: true });
+      return true;
+    }
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus({ preventScroll: true });
+      return true;
+    }
+    if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus({ preventScroll: true });
+      return true;
+    }
+    return false;
+  }
+
+  function cancelPromptOperation() {
+    const config = state.promptManager;
+    if (!config.open || !config.busy) return false;
+    config.actionSeq += 1;
+    config.requestSeq += 1;
+    clearPromptDeleteArm();
+    setPromptManagerBusy(false);
+    setPromptManagerError('');
+    setPromptManagerStatus('已取消等待；如果服务端请求稍后完成，请重新打开提示词列表确认。', false);
+    return true;
+  }
+
   function setPromptFieldError(input, errorElement, message) {
     if (input) input.setAttribute('aria-invalid', message ? 'true' : 'false');
     if (errorElement) {
@@ -2024,12 +2136,18 @@
     config.busy = Boolean(busy);
     const closeButton = $('prompt-manager-close');
     const newButton = $('prompt-manager-new');
+    const cancelButton = $('prompt-manager-cancel-busy');
     const form = $('prompt-manager-form');
     if (closeButton) closeButton.disabled = config.busy;
     if (newButton) newButton.disabled = config.busy || config.loading || config.unsupported || !config.open;
+    if (cancelButton) {
+      cancelButton.hidden = !config.busy;
+      cancelButton.disabled = !config.busy;
+    }
     if (form) {
       for (const control of form.querySelectorAll('input, textarea, button')) control.disabled = config.busy;
     }
+    syncPromptManagerAriaBusy();
     renderPromptList();
   }
 
@@ -2074,6 +2192,7 @@
     const loading = $('prompt-manager-loading');
     const newButton = $('prompt-manager-new');
     if (!list) return;
+    syncPromptManagerAriaBusy();
     if (loading) loading.hidden = !config.loading;
     if (newButton) newButton.disabled = config.busy || config.loading || config.unsupported || !config.open;
     if (empty) {
@@ -2113,11 +2232,13 @@
       renameButton.disabled = config.busy || !prompt.id || config.unsupported;
       renameButton.addEventListener('click', () => openPromptEditor('rename', prompt));
       actions.appendChild(renameButton);
-      const deleteButton = makeElement('button', 'btn btn-quiet btn-small prompt-delete-btn', '删除');
+      const deleteArmed = Boolean(prompt.id && config.deleteArmedId === prompt.id);
+      const deleteButton = makeElement('button', `btn btn-quiet btn-small prompt-delete-btn${deleteArmed ? ' is-confirm' : ''}`, deleteArmed ? '确认删除' : '删除');
       deleteButton.type = 'button';
       deleteButton.disabled = config.busy || config.prompts.length <= 1 || !prompt.id || config.unsupported;
       if (config.prompts.length <= 1) deleteButton.title = '至少保留一个提示词，不能删除最后一个';
-      deleteButton.addEventListener('click', () => void mutatePrompt('delete', prompt));
+      if (deleteArmed) deleteButton.title = '再次点击确认删除；删除不可撤销';
+      deleteButton.addEventListener('click', () => requestPromptDelete(prompt));
       actions.appendChild(deleteButton);
       row.appendChild(actions);
       list.appendChild(row);
@@ -2126,6 +2247,39 @@
 
   function syncPromptManagerBusyUi(busy) {
     setPromptManagerBusy(busy);
+  }
+
+  function requestPromptDelete(profile) {
+    const config = state.promptManager;
+    const prompt = asRecord(profile);
+    if (!config.open || config.busy || config.unsupported || !prompt.id) return;
+    if (config.prompts.length <= 1) {
+      setPromptManagerError('至少保留一个提示词，不能删除最后一个。');
+      return;
+    }
+    if (config.deleteArmedId !== prompt.id) {
+      if (promptDeleteConfirmTimer) window.clearTimeout(promptDeleteConfirmTimer);
+      config.deleteArmedId = prompt.id;
+      setPromptManagerError('');
+      setPromptManagerStatus(`再次点击“确认删除”将删除提示词“${prompt.name}”；删除不可撤销。`, true);
+      renderPromptList();
+      promptDeleteConfirmTimer = window.setTimeout(() => {
+        if (state.promptManager.open && state.promptManager.deleteArmedId === prompt.id) {
+          state.promptManager.deleteArmedId = '';
+          promptDeleteConfirmTimer = null;
+          setPromptManagerStatus('删除确认已超时，请重新点击“删除”。', true);
+          renderPromptList();
+        }
+      }, PROMPT_DELETE_CONFIRM_MS);
+      return;
+    }
+    if (promptDeleteConfirmTimer) {
+      window.clearTimeout(promptDeleteConfirmTimer);
+      promptDeleteConfirmTimer = null;
+    }
+    config.deleteArmedId = '';
+    setPromptManagerStatus('', false);
+    void mutatePrompt('delete', prompt);
   }
 
   async function loadPromptList(instance, options = {}) {
@@ -2138,7 +2292,7 @@
     }
     renderPromptList();
     try {
-      const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`);
+      const data = await withPromptTimeout(apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`));
       if (!config.open || seq !== config.requestSeq) return false;
       if (!data || data.ok === false) {
         throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词列表读取失败。', { data });
@@ -2185,7 +2339,9 @@
     config.activeId = '';
     config.editorMode = '';
     config.editorProfileId = '';
+    config.deleteArmedId = '';
     config.trigger = trigger || null;
+    clearPromptDeleteArm();
     const overlay = $('prompt-manager-overlay');
     if (overlay) overlay.hidden = false;
     setText('prompt-manager-title', '提示词列表');
@@ -2198,10 +2354,15 @@
     setPromptManagerStatus('', false);
     const closeButton = $('prompt-manager-close');
     if (closeButton) closeButton.disabled = false;
+    const cancelButton = $('prompt-manager-cancel-busy');
+    if (cancelButton) cancelButton.hidden = true;
     renderPromptList();
     syncConsoleModalLock();
     const modal = $('prompt-manager-modal');
-    if (modal) modal.focus({ preventScroll: true });
+    if (modal) modal.setAttribute('aria-busy', 'true');
+    const title = $('prompt-manager-title');
+    if (title) title.focus({ preventScroll: true });
+    else if (modal) modal.focus({ preventScroll: true });
     await loadPromptList(instance);
     return true;
   }
@@ -2210,6 +2371,8 @@
     const config = state.promptManager;
     if (config.busy && options.force !== true) return false;
     config.requestSeq += 1;
+    config.actionSeq += 1;
+    clearPromptDeleteArm();
     const trigger = config.trigger;
     config.open = false;
     config.loading = false;
@@ -2227,6 +2390,10 @@
     if (list) list.replaceChildren();
     const form = $('prompt-manager-form');
     if (form) form.hidden = true;
+    const cancelButton = $('prompt-manager-cancel-busy');
+    if (cancelButton) cancelButton.hidden = true;
+    const modal = $('prompt-manager-modal');
+    if (modal) modal.setAttribute('aria-busy', 'false');
     setPromptManagerError('');
     setPromptManagerStatus('', false);
     syncConsoleModalLock();
@@ -2246,31 +2413,44 @@
     const promptText = promptInput ? promptInput.value : '';
     clearPromptEditorErrors();
     let invalid = false;
+    const nameLength = Array.from(name).length;
+    const promptLength = Array.from(promptText).length;
     if (!name) {
       setPromptFieldError(nameInput, $('prompt-editor-name-error'), '请输入提示词名称。');
       invalid = true;
-    }
-    if (config.editorMode !== 'rename' && !promptText.trim()) {
-      setPromptFieldError(promptInput, $('prompt-editor-prompt-error'), '请输入提示词内容。');
+    } else if (nameLength > PROMPT_NAME_MAX_LENGTH) {
+      setPromptFieldError(nameInput, $('prompt-editor-name-error'), `提示词名称最多 ${PROMPT_NAME_MAX_LENGTH} 个字符（当前 ${nameLength}）。`);
       invalid = true;
+    }
+    if (config.editorMode !== 'rename') {
+      if (!promptText.trim()) {
+        setPromptFieldError(promptInput, $('prompt-editor-prompt-error'), '请输入提示词内容。');
+        invalid = true;
+      } else if (promptLength > PROMPT_TEXT_MAX_LENGTH) {
+        setPromptFieldError(promptInput, $('prompt-editor-prompt-error'), `提示词内容最多 ${PROMPT_TEXT_MAX_LENGTH} 个字符（当前 ${promptLength}）。`);
+        invalid = true;
+      }
     }
     if (invalid) return;
     const payload = { action: config.editorMode === 'create' ? 'create' : 'update', name };
     if (config.editorMode !== 'create') payload.profile_id = config.editorProfileId;
     if (config.editorMode !== 'rename') payload.prompt = promptText;
+    const actionSeq = ++config.actionSeq;
     setPromptManagerBusy(true);
     setPromptManagerError('');
     setPromptManagerStatus('正在保存提示词…', false);
     try {
-      const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`, { method: 'POST', body: payload });
+      const data = await withPromptTimeout(apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`, { method: 'POST', body: payload }));
+      if (!config.open || config.actionSeq !== actionSeq) return;
       if (!data || data.ok === false) {
         throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词保存失败。', { data });
       }
       closePromptEditor();
       const feedback = promptActionFeedback(data);
       const loaded = await loadPromptList(instance, { keepFeedback: true });
-      if (loaded) setPromptManagerStatus(feedback.message, feedback.restart);
+      if (loaded && config.actionSeq === actionSeq) setPromptManagerStatus(feedback.message, feedback.restart);
     } catch (error) {
+      if (!config.open || config.actionSeq !== actionSeq) return;
       const unsupported = isMissingEndpointError(error)
         || pluginConfigUnsupportedMessage(error instanceof ApiError ? error.message : '');
       if (unsupported) {
@@ -2281,7 +2461,7 @@
         setPromptManagerError(formatError(error, '提示词保存失败。'));
       }
     } finally {
-      setPromptManagerBusy(false);
+      if (config.open && config.actionSeq === actionSeq) setPromptManagerBusy(false);
     }
   }
 
@@ -2296,18 +2476,22 @@
     const instance = state.instances.find((item) => item.id === config.instanceId);
     if (!instance) return;
     const payload = { action, profile_id: prompt.id };
+    const actionSeq = ++config.actionSeq;
+    clearPromptDeleteArm();
     setPromptManagerBusy(true);
     setPromptManagerError('');
     setPromptManagerStatus(action === 'delete' ? '正在删除提示词…' : '正在切换当前提示词…', false);
     try {
-      const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`, { method: 'POST', body: payload });
+      const data = await withPromptTimeout(apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/prompts`, { method: 'POST', body: payload }));
+      if (!config.open || config.actionSeq !== actionSeq) return;
       if (!data || data.ok === false) {
         throw new ApiError(sanitisePluginText(asRecord(data).message || asRecord(data).error) || '提示词操作失败。', { data });
       }
       const feedback = promptActionFeedback(data);
       const loaded = await loadPromptList(instance, { keepFeedback: true });
-      if (loaded) setPromptManagerStatus(feedback.message, feedback.restart);
+      if (loaded && config.actionSeq === actionSeq) setPromptManagerStatus(feedback.message, feedback.restart);
     } catch (error) {
+      if (!config.open || config.actionSeq !== actionSeq) return;
       const unsupported = isMissingEndpointError(error)
         || pluginConfigUnsupportedMessage(error instanceof ApiError ? error.message : '');
       if (unsupported) {
@@ -2318,7 +2502,7 @@
         setPromptManagerError(formatError(error, '提示词操作失败。'));
       }
     } finally {
-      setPromptManagerBusy(false);
+      if (config.open && config.actionSeq === actionSeq) setPromptManagerBusy(false);
     }
   }
 
@@ -3083,15 +3267,20 @@
     if (promptEditorName) promptEditorName.addEventListener('input', () => setPromptFieldError(promptEditorName, $('prompt-editor-name-error'), ''));
     const promptEditorPrompt = $('prompt-editor-prompt');
     if (promptEditorPrompt) promptEditorPrompt.addEventListener('input', () => setPromptFieldError(promptEditorPrompt, $('prompt-editor-prompt-error'), ''));
+    const promptManagerCancelBusy = $('prompt-manager-cancel-busy');
+    if (promptManagerCancelBusy) promptManagerCancelBusy.addEventListener('click', cancelPromptOperation);
 
     instanceSettings.mount();
     document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
       if (state.promptManager.open) {
-        event.preventDefault();
-        closePromptManager();
-        return;
+        if (event.key === 'Tab' && trapPromptModalFocus(event)) return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closePromptManager();
+          return;
+        }
       }
+      if (event.key !== 'Escape') return;
       if (state.pluginConfig.open) {
         event.preventDefault();
         closePluginConfigPanel();

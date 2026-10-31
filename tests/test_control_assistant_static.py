@@ -319,6 +319,9 @@ class ControlAssistantStaticTests(unittest.TestCase):
             self.assertIn(style, self.console_css)
         self.assertIn("overflow-y: auto", self.console_css)
         self.assertIn("@media (max-width: 640px)", self.console_css)
+        self.assertIn(".prompt-delete-btn.is-confirm", self.console_css)
+        self.assertIn("maxlength=\"80\"", self.console_html)
+        self.assertIn("maxlength=\"12000\"", self.console_html)
         settings_body_start = self.console_css.index(".instance-settings-body {")
         settings_body_block = self.console_css[settings_body_start:self.console_css.index("}", settings_body_start) + 1]
         self.assertIn("overflow-y: auto", settings_body_block)
@@ -402,7 +405,7 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "prompt-editor-name", "prompt-editor-name-error", "prompt-editor-prompt",
             "prompt-editor-prompt-error", "prompt-editor-prompt-field",
             "prompt-editor-cancel", "prompt-editor-save", "prompt-manager-error",
-            "prompt-manager-status",
+            "prompt-manager-status", "prompt-manager-cancel-busy",
         }
         self.assertTrue(required.issubset(set(self.console_parser.ids)))
         for token in (
@@ -423,6 +426,13 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "当前后端不支持提示词列表。",
             "至少保留一个提示词，不能删除最后一个",
             "切换后会开始新会话",
+            "PROMPT_NAME_MAX_LENGTH = 80", "PROMPT_TEXT_MAX_LENGTH = 12000",
+            "PROMPT_REQUEST_TIMEOUT_MS = 15000", "PROMPT_DELETE_CONFIRM_MS = 5000",
+            "withPromptTimeout", "requestPromptDelete", "deleteArmedId",
+            "确认删除", "clearPromptDeleteArm", "cancelPromptOperation",
+            "trapPromptModalFocus", "promptFocusableElements",
+            "aria-busy", "config.actionSeq",
+            "提示词名称最多", "提示词内容最多",
         ):
             self.assertIn(token, self.console_js)
         self.assertIn("prompt-manager", self.console_html)

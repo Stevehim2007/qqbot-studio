@@ -1308,8 +1308,9 @@ Content-Type: application/json
 - `list` 必须为数组；若 schema 提供 `items`，逐项校验类型/选项，最多 256 项。
 - schema 有 `options` 时，值必须属于允许选项。
 - schema 有 `slider.min` / `slider.max`（或直接 min/max）时严格执行范围。
-- schema 中不存在、或属于敏感 Key 类的字段会被拒绝；请求体 values 最大约 512 KiB，
-  服务端整体 JSON 请求体另有 2 MiB 上限。
+- schema 中不存在、或属于敏感 Key 类的字段会被拒绝。普通插件参数请求仍限制约 512 KiB；
+  当 values 包含 `prompt_profiles` 时，允许受控上限 8 MiB（仅提示词 profiles/插件配置路径），
+  其它 API 仍使用默认 2 MiB JSON 请求体上限，不存在全局无界请求。
 - `plugin_id` 只允许字母、数字、点、下划线和连字符，防止路径穿越；一次只操作指定插件。
 
 所有错误响应均为 HTTP 200 JSON（缺少本地访问令牌、JSON 语法错误等传输层鉴权/解析错误除外），
@@ -1365,14 +1366,35 @@ GET /api/instances/<instance_id>/prompts
   "restart_required": false,
   "conversation_created": false,
   "conversation_pending": false,
-  "message": "提示词列表已读取。",
+  "plugin_sync_required": true,
+  "prompt_plugin_sync_pending": true,
+  "prompt_plugin_sync_pending_at": "2026-01-01T00:00:00+00:00",
+  "message": "提示词列表已读取；本地插件状态已更新，但 AstrBot 热重载未确认，需重启后生效。",
   "error": ""
 }
 ```
 
-- profile prompt 保留内部/首尾换行和空白，长度上限 12000 字符。
-- profile 名称最长 80；最多 100 个 profile。
+- profile prompt 保留内部/首尾换行和空白，长度上限 12000 字符；插件 parser 同样不改写 prompt 原文。
+- profile 名称最长 80；最多 100 个 profile。恰好 12000/100 合法；12001/101 返回 `ok:false`，
+  不截断、不删除、不保存，`error/validation_errors` 给出可操作原因。
+- 总量统一常量：
+  - 每 profile prompt 12000 字符；
+  - 最多 100 个 profile；
+  - prompt 总字符数最多 1,200,000；
+  - 序列化 `prompt_profiles` JSON 最多 2,600,000 字符（含 id/name/时间戳/转义余量）；
+  - Studio prompt API 和包含 `prompt_profiles` 的插件配置 API 请求体最多 8 MiB；
+  - 其它插件配置请求仍约 512 KiB，其它普通 API 仍 2 MiB。
+- 9×12000 与 100×12000（在总字符/JSON 上限内）均应保存、GET、插件配置同步成功；
+  超过总 JSON 上限返回明确 `ok:false`/schema 长度错误或被 server 413 拒绝，不会被 API 接受后热重载再失败。
 - 不存在/空/非法旧列表会自动迁移为一个默认 profile；不会删除最后一个 profile。
+- GET 也会检查插件 state 是否与 Studio 一致；发现 `prompt_profiles`/active/`system_prompt`
+  过期时自动修复并返回 `plugin_sync_required`、`warnings` 等状态，避免下一轮仍用旧 prompt。
+- 只要实例 `deployed=true`，本地写入插件文件但 AstrBot API 不可用/热重载未确认时，会持久化
+  `prompt_plugin_sync_pending=true` 与 `prompt_plugin_sync_pending_at`；连续 GET 都返回
+  `restart_required=true`、`api_available=false` 和“需重启/热重载”警告，不会因第二次 GET 本地文件已匹配而消失。
+- 只有 AstrBot API 可用，且实际 live 配置已匹配，或热重载保存明确成功后才清除 pending。
+  未部署实例不会误报 `restart_required`。
+- 本地插件文件写入失败时不会设置 pending 为“已同步”，会返回明确同步 warning；Studio store 仍原子写 0600。
 - prompt/active 同时镜像到插件配置字段 `prompt_profiles`（JSON 字符串）、
   `prompt_profile_active_id` 和旧字段 `system_prompt`。
 
@@ -1403,12 +1425,16 @@ X-QB-Token: <token>
 
 - `activate` 会把目标 profile 设为唯一 pinned，并同步 `config.prompt` 镜像和插件 state。
 - direct 模式下一轮直接使用新 active prompt。
-- astrbot memory 模式：插件在下一轮检测 active profile persona 变化，通过官方
-  `ConversationManager.new_conversation(..., persona_id=...)` 新建会话并绑定专用 Persona；
-  `conversation_pending=true` 表示该动作延迟到插件下一轮，而不是后端假称已完成。
+- astrbot memory 模式：插件在下一轮检测任何有效 persona id/prompt 变化（active profile、
+  group 精确映射或 default 映射），通过官方 `ConversationManager.new_conversation(..., persona_id=...)`
+  新建会话并绑定专用 Persona；`conversation_pending=true` 表示该动作延迟到插件下一轮，
+  而不是后端假称已完成。ConversationManager/PersonaManager 不可用或绑定失败时安全拒绝注入新人格，
+  不会把新人格接到旧会话历史上。
 - AstrBot 不在线或插件配置 API 不可用时：返回 `restart_required=true`/warning，本地配置仍保存，不返回 500。
 - 删除 active profile 时自动选择剩余的第一个 profile；删除最后一个返回 `ok:false`。
 - 写入使用原子 JSON + 0600；不记录 prompt、Key、用户 ID 到日志。
+- `/新会话` 同名检测和 `/会话` 切换不再静默取第一个同名会话；存在多个同名会话时明确拒绝自动切换，
+  并显示短 ID 提示用户先改名。
 
 提示词优先级（direct 与 astrbot 一致）：
 

@@ -40,6 +40,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "prompt": DEFAULT_PROMPT,
     "prompt_profiles": [],
     "prompt_profiles_active_id": "",
+    "prompt_plugin_sync_pending": False,
+    "prompt_plugin_sync_pending_at": "",
     "use_mirror": False,
     "ports": {},
     "deployed": False,

@@ -1064,3 +1064,8 @@ body.console-modal-open { overflow: hidden; }
   .prompt-item-top { flex-direction: column; gap: 4px; }
   .prompt-item-actions .btn { flex: 1 1 80px; }
 }
+.prompt-manager-busy-actions { display: flex; justify-content: flex-end; min-height: 0; }
+.prompt-manager-busy-actions [hidden] { display: none !important; }
+.prompt-manager-cancel-busy, #prompt-manager-cancel-busy { min-height: 29px; padding: 4px 9px; font-size: 8.5px; }
+.prompt-delete-btn.is-confirm { color: #a52e3b; background: #fff2f4; border-color: #eab7bf; font-weight: 780; }
+.prompt-manager-modal:focus-visible, #prompt-manager-title:focus-visible { outline: 3px solid rgba(32, 201, 151, .55); outline-offset: 3px; }

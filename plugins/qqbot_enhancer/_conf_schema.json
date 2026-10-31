@@ -527,8 +527,8 @@
     "description": "实例提示词 profiles JSON（由 Studio 提示词 API 维护）",
     "type": "text",
     "default": "[]",
-    "max_length": 100000,
-    "hint": "通常由 Studio 提示词列表 API 写入；旧配置无此字段时回退 system_prompt。"
+    "max_length": 2600000,
+    "hint": "总上限：100 个 profile、12000 字符/profile、JSON 最多 2600000 字符；通常由 Studio 提示词列表 API 写入。"
   },
   "prompt_profile_active_id": {
     "description": "当前激活的提示词 profile id（由 Studio 提示词 API 维护）",
@@ -742,6 +742,16 @@
       "min": 0,
       "max": 3600,
       "step": 10
+    }
+  },
+  "ambient_group_context_max_chars": {
+    "description": "astrbot memory 全群上下文 system prompt 最大字符数",
+    "type": "int",
+    "default": 1500,
+    "slider": {
+      "min": 500,
+      "max": 6000,
+      "step": 100
     }
   },
   "system_prompt": {

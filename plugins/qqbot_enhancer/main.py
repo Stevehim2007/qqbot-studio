@@ -112,7 +112,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "1.19.0"
+PLUGIN_FALLBACK_VERSION = "1.21.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -205,6 +205,7 @@ class QQBotEnhancerPlugin(Star):
         self._last_collected_by_session: dict[str, dict[str, Any]] = {}
         self._recent_chat_identity: dict[str, list[dict[str, Any]]] = {}
         self._last_ambient_at: dict[str, float] = {}
+        self._ambient_group_message_count: dict[str, int] = {}
         self._sticker_ai_auto_collect_times: dict[str, list[float]] = {}
         self._pending_user_media: dict[str, dict[str, Any]] = {}
         self._song_dir = SONG_DIR
@@ -346,7 +347,7 @@ class QQBotEnhancerPlugin(Star):
                 if self._ambient_group_should_participate(
                     event,
                     message_text,
-                    has_image=has_image,
+                    components,
                 ):
                     mode = "ambient"
                 else:
@@ -1123,25 +1124,78 @@ class QQBotEnhancerPlugin(Star):
                 cid,
             )
         )
-        await self._bind_current_agent_persona(event)
+        if target is not None:
+            # The new conversation was created with the expected persona.
+            # Do not run bind_conversation here: a fresh PersonaManager write
+            # marks the persona as changed and could create a second hidden
+            # conversation instead of the named one just created.
+            current = await self._current_agent_conversation(
+                event,
+                cid,
+            )
+            expected_persona = target[3]
+            if (
+                current is not None
+                and conversation_engine.conversation_persona_id(current)
+                != expected_persona
+            ):
+                raise RuntimeError("created conversation persona mismatch")
         return cid
+
+    async def _current_agent_conversation(
+        self,
+        event: AstrMessageEvent,
+        cid: str,
+    ):
+        manager = self._conversation_manager()
+        getter = (
+            getattr(manager, "get_conversation", None)
+            if manager is not None
+            else None
+        )
+        if not callable(getter) or not cid:
+            return None
+        try:
+            return await self._await_conversation_api(
+                getter(str(event.unified_msg_origin), cid)
+            )
+        except Exception:
+            return None
 
     async def _switch_agent_conversation(
         self,
         event: AstrMessageEvent,
         cid: str,
-    ) -> bool:
+        target_conversation: Any = None,
+    ) -> str:
         manager = self._conversation_manager()
         if manager is None or not cid:
-            return False
+            return "unsupported"
+        expected_target = self._agent_group_persona_target(event)
+        expected_persona = (
+            expected_target[3] if expected_target is not None else ""
+        )
+        if expected_persona:
+            actual = conversation_engine.conversation_persona_id(
+                target_conversation
+            )
+            if actual != expected_persona:
+                return "persona_conflict"
         await self._await_conversation_api(
             manager.switch_conversation(
                 str(event.unified_msg_origin),
                 cid,
             )
         )
-        await self._bind_current_agent_persona(event)
-        return True
+        if expected_persona:
+            current = await self._current_agent_conversation(event, cid)
+            if (
+                current is not None
+                and conversation_engine.conversation_persona_id(current)
+                != expected_persona
+            ):
+                return "persona_conflict_after_switch"
+        return "ok"
 
     def _conversation_title_from_command(
         self,
@@ -1191,9 +1245,9 @@ class QQBotEnhancerPlugin(Star):
             current = await self._current_agent_conversation_id(
                 str(event.unified_msg_origin)
             )
-            limit = max(
-                1,
-                self._cfg_int("conversation_list_limit", 1),
+            limit = min(
+                50,
+                max(1, self._cfg_int("conversation_list_limit", 1)),
             )
             lines = [f"当前群会话（最多显示 {limit} 个）："]
             for conversation in conversations[:limit]:
@@ -1244,13 +1298,44 @@ class QQBotEnhancerPlugin(Star):
                 conversations = await self._list_agent_conversations(
                     str(event.unified_msg_origin)
                 )
-                found = conversation_engine.find_by_title(
+                matches = conversation_engine.find_all_by_title(
                     conversations,
                     title,
                 )
+                if len(matches) > 1:
+                    ids = "、".join(
+                        conversation_engine.short_id(
+                            conversation_engine.conversation_id(item)
+                        )
+                        for item in matches[:5]
+                    )
+                    yield event.plain_result(
+                        f"找到多个同名会话「{title}」（id:{ids}），"
+                        "请先在 AstrBot 会话列表改名后再切换；本次未自动取第一个。"
+                    )
+                    return
+                found = matches[0] if matches else None
                 if found is not None:
                     cid = conversation_engine.conversation_id(found)
-                    if not await self._switch_agent_conversation(event, cid):
+                    switch_status = await self._switch_agent_conversation(
+                        event,
+                        cid,
+                        found,
+                    )
+                    if switch_status == "persona_conflict":
+                        yield event.plain_result(
+                            "该会话的人格与当前群人格不同，不能直接切换；"
+                            "请用 /新会话 <名称> 新建，或先修改该群人格。"
+                        )
+                        return
+                    if switch_status == "persona_conflict_after_switch":
+                        yield event.plain_result(
+                            "切换后实际会话人格与当前群人格不一致，"
+                            "已保留目标会话但未声称人格接管；"
+                            "请用 /新会话 <名称> 或先修改该群人格。"
+                        )
+                        return
+                    if switch_status != "ok":
                         yield event.plain_result(
                             self._conversation_unsupported_reply()
                         )
@@ -1305,10 +1390,10 @@ class QQBotEnhancerPlugin(Star):
                 conversations = await self._list_agent_conversations(
                     str(event.unified_msg_origin)
                 )
-                if conversation_engine.find_by_title(
+                if conversation_engine.find_all_by_title(
                     conversations,
                     title,
-                ) is not None:
+                ):
                     yield event.plain_result(
                         f"同名会话「{title}」已存在，可用 /会话 {title} 切换。"
                     )
@@ -1787,6 +1872,15 @@ class QQBotEnhancerPlugin(Star):
             parsed = self._parse_group_personas_config()
         except Exception:
             return "群人格：配置解析失败，已回退旧 system_prompt。"
+        try:
+            prompt_profiles = self._parse_prompt_profiles_config()
+        except Exception:
+            prompt_profiles = None
+        if prompt_profiles is not None and prompt_profiles.errors:
+            return (
+                "提示词 profiles：配置超过 100 个/单条超过 12000 字符或格式非法；"
+                "已安全拒绝 active profile，回退旧 system_prompt，不使用混合人格。"
+            )
         if self._memory_mode() == "astrbot" and (
             parsed.has_group_overrides or parsed.default is not None
         ):
@@ -1800,6 +1894,11 @@ class QQBotEnhancerPlugin(Star):
                 "群人格：已配置映射，但当前 AstrBot 缺少 PersonaManager/"
                 "ConversationManager 会话 persona API；已安全保留 AstrBot 全局人格，"
                 "不会伪装成按群隔离。请升级 AstrBot 或改用 direct 模式。"
+            )
+        if prompt_profiles is not None and prompt_profiles.active is not None:
+            return (
+                "提示词：已加载 active profile；"
+                f"共 {len(prompt_profiles.profiles)} 个，优先级与群人格规则见 /option 文档。"
             )
         return persona_engine.persona_summary(parsed)
 
@@ -2007,6 +2106,7 @@ class QQBotEnhancerPlugin(Star):
             + len(self._last_food_at)
             + len(self._recent_chat_identity)
             + len(self._last_ambient_at)
+            + len(self._ambient_group_message_count)
             + len(self._sticker_ai_auto_collect_times)
             + len(self._pending_user_media)
             < 4096
@@ -2324,6 +2424,23 @@ class QQBotEnhancerPlugin(Star):
             [],
         )
         items.append(entry)
+        if self._cfg_bool("ambient_group_chat_enabled") and not event.is_private_chat():
+            count = self._ambient_group_message_count.get(
+                event.unified_msg_origin,
+                0,
+            ) + 1
+            self._ambient_group_message_count[
+                event.unified_msg_origin
+            ] = count
+            if len(self._ambient_group_message_count) > 256:
+                oldest_sessions = sorted(
+                    self._ambient_group_message_count.items(),
+                    key=lambda pair: pair[1],
+                )
+                for session, _ in oldest_sessions[
+                    : len(self._ambient_group_message_count) - 256
+                ]:
+                    self._ambient_group_message_count.pop(session, None)
         limit = max(0, self._cfg_int("group_identity_history_limit", 0))
         if self._cfg_bool("ambient_group_chat_enabled"):
             limit = max(
@@ -2370,14 +2487,13 @@ class QQBotEnhancerPlugin(Star):
         self,
         event: AstrMessageEvent,
         message_text: str,
-        *,
-        has_image: bool,
+        components: list[Any],
     ) -> bool:
         if not self._cfg_bool("ambient_group_chat_enabled"):
             return False
         if event.is_private_chat():
             return False
-        if not message_text.strip() and not has_image:
+        if not self._group_random_eligible(message_text, components):
             return False
         session_key = event.unified_msg_origin
         now = self._clock()
@@ -2391,7 +2507,8 @@ class QQBotEnhancerPlugin(Star):
         self._prune_chat_identity_history(now)
         history = self._recent_chat_identity.get(session_key, [])
         round_interval = self._cfg_int("ambient_group_round_interval", 0)
-        if round_interval > 0 and len(history) % round_interval != 0:
+        message_count = self._ambient_group_message_count.get(session_key, 0)
+        if round_interval > 0 and message_count % round_interval != 0:
             return False
         text = str(message_text or "").casefold()
         keywords = self._cfg_list("ambient_group_keywords")
@@ -3931,13 +4048,15 @@ class QQBotEnhancerPlugin(Star):
         )
 
     def _parse_prompt_profiles_config(self):
-        return persona_engine.parse_prompt_profiles(
+        config = persona_engine.parse_prompt_profiles(
             self._cfg_str("prompt_profiles"),
             self._cfg_str("prompt_profile_active_id"),
             max_profiles=100,
             max_prompt_chars=PROMPT_PROFILE_MAX_PROMPT_CHARS,
             max_name_chars=80,
         )
+        self._prompt_profile_parse_error = bool(config.errors)
+        return config
 
     def _active_prompt_profile(self) -> tuple[str, str, str, str]:
         config = self._parse_prompt_profiles_config()
@@ -4033,17 +4152,18 @@ class QQBotEnhancerPlugin(Star):
         if target is None or bridge is None:
             return
         prompt, _name, _source, persona_id = target
+        event.set_extra("qqbot_enhancer_persona_bound", False)
         try:
             ensured = await bridge.ensure_persona(persona_id, prompt)
             if ensured:
-                await bridge.bind_conversation(
+                bound = await bridge.bind_conversation(
                     unified_msg_origin=str(event.unified_msg_origin),
                     platform_id=str(event.get_platform_id() or ""),
                     persona_id=persona_id,
-                    new_conversation_on_persona_change=(
-                        target[2] == "profile"
-                    ),
+                    new_conversation_on_persona_change=True,
+                    persona_prompt_changed=bool(bridge.last_persona_changed),
                 )
+                event.set_extra("qqbot_enhancer_persona_bound", bool(bound))
         except Exception:
             logger.warning("qqbot_enhancer 会话 persona 绑定失败，保留当前 AstrBot 人格")
 
@@ -4062,18 +4182,24 @@ class QQBotEnhancerPlugin(Star):
         target = self._agent_group_persona_target(event)
         if target is None:
             return
-        prompt, name, _source, persona_id = target
-        conversation = getattr(req, "conversation", None)
-        if conversation is not None and str(
-            getattr(conversation, "persona_id", "") or ""
-        ) == persona_id:
+        _prompt, _name, _source, persona_id = target
+        bridge = getattr(self, "_agent_persona_bridge", None)
+        if bridge is None or not bridge.supported:
+            # Without a guarantee that the conversation was switched/bound we
+            # must not inject a new persona into old conversation history.
+            event.set_extra("qqbot_enhancer_persona_degraded", True)
             return
-        try:
-            persona_bridge_engine.AgentPersonaBridge.inject_system_prompt(
-                req, prompt, name
-            )
-        except Exception:
-            logger.warning("qqbot_enhancer 请求 persona 注入失败，保留全局人格")
+        if event.get_extra("qqbot_enhancer_persona_bound") is not True:
+            event.set_extra("qqbot_enhancer_persona_degraded", True)
+            return
+        conversation = getattr(req, "conversation", None)
+        if conversation is None or str(
+            getattr(conversation, "persona_id", "") or ""
+        ) != persona_id:
+            # The pre-request binding failed or was replaced; refuse to mix the
+            # new persona with the old history and keep the existing persona.
+            event.set_extra("qqbot_enhancer_persona_degraded", True)
+            return
 
     @filter.on_llm_request()
     async def inject_agent_current_sender_identity(
@@ -4085,23 +4211,65 @@ class QQBotEnhancerPlugin(Star):
 
         if self._memory_mode() != "astrbot":
             return
-        if not self._cfg_bool("group_identity_context_enabled"):
-            return
         try:
-            persona_bridge_engine.inject_current_sender_identity(
-                req,
-                group_id=self._safe_group_id(event),
-                nickname=self._safe_identity_nickname(event),
-                qq=self._safe_identity_qq(event.get_sender_id()),
-                max_chars=self._cfg_int(
-                    "group_identity_agent_prompt_max_chars",
-                    1,
-                ),
-            )
+            if self._cfg_bool("group_identity_context_enabled"):
+                persona_bridge_engine.inject_current_sender_identity(
+                    req,
+                    group_id=self._safe_group_id(event),
+                    nickname=self._safe_identity_nickname(event),
+                    qq=self._safe_identity_qq(event.get_sender_id()),
+                    max_chars=self._cfg_int(
+                        "group_identity_agent_prompt_max_chars",
+                        1,
+                    ),
+                )
+            if self._cfg_bool("ambient_group_chat_enabled"):
+                is_group = (
+                    not event.is_private_chat()
+                    and bool(self._safe_group_id(event))
+                )
+                if is_group:
+                    now = self._clock()
+                    self._prune_chat_identity_history(now)
+                    history_limit = max(
+                        1,
+                        self._cfg_int("ambient_group_cache_limit", 1),
+                    )
+                    history = list(
+                        self._recent_chat_identity.get(
+                            event.unified_msg_origin,
+                            [],
+                        )
+                    )[-history_limit:]
+                    injected = (
+                        persona_bridge_engine.inject_ambient_group_context(
+                            req,
+                            history,
+                            now=now,
+                            max_chars=self._cfg_int(
+                                "ambient_group_context_max_chars",
+                                1,
+                            ),
+                        )
+                    )
+                    event.set_extra(
+                        "qqbot_enhancer_ambient_context_injected",
+                        bool(injected),
+                    )
+                else:
+                    event.set_extra(
+                        "qqbot_enhancer_ambient_context_injected",
+                        False,
+                    )
         except Exception:
+            event.set_extra(
+                "qqbot_enhancer_ambient_context_injected",
+                False,
+            )
             # Never include nickname/QQ/group id in this log.
             logger.warning(
-                "qqbot_enhancer 当前发送者身份注入失败，保留原 system prompt"
+                "qqbot_enhancer memory 身份/全群上下文注入失败，"
+                "保留原 system prompt 并安全降级"
             )
 
     def _effective_system_prompt(

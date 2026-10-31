@@ -3562,6 +3562,44 @@ class TestModuleArchitecture(unittest.TestCase):
         self.assertGreaterEqual(limited.errors, 3)
         self.assertFalse(personas.parse_group_personas("{bad json").groups)
 
+    def test_prompt_profile_parser_preserves_edges_and_rejects_overflow(self):
+        personas = importlib.import_module("personas")
+        prompt = "  第一行\n第二行  \n"
+        raw = json_module.dumps(
+            [
+                {
+                    "id": "p_one",
+                    "name": "边缘空白",
+                    "prompt": prompt,
+                    "pinned": True,
+                }
+            ],
+            ensure_ascii=False,
+        )
+        parsed = personas.parse_prompt_profiles(raw, "p_one")
+        self.assertEqual(parsed.errors, 0)
+        self.assertEqual(parsed.active.prompt, prompt)
+        resolved = personas.resolve_prompt_profile(parsed, legacy_prompt="legacy")
+        self.assertEqual(resolved[0], prompt)
+        self.assertEqual(resolved[3], "profile")
+
+        too_long = json_module.dumps(
+            [{"id": "p_long", "name": "long", "prompt": "x" * 12001}]
+        )
+        rejected = personas.parse_prompt_profiles(too_long, "p_long")
+        self.assertEqual(rejected.profiles, [])
+        self.assertGreaterEqual(rejected.errors, 1)
+
+        too_many = json_module.dumps(
+            [
+                {"id": f"p{i:03d}", "name": f"P{i}", "prompt": f"prompt-{i}"}
+                for i in range(101)
+            ]
+        )
+        overflow = personas.parse_prompt_profiles(too_many, "p100")
+        self.assertEqual(overflow.profiles, [])
+        self.assertGreaterEqual(overflow.errors, 1)
+
     def test_protocol_interfaces_are_exposed(self):
         interfaces = importlib.import_module("interfaces")
         for name in (
@@ -5680,9 +5718,8 @@ class TestGroupPersonas(unittest.IsolatedAsyncioTestCase):
         await plugin.bind_agent_group_persona(event)
         req = SimpleNamespace(system_prompt="AstrBot global persona", conversation=None)
         await plugin.inject_agent_group_persona_prompt(event, req)
-        self.assertIn("AstrBot global persona", req.system_prompt)
-        self.assertIn("Group Persona Instructions", req.system_prompt)
-        self.assertIn("A群专属人格", req.system_prompt)
+        self.assertEqual(req.system_prompt, "AstrBot global persona")
+        self.assertTrue(event.get_extra("qqbot_enhancer_persona_degraded"))
         self.assertEqual(context.calls, [])
         self.assertEqual(plugin.context.provider_id, "deepseek-flash")
         option_text = plugin._build_option_text()
@@ -5813,6 +5850,108 @@ class TestPromptProfilesPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIn("群专属人格优先", target[0])
         self.assertNotIn("第二套提示词", target[0])
 
+
+    async def test_invalid_prompt_profiles_fall_back_without_mixing(self):
+        context = FakeContext(responder=lambda kwargs: "回复")
+        bad_prompt = "不可泄漏的超长人格" * 2000
+        plugin = make_plugin(
+            context,
+            memory_mode="direct",
+            prompt_profiles=json_module.dumps(
+                [{"id": "p_bad", "name": "bad", "prompt": bad_prompt}]
+            ),
+            prompt_profile_active_id="p_bad",
+            system_prompt="合法旧提示词",
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="111111",
+            session_id="profile-invalid",
+        )
+        await run_handler(plugin, event)
+        used_prompt = context.calls[-1]["system_prompt"]
+        self.assertIn("合法旧提示词", used_prompt)
+        self.assertNotIn("不可泄漏的超长人格", used_prompt)
+        option_text = plugin._build_option_text()
+        self.assertIn("安全拒绝", option_text)
+        self.assertNotIn("不可泄漏的超长人格", option_text)
+
+    async def test_group_persona_prompt_update_starts_new_conversation(self):
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        context = FakeContext(
+            persona_manager=persona_mgr,
+            conversation_manager=conv_mgr,
+        )
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas=json_module.dumps(
+                {"groups": {"111111": "群人格 v1"}}
+            ),
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="111111",
+            session_id="persona-change",
+        )
+        await plugin.bind_agent_group_persona(event)
+        first_cid = conv_mgr.current[event.unified_msg_origin]
+        plugin._config_reader.config["group_personas"] = json_module.dumps(
+            {"groups": {"111111": "群人格 v2"}}
+        )
+        await plugin.bind_agent_group_persona(event)
+        second_cid = conv_mgr.current[event.unified_msg_origin]
+        self.assertNotEqual(first_cid, second_cid)
+        second_conv = conv_mgr.conversations[(event.unified_msg_origin, second_cid)]
+        self.assertEqual(second_conv.persona_id, "qqbot_enhancer_group_111111")
+        self.assertIn(
+            "群人格 v2",
+            persona_mgr.personas[second_conv.persona_id].system_prompt,
+        )
+        self.assertEqual(context.calls, [])
+
+    async def test_group_persona_switch_from_profile_starts_new_conversation(self):
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        context = FakeContext(
+            persona_manager=persona_mgr,
+            conversation_manager=conv_mgr,
+        )
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas="{}",
+            prompt_profiles=self._profiles_json(),
+            prompt_profile_active_id="p_one",
+        )
+        event = FakeEvent(
+            [At("10001"), Plain("你好")],
+            message_str="你好",
+            private=False,
+            group_id="111111",
+            session_id="persona-source-change",
+        )
+        await plugin.bind_agent_group_persona(event)
+        profile_cid = conv_mgr.current[event.unified_msg_origin]
+        plugin._config_reader.config["group_personas"] = json_module.dumps(
+            {"groups": {"111111": "群专属切换"}}
+        )
+        await plugin.bind_agent_group_persona(event)
+        group_cid = conv_mgr.current[event.unified_msg_origin]
+        self.assertNotEqual(profile_cid, group_cid)
+        group_conv = conv_mgr.conversations[(event.unified_msg_origin, group_cid)]
+        self.assertEqual(group_conv.persona_id, "qqbot_enhancer_group_111111")
+        self.assertIn(
+            "群专属切换",
+            persona_mgr.personas[group_conv.persona_id].system_prompt,
+        )
 
 class TestGroupIdentityContext(unittest.IsolatedAsyncioTestCase):
     async def test_two_users_in_same_group_are_distinguishable_in_prompt(self):
@@ -6091,6 +6230,7 @@ class TestConversationSwitchCommands(unittest.IsolatedAsyncioTestCase):
         conv_a = conv_mgr.conversations[(umo_a, cid_a)]
         self.assertEqual(conv_a.title, "复盘")
         self.assertEqual(conv_a.persona_id, "qqbot_enhancer_group_111111")
+        self.assertEqual(conv_mgr.counter, 1)
         self.assertEqual(context.provider_id, "deepseek-flash")
 
         list_event = FakeEvent(
@@ -6161,6 +6301,116 @@ class TestConversationSwitchCommands(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             conv_mgr.conversations[(umo_a, cid_a)].persona_id,
             "qqbot_enhancer_group_111111",
+        )
+
+    async def test_duplicate_titles_are_not_silently_switched_to_first(self):
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        context = FakeContext(
+            persona_manager=persona_mgr,
+            conversation_manager=conv_mgr,
+        )
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("/会话 复盘")],
+            message_str="/会话 复盘",
+            private=False,
+            group_id="111111",
+            session_id="conversation-duplicate",
+        )
+        umo = event.unified_msg_origin
+        conv_mgr.current[umo] = "conv-a"
+        conv_mgr.conversations[(umo, "conv-a")] = FakeConversation(
+            "conv-a", title="复盘"
+        )
+        conv_mgr.conversations[(umo, "conv-b")] = FakeConversation(
+            "conv-b", title="复盘"
+        )
+        current_before = conv_mgr.current[umo]
+        results = await run_conversation_switch_command(plugin, event)
+        self.assertIn("多个同名会话", results[0].text)
+        self.assertIn("未自动取第一个", results[0].text)
+        self.assertEqual(conv_mgr.current[umo], current_before)
+
+    async def test_named_switch_rejects_missing_or_different_target_persona(self):
+        persona_mgr = FakePersonaManager()
+        conv_mgr = FakeConversationManager()
+        context = FakeContext(
+            persona_manager=persona_mgr,
+            conversation_manager=conv_mgr,
+        )
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            group_persona_enabled=True,
+            group_personas=json_module.dumps(
+                {"groups": {"111111": "A群专属人格"}}
+            ),
+        )
+        event = FakeEvent(
+            [Plain("/会话 复盘")],
+            message_str="/会话 复盘",
+            private=False,
+            group_id="111111",
+            session_id="persona-switch-conflict",
+        )
+        umo = event.unified_msg_origin
+        expected = "qqbot_enhancer_group_111111"
+        conv_mgr.current[umo] = "current"
+        current = FakeConversation("current", persona_id=expected, title="当前")
+        target_none = FakeConversation("target-none", persona_id=None, title="复盘")
+        target_other = FakeConversation("target-other", persona_id="other-persona", title="复盘")
+        for target_id, target in (
+            ("target-none", target_none),
+            ("target-other", target_other),
+        ):
+            conv_mgr.conversations = {
+                (umo, "current"): current,
+                (umo, target_id): target,
+            }
+            conv_mgr.current[umo] = "current"
+            before_counter = conv_mgr.counter
+            results = await run_conversation_switch_command(plugin, event)
+            self.assertIn("人格与当前群人格不同", results[0].text)
+            self.assertNotIn("已切换到会话", results[0].text)
+            self.assertEqual(conv_mgr.current[umo], "current")
+            self.assertEqual(conv_mgr.counter, before_counter)
+            self.assertIsNone(target_none.persona_id)
+            self.assertEqual(target_other.persona_id, "other-persona")
+
+    async def test_ambient_private_hook_never_injects_group_context(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            ambient_group_chat_enabled=True,
+            group_identity_context_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("私聊消息")],
+            message_str="私聊消息",
+            private=True,
+            sender_id="24001",
+            sender_name="私聊用户",
+            session_id="ambient-private-context",
+        )
+        plugin._remember_chat_identity_message(
+            event,
+            "私聊消息",
+            has_image=False,
+            has_face=False,
+        )
+        req = SimpleNamespace(system_prompt="base")
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertNotIn("Ambient Group Context", req.system_prompt)
+        self.assertNotIn("Recent messages from this group only", req.system_prompt)
+        self.assertNotIn("私聊消息", req.system_prompt)
+        self.assertFalse(
+            event.get_extra("qqbot_enhancer_ambient_context_injected")
         )
 
     async def test_auto_create_private_validation_unsupported_and_api_error(self):
@@ -6431,6 +6681,192 @@ class TestAmbientGroupChat(unittest.IsolatedAsyncioTestCase):
         self.assertIn("群友乙", chain[0].text)
         self.assertTrue(chain[0].text.startswith("@群友乙"))
         self.assertNotIn("22009", chain[0].text)
+
+class TestAmbientP1Fixes(unittest.IsolatedAsyncioTestCase):
+    async def test_memory_hook_injects_group_cache_only_for_same_umo(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            ambient_group_chat_enabled=True,
+            ambient_group_cache_limit=5,
+            group_identity_context_enabled=True,
+        )
+        group_a = FakeEvent(
+            [Plain("群A第一句")],
+            message_str="群A第一句",
+            private=False,
+            group_id="910001",
+            sender_id="31001",
+            sender_name="甲",
+            session_id="ambient-p1-a",
+        )
+        group_b = FakeEvent(
+            [Plain("群B不应出现")],
+            message_str="群B不应出现",
+            private=False,
+            group_id="910002",
+            sender_id="31002",
+            sender_name="乙",
+            session_id="ambient-p1-b",
+        )
+        plugin._remember_chat_identity_message(
+            group_a,
+            "群A第一句",
+            has_image=False,
+            has_face=False,
+        )
+        plugin._remember_chat_identity_message(
+            group_a,
+            "群A第二句",
+            has_image=False,
+            has_face=False,
+        )
+        plugin._remember_chat_identity_message(
+            group_b,
+            "群B不应出现",
+            has_image=False,
+            has_face=False,
+        )
+        req = SimpleNamespace(system_prompt="base persona")
+        await plugin.inject_agent_current_sender_identity(group_a, req)
+        self.assertIn("# Ambient Group Context", req.system_prompt)
+        self.assertIn("群A第一句", req.system_prompt)
+        self.assertIn("群A第二句", req.system_prompt)
+        self.assertNotIn("群B不应出现", req.system_prompt)
+        self.assertIn("Current Sender Identity", req.system_prompt)
+        self.assertEqual(context.calls, [])
+
+        direct_context = FakeContext()
+        direct_plugin = make_plugin(
+            direct_context,
+            memory_mode="direct",
+            ambient_group_chat_enabled=True,
+        )
+        direct_req = SimpleNamespace(system_prompt="direct unchanged")
+        await direct_plugin.inject_agent_current_sender_identity(
+            group_a,
+            direct_req,
+        )
+        self.assertEqual(direct_req.system_prompt, "direct unchanged")
+
+    async def test_memory_ambient_context_injection_failure_degrades_safely(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            ambient_group_chat_enabled=True,
+        )
+        event = FakeEvent(
+            [Plain("上下文失败")],
+            message_str="上下文失败",
+            private=False,
+            group_id="910099",
+            sender_id="31099",
+            sender_name="失败测试",
+            session_id="ambient-inject-fail",
+        )
+        plugin._remember_chat_identity_message(
+            event,
+            "上下文失败",
+            has_image=False,
+            has_face=False,
+        )
+        req = SimpleNamespace(system_prompt="base")
+        with mock.patch.object(
+            MODULE.persona_bridge_engine,
+            "inject_ambient_group_context",
+            side_effect=RuntimeError("hook denied"),
+        ):
+            await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertIn("Current Sender Identity", req.system_prompt)
+        self.assertNotIn("# Ambient Group Context", req.system_prompt)
+        self.assertFalse(
+            event.get_extra("qqbot_enhancer_ambient_context_injected")
+        )
+        self.assertEqual(context.calls, [])
+
+    async def test_round_interval_larger_than_cache_limit_still_triggers(self):
+        context = FakeContext(responder=lambda kwargs: "参与")
+        plugin = make_plugin(
+            context,
+            reply_probability=0.0,
+            ambient_group_chat_enabled=True,
+            ambient_group_reply_probability=1.0,
+            ambient_group_min_interval_seconds=0,
+            ambient_group_cache_limit=3,
+            ambient_group_round_interval=5,
+        )
+        for index in range(1, 6):
+            event = FakeEvent(
+                [Plain(f"第{index}条群消息")],
+                message_str=f"第{index}条群消息",
+                private=False,
+                group_id="920001",
+                sender_id=f"3200{index}",
+                sender_name=f"用户{index}",
+                session_id="ambient-round",
+            )
+            results = await run_handler(plugin, event)
+            if index < 5:
+                self.assertEqual(results, [])
+                self.assertEqual(len(context.calls), 0)
+        self.assertEqual(len(context.calls), 1)
+
+    async def test_ambient_respects_min_chars_and_pure_image_face_filters(self):
+        context = FakeContext(responder=lambda kwargs: "不应参与")
+        plugin = make_plugin(
+            context,
+            reply_probability=0.0,
+            ambient_group_chat_enabled=True,
+            ambient_group_reply_probability=1.0,
+            ambient_group_min_interval_seconds=0,
+            min_message_chars=5,
+            ignore_pure_image=True,
+            ignore_pure_face=True,
+        )
+        for index, components in enumerate(
+            (
+                [Plain("短")],
+                [Image(data=make_test_png(32, 32, b"ambient-image"))],
+                [Face(21)],
+            )
+        ):
+            event = FakeEvent(
+                components,
+                message_str="短" if index == 0 else "",
+                private=False,
+                group_id=f"93000{index}",
+                sender_id=f"3300{index}",
+                sender_name="过滤测试",
+                session_id=f"ambient-filter-{index}",
+            )
+            results = await run_handler(plugin, event)
+            self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+
+        open_context = FakeContext(responder=lambda kwargs: "图片参与")
+        open_plugin = make_plugin(
+            open_context,
+            reply_probability=0.0,
+            ambient_group_chat_enabled=True,
+            ambient_group_reply_probability=1.0,
+            ambient_group_min_interval_seconds=0,
+            min_message_chars=5,
+            ignore_pure_image=False,
+        )
+        image_event = FakeEvent(
+            [Image(data=make_test_png(32, 32, b"ambient-image-open"))],
+            message_str="",
+            private=False,
+            group_id="930099",
+            sender_id="33099",
+            sender_name="图片允许",
+            session_id="ambient-filter-open",
+        )
+        open_results = await run_handler(open_plugin, image_event)
+        self.assertEqual(len(open_results), 1)
+        self.assertEqual(len(open_context.calls), 1)
 
 class TestFinalization(unittest.IsolatedAsyncioTestCase):
     async def test_reply_is_truncated(self):

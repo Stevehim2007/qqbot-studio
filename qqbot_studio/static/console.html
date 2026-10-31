@@ -253,7 +253,7 @@
           <span class="prompt-manager-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-edit"></use></svg></span>
           <div>
             <span class="prompt-manager-kicker">实例设置 · 提示词</span>
-            <h2 id="prompt-manager-title">提示词列表</h2>
+            <h2 id="prompt-manager-title" tabindex="-1">提示词列表</h2>
             <p id="prompt-manager-subtitle">管理当前实例的多套提示词</p>
           </div>
         </div>
@@ -271,12 +271,12 @@
           <h3 id="prompt-editor-title">新增提示词</h3>
           <div class="prompt-editor-field">
             <label for="prompt-editor-name">名称</label>
-            <input id="prompt-editor-name" type="text" maxlength="200" autocomplete="off" placeholder="例如：日常聊天 / 客服模式" aria-describedby="prompt-editor-name-error">
+            <input id="prompt-editor-name" type="text" maxlength="80" autocomplete="off" placeholder="例如：日常聊天 / 客服模式" aria-describedby="prompt-editor-name-error">
             <p id="prompt-editor-name-error" class="field-error" role="alert" hidden></p>
           </div>
           <div id="prompt-editor-prompt-field" class="prompt-editor-field">
             <label for="prompt-editor-prompt">提示词内容</label>
-            <textarea id="prompt-editor-prompt" rows="9" spellcheck="false" placeholder="输入系统提示词；换行会原样保存。" aria-describedby="prompt-editor-prompt-error"></textarea>
+            <textarea id="prompt-editor-prompt" rows="9" maxlength="12000" spellcheck="false" placeholder="输入系统提示词；换行会原样保存。" aria-describedby="prompt-editor-prompt-error"></textarea>
             <p id="prompt-editor-prompt-error" class="field-error" role="alert" hidden></p>
           </div>
           <div class="prompt-manager-form-actions">
@@ -286,6 +286,9 @@
         </form>
         <p id="prompt-manager-error" class="prompt-manager-error" role="alert" hidden></p>
         <p id="prompt-manager-status" class="prompt-manager-status" role="status" hidden></p>
+        <div class="prompt-manager-busy-actions">
+          <button id="prompt-manager-cancel-busy" class="btn btn-quiet btn-small" type="button" hidden>取消等待</button>
+        </div>
       </div>
     </section>
   </div>

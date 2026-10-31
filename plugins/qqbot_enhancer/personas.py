@@ -27,9 +27,16 @@ class PersonaConfig:
         return bool(self.groups)
 
 
-def _safe_text(value: Any, *, max_chars: int, allow_newlines: bool) -> str | None:
-    text = str(value or "").strip()
-    if not text or len(text) > max_chars:
+def _safe_text(
+    value: Any,
+    *,
+    max_chars: int,
+    allow_newlines: bool,
+    preserve_whitespace: bool = False,
+) -> str | None:
+    raw_text = str(value or "")
+    text = raw_text if preserve_whitespace else raw_text.strip()
+    if not text.strip() or len(text) > max_chars:
         return None
     for char in text:
         code = ord(char)
@@ -168,6 +175,12 @@ def persona_summary(parsed: PersonaConfig) -> str:
 
 
 PROMPT_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+PROMPT_PROFILE_MAX_COUNT = 100
+PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
+PROMPT_PROFILES_MAX_TOTAL_PROMPT_CHARS = (
+    PROMPT_PROFILE_MAX_COUNT * PROMPT_PROFILE_MAX_PROMPT_CHARS
+)
+PROMPT_PROFILES_MAX_JSON_CHARS = 2_600_000
 
 
 @dataclass(slots=True)
@@ -181,6 +194,7 @@ class PromptProfile:
 class PromptProfileConfig:
     profiles: list[PromptProfile]
     active_id: str = ""
+    errors: int = 0
 
     @property
     def active(self) -> PromptProfile | None:
@@ -191,36 +205,42 @@ def parse_prompt_profiles(
     raw: Any,
     active_id: Any = "",
     *,
-    max_profiles: int = 100,
-    max_prompt_chars: int = 12000,
+    max_profiles: int = PROMPT_PROFILE_MAX_COUNT,
+    max_prompt_chars: int = PROMPT_PROFILE_MAX_PROMPT_CHARS,
     max_name_chars: int = 80,
 ) -> PromptProfileConfig:
     """Parse Studio-synced prompt profiles without ever raising."""
 
     data: Any = raw
     if isinstance(raw, str):
+        if len(raw) > PROMPT_PROFILES_MAX_JSON_CHARS:
+            return PromptProfileConfig(profiles=[], errors=1)
         try:
             data = json.loads(raw.strip() or "[]")
         except (TypeError, ValueError):
-            return PromptProfileConfig(profiles=[])
+            return PromptProfileConfig(profiles=[], errors=1)
     if not isinstance(data, list):
-        return PromptProfileConfig(profiles=[])
+        return PromptProfileConfig(profiles=[], errors=1)
     max_profiles = max(1, int(max_profiles))
+    if len(data) > max_profiles:
+        # Never silently drop profiles: use legacy fallback and surface an error.
+        return PromptProfileConfig(profiles=[], errors=1)
     profiles: list[PromptProfile] = []
     seen: set[str] = set()
     for raw_item in data:
         if not isinstance(raw_item, dict):
-            continue
+            return PromptProfileConfig(profiles=[], errors=1)
         profile_id = str(raw_item.get("id") or "").strip()
         if not PROMPT_PROFILE_ID_RE.fullmatch(profile_id) or profile_id in seen:
-            continue
+            return PromptProfileConfig(profiles=[], errors=1)
         prompt = _safe_text(
             raw_item.get("prompt"),
             max_chars=max_prompt_chars,
             allow_newlines=True,
+            preserve_whitespace=True,
         )
         if prompt is None:
-            continue
+            return PromptProfileConfig(profiles=[], errors=1)
         name = _safe_text(
             raw_item.get("name", ""),
             max_chars=max_name_chars,
@@ -228,8 +248,11 @@ def parse_prompt_profiles(
         ) or f"提示词 {len(profiles) + 1}"
         profiles.append(PromptProfile(id=profile_id, name=name, prompt=prompt))
         seen.add(profile_id)
-        if len(profiles) >= max_profiles:
-            break
+    if (
+        sum(len(item.prompt) for item in profiles)
+        > PROMPT_PROFILES_MAX_TOTAL_PROMPT_CHARS
+    ):
+        return PromptProfileConfig(profiles=[], errors=1)
     safe_active = str(active_id or "").strip()
     if safe_active not in seen:
         safe_active = profiles[0].id if profiles else ""
