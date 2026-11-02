@@ -12,6 +12,17 @@
 
 
 
+
+## v4.1.1 — 网页智能阅读 + 饭店搜索/地址创建 + AstrBot 断连修复
+
+- 插件 2.7.0：URL+提问消息自动抓取网页标题和正文，作为不可信参考资料注入 direct/AstrBot memory；裸链接不抓取。
+- 插件 2.6.0：提交评价时自动拆分完整地址并创建缺失位置（如中国牛逼市 → 中国 / 牛逼市）。
+- 插件 2.5.0：新增自然语言 `search_food_restaurants`，支持名称、标签、位置筛选和按均分/口味/性价比/评价数/最新日期排序。
+- 插件 2.4.0 修复：提交草稿按会话+发送者隔离；无效提交 marker 不再出现虚假“已提交”；网页抓取内容不会二次触发工具写入。
+- Linux core：AstrBot 登录/插件列表遇 Broken pipe 有限重试、强制重新登录和可操作错误提示。
+- food.dlsz.top 站点补丁（日新下拉、后台删除饭店）已交付但未部署；源目录只读，部署步骤见 docs/food-ai-contract/DEPLOYMENT_NOTICE.md。
+- 全量 568 tests OK。
+
 ## v4.1.0 — 网页访问 + food.dlsz.top AI 提交
 
 - 新增安全 AI 网站访问：`[[tool:fetch_webpage url="..." max_chars="N"]]`，固定 HTTP(S) GET、公网 IP/SSRF 防护、逐跳重定向校验、超时/大小/内容类型限制。
