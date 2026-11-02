@@ -66,6 +66,28 @@ WEB_FETCH_HEADERS = {
     "Connection": "close",
 }
 
+WEB_AUTO_FETCH_KEYWORDS = (
+    "根据",
+    "这个文章",
+    "这篇文章",
+    "文中",
+    "文章里",
+    "怎么",
+    "如何",
+    "安装",
+    "教程",
+    "总结",
+    "讲了",
+    "帮我看看",
+    "提取",
+    "步骤",
+    "为什么",
+    "是什么",
+)
+_MESSAGE_URL_RE = re.compile(r"https?://[^\s<>\"'][^\s<>\"'`]*", re.IGNORECASE)
+_URL_TRAILING_CHARS = "。，、；：！？）】》」』”’\"'.,;:!?)]}>…"
+_MEANINGFUL_TEXT_RE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
+
 REASON_TEXT = {
     "invalid_url": "只支持普通 http/https 公开网页链接。",
     "blocked_host": "目标地址不是公开网页。",
@@ -408,6 +430,57 @@ def neutralize_tool_markers(text: object) -> str:
         return "[ ["
 
     return TOOL_MARKER_NEUTRALIZE_RE.sub(_replace, value)
+
+
+def extract_message_urls(text: object, *, limit: int = 1) -> list[str]:
+    """Return up to ``limit`` distinct http(s) URLs found in a chat message."""
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    max_urls = max(1, int(limit or 1))
+    for match in _MESSAGE_URL_RE.finditer(str(text or "")):
+        url = match.group(0).rstrip(_URL_TRAILING_CHARS)
+        if not url or len(url) > WEB_FETCH_MAX_URL_CHARS:
+            continue
+        folded = url.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        urls.append(url)
+        if len(urls) >= max_urls:
+            break
+    return urls
+
+
+def strip_message_urls(text: object) -> str:
+    """Remove URLs so intent detection only looks at the user's own words."""
+
+    return _MESSAGE_URL_RE.sub(" ", str(text or ""))
+
+
+def looks_like_reading_request(
+    text: object,
+    *,
+    question_only: bool = True,
+    keywords: tuple[str, ...] | None = None,
+) -> bool:
+    """True when the message asks the bot to read/explain a linked page.
+
+    A bare URL is never a reading request: the text around the URL must carry
+    a question/reading keyword (default) or at least one meaningful character
+    when ``question_only`` is disabled.
+    """
+
+    remainder = strip_message_urls(text)
+    if not _MEANINGFUL_TEXT_RE.search(remainder):
+        return False
+    if not question_only:
+        return True
+    lowered = remainder.casefold()
+    return any(
+        keyword.casefold() in lowered
+        for keyword in (keywords or WEB_AUTO_FETCH_KEYWORDS)
+    )
 
 
 def truncate_text(text: str, max_chars: int) -> tuple[str, bool]:

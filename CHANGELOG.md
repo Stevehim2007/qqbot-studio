@@ -21,6 +21,23 @@
 - food.dlsz.top 站点位置搜索“日新”下拉点击修复 + 管理员删除饭店 API/UI 已交付为补丁；源目录只读，未部署。
 - fetch 网页工具注入防护、非法 food marker 假成功修复；全量 504 tests OK。
 
+## qqbot_enhancer 2.7.0（插件）
+
+- 新增智能网页阅读：消息同时含公开 http(s) 链接与提问/阅读语境时（如“根据这个文章，怎么安装 REFramework
+  <链接>”），自动用既有 `web_fetch.fetch_page_text` 读取该页，把标题+网址+正文摘录（默认 4000 字）作为
+  **外部不可信参考**注入 direct system prompt 与 astrbot memory `on_llm_request`；不再只复述链接。
+- 触发边界：`web_auto_fetch_enabled`、`web_auto_fetch_question_only`（默认仅提问语境）、
+  `web_auto_fetch_max_urls=1`（最多 3）、`web_auto_fetch_max_chars=4000`、`web_auto_fetch_timeout_seconds=12；
+  裸链接永不自动读取；群聊/私聊同一判断。
+- 安全/成本：复用 SSRF/私网/元数据地址拦截、DNS 固定、逐跳重定向、大小/类型/超时限制；无 Cookie、无 JS、
+  无浏览器、无文件/命令；页面正文已经 HTML 提取且 `[[` 中和为 `[ [`；同一 URL 成功缓存 5 分钟、失败 60 秒，
+  同一事件只抓一次；自动阅读不依赖也不强制 `fetch_webpage` 工具。
+- 失败时注入固定中文原因并要求如实告知（不编造）；`/option` 显示智能阅读状态；插件版本 2.7.0。
+- 测试：新增 TestWebAutoFetch 16 例（direct/群聊触发、裸链接不触发、question_only 关闭、两链接只取一个、
+  错误/超时、SSRF 不触达本地服务、本地文章端到端 HTML 提取、截断、去重缓存、`[[tool:` 中和、
+  不强制工具 catalog、memory 幂等注入、/option）；插件 313 / 全仓 568 tests OK。
+- 真实 CSDN 链接仅做 stdlib GET 探针；AstrBot / DeepSeek / QQ E2E 未验证。
+
 ## qqbot_enhancer 2.6.0（插件）
 
 - `submit_food_review` 支持完整地址自动拆分与缺失位置创建：`中国牛逼市` → 已有“中国”下新建“牛逼市”；

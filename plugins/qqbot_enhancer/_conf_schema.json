@@ -1246,6 +1246,49 @@
       "step": 1
     }
   },
+  "web_auto_fetch_enabled": {
+    "description": "启用消息内公开链接的智能阅读",
+    "type": "bool",
+    "default": true,
+    "hint": "用户消息同时含 http(s) 链接和提问/阅读意图时，自动读取该公开网页并把标题+正文摘录作为不可信参考注入模型；裸链接不自动读取。"
+  },
+  "web_auto_fetch_max_urls": {
+    "description": "单条消息最多自动读取的链接数",
+    "type": "int",
+    "default": 1,
+    "slider": {
+      "min": 1,
+      "max": 3,
+      "step": 1
+    },
+    "hint": "默认 1，控制 token 成本；按消息中 URL 出现顺序取前 N 个。"
+  },
+  "web_auto_fetch_max_chars": {
+    "description": "智能阅读注入的正文最大字符数",
+    "type": "int",
+    "default": 4000,
+    "slider": {
+      "min": 500,
+      "max": 8000,
+      "step": 100
+    }
+  },
+  "web_auto_fetch_timeout_seconds": {
+    "description": "智能阅读单次抓取超时秒数",
+    "type": "int",
+    "default": 12,
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    }
+  },
+  "web_auto_fetch_question_only": {
+    "description": "仅当消息含提问/阅读关键词时自动读取",
+    "type": "bool",
+    "default": true,
+    "hint": "开启：链接必须是“根据/怎么/如何/安装/教程/总结”等提问语境；关闭：链接旁边有任意文字也会读取。两种模式都不会读取裸链接。"
+  },
   "safe_tools_sticker_prefix": {
     "description": "安全工具发送表情时前缀文字",
     "type": "string",

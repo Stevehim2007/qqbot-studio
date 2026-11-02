@@ -288,6 +288,7 @@ def inject_ambient_group_context(
 
 STICKER_TOOL_MARKER = "# Sticker Tool Catalog"
 WEB_FETCH_TOOL_MARKER = "# Web Fetch Tool Catalog"
+WEB_AUTO_FETCH_MARKER = "# Web Auto Fetch Reference"
 FOOD_SUBMIT_TOOL_MARKER = "# Food Submit Tool Catalog"
 
 
@@ -318,6 +319,12 @@ def inject_web_fetch_tool_catalog(req: Any, instruction: str) -> bool:
     """Inject one idempotent public-web-reader catalog into a prompt."""
 
     return _inject_catalog(req, instruction, WEB_FETCH_TOOL_MARKER)
+
+
+def inject_web_auto_fetch_context(req: Any, instruction: str) -> bool:
+    """Inject one idempotent untrusted page reference for this turn."""
+
+    return _inject_catalog(req, instruction, WEB_AUTO_FETCH_MARKER)
 
 
 def inject_food_submit_tool_catalog(req: Any, instruction: str) -> bool:
