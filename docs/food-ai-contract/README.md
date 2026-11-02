@@ -24,6 +24,8 @@ POST https://food.dlsz.top/api/upload     Content-Type: application/json
 | `FOOD_SITE_FIXES.md` | v1.2 站点修复说明：位置搜索下拉点击 bug 根因 + 后台删除饭店（含验收清单） |
 | `food-site-v1.2-fixes.patch` | v1.2 补丁：`app.py` 新增 `DELETE /api/admin/restaurants/<id>`、`static/js/main.js` 下拉修复、`static/js/admin.js` 删除按钮 |
 | `test_site_fixes.py` | v1.2 的 11 个用例（admin 删除鉴权/404/级联 + 下拉修复静态断言） |
+| `DEPLOYMENT_NOTICE.md` | **给项目所有者的部署通知**：只读挂载证据、成品文件 SHA、备份/应用/重启/回滚、验收清单 |
+| `deploy/v1.2/` `deploy/v1.2-with-review-codes/` | 可直接覆盖的成品文件（各含 `MANIFEST.sha256`）；同名 `.tar.gz` 为打包版 |
 
 不随仓库放 `app.py` 副本：站点源码随时可能变，`run-tests.sh` 现场从 `FOOD_SRC`
 （默认 `/home/stevehim/food.dlsz.top`）取源码 + 打补丁，避免仓库里躺着一份过期生产代码。
