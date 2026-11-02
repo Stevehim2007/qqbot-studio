@@ -1680,6 +1680,33 @@ class QQBotEnhancerPlugin(Star):
         self._last_food_nl_at[key] = now
         return 0
 
+    @staticmethod
+    def _submit_marker_in_intents(intents: list[Any]) -> bool:
+        return any(
+            getattr(intent, "name", "") == "submit_food_review"
+            for intent in intents
+        )
+
+    def _reject_food_submit_marker(
+        self,
+        event: AstrMessageEvent,
+        reason: str,
+    ) -> tuple[str, Any | None, bool]:
+        """Replace model prose for a rejected submit marker.
+
+        A model may write "已提交喵" next to an invalid/denied/oversized marker.
+        Since nothing was written, the whole reply is replaced by one fixed
+        Chinese clarification; the marker never leaks and no success is claimed.
+        """
+
+        logger.info(
+            "qqbot_enhancer safe_tool tool=submit_food_review "
+            "success=False reason=%s",
+            reason,
+        )
+        message = self._cfg_str("food_submit_tool_rejected_reply")
+        return message, event.plain_result(message), True
+
     def _food_submit_tool_catalog_instruction(self) -> str:
         """AstrBot memory mode catalog for the food submission tool."""
 
@@ -2897,6 +2924,11 @@ class QQBotEnhancerPlugin(Star):
     async def attach_memory_mode_sticker(self, event: AstrMessageEvent):
         """Add a local sticker after AstrBot default Agent replies in memory mode."""
 
+        # Tool results (e.g. fetched page text, submit confirmations) are
+        # post-processed output. Re-parsing them would let an untrusted page
+        # inject a second tool marker, so such events are terminal here.
+        if event.get_extra("qqbot_enhancer_tool_processed"):
+            return
         result = event.get_result()
         chain = getattr(result, "chain", None) if result is not None else None
         if not isinstance(chain, list):
@@ -6826,13 +6858,21 @@ class QQBotEnhancerPlugin(Star):
         parsed = safe_tools_engine.parse_tool_markers(text)
         if not parsed.had_marker:
             return text, None, False
+        # Whatever happens below, this text has been post-processed. Never let
+        # the decorating hook re-parse it (page text must not inject tools).
+        event.set_extra("qqbot_enhancer_tool_processed", True)
         clean_text, _, _ = extract_sticker_ai_marker(parsed.clean_text)
+        submit_marker = self._submit_marker_in_intents(parsed.intents)
         if not self._cfg_bool("safe_tools_enabled"):
             logger.info(
                 "qqbot_enhancer safe_tool marker tool=%s success=False "
                 "reason=disabled",
                 parsed.intents[0].name if parsed.intents else "invalid",
             )
+            if submit_marker:
+                return self._reject_food_submit_marker(
+                    event, "submit_tool_disabled"
+                )
             if parsed.intents and parsed.intents[0].name == "send_sticker":
                 return (
                     self._with_sticker_tool_failure(
@@ -6849,6 +6889,13 @@ class QQBotEnhancerPlugin(Star):
             logger.info(
                 "qqbot_enhancer safe_tool marker rejected reason=count_or_limit"
             )
+            if submit_marker:
+                reason = (
+                    "submit_tool_action_limit"
+                    if max_actions < 1
+                    else "submit_tool_too_many"
+                )
+                return self._reject_food_submit_marker(event, reason)
             if parsed.intents and parsed.intents[0].name == "send_sticker":
                 return (
                     self._with_sticker_tool_failure(
@@ -6866,6 +6913,14 @@ class QQBotEnhancerPlugin(Star):
                 "reason=invalid_or_denied",
                 intent.name,
             )
+            if intent.name == "submit_food_review":
+                if intent.name not in enabled:
+                    reason = "submit_tool_denied"
+                elif intent.error == "字段过长":
+                    reason = "submit_tool_over_fields"
+                else:
+                    reason = "submit_tool_malformed"
+                return self._reject_food_submit_marker(event, reason)
             if intent.name == "send_sticker":
                 return (
                     self._with_sticker_tool_failure(
@@ -6893,6 +6948,10 @@ class QQBotEnhancerPlugin(Star):
             intent.name,
             result is not None,
         )
+        if result is None and intent.name == "submit_food_review":
+            return self._reject_food_submit_marker(
+                event, "submit_tool_no_result"
+            )
         if result is None and intent.name == "send_sticker":
             reason = self._last_sticker_tool_failure or "no_match"
             return (

@@ -17,12 +17,14 @@ Bot ：要把这条评价添加到 food.dlsz.top 吗？回复「添加」我就�
 用户：添加
 Bot ：已提交到 food.dlsz.top：老王火锅（南关区），口味 4.5 / 性价比 3。
 
-用户：帮我提交老王火锅，口味 4.5
+用户：帮我把老王火锅添加到 food，口味 4.5
 Bot ：还差这些信息：位置、性价比分（0.1-5）、评价内容。补全后我再提交到 food.dlsz.top。
 ```
 
 **只收集、不提交**的字段：日期由站点按当天生成（插件不发 `review_date`，也不向用户索要）；
-密钥默认 = 发送者 QQ，由插件在请求体里注入，从不进入 prompt、日志或回复；
+提交密钥（`password` 字段）默认 = 发送者 QQ，由插件在 POST 请求体里注入；该字段/值从不出现在工具参数、日志或回复中。
+注意：direct 模式的身份上下文本来就会把发送者 QQ 作为身份元数据写进 prompt（既有功能），
+它不是提交密钥，也不能用于提交；插件从不在 prompt 里说明或使用 password。
 用户名默认 = 群昵称（取不到时用 `food_submit_username_fallback`）。
 
 ## 2. 站点契约（t1 原文摘要）
@@ -95,7 +97,15 @@ Content-Type: application/json; charset=utf-8
 - **超时/大小**：`food_submit_timeout_seconds`、`food_submit_max_response_bytes`；
   非 JSON/超限响应按失败处理。
 - **密钥**：`password = event.get_sender_id()` 只在 `build_food_submit_payload` 里注入；
-  不写日志、不进 prompt、不进回复。站点错误文本不含密码。
+  该字段/值不写日志、不进入工具参数、不进入回复。站点错误文本不含密码。
+  direct 模式 prompt 里的发送者 QQ 是**既有身份上下文**（身份元数据，不是 password，
+  也不会被当成提交密钥使用）；模型无法通过工具传密码（白名单拒绝 `password=`）。
+- **不可信网页注入**：`fetch_webpage` 返回的文本会把 `[[` 中和成 `[ [`，且工具结果会打上
+  `qqbot_enhancer_tool_processed` 标记，`on_decorating_result` 不再二次解析，恶意页面无法
+  注入 `[[tool:submit_food_review ...]]` 触发写入。
+- **非法提交 marker**：被识别为 `submit_food_review` 但被禁用/参数非法/字段超长/多条 marker/
+  执行无结果时，整条回复替换为固定的中文说明（`food_submit_tool_rejected_reply`），
+  不保留模型写的“已提交”，也不会 POST。
 - **字段清洗**：店名/位置拒绝 URL/路径/控制字符；评价只保留单行可打印文本并截断；
   标签按 `,，、;；|` 切分、去重、限额。
 - 其它复用 t2 的 `safe_tools` 白名单与 t1 的只读查询接口；不登录站点、不带 Cookie。
@@ -117,7 +127,7 @@ Content-Type: application/json; charset=utf-8
 | `food_nl_probability` / `food_nl_cooldown_seconds` / `food_nl_min_message_chars` | 0.35 / 120 / 4 | 文字触发 |
 | `food_nl_image_enabled` / `food_nl_image_probability` | true / 0.25 | 无文字美食图 |
 | `food_nl_image_without_caption_enabled` | false | 无视觉描述时也追问 |
-| `food_submit_*_reply` | 中文模板 | 缺字段/成功/重复/位置/404/拒绝/网络/冷却/图追问/多义位置 |
+| `food_submit_*_reply` | 中文模板 | 缺字段/成功/重复/位置/404/拒绝/网络/冷却/图追问/多义位置/工具被拒 |
 
 `/option` 会显示「AI 美食提交：已启用（仅 POST …；缺字段会追问；密钥默认发送者 QQ，
 不显示不记录）」与「美食话题参与：开启；概率 …；冷却 …；最短 … 字；美食图 …」。
@@ -135,8 +145,8 @@ Content-Type: application/json; charset=utf-8
 
 ```bash
 cd "/home/stevehim/QQ Ai bot"
-python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmit -q   # 28 tests
-python3 -m unittest discover -s tests -q                           # 497 tests OK
+python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmit -q   # 35 tests
+python3 -m unittest discover -s tests -q                           # 504 tests OK
 ```
 
 本机只读探针（不写数据，2026-11 实测）：
@@ -152,7 +162,8 @@ GET https://food.dlsz.top/api/upload -> 405   # POST 端点存在且拒绝 GET
 执行、缺字段追问且不 POST、分数越界本地追问、普通「我吃过」不写生产 + 确认后提交草稿、
 重复用户名/位置已存在/v1.1 `code`/500 的中文映射且不谎称成功、密码不进 prompt/日志/回复、
 固定 https 端点与 JSON body、跨 host 跳转拒绝、HTTPError JSON 解析、SSRF/任意 URL 拒绝、
-一次回复两个 marker 不执行、禁用时不暴露工具、`/option` 状态、纯美食图追问不提交、
+一次回复两个 marker 不执行、禁用时不暴露工具、`/option` 状态、纯美食图追问不提交、网页注入 marker 不写入且文本被中和、非法/超长/多条/禁用/无结果 marker 用固定中文替换模型
+文字且不 POST（含 memory 模式）、
 非美食图沉默、美食概率未命中不回退 ambient、纯函数（分数/标签/意图/错误码）。
 
 ## 8. 部署

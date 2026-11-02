@@ -28,7 +28,7 @@ POST https://food.dlsz.top/api/upload      Content-Type: application/json; chars
 | `value_score` | number | 必填 | 同上 |
 | `comment` | string | 必填 | 评价正文，去空后不能为空 |
 | `username` | string(≤100) | 可选 | 缺省存成 `用户N`；**同一餐厅内唯一**，重复 → 400 `DUPLICATE_USERNAME` |
-| `password` | string | 可选 | 设置后可用 `PUT /api/reviews/<id>` 改评价；服务端 pbkdf2:sha256 存储，任何响应/日志**不回显**。AI 流程默认 = 发送者 QQ 号（插件侧注入，不进 prompt/URL/日志） |
+| `password` | string | 可选 | 设置后可用 `PUT /api/reviews/<id>` 改评价；服务端 pbkdf2:sha256 存储，任何响应/日志**不回显**。AI 流程默认 = 发送者 QQ 号（插件侧注入 POST body；该字段/值不进工具参数/URL/日志/回复；direct prompt 里的 QQ 是既有身份元数据，非密码） |
 | `review_date` | `"YYYY-MM-DD"` | 可选 | 非法值**静默回退**为服务器当前时间（不报错） |
 | `tags` | array[string] | 可选 | 标签自动创建并绑定到该餐厅；**必须是字符串数组**（v1 下数组含非字符串 → 500） |
 

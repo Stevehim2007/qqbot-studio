@@ -377,8 +377,37 @@ def html_to_text(html: str) -> tuple[str, str]:
         parser.close()
     except Exception:  # Best-effort extraction; never fail on malformed HTML.
         pass
-    title = normalize_text("".join(parser.title_parts))[:200]
-    return title, normalize_text("".join(parser.chunks))
+    title = neutralize_tool_markers(
+        normalize_text("".join(parser.title_parts))[:200]
+    )
+    return title, neutralize_tool_markers(
+        normalize_text("".join(parser.chunks))
+    )
+
+
+TOOL_MARKER_NEUTRALIZE_RE = re.compile(r"\[\s*\[")
+TOOL_MARKER_NEUTRALIZE_MAX = 2000
+
+
+def neutralize_tool_markers(text: object) -> str:
+    """Break ``[[tool:`` sequences in fetched text so they can never be re-parsed.
+
+    Fetched pages are untrusted input; a page could otherwise smuggle a
+    ``[[tool:submit_food_review ...]]`` marker into the reply and have the
+    plugin execute it. Only double opening brackets are rewritten (``[ [`).
+    """
+
+    value = str(text or "")
+    count = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        if count > TOOL_MARKER_NEUTRALIZE_MAX:
+            return match.group(0)
+        return "[ ["
+
+    return TOOL_MARKER_NEUTRALIZE_RE.sub(_replace, value)
 
 
 def truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
@@ -420,8 +449,10 @@ def build_page_result(
 
 
 def format_page_text(page: PageResult) -> str:
-    header = f"网页：{page.title}" if page.title else f"网页：{page.url}"
-    body = page.text or "（网页没有可读正文）"
+    header = f"网页：{neutralize_tool_markers(page.title)}" if page.title else (
+        f"网页：{page.url}"
+    )
+    body = neutralize_tool_markers(page.text) or "（网页没有可读正文）"
     parts = [header, "", body]
     if page.truncated:
         parts.extend(["", "（内容已截断）"])

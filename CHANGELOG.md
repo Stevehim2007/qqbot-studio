@@ -21,7 +21,10 @@
 - 群聊非 @ 只对美食消息/图片参与（概率/冷却/最短字数），与 ambient 概率互斥不双触发；无文字美食图只追问不提交。
 - direct 与 AstrBot memory 双模式注入幂等工具 catalog；`/option` 显示美食提交与美食话题状态。
 - 新增 `docs/food-ai-submission.md`（契约/安全/测试证据/猫娘群 Bot 提示词）。
-- 全量 497 tests OK。
+- 安全修复（t4 P1）：fetch_webpage 返回文本中和 `[[`、工具结果标记 `qqbot_enhancer_tool_processed`
+  且 `on_decorating_result` 不再二次解析，恶意网页无法注入 `submit_food_review` 写入；
+  被禁用/参数非法/字段超长/多条 marker 的提交工具整条替换为固定中文说明，不再保留模型“已提交”文字。
+- 全量 504 tests OK。
 
 ## v4.0.4
 
