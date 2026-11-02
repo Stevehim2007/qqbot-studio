@@ -10040,3 +10040,292 @@ class TestFoodSearch(unittest.IsolatedAsyncioTestCase):
             "search_food_restaurants",
             plugin._safe_tool_system_instruction(),
         )
+
+
+class TestFoodLocationPath(unittest.IsolatedAsyncioTestCase):
+    """Full-address splitting and missing-location creation for submits."""
+
+    def setUp(self):
+        self.marker = (
+            '[[tool:submit_food_review restaurant="牛逼火锅" '
+            'location="中国牛逼市" taste="4" value="3" '
+            'comment="汤底香"]]'
+        )
+        self.queries = []
+        self.posts = []
+        self.location_map = {}
+        self.post_results = [(200, {"success": True, "restaurant_id": 9})]
+        self.logger_patch = mock.patch.object(MODULE, "logger", mock.MagicMock())
+        self.logger = self.logger_patch.start()
+        self.addCleanup(self.logger_patch.stop)
+        self.plugin = self._make_plugin()
+
+    async def _fake_locations(self, query):
+        self.queries.append(query)
+        return [dict(item) for item in self.location_map.get(query, [])]
+
+    def _fake_post(self, payload):
+        self.posts.append(payload)
+        index = min(len(self.posts) - 1, len(self.post_results) - 1)
+        return self.post_results[index]
+
+    def _make_plugin(self, **overrides):
+        context = FakeContext(responder=lambda kwargs: self.marker)
+        config = {
+            "safe_tools_enabled": True,
+            "safe_tools_marker_enabled": True,
+            "safe_tools_allow_submit_food_review": True,
+            "food_submit_enabled": True,
+            "food_submit_cooldown_seconds": 0,
+            "safe_tools_allow_search_food_restaurants": True,
+            "food_nl_enabled": True,
+            "food_nl_probability": 1.0,
+            "food_nl_cooldown_seconds": 0,
+            "group_cooldown_seconds": 0,
+            "user_cooldown_seconds": 0,
+            "reply_probability": 1.0,
+        }
+        config.update(overrides)
+        plugin = make_plugin(context, **config)
+        plugin._search_food_locations = self._fake_locations
+        plugin._post_food_submit_sync = self._fake_post
+        return plugin
+
+    @staticmethod
+    def _marker_for(location):
+        return (
+            '[[tool:submit_food_review restaurant="牛逼火锅" '
+            f'location="{location}" taste="4" value="3" '
+            'comment="汤底香"]]'
+        )
+
+    @staticmethod
+    def _event(text):
+        return FakeEvent([Plain(text)], message_str=text, private=True)
+
+    async def _submit(self, text):
+        return await run_handler(self.plugin, self._event(text))
+
+    # -- pure parser ---------------------------------------------------
+    def test_pure_location_parser_and_matcher(self):
+        food = importlib.import_module("food")
+        self.assertEqual(
+            food.split_food_location_path("中国牛逼市"), ["中国", "牛逼市"]
+        )
+        self.assertEqual(
+            food.split_food_location_path("中国/吉林省/长春市/南关区"),
+            ["中国", "吉林省", "长春市", "南关区"],
+        )
+        self.assertEqual(
+            food.split_food_location_path("中国 > 吉林省 → 长春市"),
+            ["中国", "吉林省", "长春市"],
+        )
+        self.assertEqual(
+            food.split_food_location_path("吉林省-长春市—南关区"),
+            ["吉林省", "长春市", "南关区"],
+        )
+        self.assertEqual(
+            food.split_food_location_path("长春市南关区"),
+            ["长春市", "南关区"],
+        )
+        self.assertEqual(food.split_food_location_path("南关区"), ["南关区"])
+        self.assertEqual(food.split_food_location_path("中国"), ["中国"])
+        self.assertEqual(food.split_food_location_path("http://evil/x"), [])
+        self.assertEqual(food.split_food_location_path("坏\x01地址"), [])
+        long_name = "长" * 40
+        self.assertEqual(
+            food.split_food_location_path(long_name, max_part_chars=30),
+            [long_name],
+        )
+        china = [{"id": 1, "name": "中国", "path": "中国"}]
+        self.assertEqual(
+            food.match_food_location(["中国", "牛逼市"], china)["kind"],
+            "prefix",
+        )
+        self.assertEqual(
+            food.match_food_location(["中国"], china)["kind"], "full"
+        )
+        self.assertEqual(
+            food.match_food_location(["火星", "基地"], china)["kind"],
+            "none",
+        )
+        self.assertEqual(
+            food.format_food_location_path(["长春市", "南关区"]),
+            "长春市/南关区",
+        )
+
+    # -- resolution flows ----------------------------------------------
+    async def test_china_plus_new_city_creates_under_china(self):
+        self.location_map["中国"] = [
+            {"id": 1, "name": "中国", "path": "中国"}
+        ]
+        results = await self._submit(
+            "帮我把牛逼火锅添加到 food：中国牛逼市，口味4，性价比3，汤底香"
+        )
+        self.assertEqual(len(self.posts), 1)
+        payload = self.posts[0]
+        self.assertEqual(payload["new_location_name"], "牛逼市")
+        self.assertEqual(payload["new_location_parent_id"], 1)
+        self.assertNotIn("location_id", payload)
+        self.assertEqual(payload["password"], "20002")
+        self.assertIn("已提交到 food.dlsz.top", results[0].text)
+        # Longest prefix queried first, then the existing ancestor.
+        self.assertEqual(self.queries[0], "中国/牛逼市")
+        self.assertIn("中国", self.queries)
+
+    async def test_full_existing_path_uses_location_id(self):
+        self.location_map["中国/吉林省/长春市/南关区"] = [
+            {
+                "id": 7632,
+                "name": "南关区",
+                "path": "中国/吉林省/长春市/南关区",
+            }
+        ]
+        self.marker = self._marker_for("中国/吉林省/长春市/南关区")
+        self.plugin = self._make_plugin()
+        await self._submit(
+            "帮我把牛逼火锅添加到 food：中国/吉林省/长春市/南关区，"
+            "口味4，性价比3，汤底香"
+        )
+        self.assertEqual(len(self.posts), 1)
+        payload = self.posts[0]
+        self.assertEqual(payload["location_id"], 7632)
+        self.assertNotIn("new_location_name", payload)
+        self.assertNotIn("new_location_parent_id", payload)
+
+    async def test_missing_tail_chain_attaches_to_deepest_prefix(self):
+        self.location_map["中国/吉林省"] = [
+            {"id": 2, "name": "吉林省", "path": "中国/吉林省"}
+        ]
+        self.marker = self._marker_for("中国/吉林省/长春市/新区")
+        self.plugin = self._make_plugin()
+        await self._submit(
+            "帮我把牛逼火锅添加到 food：中国/吉林省/长春市/新区，"
+            "口味4，性价比3，汤底香"
+        )
+        payload = self.posts[0]
+        self.assertEqual(payload["new_location_name"], "长春市/新区")
+        self.assertEqual(payload["new_location_parent_id"], 2)
+        self.assertEqual(
+            self.queries[:2],
+            ["中国/吉林省/长春市/新区", "中国/吉林省/长春市"],
+        )
+
+    async def test_separator_variants_resolve_full_path(self):
+        self.location_map["中国/吉林省/长春市"] = [
+            {"id": 3, "name": "长春市", "path": "中国/吉林省/长春市"}
+        ]
+        self.marker = self._marker_for("中国 > 吉林省 → 长春市")
+        self.plugin = self._make_plugin()
+        await self._submit(
+            "帮我把牛逼火锅添加到 food：中国 > 吉林省 → 长春市，"
+            "口味4，性价比3，汤底香"
+        )
+        self.assertEqual(self.posts[0]["location_id"], 3)
+        self.assertEqual(self.queries[0], "中国/吉林省/长春市")
+
+    async def test_unknown_prefix_passes_full_path_without_parent(self):
+        self.marker = self._marker_for("火星/基地")
+        self.plugin = self._make_plugin()
+        await self._submit(
+            "帮我把牛逼火锅添加到 food：火星/基地，口味4，性价比3，汤底香"
+        )
+        payload = self.posts[0]
+        self.assertEqual(payload["new_location_name"], "火星/基地")
+        self.assertNotIn("new_location_parent_id", payload)
+        self.assertEqual(self.queries, ["火星/基地", "火星"])
+
+    # -- safety / no partial writes ------------------------------------
+    async def test_ambiguous_location_clarifies_without_post(self):
+        self.location_map["南关区"] = [
+            {"id": 1, "name": "南关区", "path": "中国/吉林省/长春市/南关区"},
+            {"id": 2, "name": "南关区", "path": "中国/辽宁省/沈阳市/南关区"},
+        ]
+        self.marker = (
+            '[[tool:submit_food_review restaurant="牛逼火锅" '
+            'location="南关区" taste="4" value="3" comment="汤底香"]]'
+        )
+        self.plugin = self._make_plugin()
+        results = await self._submit(
+            "帮我把牛逼火锅添加到 food：南关区，口味4，性价比3，汤底香"
+        )
+        self.assertEqual(self.posts, [])
+        self.assertIn("匹配到多个位置", results[0].text)
+
+    async def test_malformed_location_rejected_without_lookup_or_post(self):
+        self.marker = (
+            '[[tool:submit_food_review restaurant="牛逼火锅" '
+            'location="http://evil.example/x" taste="4" value="3" '
+            'comment="汤底香"]]'
+        )
+        self.plugin = self._make_plugin()
+        results = await self._submit(
+            "帮我把牛逼火锅添加到 food：http://evil.example/x，"
+            "口味4，性价比3，汤底香"
+        )
+        self.assertEqual(self.posts, [])
+        self.assertEqual(self.queries, [])
+        self.assertIn("没有生效", results[0].text)
+        self.assertNotIn("[[tool:", results[0].text)
+
+    async def test_missing_fields_never_touch_location_or_post(self):
+        self.marker = (
+            '[[tool:submit_food_review restaurant="牛逼火锅" taste="4"]]'
+        )
+        self.plugin = self._make_plugin()
+        results = await self._submit("帮我把牛逼火锅添加到 food，口味4")
+        self.assertEqual(self.posts, [])
+        self.assertEqual(self.queries, [])
+        self.assertIn("还差这些信息", results[0].text)
+
+    # -- race / duplicate creation -------------------------------------
+    async def test_location_exists_retries_resolution_once(self):
+        self.location_map["中国"] = [
+            {"id": 1, "name": "中国", "path": "中国"}
+        ]
+
+        def first_fails(payload):
+            self.posts.append(payload)
+            if len(self.posts) == 1:
+                # Someone created it between lookup and POST.
+                self.location_map["中国/牛逼市"] = [
+                    {"id": 5, "name": "牛逼市", "path": "中国/牛逼市"}
+                ]
+                return 400, {"error": "位置「牛逼市」已存在"}
+            return 200, {"success": True, "restaurant_id": 9}
+
+        self.plugin._post_food_submit_sync = first_fails
+        results = await self._submit(
+            "帮我把牛逼火锅添加到 food：中国牛逼市，口味4，性价比3，汤底香"
+        )
+        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(self.posts[0]["new_location_name"], "牛逼市")
+        self.assertEqual(self.posts[1]["location_id"], 5)
+        self.assertNotIn("new_location_name", self.posts[1])
+        self.assertEqual(self.posts[1]["password"], "20002")
+        self.assertIn("已提交到 food.dlsz.top", results[0].text)
+
+    async def test_location_exists_reports_after_single_retry(self):
+        self.location_map["中国"] = [
+            {"id": 1, "name": "中国", "path": "中国"}
+        ]
+        self.post_results = [
+            (400, {"error": "位置「牛逼市」已存在"})
+        ]
+        results = await self._submit(
+            "帮我把牛逼火锅添加到 food：中国牛逼市，口味4，性价比3，汤底香"
+        )
+        # Resolution is retried once; the location still does not exist, so no
+        # duplicate write is attempted and the existing-location message wins.
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.queries.count("中国/牛逼市"), 2)
+        self.assertIn("已存在", results[0].text)
+        self.assertNotIn("已提交", results[0].text)
+
+    def test_catalog_tells_ai_to_pass_full_location(self):
+        plugin = self._make_plugin()
+        self.assertIn("完整地址", plugin._safe_tool_system_instruction())
+        memory = self._make_plugin(memory_mode="astrbot")
+        self.assertIn(
+            "完整地址", memory._food_submit_tool_catalog_instruction()
+        )

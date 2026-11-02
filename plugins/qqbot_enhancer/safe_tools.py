@@ -336,6 +336,8 @@ def tool_instruction(enabled_tools: list[str]) -> str:
             "submit_food_review 只在用户明确要求把餐厅/评价添加、记录或上传到 "
             "food.dlsz.top 时使用；必填店名/位置/味道分/性价比分/评价，"
             "缺哪个就留空并照常调用一次（插件会追问缺少项），"
+            "location 可以直接写完整地址（如 中国/吉林省/长春市/南关区 或 中国长春市南关区），"
+            "插件会自动拆分并创建缺失的上级/子级位置，用户不用手动拆；"
             "不要编造分数，不要传密码/QQ/日期"
         )
     if "search_food_restaurants" in enabled_tools:

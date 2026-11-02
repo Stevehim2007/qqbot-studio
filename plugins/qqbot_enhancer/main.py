@@ -117,7 +117,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "2.5.0"
+PLUGIN_FALLBACK_VERSION = "2.6.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -1386,35 +1386,60 @@ class QQBotEnhancerPlugin(Star):
         self,
         location: str,
     ) -> dict[str, Any]:
-        try:
-            items = await self._search_food_locations(location)
-        except asyncio.TimeoutError:
-            return {"error": "timeout"}
-        except Exception:
-            return {"error": "error"}
-        needle = str(location or "").strip().casefold()
-        for item in items:
-            name = str(item.get("name", "")).strip()
-            if name.casefold() == needle and item.get("id") is not None:
+        """Resolve a full address, creating only the missing tail on the site.
+
+        "中国牛逼市" queries "中国/牛逼市" then "中国": with 中国 existing it
+        returns new_location_name="牛逼市" + new_location_parent_id=<中国 id>.
+        A full existing path returns location_id; unsafe/ambiguous input is a
+        clarification error (no partial write).
+        """
+
+        parts = food_engine.split_food_location_path(
+            location,
+            max_parts=max(
+                1, self._cfg_int("food_submit_location_max_parts", 1)
+            ),
+            max_part_chars=max(
+                1,
+                self._cfg_int("food_submit_location_part_max_chars", 1),
+            ),
+        )
+        if not parts:
+            return {"error": "unsafe"}
+        for depth in range(len(parts), 0, -1):
+            prefix = parts[:depth]
+            query = food_engine.format_food_location_path(prefix)
+            try:
+                items = await self._search_food_locations(query)
+            except asyncio.TimeoutError:
+                return {"error": "timeout"}
+            except Exception:
+                return {"error": "error"}
+            match = food_engine.match_food_location(parts, items)
+            if match.get("kind") == "full":
                 return {
-                    "location_id": item.get("id"),
-                    "name": name,
+                    "location_id": match.get("id"),
+                    "name": str(match.get("name", "")),
                 }
-        if len(items) == 1 and items[0].get("id") is not None:
-            return {
-                "location_id": items[0].get("id"),
-                "name": str(items[0].get("name", "")).strip(),
-            }
-        if len(items) > 1:
-            options = []
-            for item in items[:3]:
-                path = str(
-                    item.get("path", "") or item.get("name", "")
-                ).strip()
-                if path:
-                    options.append(path)
-            return {"error": "ambiguous", "options": options}
-        return {"new_location_name": str(location)}
+            if match.get("kind") == "prefix":
+                tail = list(match.get("tail") or [])
+                return {
+                    "new_location_name": (
+                        food_engine.format_food_location_path(tail)
+                    ),
+                    "new_location_parent_id": match.get("id"),
+                }
+            if match.get("kind") == "ambiguous":
+                return {
+                    "error": "ambiguous",
+                    "options": list(match.get("options") or [])[:3],
+                }
+        return {
+            "new_location_name": food_engine.format_food_location_path(
+                parts
+            ),
+            "new_location_parent_id": None,
+        }
 
     async def _perform_food_submit(
         self,
@@ -1494,6 +1519,9 @@ class QQBotEnhancerPlugin(Star):
             password=password,
             location_id=resolved.get("location_id"),
             new_location_name=str(resolved.get("new_location_name", "")),
+            new_location_parent_id=resolved.get(
+                "new_location_parent_id"
+            ),
         )
         if not payload:
             logger.info(
@@ -1507,51 +1535,82 @@ class QQBotEnhancerPlugin(Star):
                 )
             )
         timeout = max(1, self._cfg_int("food_submit_timeout_seconds", 1))
-        try:
-            status, body = await asyncio.wait_for(
-                asyncio.to_thread(self._post_food_submit_sync, payload),
-                timeout=timeout + 2,
-            )
-        except asyncio.TimeoutError:
-            logger.info(
-                "qqbot_enhancer food_submit success=False kind=timeout"
-            )
-            self._save_food_submit_draft(event, fields)
-            return event.plain_result(
-                self._join_food_submit_text(
-                    clean_text,
-                    self._cfg_str("food_submit_error_reply"),
+        retried_location = False
+        while True:
+            try:
+                status, body = await asyncio.wait_for(
+                    asyncio.to_thread(self._post_food_submit_sync, payload),
+                    timeout=timeout + 2,
                 )
-            )
-        except Exception:
-            logger.info(
-                "qqbot_enhancer food_submit success=False kind=internal"
-            )
-            self._save_food_submit_draft(event, fields)
-            return event.plain_result(
-                self._join_food_submit_text(
-                    clean_text,
-                    self._cfg_str("food_submit_error_reply"),
+            except asyncio.TimeoutError:
+                logger.info(
+                    "qqbot_enhancer food_submit success=False kind=timeout"
                 )
-            )
-        result = food_engine.parse_food_submit_response(status, body)
-        if result.get("ok"):
-            self._clear_food_submit_draft(event)
-            event.set_extra("qqbot_enhancer_food_submit_done", True)
-            logger.info(
-                "qqbot_enhancer food_submit success=True restaurant_id=%s",
-                result.get("restaurant_id"),
-            )
-            message = self._format_collected_reply(
-                self._cfg_str("food_submit_success_reply"),
-                name=str(fields.get("restaurant", "")),
-                location=str(fields.get("location", "")),
-                taste=f"{float(fields['taste']):g}",
-                value=f"{float(fields['value']):g}",
-            )
-            return event.plain_result(
-                self._join_food_submit_text(clean_text, message)
-            )
+                self._save_food_submit_draft(event, fields)
+                return event.plain_result(
+                    self._join_food_submit_text(
+                        clean_text,
+                        self._cfg_str("food_submit_error_reply"),
+                    )
+                )
+            except Exception:
+                logger.info(
+                    "qqbot_enhancer food_submit success=False kind=internal"
+                )
+                self._save_food_submit_draft(event, fields)
+                return event.plain_result(
+                    self._join_food_submit_text(
+                        clean_text,
+                        self._cfg_str("food_submit_error_reply"),
+                    )
+                )
+            result = food_engine.parse_food_submit_response(status, body)
+            if result.get("ok"):
+                self._clear_food_submit_draft(event)
+                event.set_extra("qqbot_enhancer_food_submit_done", True)
+                logger.info(
+                    "qqbot_enhancer food_submit success=True "
+                    "restaurant_id=%s",
+                    result.get("restaurant_id"),
+                )
+                message = self._format_collected_reply(
+                    self._cfg_str("food_submit_success_reply"),
+                    name=str(fields.get("restaurant", "")),
+                    location=str(fields.get("location", "")),
+                    taste=f"{float(fields['taste']):g}",
+                    value=f"{float(fields['value']):g}",
+                )
+                return event.plain_result(
+                    self._join_food_submit_text(clean_text, message)
+                )
+            # Race: the location may have been created between our lookup and
+            # this POST. Re-resolve exactly once and retry with the real id.
+            if (
+                result.get("kind") == "location_exists"
+                and payload.get("new_location_name")
+                and not retried_location
+            ):
+                retried_location = True
+                retried = await self._resolve_food_submit_location(
+                    str(fields.get("location", ""))
+                )
+                if retried.get("location_id") is not None:
+                    retried_payload = (
+                        food_engine.build_food_submit_payload(
+                            fields,
+                            username=self._food_submit_username(event),
+                            password=password,
+                            location_id=retried.get("location_id"),
+                        )
+                    )
+                    if retried_payload:
+                        logger.info(
+                            "qqbot_enhancer food_submit "
+                            "retry=location_exists"
+                        )
+                        payload = retried_payload
+                        continue
+            break
         kind = str(result.get("kind", ""))
         logger.info(
             "qqbot_enhancer food_submit success=False kind=%s",
@@ -1958,7 +2017,10 @@ class QQBotEnhancerPlugin(Star):
                 'taste="4.5" value="3.5" comment="评价" tags="火锅,夜宵"]]；'
                 "必填店名/位置/味道分/性价比分/评价内容，缺哪个就留空并照常调用"
                 "一次（插件会追问缺少项），不要编造分数；"
-                "不要传密码/QQ/日期，密钥由插件用发送者 QQ 自动注入且不显示。"
+                "location 可以直接写完整地址（如 中国/吉林省/长春市/南关区 或 "
+                "中国长春市南关区），插件会自动拆分并创建缺失的位置层级，"
+                "用户不用手动拆；不要传密码/QQ/日期，"
+                "密钥由插件用发送者 QQ 自动注入且不显示。"
                 "普通美食聊天不要调用，最多一次，不要解释标记。"
             )
         if self._food_search_flag_enabled():

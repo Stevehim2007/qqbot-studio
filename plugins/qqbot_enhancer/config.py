@@ -68,6 +68,8 @@ DEFAULTS: dict[str, Any] = {
     "food_submit_draft_ttl_seconds": 600,
     "food_submit_name_max_chars": 100,
     "food_submit_location_max_chars": 60,
+    "food_submit_location_max_parts": 6,
+    "food_submit_location_part_max_chars": 30,
     "food_submit_comment_max_chars": 500,
     "food_submit_tag_max_chars": 20,
     "food_submit_tags_max_count": 5,

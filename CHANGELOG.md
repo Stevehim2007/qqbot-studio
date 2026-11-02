@@ -21,6 +21,19 @@
 - food.dlsz.top 站点位置搜索“日新”下拉点击修复 + 管理员删除饭店 API/UI 已交付为补丁；源目录只读，未部署。
 - fetch 网页工具注入防护、非法 food marker 假成功修复；全量 504 tests OK。
 
+## qqbot_enhancer 2.6.0（插件）
+
+- `submit_food_review` 支持完整地址自动拆分与缺失位置创建：`中国牛逼市` → 已有“中国”下新建“牛逼市”；
+  `中国/吉林省/长春市/南关区` 完整存在 → 直接用 location_id；未知前缀 → 整段作为 new_location_name。
+  纯函数解析支持 `/ \ > → - —` 分隔符与 省/市/区/县/镇/乡/街道/路/街/州 后缀、`中国` 特例、长度上限、
+  URL/控制字符拒绝与原文回退；仍只用现有 `GET /api/locations/search` + `POST /api/upload`，不新增站点端点。
+- `位置已存在` 竞态：重新解析一次，拿到 id 才用 location_id 重试一次；仍不存在则回“位置已存在”，不重复建点。
+  歧义/不安全输入中文追问、不部分写入；只有明确添加意图且字段齐全才解析/建点；密码/日期规则不变。
+- 工具 catalog 提示 AI 可直接传完整地址，用户无需手动拆分；新增 `food_submit_location_max_parts` /
+  `_part_max_chars` 配置（DEFAULTS/schema 251/251）。
+- 测试：TestFoodLocationPath 12 例（纯解析/分隔符/中国特例/完整路径/缺失链/未知前缀/歧义/URL/
+  字段缺失不建点/竞态重试/只重试一次/catalog）；插件 297 / 全仓 552 tests OK。
+
 ## qqbot_enhancer 2.5.0（插件）
 
 - 新增自然语言餐厅搜索 `search_food_restaurants`（无需 slash）：固定 `https://food.dlsz.top` 的三个只读 GET

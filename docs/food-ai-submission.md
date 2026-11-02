@@ -86,6 +86,15 @@ Content-Type: application/json; charset=utf-8
 - 缺任一必需字段（店名/位置/味道分/性价比分/评价）→ 中文列出缺什么，不提交；
   分数越界（不在 0.1–5）单独提示，不提交。
 - 一次回复最多一个工具调用、最多一次 POST；成功才说「已提交」。
+- **完整地址自动拆分/建点**：`location` 可以整段交给 AI（如“中国牛逼市”“中国/吉林省/长春市/南关区”
+  “中国 > 吉林省 → 长春市”），用户不用手动拆。插件在 `food.py` 纯函数里按 `/ \ > → - —` 与
+  省/市/区/县/镇/乡/街道/路/街/州 后缀拆分（`中国` 特例作首段，超长/URL/控制字符拒绝，回退保留原文）；
+  提交前用 `GET /api/locations/search` 从最长前缀向短查询：完整路径命中 → `location_id`；
+  命中已有最深前缀（如“中国” id=1）→ `new_location_name="牛逼市"` + `new_location_parent_id=1`；
+  完全不存在 → 整段作为 `new_location_name` 交给现有 `/api/upload`（不新增站点端点）。
+  站点返回 `位置已存在`（竞态）→ 重新解析一次：拿到 id 就带 `location_id` 重试一次，仍不存在则回
+  “位置已存在”提示，不重复写；歧义/不安全输入 → 中文追问，不部分写入。只有明确添加意图且其它字段
+  齐全时才解析/建点，密码与日期规则不变。
 - **草稿隔离**：缺字段草稿按 `unified_msg_origin + 发送者 ID` 存（`_food_submit_key`）；
   同群两个成员交错补字段/确认不会串数据，各自确认只提交各自店名/位置/分数/评价/用户名/密码；
   同一发送者在两个群（不同 UMO）也互不影响。同一发送者换店名时 `_merge_food_submit_fields`
@@ -128,6 +137,7 @@ Content-Type: application/json; charset=utf-8
 | `food_submit_cooldown_seconds` | 60 | 同用户提交冷却 |
 | `food_submit_draft_ttl_seconds` | 600 | 缺字段草稿有效期 |
 | `food_submit_name/location/comment/tag_max_chars` | 100/60/500/20 | 字段长度 |
+| `food_submit_location_max_parts` / `_part_max_chars` | 6 / 30 | 地址层级数/单层长度 |
 | `food_submit_tags_max_count` | 5 | 标签数 |
 | `food_submit_username_max_chars` / `_fallback` | 32 / 群友 | 用户名 |
 | `food_nl_enabled` | true | 群聊美食话题参与 |
@@ -234,6 +244,8 @@ GET https://food.dlsz.top/api/upload -> 405   # POST 端点存在且拒绝 GET
   comment="评价", tags="火锅,夜宵")。
 - 必填：店名、位置、味道分、性价比分、评价内容。缺哪个就先问哪个，一次问清楚，
   不要编造分数，不要提交不完整的信息。
+- 位置不用自己拆：用户给完整地址就整段传（如“中国/吉林省/长春市/南关区”或“中国牛逼市”），
+  系统会自动拆分并创建缺失的上级/子级位置喵。
 - 分数范围 0.1–5；用户给“4 分/4.5 分”都能理解。
 - 用户名用群昵称就行；日期不用问也不用写，站点会自动用今天。
 - 密钥（密码）由系统自动使用发送者 QQ，你永远看不到、也不要问、不要提、不要输出。

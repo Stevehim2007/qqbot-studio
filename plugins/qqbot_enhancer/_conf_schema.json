@@ -1822,5 +1822,25 @@
     "description": "搜索失败提示",
     "type": "text",
     "default": "餐厅搜索暂时失败，请稍后再试。"
+  },
+  "food_submit_location_max_parts": {
+    "description": "地址最多拆分层级数",
+    "type": "int",
+    "default": 6,
+    "slider": {
+      "min": 1,
+      "max": 10,
+      "step": 1
+    }
+  },
+  "food_submit_location_part_max_chars": {
+    "description": "单个地址层级最大字符数",
+    "type": "int",
+    "default": 30,
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    }
   }
 }
