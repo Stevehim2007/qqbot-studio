@@ -86,6 +86,13 @@ Content-Type: application/json; charset=utf-8
 - 缺任一必需字段（店名/位置/味道分/性价比分/评价）→ 中文列出缺什么，不提交；
   分数越界（不在 0.1–5）单独提示，不提交。
 - 一次回复最多一个工具调用、最多一次 POST；成功才说「已提交」。
+- **草稿隔离**：缺字段草稿按 `unified_msg_origin + 发送者 ID` 存（`_food_submit_key`）；
+  同群两个成员交错补字段/确认不会串数据，各自确认只提交各自店名/位置/分数/评价/用户名/密码；
+  同一发送者在两个群（不同 UMO）也互不影响。同一发送者换店名时 `_merge_food_submit_fields`
+  会丢弃旧店草稿，不会把 A 店评价拼到 B 店。
+- **无身份 fail safe**：发送者 ID 为空时不建草稿、不写 cooldown 键、不 POST，回固定中文
+  `food_submit_no_sender_reply`（「无法确认你的身份，暂时不能提交评价」）；绝不把多个
+  匿名成员折叠到 `umo:` 共用草稿。草稿超过 `food_submit_draft_ttl_seconds` 自动清理。
 
 ## 4. 安全设计
 
@@ -127,7 +134,7 @@ Content-Type: application/json; charset=utf-8
 | `food_nl_probability` / `food_nl_cooldown_seconds` / `food_nl_min_message_chars` | 0.35 / 120 / 4 | 文字触发 |
 | `food_nl_image_enabled` / `food_nl_image_probability` | true / 0.25 | 无文字美食图 |
 | `food_nl_image_without_caption_enabled` | false | 无视觉描述时也追问 |
-| `food_submit_*_reply` | 中文模板 | 缺字段/成功/重复/位置/404/拒绝/网络/冷却/图追问/多义位置/工具被拒 |
+| `food_submit_*_reply` | 中文模板 | 缺字段/成功/重复/位置/404/拒绝/网络/冷却/图追问/多义位置/工具被拒/身份缺失 |
 
 `/option` 会显示「AI 美食提交：已启用（仅 POST …；缺字段会追问；密钥默认发送者 QQ，
 不显示不记录）」与「美食话题参与：开启；概率 …；冷却 …；最短 … 字；美食图 …」。
@@ -146,7 +153,8 @@ Content-Type: application/json; charset=utf-8
 ```bash
 cd "/home/stevehim/QQ Ai bot"
 python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmit -q   # 35 tests
-python3 -m unittest discover -s tests -q                           # 504 tests OK
+python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmitDraftIsolation -q  # 6 tests
+python3 -m unittest discover -s tests -q                           # 510 tests OK
 ```
 
 本机只读探针（不写数据，2026-11 实测）：
@@ -163,7 +171,8 @@ GET https://food.dlsz.top/api/upload -> 405   # POST 端点存在且拒绝 GET
 重复用户名/位置已存在/v1.1 `code`/500 的中文映射且不谎称成功、密码字段/值不进工具参数/日志/回复（提醒：既有身份上下文中的发送者 QQ 不是密码）、
 固定 https 端点与 JSON body、跨 host 跳转拒绝、HTTPError JSON 解析、SSRF/任意 URL 拒绝、
 一次回复两个 marker 不执行、禁用时不暴露工具、`/option` 状态、纯美食图追问不提交、网页注入 marker 不写入且文本被中和、非法/超长/多条/禁用/无结果 marker 用固定中文替换模型
-文字且不 POST（含 memory 模式）、
+文字且不 POST（含 memory 模式）、双用户交错草稿隔离/各自确认只提交自己的数据/不同群隔离/
+换店重置旧草稿/TTL 过期清理/空发送者 ID fail safe（不建草稿不提交）、
 非美食图沉默、美食概率未命中不回退 ambient、纯函数（分数/标签/意图/错误码）。
 
 ## 8. 部署

@@ -34,7 +34,10 @@
 - 安全修复（t4 P1）：fetch_webpage 返回文本中和 `[[`、工具结果标记 `qqbot_enhancer_tool_processed`
   且 `on_decorating_result` 不再二次解析，恶意网页无法注入 `submit_food_review` 写入；
   被禁用/参数非法/字段超长/多条 marker 的提交工具整条替换为固定中文说明，不再保留模型“已提交”文字。
-- 全量 504 tests OK。
+- 草稿隔离与无身份 fail safe：提交草稿按「会话 UMO + 发送者 ID」隔离，同群多用户交错补字段/确认
+  不会串店名、分数、评价、用户名或密码；同一发送者跨群隔离；换店名重置旧草稿；TTL 过期清理；
+  发送者 ID 为空时不建草稿、不写 cooldown、不提交，回固定中文说明。
+- 全量 510 tests OK。
 
 ## v4.0.4
 

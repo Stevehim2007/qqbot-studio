@@ -108,6 +108,9 @@ DEFAULTS: dict[str, Any] = {
         "这次提交没有生效：请用普通文字告诉我店名、位置、味道分（0.1-5）、"
         "性价比分（0.1-5）和评价内容，不要带链接、密码或额外参数。"
     ),
+    "food_submit_no_sender_reply": (
+        "无法确认你的身份，暂时不能提交评价；请稍后再试。"
+    ),
     "food_nl_enabled": True,
     "food_nl_probability": 0.35,
     "food_nl_cooldown_seconds": 120,

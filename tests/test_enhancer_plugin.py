@@ -9268,3 +9268,328 @@ class TestFoodSubmit(unittest.IsolatedAsyncioTestCase):
                     food.parse_food_submit_response(status, body)["kind"],
                     kind,
                 )
+
+
+class TestFoodSubmitDraftIsolation(unittest.IsolatedAsyncioTestCase):
+    """Food drafts are isolated per (UMO, sender) and fail safe without an id."""
+
+    def setUp(self):
+        self.locations = [
+            {"id": 7, "name": "南关区", "path": "中国/吉林省/长春市/南关区"}
+        ]
+        self.posts = []
+        self.markers = {}
+        self.clock = FakeClock(100.0)
+        self.logger_patch = mock.patch.object(MODULE, "logger", mock.MagicMock())
+        self.logger = self.logger_patch.start()
+        self.addCleanup(self.logger_patch.stop)
+        self.plugin = self._make_plugin()
+
+    def _make_plugin(self, **overrides):
+        def responder(kwargs):
+            prompt = str(kwargs.get("prompt", ""))
+            # The prompt also lists recent messages; only match the current one
+            # so another member's history cannot pick this turn's marker.
+            current = prompt.split("当前用户消息：")[-1]
+            for needle, marker in self.markers.items():
+                if needle in current:
+                    return marker
+            return "好的喵"
+
+        context = FakeContext(responder=responder)
+        config = {
+            "safe_tools_enabled": True,
+            "safe_tools_marker_enabled": True,
+            "safe_tools_allow_submit_food_review": True,
+            "food_submit_enabled": True,
+            "food_submit_cooldown_seconds": 0,
+            "food_submit_draft_ttl_seconds": 120,
+            "food_nl_enabled": True,
+            "food_nl_cooldown_seconds": 0,
+            "food_nl_probability": 1.0,
+            "food_nl_image_probability": 1.0,
+            "group_cooldown_seconds": 0,
+            "user_cooldown_seconds": 0,
+            "reply_probability": 1.0,
+        }
+        config.update(overrides)
+        plugin = make_plugin(context, clock=self.clock, **config)
+        plugin._last_food_submit_at.clear()
+        plugin._food_submit_drafts.clear()
+
+        async def fake_locations(query):
+            return list(self.locations)
+
+        def fake_post(payload):
+            self.posts.append(payload)
+            return 200, {"success": True, "restaurant_id": 1}
+
+        plugin._search_food_locations = fake_locations
+        plugin._post_food_submit_sync = fake_post
+        return plugin
+
+    @staticmethod
+    def _event(
+        text,
+        *,
+        sender_id="20002",
+        sender_name="用户甲",
+        session_id="group-1",
+        private=False,
+    ):
+        return FakeEvent(
+            [Plain(text)],
+            message_str=text,
+            private=private,
+            session_id=session_id,
+            sender_id=sender_id,
+            sender_name=sender_name,
+        )
+
+    async def test_interleaved_partial_drafts_stay_per_user(self):
+        self.markers = {
+            "A店": (
+                '[[tool:submit_food_review restaurant="A店" '
+                'taste="4.5" comment="A汤好喝"]]'
+            ),
+            "B店": (
+                '[[tool:submit_food_review restaurant="B店" '
+                'location="朝阳区" taste="3" value="4"]]'
+            ),
+        }
+        user_a = self._event(
+            "帮我把A店加到 food，口味4.5，A汤好喝",
+            sender_id="10001",
+            sender_name="甲",
+        )
+        user_b = self._event(
+            "帮我把B店加到 food：朝阳区，口味3，性价比4",
+            sender_id="20002",
+            sender_name="乙",
+        )
+        await run_handler(self.plugin, user_a)
+        await run_handler(self.plugin, user_b)
+        self.assertEqual(self.posts, [])
+        self.assertNotEqual(
+            self.plugin._food_submit_key(user_a),
+            self.plugin._food_submit_key(user_b),
+        )
+        draft_a = self.plugin._food_submit_draft(user_a)
+        draft_b = self.plugin._food_submit_draft(user_b)
+        self.assertIsNotNone(draft_a)
+        self.assertIsNotNone(draft_b)
+        self.assertEqual(
+            set(draft_a["fields"]), {"restaurant", "taste", "comment"}
+        )
+        self.assertEqual(
+            set(draft_b["fields"]),
+            {"restaurant", "location", "taste", "value"},
+        )
+        self.assertEqual(draft_a["fields"]["restaurant"], "A店")
+        self.assertEqual(draft_a["fields"]["comment"], "A汤好喝")
+        self.assertEqual(draft_b["fields"]["restaurant"], "B店")
+        self.assertEqual(draft_b["fields"]["location"], "朝阳区")
+        self.assertNotIn("location", draft_a["fields"])
+        self.assertNotIn("comment", draft_b["fields"])
+        self.assertNotIn("B店", str(draft_a))
+
+    async def test_each_confirmation_submits_only_own_data(self):
+        self.markers = {
+            "A店": (
+                '[[tool:submit_food_review restaurant="A店" '
+                'location="南关区" taste="4.5" value="4" '
+                'comment="A汤好喝"]]'
+            ),
+            "B店": (
+                '[[tool:submit_food_review restaurant="B店" '
+                'location="朝阳区" taste="3" value="5" '
+                'comment="B面条一般"]]'
+            ),
+        }
+        user_a = self._event(
+            "我吃过A店，南关区，口味4.5，性价比4，A汤好喝",
+            sender_id="10001",
+            sender_name="甲",
+        )
+        user_b = self._event(
+            "我吃过B店，朝阳区，口味3，性价比5，B面条一般",
+            sender_id="20002",
+            sender_name="乙",
+        )
+        await run_handler(self.plugin, user_a)
+        await run_handler(self.plugin, user_b)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(
+            self.plugin._food_submit_draft(user_a)["fields"]["restaurant"],
+            "A店",
+        )
+        self.assertEqual(
+            self.plugin._food_submit_draft(user_b)["fields"]["restaurant"],
+            "B店",
+        )
+
+        await run_handler(
+            self.plugin,
+            self._event("添加", sender_id="10001", sender_name="甲"),
+        )
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(
+            self.plugin._food_submit_draft(user_b)["fields"]["restaurant"],
+            "B店",
+        )  # B's draft survives A's submission
+        await run_handler(
+            self.plugin,
+            self._event("添加", sender_id="20002", sender_name="乙"),
+        )
+        self.assertEqual(len(self.posts), 2)
+
+        payload_a, payload_b = self.posts
+        self.assertEqual(payload_a["name"], "A店")
+        self.assertEqual(payload_a["comment"], "A汤好喝")
+        self.assertEqual(payload_a["taste_score"], 4.5)
+        self.assertEqual(payload_a["value_score"], 4.0)
+        self.assertEqual(payload_a["username"], "甲")
+        self.assertEqual(payload_a["password"], "10001")
+        self.assertEqual(payload_b["name"], "B店")
+        self.assertEqual(payload_b["comment"], "B面条一般")
+        self.assertEqual(payload_b["taste_score"], 3.0)
+        self.assertEqual(payload_b["value_score"], 5.0)
+        self.assertEqual(payload_b["username"], "乙")
+        self.assertEqual(payload_b["password"], "20002")
+        # No field, comment, nickname or sender QQ crosses over.
+        for leaked in ("B店", "B面条一般", "乙", "20002"):
+            self.assertNotIn(leaked, str(payload_a))
+        for leaked in ("A店", "A汤好喝", "甲", "10001"):
+            self.assertNotIn(leaked, str(payload_b))
+
+    async def test_same_sender_different_groups_isolated(self):
+        self.markers = {
+            "A店": (
+                '[[tool:submit_food_review restaurant="A店" '
+                'location="南关区" taste="4" value="3" comment="A"]]'
+            ),
+            "B店": (
+                '[[tool:submit_food_review restaurant="B店" '
+                'location="朝阳区" taste="2" value="2" comment="B"]]'
+            ),
+        }
+        group_a = self._event(
+            "我吃过A店，口味4，性价比3，A",
+            sender_id="10001",
+            session_id="group-1",
+        )
+        group_b = self._event(
+            "我吃过B店，口味2，性价比2，B",
+            sender_id="10001",
+            session_id="group-2",
+        )
+        await run_handler(self.plugin, group_a)
+        await run_handler(self.plugin, group_b)
+        self.assertEqual(
+            self.plugin._food_submit_draft(group_a)["fields"]["restaurant"],
+            "A店",
+        )
+        self.assertEqual(
+            self.plugin._food_submit_draft(group_b)["fields"]["restaurant"],
+            "B店",
+        )
+        await run_handler(
+            self.plugin,
+            self._event(
+                "添加", sender_id="10001", session_id="group-2"
+            ),
+        )
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.posts[0]["name"], "B店")
+        # group-1's draft must remain untouched by group-2's confirmation.
+        self.assertEqual(
+            self.plugin._food_submit_draft(group_a)["fields"]["restaurant"],
+            "A店",
+        )
+        await run_handler(
+            self.plugin,
+            self._event(
+                "添加", sender_id="10001", session_id="group-1"
+            ),
+        )
+        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(self.posts[1]["name"], "A店")
+
+    async def test_restaurant_change_resets_old_draft(self):
+        self.markers = {
+            "A店": (
+                '[[tool:submit_food_review restaurant="A店" '
+                'taste="4.5" comment="A汤好喝"]]'
+            ),
+            "B店": '[[tool:submit_food_review restaurant="B店" taste="2"]]',
+        }
+        first = self._event(
+            "帮我把A店加到 food，口味4.5，A汤好喝", sender_id="10001"
+        )
+        await run_handler(self.plugin, first)
+        self.assertEqual(
+            self.plugin._food_submit_draft(first)["fields"]["restaurant"],
+            "A店",
+        )
+        second = self._event("帮我把B店加到 food，口味2", sender_id="10001")
+        await run_handler(self.plugin, second)
+        self.assertEqual(self.posts, [])
+        fields = self.plugin._food_submit_draft(second)["fields"]
+        self.assertEqual(fields["restaurant"], "B店")
+        self.assertEqual(set(fields), {"restaurant", "taste"})
+        self.assertNotIn("comment", fields)
+        merged = self.plugin._merge_food_submit_fields(
+            second, {"restaurant": "B店", "taste": 2.0}
+        )
+        self.assertEqual(merged, {"restaurant": "B店", "taste": 2.0})
+
+    async def test_expired_draft_is_cleared(self):
+        self.markers = {
+            "A店": (
+                '[[tool:submit_food_review restaurant="A店" '
+                'location="南关区" taste="4" value="3" comment="A"]]'
+            )
+        }
+        user_a = self._event(
+            "我吃过A店，口味4，性价比3，A", sender_id="10001"
+        )
+        await run_handler(self.plugin, user_a)
+        self.assertIsNotNone(self.plugin._food_submit_draft(user_a))
+        self.clock.value += 121
+        self.assertIsNone(self.plugin._food_submit_draft(user_a))
+        self.assertEqual(self.plugin._food_submit_drafts, {})
+        await run_handler(
+            self.plugin, self._event("添加", sender_id="10001")
+        )
+        self.assertEqual(self.posts, [])
+
+    async def test_blank_sender_id_fails_safe_without_draft_or_post(self):
+        self.markers = {
+            "A店": (
+                '[[tool:submit_food_review restaurant="A店" '
+                'location="南关区" taste="4" value="3" comment="A"]]'
+            )
+        }
+        first = self._event(
+            "帮我把A店加到 food", sender_id="", sender_name="甲", private=True
+        )
+        results = await run_handler(self.plugin, first)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(self.plugin._food_submit_drafts, {})
+        self.assertIsNone(self.plugin._food_submit_draft(first))
+        self.assertEqual(self.plugin._food_submit_key(first), "")
+        self.assertEqual(len(results), 1)
+        self.assertIn("无法确认你的身份", results[0].text)
+        self.assertNotIn("[[tool:", results[0].text)
+
+        # A second anonymous member must not inherit a shared draft either.
+        second = self._event(
+            "帮我把A店加到 food", sender_id="", sender_name="乙", private=True
+        )
+        results = await run_handler(self.plugin, second)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(self.plugin._food_submit_drafts, {})
+        self.assertIn("无法确认你的身份", results[0].text)
+        self.assertFalse(
+            any(key.endswith(":") for key in self.plugin._food_submit_drafts)
+        )

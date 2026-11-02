@@ -1135,8 +1135,17 @@ class QQBotEnhancerPlugin(Star):
             and self._cfg_bool("food_submit_enabled")
         )
 
+    @staticmethod
+    def _food_submit_sender(event: AstrMessageEvent) -> str:
+        return str(event.get_sender_id() or "").strip()
+
     def _food_submit_key(self, event: AstrMessageEvent) -> str:
-        return f"{event.unified_msg_origin}:{event.get_sender_id()}"
+        sender = self._food_submit_sender(event)
+        if not sender:
+            # Fail safe: an empty sender id must never key a shared draft (it
+            # would merge every anonymous group member into one submission).
+            return ""
+        return f"{event.unified_msg_origin}:{sender}"
 
     def _prune_food_submit_drafts(self, now: float) -> None:
         ttl = max(1, self._cfg_int("food_submit_draft_ttl_seconds", 1))
@@ -1153,6 +1162,8 @@ class QQBotEnhancerPlugin(Star):
         event: AstrMessageEvent,
     ) -> dict[str, Any] | None:
         key = self._food_submit_key(event)
+        if not key:
+            return None
         draft = self._food_submit_drafts.get(key)
         if not draft:
             return None
@@ -1195,6 +1206,8 @@ class QQBotEnhancerPlugin(Star):
         fields: dict[str, Any],
     ) -> None:
         key = self._food_submit_key(event)
+        if not key:
+            return
         if not fields:
             self._food_submit_drafts.pop(key, None)
             return
@@ -1204,7 +1217,9 @@ class QQBotEnhancerPlugin(Star):
         }
 
     def _clear_food_submit_draft(self, event: AstrMessageEvent) -> None:
-        self._food_submit_drafts.pop(self._food_submit_key(event), None)
+        key = self._food_submit_key(event)
+        if key:
+            self._food_submit_drafts.pop(key, None)
 
     def _food_submit_missing(self, fields: dict[str, Any]) -> list[str]:
         return [
@@ -1229,7 +1244,9 @@ class QQBotEnhancerPlugin(Star):
     ) -> int:
         now = self._clock()
         self._prune_state(now)
-        key = f"{event.unified_msg_origin}:{event.get_sender_id()}"
+        key = self._food_submit_key(event)
+        if not key:
+            return 0
         cooldown = max(0, self._cfg_int("food_submit_cooldown_seconds", 0))
         last = self._last_food_submit_at.get(key)
         if last is not None and cooldown > 0:
@@ -1439,11 +1456,23 @@ class QQBotEnhancerPlugin(Star):
                     ),
                 )
             )
+        password = self._food_submit_sender(event)
+        if not password:
+            self._save_food_submit_draft(event, fields)
+            logger.info(
+                "qqbot_enhancer food_submit success=False kind=no_sender"
+            )
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._cfg_str("food_submit_no_sender_reply"),
+                )
+            )
         payload = food_engine.build_food_submit_payload(
             fields,
             username=self._food_submit_username(event),
             # Password = sender QQ, injected here only; never model-visible.
-            password=str(event.get_sender_id() or "").strip(),
+            password=password,
             location_id=resolved.get("location_id"),
             new_location_name=str(resolved.get("new_location_name", "")),
         )
@@ -1532,6 +1561,15 @@ class QQBotEnhancerPlugin(Star):
         if event.get_extra("qqbot_enhancer_food_submit_done"):
             # One submission per reply.
             return None
+        if not self._food_submit_sender(event):
+            # No identity -> no draft, no cooldown key, no production write.
+            logger.info(
+                "qqbot_enhancer food_submit success=False kind=no_sender"
+            )
+            message = self._cfg_str("food_submit_no_sender_reply")
+            return event.plain_result(
+                self._join_food_submit_text(clean_text, message)
+            )
         validation = food_engine.validate_food_submission(
             intent.args,
             name_max=max(
