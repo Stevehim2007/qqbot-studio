@@ -160,7 +160,7 @@ GET https://food.dlsz.top/api/upload -> 405   # POST 端点存在且拒绝 GET
 `TestFoodSubmit` 覆盖：成功 payload（密码=发送者 QQ、用户名=群昵称、无 `review_date`）、
 新位置 `new_location_name`、群非 @ 美食消息参与并 @ 发言人、astrbot memory 模式 marker
 执行、缺字段追问且不 POST、分数越界本地追问、普通「我吃过」不写生产 + 确认后提交草稿、
-重复用户名/位置已存在/v1.1 `code`/500 的中文映射且不谎称成功、密码不进 prompt/日志/回复、
+重复用户名/位置已存在/v1.1 `code`/500 的中文映射且不谎称成功、密码字段/值不进工具参数/日志/回复（提醒：既有身份上下文中的发送者 QQ 不是密码）、
 固定 https 端点与 JSON body、跨 host 跳转拒绝、HTTPError JSON 解析、SSRF/任意 URL 拒绝、
 一次回复两个 marker 不执行、禁用时不暴露工具、`/option` 状态、纯美食图追问不提交、网页注入 marker 不写入且文本被中和、非法/超长/多条/禁用/无结果 marker 用固定中文替换模型
 文字且不 POST（含 memory 模式）、

@@ -11,6 +11,16 @@
 
 
 
+
+## v4.1.0 — 网页访问 + food.dlsz.top AI 提交
+
+- 新增安全 AI 网站访问：`[[tool:fetch_webpage url="..." max_chars="N"]]`，固定 HTTP(S) GET、公网 IP/SSRF 防护、逐跳重定向校验、超时/大小/内容类型限制。
+- 新增自然语言美食提交：`submit_food_review`，固定 `https://food.dlsz.top/api/upload`；店名/位置/味道分/性价比分/评价必填，缺项追问，不提交不完整数据。
+- 密钥默认发送者 QQ，只注入 POST body；日期不提取，站点自动当天；重复饭店/位置/用户名错误映射为中文。
+- 群聊只在食物相关消息/图片时参与；普通聊天不写生产数据；异食癖吐槽遵循安全边界。
+- food.dlsz.top 站点位置搜索“日新”下拉点击修复 + 管理员删除饭店 API/UI 已交付为补丁；源目录只读，未部署。
+- fetch 网页工具注入防护、非法 food marker 假成功修复；全量 504 tests OK。
+
 ## qqbot_enhancer 2.4.0（插件）
 
 - 新增 AI 自然语言美食提交：群里自然说“帮我加到 food/记录评价”，AI 用 `submit_food_review`
