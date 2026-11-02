@@ -21,6 +21,18 @@
 - food.dlsz.top 站点位置搜索“日新”下拉点击修复 + 管理员删除饭店 API/UI 已交付为补丁；源目录只读，未部署。
 - fetch 网页工具注入防护、非法 food marker 假成功修复；全量 504 tests OK。
 
+## qqbot_enhancer 2.5.0（插件）
+
+- 新增自然语言餐厅搜索 `search_food_restaurants`（无需 slash）：固定 `https://food.dlsz.top` 的三个只读 GET
+  （`/api/locations/search`、`/api/tags/search`、`/api/restaurants`），支持店名/多标签/地点组合、
+  标签与地点精确匹配（歧义或不存在只追问，不发错结果），本地按均分/口味/性价比/评价数/店名/最新日期排序，
+  `limit` 1–5 硬上限，输出店名/地点/标签/三项均分/评价数/最新日期 + 站点链接。
+- 安全：复用 `/food` 的 HTTPS/host/path 校验、重定向校验、超时与响应大小；工具无 URL 参数、不 POST、不额外调用 LLM；
+  一次回复最多一个工具；direct 与 astrbot memory 同一套安全 catalog；`/option` 显示搜索状态。
+- 新增 15 个配置键（schema 与 DEFAULTS 234→249 同步）；插件版本 2.5.0。
+- 测试：新增 TestFoodSearch 17 例（店名/标签/地点/组合、全部排序、limit、歧义/未知标签地点、无结果、
+  错误/超时、固定 host/SSRF、direct+memory marker、一次调用、无 POST）；插件 285 / 全仓 527 tests OK。
+
 ## qqbot_enhancer 2.4.0（插件）
 
 - 新增 AI 自然语言美食提交：群里自然说“帮我加到 food/记录评价”，AI 用 `submit_food_review`

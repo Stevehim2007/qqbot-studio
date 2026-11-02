@@ -42,6 +42,14 @@ TOOL_ARG_KEYS = {
         "comment",
         "tags",
     },
+    "search_food_restaurants": {
+        "name",
+        "tag",
+        "location",
+        "sort",
+        "order",
+        "limit",
+    },
 }
 ALLOWED_TOOLS = tuple(TOOL_ARG_KEYS)
 
@@ -128,6 +136,35 @@ def validate_intent(
     if set(intent.args) - allowed:
         intent.valid = False
         intent.error = "参数不在白名单"
+        return intent
+    if intent.name == "search_food_restaurants":
+        for key, limit in (
+            ("name", 50),
+            ("tag", 120),
+            ("location", 30),
+            ("sort", 12),
+            ("order", 5),
+            ("limit", 4),
+        ):
+            value = str(intent.args.get(key, "") or "")
+            if len(value) > limit:
+                intent.valid = False
+                intent.error = "字段过长"
+                return intent
+            if any(ord(char) < 32 or ord(char) == 127 for char in value):
+                intent.valid = False
+                intent.error = "字段含控制字符"
+                return intent
+            if (
+                value
+                and key in ("name", "tag", "location")
+                and not food_engine.sanitize_food_submit_text(
+                    value, max_chars=limit
+                )
+            ):
+                intent.valid = False
+                intent.error = "字段含链接/路径"
+                return intent
         return intent
     if intent.name == "submit_food_review":
         # Free-text fields legitimately contain Chinese, spaces and punctuation,
@@ -278,6 +315,11 @@ def tool_instruction(enabled_tools: list[str]) -> str:
             'submit_food_review(restaurant="店名", location="位置", '
             'taste="4.5", value="3.5", comment="评价", tags="火锅,夜宵")'
         )
+    if "search_food_restaurants" in enabled_tools:
+        lines.append(
+            'search_food_restaurants(name="店名关键词", tag="火锅,烤肉", '
+            'location="南关区", sort="total", order="desc", limit=5)'
+        )
     if not lines:
         return ""
     if "fetch_webpage" in enabled_tools:
@@ -295,6 +337,13 @@ def tool_instruction(enabled_tools: list[str]) -> str:
             "food.dlsz.top 时使用；必填店名/位置/味道分/性价比分/评价，"
             "缺哪个就留空并照常调用一次（插件会追问缺少项），"
             "不要编造分数，不要传密码/QQ/日期"
+        )
+    if "search_food_restaurants" in enabled_tools:
+        lines.append(
+            "search_food_restaurants 只在用户想找/推荐餐厅时使用："
+            "name/tag/location 至少给一个，tag 支持逗号分隔多个，"
+            'sort 可选 total/taste/value/reviews/name/latest，order 可选 asc/desc，'
+            "limit 1-5；不带 URL/命令参数，查询结果由插件排序并只读返回"
         )
     return (
         preamble

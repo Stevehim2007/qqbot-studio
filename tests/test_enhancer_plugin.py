@@ -9593,3 +9593,450 @@ class TestFoodSubmitDraftIsolation(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             any(key.endswith(":") for key in self.plugin._food_submit_drafts)
         )
+
+
+class TestFoodSearch(unittest.IsolatedAsyncioTestCase):
+    """search_food_restaurants: read-only fixed-host GET, local sort/limit."""
+
+    def setUp(self):
+        import sys as _sys
+
+        self.fetched = []
+        self.posts = []
+        self.location_payload = [
+            {"id": 7632, "name": "南关区", "path": "中国/吉林省/长春市/南关区"}
+        ]
+        self.location_error = None
+        self.tag_error = None
+        self.restaurant_error = None
+        self.tags = {
+            "火锅": [{"id": 15, "name": "火锅"}],
+            "烤肉": [{"id": 30, "name": "烤肉"}],
+            "火": [{"id": 15, "name": "火锅"}],
+        }
+        self.restaurants = [
+            {
+                "id": 1,
+                "name": "老王火锅",
+                "location_name": "南关区",
+                "location_id": 7632,
+                "tags": ["火锅", "便宜"],
+                "total_avg": 4.6,
+                "taste_avg": 4.2,
+                "value_avg": 4.8,
+                "review_count": 12,
+                "latest_review_date": "2026-05-01",
+                "is_closed": False,
+            },
+            {
+                "id": 2,
+                "name": "阿香烤肉",
+                "location_name": "朝阳区",
+                "location_id": 8,
+                "tags": ["烤肉"],
+                "total_avg": 4.8,
+                "taste_avg": 4.9,
+                "value_avg": 3.9,
+                "review_count": 30,
+                "latest_review_date": "2026-06-01",
+                "is_closed": False,
+            },
+            {
+                "id": 3,
+                "name": "B面馆",
+                "location_name": "南关区",
+                "location_id": 7632,
+                "tags": ["面"],
+                "total_avg": 3.9,
+                "taste_avg": 3.5,
+                "value_avg": 4.9,
+                "review_count": 5,
+                "latest_review_date": "2025-12-31",
+                "is_closed": True,
+            },
+        ]
+        self.logger_patch = mock.patch.object(MODULE, "logger", mock.MagicMock())
+        self.logger = self.logger_patch.start()
+        self.addCleanup(self.logger_patch.stop)
+        self.plugin = self._make_plugin()
+
+    async def _fake_fetch(self, url):
+        self.fetched.append(url)
+        parsed = urllib.parse.urlsplit(url)
+        self.assertEqual(parsed.scheme, "https")
+        self.assertEqual(parsed.hostname, "food.dlsz.top")
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        if parsed.path == "/api/locations/search":
+            if self.location_error is not None:
+                raise self.location_error
+            return list(self.location_payload)
+        if parsed.path == "/api/tags/search":
+            if self.tag_error is not None:
+                raise self.tag_error
+            return list(self.tags.get(params.get("q", ""), []))
+        if parsed.path == "/api/restaurants":
+            if self.restaurant_error is not None:
+                raise self.restaurant_error
+            return [dict(item) for item in self.restaurants]
+        raise AssertionError(f"unexpected food URL: {url}")
+
+    def _forbid_post(self, payload):
+        raise AssertionError(f"food search must never POST: {payload}")
+
+    def _make_plugin(self, marker='[[tool:search_food_restaurants]]', **overrides):
+        context = FakeContext(responder=lambda kwargs: marker)
+        config = {
+            "safe_tools_enabled": True,
+            "safe_tools_marker_enabled": True,
+            "safe_tools_allow_search_food_restaurants": True,
+            "food_search_enabled": True,
+            "food_submit_enabled": True,
+            "food_search_default_limit": 5,
+            "group_cooldown_seconds": 0,
+            "user_cooldown_seconds": 0,
+            "reply_probability": 1.0,
+            "food_nl_enabled": True,
+            "food_nl_probability": 1.0,
+            "food_nl_cooldown_seconds": 0,
+        }
+        config.update(overrides)
+        plugin = make_plugin(context, **config)
+        plugin._last_food_nl_at.clear()
+        self.fetched.clear()
+        plugin._fetch_food_json = self._fake_fetch
+        plugin._post_food_submit_sync = self._forbid_post
+        return plugin
+
+    @staticmethod
+    def _private(text):
+        return FakeEvent([Plain(text)], message_str=text, private=True)
+
+    @staticmethod
+    def _result_names(text):
+        names = []
+        for line in text.splitlines():
+            if len(line) > 3 and line[0].isdigit() and line[1:3] == ". ":
+                names.append(line.split(". ", 1)[1])
+        return names
+
+    def _restaurant_params(self):
+        urls = [
+            url
+            for url in self.fetched
+            if urllib.parse.urlsplit(url).path == "/api/restaurants"
+        ]
+        self.assertEqual(len(urls), 1)
+        return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(urls[0]).query))
+
+    # -- query composition ---------------------------------------------
+    async def test_name_only_query_and_format(self):
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants name="老王火锅"]]'
+        )
+        context = plugin.context
+        results = await run_handler(plugin, self._private("找一家叫老王火锅的"))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(len(context.calls), 1)  # no extra LLM call
+        self.assertEqual(
+            self._restaurant_params(), {"q": "老王火锅", "search_type": "name"}
+        )
+        text = results[0].text
+        self.assertIn("老王火锅", text)
+        self.assertIn("南关区", text)
+        self.assertIn("火锅", text)
+        self.assertIn("均分 4.6", text)
+        self.assertIn("口味 4.2", text)
+        self.assertIn("性价比 4.8", text)
+        self.assertIn("12 条", text)
+        self.assertIn("2026-05-01", text)
+        self.assertIn("更多：https://food.dlsz.top", text)
+        self.assertNotIn("[[tool:", text)
+        self.assertNotIn("20002", text)
+
+    async def test_tag_only_resolves_exact_ids(self):
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants tag="火锅,烤肉"]]'
+        )
+        results = await run_handler(plugin, self._private("火锅和烤肉的店"))
+        self.assertEqual(self.posts, [])
+        tag_urls = [
+            url for url in self.fetched if "/api/tags/search" in url
+        ]
+        self.assertEqual(len(tag_urls), 2)
+        self.assertEqual(
+            self._restaurant_params(), {"tag_ids": "15,30"}
+        )
+        self.assertEqual(len(results), 1)
+
+    async def test_location_only_uses_location_id(self):
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants location="南关区"]]'
+        )
+        await run_handler(plugin, self._private("南关区有什么好吃的"))
+        self.assertTrue(
+            any("/api/locations/search" in url for url in self.fetched)
+        )
+        self.assertEqual(self._restaurant_params(), {"location_id": "7632"})
+
+    async def test_combined_name_tag_location(self):
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants name="老王火锅" '
+            'tag="火锅" location="南关区"]]'
+        )
+        await run_handler(
+            plugin, self._private("南关区标签火锅的老王火锅")
+        )
+        self.assertEqual(
+            self._restaurant_params(),
+            {
+                "q": "老王火锅",
+                "search_type": "name",
+                "tag_ids": "15",
+                "location_id": "7632",
+            },
+        )
+
+    # -- sorting -------------------------------------------------------
+    async def test_all_sort_orders(self):
+        expected = {
+            ("total", "desc"): ["阿香烤肉", "老王火锅", "B面馆"],
+            ("taste", "desc"): ["阿香烤肉", "老王火锅", "B面馆"],
+            ("value", "desc"): ["B面馆", "老王火锅", "阿香烤肉"],
+            ("reviews", "desc"): ["阿香烤肉", "老王火锅", "B面馆"],
+            ("name", "asc"): ["B面馆", "老王火锅", "阿香烤肉"],
+            ("latest", "desc"): ["阿香烤肉", "老王火锅", "B面馆"],
+            ("total", "asc"): ["B面馆", "老王火锅", "阿香烤肉"],
+            ("name", "desc"): ["阿香烤肉", "老王火锅", "B面馆"],
+        }
+        for (sort, order), names in expected.items():
+            with self.subTest(sort=sort, order=order):
+                marker = (
+                    '[[tool:search_food_restaurants tag="火锅" '
+                    f'sort="{sort}" order="{order}"]]'
+                )
+                plugin = self._make_plugin(marker)
+                results = await run_handler(plugin, self._private("找火锅"))
+                self.assertEqual(
+                    self._result_names(results[0].text), names
+                )
+                self.assertEqual(self.posts, [])
+
+    # -- limit ---------------------------------------------------------
+    async def test_limit_and_hard_cap(self):
+        extra = []
+        for index in range(4):
+            extra.append(
+                {
+                    "id": 100 + index,
+                    "name": f"店{index}",
+                    "location_name": "南关区",
+                    "tags": ["火锅"],
+                    "total_avg": 4.0 + index,
+                    "taste_avg": 4.0,
+                    "value_avg": 4.0,
+                    "review_count": index,
+                    "latest_review_date": "2026-01-01",
+                }
+            )
+        self.restaurants = extra + self.restaurants
+        cases = (("2", 2), ("99", 5), ("abc", 5), ("0", 5))
+        for raw_limit, expected_count in cases:
+            with self.subTest(limit=raw_limit):
+                plugin = self._make_plugin(
+                    '[[tool:search_food_restaurants tag="火锅" '
+                    f'limit="{raw_limit}"]]'
+                )
+                results = await run_handler(plugin, self._private("找火锅"))
+                names = self._result_names(results[0].text)
+                self.assertEqual(len(names), expected_count)
+                self.assertNotIn("limit", self._restaurant_params())
+
+    # -- clarifications ------------------------------------------------
+    async def test_ambiguous_tag_clarification_no_wrong_results(self):
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants tag="火"]]'
+        )
+        results = await run_handler(plugin, self._private("找火的店"))
+        text = results[0].text
+        self.assertIn("标签「火」匹配到多个", text)
+        self.assertIn("火锅", text)
+        self.assertNotIn("均分", text)
+        self.assertFalse(
+            any("/api/restaurants" in url for url in self.fetched)
+        )
+        self.assertEqual(self.posts, [])
+
+    async def test_unknown_tag_clarification(self):
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants tag="不存在的标签"]]'
+        )
+        results = await run_handler(plugin, self._private("找不存在的标签"))
+        self.assertIn("没有找到标签「不存在的标签」", results[0].text)
+        self.assertFalse(
+            any("/api/restaurants" in url for url in self.fetched)
+        )
+
+    async def test_ambiguous_location_clarification(self):
+        self.location_payload = [
+            {"id": 1, "name": "南关区", "path": "吉林省/长春市/南关区"},
+            {"id": 2, "name": "南关街道", "path": "辽宁省/沈阳市/南关街道"},
+        ]
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants location="南关"]]'
+        )
+        results = await run_handler(plugin, self._private("南关的店"))
+        text = results[0].text
+        self.assertIn("匹配到多个位置", text)
+        self.assertIn("南关区", text)
+        self.assertFalse(
+            any("/api/restaurants" in url for url in self.fetched)
+        )
+
+    async def test_unknown_location_clarification(self):
+        self.location_payload = []
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants location="不存在区"]]'
+        )
+        results = await run_handler(plugin, self._private("不存在区"))
+        self.assertIn("没有找到地点「不存在区」", results[0].text)
+        self.assertFalse(
+            any("/api/restaurants" in url for url in self.fetched)
+        )
+
+    async def test_no_results_and_usage(self):
+        self.restaurants = []
+        plugin = self._make_plugin(
+            '[[tool:search_food_restaurants tag="火锅"]]'
+        )
+        results = await run_handler(plugin, self._private("找火锅"))
+        self.assertEqual(results[0].text, "没有符合条件的结果，换个店名/标签/地点试试。")
+
+        plugin = self._make_plugin("[[tool:search_food_restaurants]]")
+        self.fetched.clear()
+        results = await run_handler(plugin, self._private("想找店"))
+        self.assertIn("告诉我店名、标签", results[0].text)
+        self.assertEqual(self.fetched, [])
+
+    # -- API failures --------------------------------------------------
+    async def test_api_errors_and_timeout(self):
+        api_error = MODULE.food_engine.FoodAPIError("bad payload")
+        cases = (
+            ("tag", "food_search_error_reply", "餐厅搜索暂时失败"),
+            ("restaurants", "food_search_error_reply", "餐厅搜索暂时失败"),
+        )
+        for target, _key, expected in cases:
+            with self.subTest(target=target):
+                self.location_error = None
+                self.tag_error = None
+                self.restaurant_error = None
+                if target == "tag":
+                    self.tag_error = api_error
+                else:
+                    self.restaurant_error = api_error
+                plugin = self._make_plugin(
+                    '[[tool:search_food_restaurants tag="火锅"]]'
+                )
+                results = await run_handler(plugin, self._private("找火锅"))
+                self.assertIn(expected, results[0].text)
+                self.assertEqual(self.posts, [])
+
+        for target in ("tag", "restaurants"):
+            with self.subTest(target=target, timeout=True):
+                self.location_error = None
+                self.tag_error = None
+                self.restaurant_error = None
+                if target == "tag":
+                    self.tag_error = asyncio.TimeoutError()
+                else:
+                    self.restaurant_error = asyncio.TimeoutError()
+                plugin = self._make_plugin(
+                    '[[tool:search_food_restaurants tag="火锅"]]'
+                )
+                results = await run_handler(plugin, self._private("找火锅"))
+                self.assertIn("餐厅搜索超时", results[0].text)
+
+    # -- fixed host / SSRF ---------------------------------------------
+    def test_fixed_host_paths_and_marker_args(self):
+        food = MODULE.food_engine
+        self.assertTrue(
+            food.validate_food_final_url(
+                "https://food.dlsz.top/api/tags/search?q=x"
+            )
+        )
+        self.assertTrue(
+            food.validate_food_final_url("https://food.dlsz.top/api/tags")
+        )
+        for url in (
+            "http://food.dlsz.top/api/tags",
+            "https://evil.example/api/tags",
+            "https://food.dlsz.top/api/admin",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(food.validate_food_final_url(url))
+        safe_tools = importlib.import_module("safe_tools")
+        intent = safe_tools.parse_tool_markers(
+            '[[tool:search_food_restaurants url="http://127.0.0.1/"]]'
+        ).intents[0]
+        self.assertFalse(intent.valid)
+        for marker in (
+            '[[tool:search_food_restaurants location="\\\\server\\share"]]',
+            '[[tool:search_food_restaurants name="' + "长" * 60 + '"]]',
+        ):
+            with self.subTest(marker=marker[:40]):
+                self.assertFalse(
+                    safe_tools.parse_tool_markers(marker).intents[0].valid
+                )
+
+    # -- modes / one call / no writes ----------------------------------
+    async def test_natural_language_group_message_triggers_search(self):
+        marker = (
+            '[[tool:search_food_restaurants tag="火锅" '
+            'location="南关区" sort="total" limit="5"]]'
+        )
+        plugin = self._make_plugin(marker)
+        text = "南关区标签火锅评分最高的5家"
+        event = FakeEvent(
+            [Plain(text)], message_str=text, private=False
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertIn("老王火锅", results[0].text)
+        self.assertTrue(
+            any(isinstance(comp, At) for comp in results[0].chain)
+        )
+        self.assertEqual(self.posts, [])
+
+    async def test_memory_mode_marker_executes_search(self):
+        marker = '[[tool:search_food_restaurants tag="火锅"]]'
+        plugin = self._make_plugin(marker, memory_mode="astrbot")
+        event = self._private("找火锅")
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        event.result = FakeResult([Plain(marker)])
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertIn("老王火锅", event.result.text)
+        self.assertNotIn("[[tool:", event.result.text)
+        self.assertEqual(self.posts, [])
+
+    async def test_two_markers_execute_no_search(self):
+        marker = '[[tool:search_food_restaurants tag="火锅"]]'
+        plugin = self._make_plugin(marker + " " + marker)
+        results = await run_handler(plugin, self._private("找火锅"))
+        self.assertEqual(self.fetched, [])
+        self.assertNotIn("[[tool:", results[0].text)
+        self.assertEqual(self.posts, [])
+
+    def test_option_reports_food_search_status(self):
+        plugin = self._make_plugin()
+        self.assertIn("AI 餐厅搜索：已启用", plugin._build_option_text())
+        disabled = self._make_plugin(food_search_enabled=False)
+        self.assertIn("AI 餐厅搜索：未启用", disabled._build_option_text())
+        self.assertNotIn(
+            "search_food_restaurants",
+            disabled._safe_tool_system_instruction(),
+        )
+        self.assertIn(
+            "search_food_restaurants",
+            plugin._safe_tool_system_instruction(),
+        )

@@ -111,6 +111,33 @@ DEFAULTS: dict[str, Any] = {
     "food_submit_no_sender_reply": (
         "无法确认你的身份，暂时不能提交评价；请稍后再试。"
     ),
+    "food_search_enabled": True,
+    "safe_tools_allow_search_food_restaurants": True,
+    "food_search_max_tags": 3,
+    "food_search_default_limit": 5,
+    "food_search_name_max_chars": 50,
+    "food_search_tag_max_chars": 20,
+    "food_search_location_max_chars": 30,
+    "food_search_usage_reply": (
+        "想找哪家店？告诉我店名、标签（如火锅、烤肉）或地点（如南关区）就行。"
+    ),
+    "food_search_unknown_tag_reply": (
+        "没有找到标签「{tags}」。换一个标签，或只按店名/地点找。"
+    ),
+    "food_search_ambiguous_tag_reply": (
+        "标签「{tag}」匹配到多个：{options}。请说得更精确一点。"
+    ),
+    "food_search_location_not_found_reply": (
+        "没有找到地点「{location}」。换个写法，或只按店名/标签找。"
+    ),
+    "food_search_ambiguous_location_reply": (
+        "「{location}」匹配到多个位置：{options}。请说得更具体一点。"
+    ),
+    "food_search_empty_reply": (
+        "没有符合条件的结果，换个店名/标签/地点试试。"
+    ),
+    "food_search_timeout_reply": "餐厅搜索超时，请稍后再试。",
+    "food_search_error_reply": "餐厅搜索暂时失败，请稍后再试。",
     "food_nl_enabled": True,
     "food_nl_probability": 0.35,
     "food_nl_cooldown_seconds": 120,

@@ -131,6 +131,24 @@ Bing/Baidu 页面/JSON 结构变化、网络限制或反爬都可能导致无结
 - 相关配置：`food_enabled`、`food_timeout_seconds`、`food_max_response_bytes`、`food_max_results`、`food_cooldown_seconds`、关键词/地点长度限制及回复模板。
 - 真实 QQ 展示和站点数据长期稳定性未验证；API Key、用户 ID 不写日志，不输出原始 JSON/路径。
 
+## 自然语言餐厅搜索 `search_food_restaurants`
+
+不需要 slash 命令：用户问“南关区标签火锅评分最高的5家”“找一家叫老王火锅的”“朝阳区性价比最好的烤肉”
+“评价最多的店”时，AI 用
+`[[tool:search_food_restaurants name="..." tag="火锅,烤肉" location="南关区" sort="total" order="desc" limit=5]]`
+发起只读搜索：
+
+- 固定 `https://food.dlsz.top`，只用 `/api/locations/search`、`/api/tags/search`、`/api/restaurants`
+  三个只读 GET；HTTPS/host/路径校验、超时/响应大小/JSON 类型沿用 `/food`；工具没有 URL 参数，不 POST。
+- `name` 走 `q`+`search_type=name`；`tag` 支持逗号/、分隔多个，精确匹配标签名到 id（`tag_ids=15,30`），
+  歧义或不存在只追问、不发餐厅查询；`location` 精确匹配 location id，多义/未找到都中文追问。
+- API 只按名字排序：插件本地按均分/口味/性价比/评价数/店名/最新日期排序，评分类默认降序、店名默认升序，
+  `limit` 1–5（>5 截断）；输出店名/地点/标签/三项均分/评价数/最新日期 + 站点链接，最多 5 家。
+- direct 与 astrbot memory 模式同一套安全 catalog；一次回复最多一次调用；不额外调用 LLM；失败/超时/无结果安全中文。
+- 配置：`food_search_enabled`、`safe_tools_allow_search_food_restaurants`、`food_search_max_tags`、
+  `food_search_default_limit`、字段长度和 `food_search_*_reply`；`/option` 显示启用状态。详见
+  `docs/plugin-qqbot-enhancer.md` §4.27。
+
 ## 自然语言提交评价 `submit_food_review`
 
 不需要 slash 命令：用户在群里说“帮我加点/记录一下这家店”，AI 用

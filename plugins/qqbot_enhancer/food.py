@@ -11,7 +11,14 @@ FOOD_BASE_URL = "https://food.dlsz.top"
 FOOD_HOST = "food.dlsz.top"
 FOOD_LOCATIONS_PATH = "/api/locations/search"
 FOOD_RESTAURANTS_PATH = "/api/restaurants"
-FOOD_ALLOWED_PATHS = {FOOD_LOCATIONS_PATH, FOOD_RESTAURANTS_PATH}
+FOOD_TAGS_PATH = "/api/tags"
+FOOD_TAGS_SEARCH_PATH = "/api/tags/search"
+FOOD_ALLOWED_PATHS = {
+    FOOD_LOCATIONS_PATH,
+    FOOD_RESTAURANTS_PATH,
+    FOOD_TAGS_PATH,
+    FOOD_TAGS_SEARCH_PATH,
+}
 FOOD_LOCATION_SUFFIXES = (
     "区",
     "县",
@@ -597,3 +604,161 @@ def food_submit_error_reason(result: dict[str, Any]) -> str:
         return error[:80]
     status = result.get("status", 0)
     return f"HTTP {status}" if status else "站点未返回成功"
+
+
+# ---------------------------------------------------------------------------
+# Natural-language restaurant search (read-only GET, sorted locally)
+# ---------------------------------------------------------------------------
+FOOD_SEARCH_SORTS = {
+    "total": "total_avg",
+    "taste": "taste_avg",
+    "value": "value_avg",
+    "reviews": "review_count",
+    "name": "name",
+    "latest": "latest_review_date",
+}
+FOOD_SEARCH_DEFAULT_SORT = "total"
+FOOD_SEARCH_HARD_LIMIT = 5
+
+
+def normalize_food_search_sort(raw: Any) -> str:
+    value = str(raw or "").strip().casefold()
+    return value if value in FOOD_SEARCH_SORTS else ""
+
+
+def normalize_food_search_order(raw: Any, *, sort: str) -> str:
+    value = str(raw or "").strip().casefold()
+    if value in ("asc", "desc"):
+        return value
+    # Ratings/review counts/latest dates default to best-first; names A-Z.
+    return "asc" if sort == "name" else "desc"
+
+
+def normalize_food_search_limit(
+    raw: Any,
+    *,
+    default: int = FOOD_SEARCH_HARD_LIMIT,
+    hard: int = FOOD_SEARCH_HARD_LIMIT,
+) -> int:
+    limit = max(1, min(int(hard), int(default)))
+    text = str(raw or "").strip()
+    if not text:
+        return limit
+    try:
+        value = int(text)
+    except (TypeError, ValueError):
+        return limit
+    if value < 1:
+        return limit
+    return max(1, min(limit, value))
+
+
+def sort_food_restaurants(
+    items: list[dict[str, Any]],
+    *,
+    sort: str = FOOD_SEARCH_DEFAULT_SORT,
+    order: str = "desc",
+) -> list[dict[str, Any]]:
+    """Sort locally; missing values always go last regardless of direction."""
+
+    key = FOOD_SEARCH_SORTS.get(sort, FOOD_SEARCH_SORTS["total"])
+    present: list[tuple[Any, dict[str, Any]]] = []
+    missing: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get(key)
+        if key == "name":
+            value: Any = str(raw or "").strip().casefold()
+            (present if value else missing).append((value, item))
+        elif key == "latest_review_date":
+            value = str(raw or "").strip()
+            (present if value else missing).append((value, item))
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = None
+            if value is None:
+                missing.append(item)
+            else:
+                present.append((value, item))
+    present.sort(key=lambda pair: pair[0], reverse=order == "desc")
+    return [item for _value, item in present] + missing
+
+
+def resolve_food_search_tag(
+    items: list[dict[str, Any]],
+    tag: str,
+) -> dict[str, Any]:
+    """Exact tag name -> id; ambiguous/unknown never resolves to a guess."""
+
+    needle = str(tag or "").strip().casefold()
+    tagged = [
+        item
+        for item in items
+        if isinstance(item, dict) and item.get("id") is not None
+    ]
+    for item in tagged:
+        name = str(item.get("name", "") or "").strip()
+        if name.casefold() == needle:
+            return {"id": item.get("id"), "name": name}
+    candidates = [
+        str(item.get("name", "") or "").strip()
+        for item in tagged
+        if needle
+        and (
+            needle in str(item.get("name", "") or "").casefold()
+            or str(item.get("name", "") or "").casefold() in needle
+        )
+    ]
+    if candidates:
+        return {"ambiguous": candidates[:5]}
+    return {"not_found": True}
+
+
+def resolve_food_search_location(
+    items: list[dict[str, Any]],
+    query: str,
+) -> dict[str, Any]:
+    """Exact location name -> id; ambiguous lists candidates instead of guessing."""
+
+    needle = str(query or "").strip().casefold()
+    valid = [
+        item
+        for item in items
+        if isinstance(item, dict) and item.get("id") is not None
+    ]
+    for item in valid:
+        name = str(item.get("name", "") or "").strip()
+        if name.casefold() == needle:
+            return {"id": item.get("id"), "name": name}
+    if len(valid) == 1:
+        return {
+            "id": valid[0].get("id"),
+            "name": str(valid[0].get("name", "") or "").strip(),
+        }
+    if valid:
+        options = [
+            str(item.get("path", "") or item.get("name", "") or "").strip()
+            for item in valid[:3]
+        ]
+        return {"ambiguous": [option for option in options if option]}
+    return {"not_found": True}
+
+
+def format_food_search_results(
+    items: list[dict[str, Any]],
+    *,
+    label: str,
+    location_name: str = "",
+    max_results: int = FOOD_SEARCH_HARD_LIMIT,
+    footer: str = "更多：https://food.dlsz.top",
+) -> str:
+    return format_food_results(
+        items,
+        keyword=label,
+        location_name=location_name,
+        max_results=max_results,
+        footer=footer,
+    )

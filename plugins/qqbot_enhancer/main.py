@@ -117,7 +117,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "2.4.0"
+PLUGIN_FALLBACK_VERSION = "2.5.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -1002,6 +1002,25 @@ class QQBotEnhancerPlugin(Star):
         items = await self._search_food_locations(query)
         return food_engine.select_food_location(items, query)
 
+    async def _search_food_tags(self, query: str) -> list[dict[str, Any]]:
+        url = food_engine.build_food_url(
+            food_engine.FOOD_TAGS_SEARCH_PATH,
+            {"q": query},
+        )
+        payload = await self._fetch_food_json(url)
+        return food_engine.extract_food_items(payload)
+
+    async def _search_food_restaurant_items(
+        self,
+        params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        url = food_engine.build_food_url(
+            food_engine.FOOD_RESTAURANTS_PATH,
+            params,
+        )
+        payload = await self._fetch_food_json(url)
+        return food_engine.extract_food_items(payload)
+
     async def _resolve_food_args(
         self,
         raw_args: str,
@@ -1745,23 +1764,213 @@ class QQBotEnhancerPlugin(Star):
         message = self._cfg_str("food_submit_tool_rejected_reply")
         return message, event.plain_result(message), True
 
+    # ------------------------------------------------------------------
+    # Natural-language restaurant search (read-only GET, sorted locally)
+    # ------------------------------------------------------------------
+    def _food_search_flag_enabled(self) -> bool:
+        return bool(
+            self._cfg_bool("safe_tools_enabled")
+            and self._cfg_bool("safe_tools_marker_enabled")
+            and self._cfg_bool("safe_tools_allow_search_food_restaurants")
+            and self._cfg_bool("food_search_enabled")
+        )
+
+    @staticmethod
+    def _food_search_text_reply(
+        event: AstrMessageEvent,
+        template: str,
+        **kwargs: Any,
+    ):
+        text = str(template or "")
+        try:
+            text = text.format(**kwargs)
+        except (KeyError, ValueError):
+            pass
+        return event.plain_result(text)
+
+    async def _execute_search_food_restaurants(
+        self,
+        event: AstrMessageEvent,
+        intent: Any,
+        clean_text: str,
+    ):
+        if not self._food_search_flag_enabled():
+            return None
+        args = getattr(intent, "args", None) or {}
+        name = food_engine.sanitize_food_submit_text(
+            args.get("name"),
+            max_chars=max(1, self._cfg_int("food_search_name_max_chars", 1)),
+        )
+        location = food_engine.sanitize_food_submit_text(
+            args.get("location"),
+            max_chars=max(
+                1, self._cfg_int("food_search_location_max_chars", 1)
+            ),
+        )
+        tags = food_engine.split_food_tags(
+            args.get("tag"),
+            max_count=max(1, self._cfg_int("food_search_max_tags", 1)),
+            max_chars=max(1, self._cfg_int("food_search_tag_max_chars", 1)),
+        )
+        if not (name or location or tags):
+            return self._food_search_text_reply(
+                event, self._cfg_str("food_search_usage_reply")
+            )
+        sort = (
+            food_engine.normalize_food_search_sort(args.get("sort"))
+            or food_engine.FOOD_SEARCH_DEFAULT_SORT
+        )
+        order = food_engine.normalize_food_search_order(
+            args.get("order"), sort=sort
+        )
+        limit = food_engine.normalize_food_search_limit(
+            args.get("limit"),
+            default=max(1, self._cfg_int("food_search_default_limit", 1)),
+            hard=food_engine.FOOD_SEARCH_HARD_LIMIT,
+        )
+
+        tag_ids: list[int] = []
+        tag_names: list[str] = []
+        for tag in tags:
+            try:
+                tag_items = await self._search_food_tags(tag)
+            except asyncio.TimeoutError:
+                return self._food_search_text_reply(
+                    event, self._cfg_str("food_search_timeout_reply")
+                )
+            except Exception:
+                logger.info(
+                    "qqbot_enhancer food_search success=False kind=tag_api"
+                )
+                return self._food_search_text_reply(
+                    event, self._cfg_str("food_search_error_reply")
+                )
+            resolved = food_engine.resolve_food_search_tag(tag_items, tag)
+            if resolved.get("id") is not None:
+                tag_ids.append(resolved["id"])
+                tag_names.append(str(resolved.get("name") or tag))
+            elif resolved.get("ambiguous"):
+                return self._food_search_text_reply(
+                    event,
+                    self._cfg_str("food_search_ambiguous_tag_reply"),
+                    tag=tag,
+                    options="、".join(resolved["ambiguous"]),
+                )
+            else:
+                return self._food_search_text_reply(
+                    event,
+                    self._cfg_str("food_search_unknown_tag_reply"),
+                    tags=tag,
+                )
+
+        location_id: Any = None
+        location_name = ""
+        if location:
+            try:
+                location_items = await self._search_food_locations(location)
+            except asyncio.TimeoutError:
+                return self._food_search_text_reply(
+                    event, self._cfg_str("food_search_timeout_reply")
+                )
+            except Exception:
+                logger.info(
+                    "qqbot_enhancer food_search success=False kind=location_api"
+                )
+                return self._food_search_text_reply(
+                    event, self._cfg_str("food_search_error_reply")
+                )
+            resolved = food_engine.resolve_food_search_location(
+                location_items, location
+            )
+            if resolved.get("id") is not None:
+                location_id = resolved["id"]
+                location_name = str(resolved.get("name") or location)
+            elif resolved.get("ambiguous"):
+                return self._food_search_text_reply(
+                    event,
+                    self._cfg_str("food_search_ambiguous_location_reply"),
+                    location=location,
+                    options="；".join(resolved["ambiguous"][:3]),
+                )
+            else:
+                return self._food_search_text_reply(
+                    event,
+                    self._cfg_str("food_search_location_not_found_reply"),
+                    location=location,
+                )
+
+        params: dict[str, Any] = {}
+        if name:
+            params["q"] = name
+            params["search_type"] = "name"
+        if tag_ids:
+            params["tag_ids"] = ",".join(str(item) for item in tag_ids)
+        if location_id is not None:
+            params["location_id"] = str(location_id)
+        try:
+            items = await self._search_food_restaurant_items(params)
+        except asyncio.TimeoutError:
+            return self._food_search_text_reply(
+                event, self._cfg_str("food_search_timeout_reply")
+            )
+        except Exception:
+            logger.info(
+                "qqbot_enhancer food_search success=False kind=restaurants_api"
+            )
+            return self._food_search_text_reply(
+                event, self._cfg_str("food_search_error_reply")
+            )
+        items = food_engine.sort_food_restaurants(
+            items, sort=sort, order=order
+        )[:limit]
+        if not items:
+            return self._food_search_text_reply(
+                event, self._cfg_str("food_search_empty_reply")
+            )
+        label = name or ("、".join(tag_names) if tag_names else "餐厅")
+        text = food_engine.format_food_search_results(
+            items,
+            label=label,
+            location_name=location_name,
+            max_results=limit,
+            footer=f"更多：{food_engine.FOOD_BASE_URL}",
+        )
+        logger.info(
+            "qqbot_enhancer food_search success=True count=%s sort=%s "
+            "order=%s",
+            len(items),
+            sort,
+            order,
+        )
+        return event.plain_result(text)
+
     def _food_submit_tool_catalog_instruction(self) -> str:
-        """AstrBot memory mode catalog for the food submission tool."""
+        """AstrBot memory mode catalog for the food search/submit tools."""
 
         if self._memory_mode() != "astrbot":
             return ""
-        if not self._food_submit_flag_enabled():
-            return ""
-        return (
-            "用户明确要求把餐厅/评价添加、记录或上传到 food.dlsz.top 时，"
-            "在回复末尾写一次 "
-            '[[tool:submit_food_review restaurant="店名" location="位置" '
-            'taste="4.5" value="3.5" comment="评价" tags="火锅,夜宵"]]；'
-            "必填店名/位置/味道分/性价比分/评价内容，缺哪个就留空并照常调用"
-            "一次（插件会追问缺少项），不要编造分数；"
-            "不要传密码/QQ/日期，密钥由插件用发送者 QQ 自动注入且不显示。"
-            "普通美食聊天不要调用，最多一次，不要解释标记。"
-        )
+        parts: list[str] = []
+        if self._food_submit_flag_enabled():
+            parts.append(
+                "用户明确要求把餐厅/评价添加、记录或上传到 food.dlsz.top 时，"
+                "在回复末尾写一次 "
+                '[[tool:submit_food_review restaurant="店名" location="位置" '
+                'taste="4.5" value="3.5" comment="评价" tags="火锅,夜宵"]]；'
+                "必填店名/位置/味道分/性价比分/评价内容，缺哪个就留空并照常调用"
+                "一次（插件会追问缺少项），不要编造分数；"
+                "不要传密码/QQ/日期，密钥由插件用发送者 QQ 自动注入且不显示。"
+                "普通美食聊天不要调用，最多一次，不要解释标记。"
+            )
+        if self._food_search_flag_enabled():
+            parts.append(
+                "用户想找/推荐餐厅、问评分或评价最多时，在回复末尾写一次 "
+                '[[tool:search_food_restaurants name="店名关键词" '
+                'tag="火锅,烤肉" location="南关区" sort="total" '
+                'order="desc" limit=5]]；name/tag/location 至少给一个，'
+                "tag 用逗号分隔；sort 可选 total/taste/value/reviews/name/latest；"
+                "只读查询，不要传 URL/密码/命令，不要编造结果，最多一次。"
+            )
+        return "\n".join(parts)
 
     async def _await_conversation_api(self, value):
         if inspect.isawaitable(value):
@@ -3158,6 +3367,13 @@ class QQBotEnhancerPlugin(Star):
             else "AI 美食提交：未启用（food_submit_enabled / "
             "safe_tools_allow_submit_food_review）"
         )
+        food_search_option_line = (
+            "AI 餐厅搜索：已启用（固定 GET /api/locations|tags|restaurants；"
+            "本地排序 total/taste/value/reviews/name/latest；最多 5 家；只读）"
+            if self._food_search_flag_enabled()
+            else "AI 餐厅搜索：未启用（food_search_enabled / "
+            "safe_tools_allow_search_food_restaurants）"
+        )
         food_nl_option_line = (
             f"美食话题参与：{'开启' if self._cfg_bool('food_nl_enabled') else '关闭'}；"
             f"概率 {self._cfg_float('food_nl_probability', 0.0, 1.0):.0%}；"
@@ -3221,6 +3437,7 @@ class QQBotEnhancerPlugin(Star):
             ),
             web_fetch_option_line,
             food_submit_option_line,
+            food_search_option_line,
             food_nl_option_line,
             (
                 "限制：一个 AstrBot conversation 独立 persona/提示词/记忆；"
@@ -5387,6 +5604,8 @@ class QQBotEnhancerPlugin(Star):
             names.append("fetch_webpage")
         if self._food_submit_flag_enabled():
             names.append("submit_food_review")
+        if self._food_search_flag_enabled():
+            names.append("search_food_restaurants")
         return names
 
     def _safe_tool_system_instruction(self) -> str:
@@ -6801,6 +7020,11 @@ class QQBotEnhancerPlugin(Star):
                     ),
                     category=category,
                 )
+            )
+
+        if name == "search_food_restaurants":
+            return await self._execute_search_food_restaurants(
+                event, intent, clean_text
             )
 
         if name == "submit_food_review":

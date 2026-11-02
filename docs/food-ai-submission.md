@@ -148,13 +148,22 @@ Content-Type: application/json; charset=utf-8
   默认 Agent 回复里的同名 marker 由 `on_decorating_result` 执行。
 - 两种模式都只允许一次调用、一次提交；失败只回中文，不泄漏路径/内部细节。
 
+## 6.5 餐厅搜索工具（t11，2.5.0）
+
+同一套自然语言入口还提供只读搜索 `search_food_restaurants`（无需 slash）：
+固定 host 的 `/api/locations/search`、`/api/tags/search`、`/api/restaurants` 三个 GET，
+标签/地点精确匹配否则追问，本地按均分/口味/性价比/评价数/店名/最新日期排序，
+`limit` 1–5，只输出店名/地点/标签/三项均分/评价数/最新日期 + 站点链接，不 POST、不额外调用 LLM。
+详见 [`plugin-qqbot-enhancer.md`](plugin-qqbot-enhancer.md) §4.27。
+
 ## 7. 测试证据
 
 ```bash
 cd "/home/stevehim/QQ Ai bot"
 python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmit -q   # 35 tests
 python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmitDraftIsolation -q  # 6 tests
-python3 -m unittest discover -s tests -q                           # 510 tests OK
+python3 -m unittest tests.test_enhancer_plugin.TestFoodSearch -q               # 17 tests
+python3 -m unittest discover -s tests -q                           # 527 tests OK
 ```
 
 本机只读探针（不写数据，2026-11 实测）：
