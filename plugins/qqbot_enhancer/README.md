@@ -131,6 +131,27 @@ Bing/Baidu 页面/JSON 结构变化、网络限制或反爬都可能导致无结
 - 相关配置：`food_enabled`、`food_timeout_seconds`、`food_max_response_bytes`、`food_max_results`、`food_cooldown_seconds`、关键词/地点长度限制及回复模板。
 - 真实 QQ 展示和站点数据长期稳定性未验证；API Key、用户 ID 不写日志，不输出原始 JSON/路径。
 
+## 自然语言提交评价 `submit_food_review`
+
+不需要 slash 命令：用户在群里说“帮我加点/记录一下这家店”，AI 用
+`[[tool:submit_food_review restaurant="店名" location="位置" taste="4.5" value="3.5" comment="评价" tags="火锅,夜宵"]]`
+提取结构化字段，插件按契约 POST `https://food.dlsz.top/api/upload`：
+
+- 必需字段：店名、位置、味道分、性价比分、评价内容；缺任一 → 中文列出缺少项，不提交；分数 0.1–5。
+- 用户名默认群昵称（fallback 群友）；**密钥默认发送者 QQ，由插件注入，不进入 prompt/日志/回复**；
+  日期不向用户索要，站点默认当天。
+- 只有明确“添加/记录/上传/提交到 food”意图，或已有缺字段草稿时才写；普通“我吃过 X”只问一句
+  要不要添加，用户回“添加/要/好的”后插件直接提交草稿。一次回复最多一次提交。
+- 站点重复/错误映射为可操作中文（用户名重复、位置已存在、餐厅不存在、其它 400/5xx）；
+  只有 `200 + success:true` 才说“已提交”。
+- 群聊非 @ 只对美食消息/图片参与：`food_nl_enabled`、`food_nl_probability`、
+  `food_nl_cooldown_seconds`、`food_nl_min_message_chars`、`food_nl_image_*`；美食路径与
+  ambient 概率互斥，不双触发。无文字美食图只追问字段，不提交空值（默认需要视觉描述能力，
+  可开 `food_nl_image_without_caption_enabled`）。
+- 安全：固定 HTTPS host/path、禁止重定向、超时与响应上限、工具无 URL 参数。
+- 配置：`food_submit_*`、`safe_tools_allow_submit_food_review`；`/option` 显示提交与美食话题状态。
+- 完整契约、测试证据与猫娘提示词：`docs/food-ai-submission.md`。
+
 ## 插件用法 `/option`
 
 ```text

@@ -287,22 +287,40 @@ def inject_ambient_group_context(
 
 
 STICKER_TOOL_MARKER = "# Sticker Tool Catalog"
+WEB_FETCH_TOOL_MARKER = "# Web Fetch Tool Catalog"
+FOOD_SUBMIT_TOOL_MARKER = "# Food Submit Tool Catalog"
 
 
-def inject_sticker_tool_catalog(req: Any, instruction: str) -> bool:
-    """Inject one idempotent short sticker/tool catalog into a request prompt."""
-
+def _inject_catalog(req: Any, instruction: str, marker: str) -> bool:
     if req is None or not str(instruction or "").strip():
         return False
     existing = str(getattr(req, "system_prompt", "") or "")
-    if STICKER_TOOL_MARKER in existing:
-        existing = existing.split(STICKER_TOOL_MARKER, 1)[0].rstrip()
+    if marker in existing:
+        existing = existing.split(marker, 1)[0].rstrip()
     req.system_prompt = (
         existing.rstrip()
         + "\n\n"
-        + STICKER_TOOL_MARKER
+        + marker
         + "\n"
         + str(instruction).strip()
         + "\n"
     )
     return True
+
+
+def inject_sticker_tool_catalog(req: Any, instruction: str) -> bool:
+    """Inject one idempotent short sticker/tool catalog into a request prompt."""
+
+    return _inject_catalog(req, instruction, STICKER_TOOL_MARKER)
+
+
+def inject_web_fetch_tool_catalog(req: Any, instruction: str) -> bool:
+    """Inject one idempotent public-web-reader catalog into a prompt."""
+
+    return _inject_catalog(req, instruction, WEB_FETCH_TOOL_MARKER)
+
+
+def inject_food_submit_tool_catalog(req: Any, instruction: str) -> bool:
+    """Inject one idempotent food-review submission catalog into a prompt."""
+
+    return _inject_catalog(req, instruction, FOOD_SUBMIT_TOOL_MARKER)

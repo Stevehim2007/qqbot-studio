@@ -1,0 +1,113 @@
+--- a/app.py
++++ b/app.py
+@@ -18,7 +18,9 @@
+ basedir = os.path.abspath(os.path.dirname(__file__))
+ 
+ app = Flask(__name__)
+-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance', 'foodlisten.db')
++app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('FOOD_DB_URI') or (
++    'sqlite:///' + os.path.join(basedir, 'instance', 'foodlisten.db')
++)
+ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+ app.secret_key = os.environ.get('SECRET_KEY', 'foodlisten-secret-key-change-in-production')
+ ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
+@@ -634,24 +636,27 @@
+     tags = data.get('tags', [])
+ 
+     if not name:
+-        return jsonify({'error': '店名不能为空'}), 400
++        return jsonify({'error': '店名不能为空', 'code': 'MISSING_NAME'}), 400
++
++    created_restaurant = False
+ 
+     if restaurant_id:
+         restaurant = db.session.get(Restaurant, restaurant_id)
+         if not restaurant:
+-            return jsonify({'error': '餐厅不存在'}), 404
++            return jsonify({'error': '餐厅不存在', 'code': 'RESTAURANT_NOT_FOUND'}), 404
+         location_id = restaurant.location_id
+     else:
+         if not location_id and not new_location_name:
+-            return jsonify({'error': '位置不能为空'}), 400
++            return jsonify({'error': '位置不能为空', 'code': 'MISSING_LOCATION'}), 400
+         restaurant = Restaurant.query.filter_by(name=name, location_id=location_id).first()
+         if not restaurant:
++            created_restaurant = True
+             if new_location_name:
+                 chain_names = split_location_names(new_location_name)
+                 loc, existed = ensure_location_chain(chain_names, new_location_parent_id)
+                 if existed:
+                     db.session.rollback()
+-                    return jsonify({'error': '位置「' + chain_names[-1] + '」已存在'}), 400
++                    return jsonify({'error': '位置「' + chain_names[-1] + '」已存在', 'code': 'LOCATION_EXISTS'}), 400
+                 location_id = loc.id
+             restaurant = Restaurant(name=name, location_id=location_id)
+             db.session.add(restaurant)
+@@ -660,30 +665,30 @@
+     if username:
+         dup = Review.query.filter_by(restaurant_id=restaurant.id, username=username).first()
+         if dup:
+-            return jsonify({'error': '用户名「' + username + '」在该店铺已存在'}), 400
++            return jsonify({'error': '用户名「' + username + '」在该店铺已存在', 'code': 'DUPLICATE_USERNAME'}), 400
+ 
+     try:
+         if taste_score not in (None, '', 'null'):
+             taste_score = float(taste_score)
+             if taste_score < 0.1 or taste_score > 5:
+-                return jsonify({'error': '味道分必须在0.5-5之间'}), 400
++                return jsonify({'error': '味道分必须在0.1-5之间', 'code': 'INVALID_TASTE_SCORE'}), 400
+         else:
+-            return jsonify({'error': '味道分不能为空'}), 400
++            return jsonify({'error': '味道分不能为空', 'code': 'MISSING_TASTE_SCORE'}), 400
+     except (ValueError, TypeError):
+-        return jsonify({'error': '味道分格式不正确'}), 400
++        return jsonify({'error': '味道分格式不正确', 'code': 'INVALID_TASTE_SCORE'}), 400
+ 
+     try:
+         if value_score not in (None, '', 'null'):
+             value_score = float(value_score)
+             if value_score < 0.1 or value_score > 5:
+-                return jsonify({'error': '性价比分必须在0.5-5之间'}), 400
++                return jsonify({'error': '性价比分必须在0.1-5之间', 'code': 'INVALID_VALUE_SCORE'}), 400
+         else:
+-            return jsonify({'error': '性价比分不能为空'}), 400
++            return jsonify({'error': '性价比分不能为空', 'code': 'MISSING_VALUE_SCORE'}), 400
+     except (ValueError, TypeError):
+-        return jsonify({'error': '性价比分格式不正确'}), 400
++        return jsonify({'error': '性价比分格式不正确', 'code': 'INVALID_VALUE_SCORE'}), 400
+ 
+     if not comment:
+-        return jsonify({'error': '评价不能为空'}), 400
++        return jsonify({'error': '评价不能为空', 'code': 'MISSING_COMMENT'}), 400
+ 
+     if not username:
+         count = restaurant.reviews.count()
+@@ -714,8 +719,8 @@
+     db.session.commit()
+ 
+     saved_tags = []
+-    for tag_name in tags:
+-        tag_name = tag_name.strip()
++    for tag_name in tags if isinstance(tags, list) else []:
++        tag_name = str(tag_name).strip()
+         if not tag_name:
+             continue
+         tag = Tag.query.filter_by(name=tag_name).first()
+@@ -731,7 +736,16 @@
+             saved_tags.append(tag_name)
+     db.session.commit()
+ 
+-    return jsonify({'success': True, 'restaurant_id': restaurant.id, 'tags': saved_tags})
++    return jsonify({
++        'success': True,
++        'restaurant_id': restaurant.id,
++        'restaurant_name': restaurant.name,
++        'restaurant_created': created_restaurant,
++        'review_id': review.id,
++        'location_id': restaurant.location_id,
++        'location_path': location_full_path(restaurant.location) if restaurant.location else '',
++        'tags': saved_tags,
++    })
+ 
+ 
+ @app.route('/api/reviews/<int:review_id>', methods=['PUT'])

@@ -12,6 +12,13 @@ import json
 import re
 from dataclasses import dataclass, field
 
+try:  # Loaded as a package by AstrBot.
+    from . import food as food_engine
+    from . import web_fetch as web_fetch_engine
+except ImportError:  # Loaded directly by a test harness.
+    import food as food_engine
+    import web_fetch as web_fetch_engine
+
 TOOL_MARKER_RE = re.compile(
     r"\[\[\s*tool\s*:\s*([a-z_]+)([^\[\]\r\n]*)\]\]",
     re.IGNORECASE,
@@ -26,6 +33,15 @@ TOOL_ARG_KEYS = {
     "send_sticker": {"category", "emotion", "tag"},
     "collect_sticker": {"category"},
     "list_sticker_categories": set(),
+    "fetch_webpage": {"url", "max_chars"},
+    "submit_food_review": {
+        "restaurant",
+        "location",
+        "taste",
+        "value",
+        "comment",
+        "tags",
+    },
 }
 ALLOWED_TOOLS = tuple(TOOL_ARG_KEYS)
 
@@ -113,6 +129,63 @@ def validate_intent(
         intent.valid = False
         intent.error = "参数不在白名单"
         return intent
+    if intent.name == "submit_food_review":
+        # Free-text fields legitimately contain Chinese, spaces and punctuation,
+        # so the generic URL/path rejection loop is skipped; dangerous values
+        # (links/paths/control chars/oversize) are rejected per field instead.
+        for key, limit in (
+            ("restaurant", 200),
+            ("location", 60),
+            ("comment", 500),
+            ("tags", 120),
+            ("taste", 8),
+            ("value", 8),
+        ):
+            value = str(intent.args.get(key, "") or "")
+            if len(value) > limit:
+                intent.valid = False
+                intent.error = "字段过长"
+                return intent
+            if any(ord(char) < 32 or ord(char) == 127 for char in value):
+                intent.valid = False
+                intent.error = "字段含控制字符"
+                return intent
+            if (
+                value
+                and key not in ("taste", "value", "tags")
+                and not food_engine.sanitize_food_submit_text(
+                    value, max_chars=limit
+                )
+            ):
+                intent.valid = False
+                intent.error = "字段含链接/路径"
+                return intent
+        return intent
+    if intent.name == "fetch_webpage":
+        # The URL is the one argument allowed to contain "://" and "/"; it is
+        # still restricted to public HTTP(S) targets by web_fetch.
+        try:
+            web_fetch_engine.validate_fetch_url(intent.args.get("url", ""))
+        except web_fetch_engine.WebFetchError:
+            intent.valid = False
+            intent.error = "网页地址不安全"
+            return intent
+        raw_max_chars = intent.args.get("max_chars", "").strip()
+        if raw_max_chars:
+            try:
+                max_chars = int(raw_max_chars)
+            except (TypeError, ValueError):
+                intent.valid = False
+                intent.error = "max_chars 无效"
+                return intent
+            if (
+                max_chars < 1
+                or max_chars > web_fetch_engine.WEB_FETCH_MAX_CHARS_HARD_LIMIT
+            ):
+                intent.valid = False
+                intent.error = "max_chars 超出范围"
+                return intent
+        return intent
     for value in intent.args.values():
         if _contains_unsafe_reference(value):
             intent.valid = False
@@ -196,10 +269,35 @@ def tool_instruction(enabled_tools: list[str]) -> str:
         lines.append('collect_sticker(category="分类")')
     if "list_sticker_categories" in enabled_tools:
         lines.append("list_sticker_categories()")
+    if "fetch_webpage" in enabled_tools:
+        lines.append(
+            'fetch_webpage(url="https://food.dlsz.top", max_chars=3000)'
+        )
+    if "submit_food_review" in enabled_tools:
+        lines.append(
+            'submit_food_review(restaurant="店名", location="位置", '
+            'taste="4.5", value="3.5", comment="评价", tags="火锅,夜宵")'
+        )
     if not lines:
         return ""
+    if "fetch_webpage" in enabled_tools:
+        preamble = (
+            "可选安全工具（仅以下白名单，禁止文件路径/命令/终端/电脑控制；"
+            "仅 fetch_webpage 允许公开网页 URL，且不登录、不带 Cookie）："
+        )
+    else:
+        preamble = (
+            "可选安全工具（仅以下白名单，禁止文件路径/URL/命令/终端/电脑控制）："
+        )
+    if "submit_food_review" in enabled_tools:
+        lines.append(
+            "submit_food_review 只在用户明确要求把餐厅/评价添加、记录或上传到 "
+            "food.dlsz.top 时使用；必填店名/位置/味道分/性价比分/评价，"
+            "缺哪个就留空并照常调用一次（插件会追问缺少项），"
+            "不要编造分数，不要传密码/QQ/日期"
+        )
     return (
-        "可选安全工具（仅以下白名单，禁止文件路径/URL/命令/终端/电脑控制）："
+        preamble
         + "；".join(lines)
         + "。需要时在回复末尾单独写一个 "
         + '[[tool:工具名 参数="值"]]'

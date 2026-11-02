@@ -11,6 +11,7 @@ import asyncio
 import base64
 import hashlib
 import importlib.util
+import io
 import inspect
 import json as json_module
 import os
@@ -21,6 +22,7 @@ import tempfile
 import types
 import unittest
 import unittest.mock as mock
+import urllib.error
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
@@ -7957,3 +7959,1102 @@ class TestFinalization(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSafeWebFetch(unittest.IsolatedAsyncioTestCase):
+    """fetch_webpage: public-web only reader with SSRF/redirect/size guards."""
+
+    def setUp(self):
+        self.wf = importlib.import_module("web_fetch")
+        self._servers = []
+
+    def tearDown(self):
+        for server in self._servers:
+            server.shutdown()
+            server.server_close()
+
+    def _serve(self, routes):
+        """Run a tiny HTTP server on loopback; tests patch DNS to reach it."""
+        import http.server
+        import socketserver
+        import threading
+
+        hits = []
+        wf = self.wf
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                return None
+
+            def do_GET(self):
+                hits.append(self.path)
+                handler = routes.get(self.path)
+                if handler is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                handler(self)
+
+        class Server(socketserver.ThreadingTCPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        server = Server(("127.0.0.1", 0), Handler)
+        self._servers.append(server)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server.server_address[1], hits
+
+    @staticmethod
+    def _respond(body, content_type="text/html; charset=utf-8", **headers):
+        def handler(request):
+            request.send_response(200)
+            request.send_header("Content-Type", content_type)
+            request.send_header("Content-Length", str(len(body)))
+            for key, value in headers.items():
+                request.send_header(key.replace("_", "-"), value)
+            request.end_headers()
+            request.wfile.write(body)
+
+        return handler
+
+    @staticmethod
+    def _redirect(location):
+        def handler(request):
+            request.send_response(302)
+            request.send_header("Location", location)
+            request.end_headers()
+
+        return handler
+
+    # -- pure URL / DNS guard -------------------------------------------
+    def test_url_validation_blocks_ssrf_targets(self):
+        wf = self.wf
+        blocked = [
+            "",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "http://127.0.0.1/",
+            "http://[::1]/",
+            "http://10.0.0.5/",
+            "http://192.168.1.1/",
+            "http://172.16.0.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://100.64.0.1/",
+            "http://localhost:8080/",
+            "http://printer.local/",
+            "http://metadata.google.internal/",
+            "https://user:secret@example.com/",
+            "http://exa mple.com/",
+            "http://-bad.example.com/",
+            "http://example.com:abc/",
+        ]
+        for url in blocked:
+            with self.subTest(url=url):
+                with self.assertRaises(wf.WebFetchError):
+                    wf.validate_fetch_url(url)
+        self.assertEqual(
+            wf.validate_fetch_url(
+                "HTTPS://food.dlsz.top/restaurants?a=1#frag"
+            ),
+            "https://food.dlsz.top/restaurants?a=1",
+        )
+        self.assertEqual(
+            wf.validate_fetch_url("https://例子.测试/餐厅"),
+            "https://xn--fsqu00a.xn--0zwm56d/餐厅",
+        )
+
+    def test_dns_rebinding_rejects_when_any_answer_is_internal(self):
+        wf = self.wf
+        answers = [
+            (2, 1, 6, "", ("93.184.216.34", 80)),
+            (2, 1, 6, "", ("127.0.0.1", 80)),
+        ]
+        with mock.patch.object(wf.socket, "getaddrinfo", return_value=answers):
+            with self.assertRaises(wf.WebFetchError) as ctx:
+                wf.resolve_public_addresses("evil.test", 80)
+        self.assertEqual(ctx.exception.reason, "blocked_ip")
+
+    def test_local_target_never_reaches_local_server(self):
+        port, hits = self._serve({"/secret": self._respond(b"secret")})
+        with self.assertRaises(self.wf.WebFetchError) as ctx:
+            self.wf.fetch_page_text(f"http://127.0.0.1:{port}/secret")
+        self.assertEqual(ctx.exception.reason, "blocked_ip")
+        self.assertEqual(hits, [])
+
+    def test_safe_messages_do_not_leak_internals(self):
+        for reason, text in self.wf.REASON_TEXT.items():
+            with self.subTest(reason=reason):
+                self.assertTrue(text)
+                self.assertNotIn("Traceback", text)
+                self.assertNotIn("127.0.0.1", text)
+                self.assertNotIn("169.254", text)
+        self.assertEqual(
+            self.wf.safe_error_message("unknown_internal_detail"),
+            "无法读取该网页。",
+        )
+
+    # -- HTML extraction ------------------------------------------------
+    def test_html_to_text_strips_scripts_and_keeps_readable_text(self):
+        wf = self.wf
+        title, text = wf.html_to_text(
+            "<html><head><title>老王火锅</title>"
+            "<style>.x{display:none}</style></head><body>"
+            "<h1>老王火锅</h1><script>alert('x')</script>"
+            "<p>汤底香 &amp; 干净</p><div>人均 60 元</div>"
+            "<noscript>请开启 JS</noscript></body></html>"
+        )
+        self.assertEqual(title, "老王火锅")
+        self.assertIn("汤底香 & 干净", text)
+        self.assertIn("人均 60 元", text)
+        self.assertNotIn("alert", text)
+        self.assertNotIn("display:none", text)
+        self.assertNotIn("请开启 JS", text)
+        self.assertNotIn("<h1>", text)
+
+    # -- live loopback server with DNS pinned to it ---------------------
+    def test_fetch_success_follows_redirect_and_extracts_text(self):
+        wf = self.wf
+        page = (
+            "<html><head><title>餐厅页</title></head><body>"
+            "<h2>营业时间</h2><p>10:00-22:00</p></body></html>"
+        ).encode("utf-8")
+        port, hits = self._serve(
+            {
+                "/go": self._redirect("/page"),
+                "/page": self._respond(page),
+            }
+        )
+        with mock.patch.object(
+            wf, "resolve_public_addresses", return_value=["127.0.0.1"]
+        ):
+            result = wf.fetch_page_text(
+                f"http://web.test:{port}/go",
+                timeout=5,
+                max_chars=2000,
+            )
+        self.assertEqual(hits, ["/go", "/page"])
+        self.assertEqual(result.title, "餐厅页")
+        self.assertIn("营业时间", result.text)
+        self.assertIn("10:00-22:00", result.text)
+        self.assertFalse(result.truncated)
+        self.assertEqual(result.url, f"http://web.test:{port}/page")
+        rendered = wf.format_page_text(result)
+        self.assertTrue(rendered.startswith("网页：餐厅页"))
+
+    def test_fetch_truncates_to_max_chars(self):
+        wf = self.wf
+        body = ("长文本" * 200).encode("utf-8")
+        port, _hits = self._serve({"/long": self._respond(body, "text/plain")})
+        with mock.patch.object(
+            wf, "resolve_public_addresses", return_value=["127.0.0.1"]
+        ):
+            result = wf.fetch_page_text(
+                f"http://web.test:{port}/long",
+                timeout=5,
+                max_chars=50,
+            )
+        self.assertEqual(len(result.text), 50)
+        self.assertTrue(result.truncated)
+        self.assertIn("内容已截断", wf.format_page_text(result))
+
+    def test_fetch_rejects_redirect_loop_oversize_binary_and_internal_hop(self):
+        wf = self.wf
+        big = b"x" * 5000
+        port, hits = self._serve(
+            {
+                "/loop": self._redirect("/loop"),
+                "/big": self._respond(big, "text/plain"),
+                "/bin": self._respond(b"PK\x03\x04", "application/octet-stream"),
+                "/zip": self._respond(
+                    b"not-really-gzip",
+                    "text/plain",
+                    Content_Encoding="gzip",
+                ),
+                "/escape": self._redirect("http://127.0.0.1/"),
+                "/missing": None,
+            }
+        )
+        cases = [
+            ("/loop", "too_many_redirects"),
+            ("/big", "too_large"),
+            ("/bin", "bad_content_type"),
+            ("/zip", "bad_encoding"),
+            ("/escape", "bad_redirect"),
+            ("/missing", "http_error"),
+        ]
+        with mock.patch.object(
+            wf, "resolve_public_addresses", return_value=["127.0.0.1"]
+        ):
+            for path, expected in cases:
+                with self.subTest(path=path):
+                    with self.assertRaises(wf.WebFetchError) as ctx:
+                        wf.fetch_page_text(
+                            f"http://web.test:{port}{path}",
+                            timeout=5,
+                            max_bytes=1024,
+                            max_redirects=2,
+                        )
+                    self.assertEqual(ctx.exception.reason, expected)
+        self.assertNotIn("/secret", hits)
+
+    # -- safe_tools marker wiring --------------------------------------
+    def test_safe_tools_accepts_only_public_fetch_markers(self):
+        safe_tools = importlib.import_module("safe_tools")
+        parsed = safe_tools.parse_tool_markers(
+            '算了 [[tool:fetch_webpage url="https://food.dlsz.top/" '
+            "max_chars=2000]]"
+        )
+        self.assertTrue(parsed.had_marker)
+        self.assertEqual(parsed.clean_text, "算了")
+        self.assertEqual(len(parsed.intents), 1)
+        self.assertTrue(parsed.intents[0].valid)
+        self.assertEqual(parsed.intents[0].name, "fetch_webpage")
+        self.assertEqual(parsed.intents[0].args["max_chars"], "2000")
+
+        for marker in (
+            '[[tool:fetch_webpage url="http://127.0.0.1/"]]',
+            '[[tool:fetch_webpage url="https://food.dlsz.top/" count=2]]',
+            '[[tool:fetch_webpage url="https://food.dlsz.top/" '
+            'max_chars=999999]]',
+            "[[tool:fetch_webpage]]",
+        ):
+            with self.subTest(marker=marker):
+                intent = safe_tools.parse_tool_markers(marker).intents[0]
+                self.assertFalse(intent.valid)
+
+        instruction = safe_tools.tool_instruction(["fetch_webpage"])
+        self.assertIn("fetch_webpage", instruction)
+        self.assertIn("公开网页", instruction)
+
+    # -- plugin integration --------------------------------------------
+    def _fetch_marker_event(self):
+        return FakeEvent(
+            [Plain("帮我看看这个网页")],
+            message_str="帮我看看这个网页",
+            private=True,
+        )
+
+    def _fetch_reply(self, responder):
+        context = FakeContext(responder=lambda kwargs: responder)
+        plugin = make_plugin(
+            context,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_fetch_webpage=True,
+            web_fetch_cooldown_seconds=0,
+        )
+        return context, plugin
+
+    async def test_direct_mode_fetch_marker_returns_page_text(self):
+        page = self.wf.PageResult(
+            url="https://food.dlsz.top/restaurants",
+            title="餐厅列表",
+            text="老王火锅\n人均 60 元",
+            truncated=False,
+            content_type="text/html",
+        )
+
+        async def fake_fetch(url, max_chars):
+            self.assertEqual(url, "https://food.dlsz.top/restaurants")
+            self.assertEqual(max_chars, 2000)
+            return page
+
+        context, plugin = self._fetch_reply(
+            '给你看看 [[tool:fetch_webpage '
+            'url="https://food.dlsz.top/restaurants" max_chars=2000]]'
+        )
+        plugin._fetch_webpage_text = fake_fetch
+        event = self._fetch_marker_event()
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(results), 1)
+        text = results[0].text
+        self.assertIn("餐厅列表", text)
+        self.assertIn("老王火锅", text)
+        self.assertNotIn("[[tool:", text)
+        self.assertIn("fetch_webpage", context.calls[0]["system_prompt"])
+        self.assertTrue(event.call_llm)
+
+    async def test_direct_mode_fetch_failure_is_chinese_and_safe(self):
+        async def failing_fetch(url, max_chars):
+            raise self.wf.WebFetchError("blocked_ip")
+
+        context, plugin = self._fetch_reply(
+            '打不开 [[tool:fetch_webpage url="https://food.dlsz.top/x"]]'
+        )
+        plugin._fetch_webpage_text = failing_fetch
+        event = self._fetch_marker_event()
+        results = await run_handler(plugin, event)
+        text = results[0].text
+        self.assertIn("打不开", text)
+        self.assertIn("目标地址不是公开网页", text)
+        self.assertNotIn("[[tool:", text)
+        self.assertNotIn("blocked_ip", text)
+        self.assertNotIn("Traceback", text)
+        self.assertNotIn(str(Path.cwd()), text)
+
+    async def test_direct_mode_fetch_cooldown_blocks_second_call(self):
+        calls = []
+
+        async def fake_fetch(url, max_chars):
+            calls.append(url)
+            return self.wf.PageResult(
+                url=url,
+                title="页",
+                text="内容",
+                truncated=False,
+                content_type="text/plain",
+            )
+
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '[[tool:fetch_webpage url="https://food.dlsz.top/x"]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_fetch_webpage=True,
+            web_fetch_cooldown_seconds=60,
+        )
+        plugin._fetch_webpage_text = fake_fetch
+        first = await run_handler(plugin, self._fetch_marker_event())
+        second = await run_handler(plugin, self._fetch_marker_event())
+        self.assertEqual(len(calls), 1)
+        self.assertIn("内容", first[0].text)
+        self.assertIn("太频繁", second[0].text)
+
+    async def test_disabled_fetch_tool_is_hidden_and_not_executed(self):
+        calls = []
+
+        async def fake_fetch(url, max_chars):
+            calls.append(url)
+            raise AssertionError("must not fetch when disabled")
+
+        context = FakeContext(
+            responder=lambda kwargs: (
+                '看这个 [[tool:fetch_webpage url="https://food.dlsz.top/"]]'
+            )
+        )
+        plugin = make_plugin(
+            context,
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_fetch_webpage=False,
+        )
+        plugin._fetch_webpage_text = fake_fetch
+        results = await run_handler(plugin, self._fetch_marker_event())
+        self.assertEqual(calls, [])
+        self.assertIn("看这个", results[0].text)
+        self.assertNotIn("[[tool:", results[0].text)
+        self.assertNotIn("fetch_webpage", context.calls[0]["system_prompt"])
+
+    async def test_memory_mode_fetch_marker_replaces_agent_text(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_fetch_webpage=True,
+            web_fetch_cooldown_seconds=0,
+        )
+
+        async def fake_fetch(url, max_chars):
+            return self.wf.PageResult(
+                url=url,
+                title="餐厅页",
+                text="营业至 22:00",
+                truncated=False,
+                content_type="text/html",
+            )
+
+        plugin._fetch_webpage_text = fake_fetch
+        event = FakeEvent(
+            [Plain("看看网页")],
+            message_str="看看网页",
+            private=True,
+            session_id="web-fetch-memory-reply",
+        )
+        event.set_extra("qqbot_enhancer_memory_reply", True)
+        event.result = FakeResult(
+            [Plain('好 [[tool:fetch_webpage url="https://food.dlsz.top/"]]')]
+        )
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertNotIn("[[tool:", event.result.text)
+        self.assertIn("餐厅页", event.result.text)
+        self.assertIn("营业至 22:00", event.result.text)
+
+    async def test_memory_mode_catalog_injected_idempotently(self):
+        context = FakeContext()
+        plugin = make_plugin(
+            context,
+            memory_mode="astrbot",
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_fetch_webpage=True,
+        )
+        event = FakeEvent(
+            [Plain("看看网页")],
+            message_str="看看网页",
+            private=False,
+            group_id="990001",
+            sender_id="39001",
+            sender_name="测试用户",
+            session_id="web-fetch-catalog",
+        )
+        req = SimpleNamespace(system_prompt="base persona")
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertIn("# Web Fetch Tool Catalog", req.system_prompt)
+        self.assertIn("fetch_webpage", req.system_prompt)
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertEqual(req.system_prompt.count("# Web Fetch Tool Catalog"), 1)
+
+        direct = make_plugin(
+            FakeContext(),
+            memory_mode="direct",
+            safe_tools_enabled=True,
+            safe_tools_marker_enabled=True,
+            safe_tools_allow_fetch_webpage=True,
+        )
+        direct_req = SimpleNamespace(system_prompt="direct base")
+        await direct.inject_agent_current_sender_identity(event, direct_req)
+        self.assertEqual(direct_req.system_prompt, "direct base")
+
+    def test_option_reports_web_fetch_status(self):
+        plugin = make_plugin(FakeContext(), web_fetch_cooldown_seconds=0)
+        self.assertIn("AI 网页访问：已启用", plugin._build_option_text())
+        disabled = make_plugin(
+            FakeContext(),
+            safe_tools_allow_fetch_webpage=False,
+        )
+        self.assertIn("AI 网页访问：未启用", disabled._build_option_text())
+
+
+class TestFoodSubmit(unittest.IsolatedAsyncioTestCase):
+    """Natural-language food review submission (fixed POST, no key leak)."""
+
+    MARKER_ALL = (
+        "好嘞 [[tool:submit_food_review restaurant=\"老王火锅\" "
+        "location=\"南关区\" taste=\"4.5\" value=\"3\" "
+        "comment=\"汤底香，就是有点咸\" tags=\"火锅,夜宵\"]]"
+    )
+
+    def setUp(self):
+        self.locations = [
+            {"id": 7, "name": "南关区", "path": "中国/吉林省/长春市/南关区"}
+        ]
+        self.posts = []
+        self.logger_patch = mock.patch.object(MODULE, "logger", mock.MagicMock())
+        self.logger = self.logger_patch.start()
+        self.addCleanup(self.logger_patch.stop)
+
+    def _plugin(self, responder=None, **overrides):
+        text = self.MARKER_ALL if responder is None else responder
+        context = FakeContext(responder=lambda kwargs: text)
+        config = {
+            "safe_tools_enabled": True,
+            "safe_tools_marker_enabled": True,
+            "safe_tools_allow_submit_food_review": True,
+            "food_submit_enabled": True,
+            "food_submit_cooldown_seconds": 0,
+            "food_submit_draft_ttl_seconds": 600,
+            "food_nl_enabled": True,
+            "food_nl_cooldown_seconds": 0,
+            "food_nl_probability": 1.0,
+            "food_nl_image_probability": 1.0,
+            "group_cooldown_seconds": 0,
+            "user_cooldown_seconds": 0,
+            "reply_probability": 1.0,
+        }
+        config.update(overrides)
+        plugin = make_plugin(context, **config)
+        plugin._last_food_submit_at.clear()
+        plugin._last_food_nl_at.clear()
+        plugin._food_submit_drafts.clear()
+
+        async def fake_locations(query):
+            return list(self.locations)
+
+        def fake_post(payload):
+            self.posts.append(payload)
+            return 200, {
+                "success": True,
+                "restaurant_id": 35,
+                "tags": ["火锅"],
+            }
+
+        plugin._search_food_locations = fake_locations
+        plugin._post_food_submit_sync = fake_post
+        return plugin, context
+
+    @staticmethod
+    def _private_event(text, **kwargs):
+        return FakeEvent(
+            [Plain(text)], message_str=text, private=True, **kwargs
+        )
+
+    # -- happy path -----------------------------------------------------
+    async def test_submit_success_posts_documented_payload(self):
+        plugin, _context = self._plugin()
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，"
+            "汤底香，就是有点咸，标签火锅和夜宵"
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(self.posts), 1)
+        payload = self.posts[0]
+        self.assertEqual(payload["name"], "老王火锅")
+        self.assertEqual(payload["comment"], "汤底香，就是有点咸")
+        self.assertEqual(payload["taste_score"], 4.5)
+        self.assertEqual(payload["value_score"], 3.0)
+        self.assertEqual(payload["location_id"], 7)
+        self.assertEqual(payload["username"], "测试用户")
+        self.assertEqual(payload["password"], "20002")
+        self.assertEqual(payload["tags"], ["火锅", "夜宵"])
+        self.assertNotIn("review_date", payload)
+        self.assertEqual(len(results), 1)
+        text = results[0].text
+        self.assertIn("已提交到 food.dlsz.top", text)
+        self.assertIn("老王火锅", text)
+        self.assertIn("4.5", text)
+        self.assertNotIn("20002", text)
+        self.assertNotIn("[[tool:", text)
+        self.assertTrue(event.call_llm)
+
+    async def test_unmatched_location_uses_new_location_name(self):
+        plugin, _context = self._plugin()
+
+        async def no_locations(query):
+            return []
+
+        plugin._search_food_locations = no_locations
+        marker = (
+            '[[tool:submit_food_review restaurant="夜市烤串" '
+            'location="新开的夜市" taste="4" value="5" comment="便宜好吃"]]'
+        )
+        event = self._private_event(
+            "帮我把夜市烤串添加到 food：新开的夜市，口味4，性价比5，便宜好吃"
+        )
+        plugin._generate_reply = mock.AsyncMock(return_value=marker)
+        await run_handler(plugin, event)
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.posts[0]["new_location_name"], "新开的夜市")
+        self.assertNotIn("location_id", self.posts[0])
+
+    async def test_username_defaults_to_nickname_or_fallback(self):
+        plugin, _context = self._plugin()
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香",
+            sender_name="",
+        )
+        await run_handler(plugin, event)
+        self.assertEqual(self.posts[0]["username"], "群友")
+
+    # -- never submit partial -------------------------------------------
+    async def test_missing_fields_clarifies_without_posting(self):
+        partial = (
+            '好的 [[tool:submit_food_review restaurant="老王火锅" '
+            'taste="4.5"]]'
+        )
+        plugin, _context = self._plugin(responder=partial)
+        event = self._private_event("帮我把老王火锅加到 food，口味4.5")
+        results = await run_handler(plugin, event)
+        self.assertEqual(self.posts, [])
+        text = results[0].text
+        for label in ("位置", "性价比分", "评价内容"):
+            self.assertIn(label, text)
+        self.assertNotIn("已提交", text)
+        self.assertNotIn("日期", text)
+        self.assertNotIn("[[tool:", text)
+
+    async def test_local_score_validation_clarifies_without_posting(self):
+        marker = (
+            '[[tool:submit_food_review restaurant="老王火锅" '
+            'location="南关区" taste="9" value="3" comment="还行"]]'
+        )
+        plugin, _context = self._plugin(responder=marker)
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味9，性价比3，还行"
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(self.posts, [])
+        text = results[0].text
+        self.assertIn("分数需要在 0.1-5 之间", text)
+        self.assertIn("味道分", text)
+        self.assertNotIn("已提交", text)
+
+    # -- write gate -----------------------------------------------------
+    async def test_casual_food_chat_never_writes_production(self):
+        marker = (
+            '这家挺香的～ [[tool:submit_food_review restaurant="老王火锅" '
+            'location="南关区" taste="4" value="3" comment="挺香"]]'
+        )
+        plugin, _context = self._plugin(responder=marker)
+        event = self._private_event("我吃过老王火锅，挺香的")
+        results = await run_handler(plugin, event)
+        self.assertEqual(self.posts, [])
+        self.assertIn("添加", results[0].text)
+        self.assertNotIn("已提交", results[0].text)
+
+        # A bare confirmation then finishes the draft without a model call.
+        second = self._private_event("添加")
+        second_results = await run_handler(plugin, second)
+        self.assertEqual(len(self.posts), 1)
+        self.assertIn("已提交到 food.dlsz.top", second_results[0].text)
+        self.assertEqual(len(_context.calls), 1)
+
+    async def test_plain_casual_chat_never_posts(self):
+        plugin, _context = self._plugin(responder="我也想吃火锅了")
+        event = self._private_event("今天吃了火锅")
+        await run_handler(plugin, event)
+        self.assertEqual(self.posts, [])
+
+    # -- site error mapping ---------------------------------------------
+    async def test_duplicate_username_is_actionable_and_no_success(self):
+        calls = []
+        plugin, _context = self._plugin()
+
+        def duplicate(payload):
+            calls.append(payload)
+            return 400, {"error": "用户名「测试用户」在该店铺已存在"}
+
+        plugin._post_food_submit_sync = duplicate
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        text = results[0].text
+        self.assertIn("已有同名评价", text)
+        self.assertNotIn("已提交", text)
+        self.assertEqual(len(calls), 1)  # no automatic retry/write storm
+        # Draft is cleared so the same duplicate is not re-posted.
+        self.assertIsNone(plugin._food_submit_draft(event))
+
+    async def test_location_exists_maps_to_actionable_message(self):
+        plugin, _context = self._plugin()
+        plugin._post_food_submit_sync = lambda payload: (
+            400,
+            {"error": "位置「南关区」已存在"},
+        )
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        text = results[0].text
+        self.assertIn("位置「南关区」已存在", text)
+        self.assertIn("更具体", text)
+        self.assertNotIn("已提交", text)
+
+    async def test_v11_error_code_preferred_over_text(self):
+        plugin, _context = self._plugin()
+        plugin._post_food_submit_sync = lambda payload: (
+            400,
+            {"code": "DUPLICATE_USERNAME", "error": "duplicated"},
+        )
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        self.assertIn("已有同名评价", results[0].text)
+        self.assertNotIn("已提交", results[0].text)
+
+    async def test_server_error_is_generic_and_safe(self):
+        plugin, _context = self._plugin()
+        plugin._post_food_submit_sync = lambda payload: (
+            500,
+            {"error": "<html>Traceback secret</html>"},
+        )
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        text = results[0].text
+        self.assertIn("提交到 food.dlsz.top 失败", text)
+        self.assertNotIn("Traceback", text)
+        self.assertNotIn("已提交", text)
+
+    # -- password handling ---------------------------------------------
+    async def test_password_field_never_model_visible_or_logged(self):
+        plugin, context = self._plugin()
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(self.posts[0]["password"], "20002")
+        self.assertNotIn("20002", results[0].text)
+        prompt_blob = json_module.dumps(
+            context.calls, ensure_ascii=False, default=str
+        )
+        self.assertIn("submit_food_review", prompt_blob)
+        # The key is only mentioned as a prohibition, never as a tool argument.
+        self.assertIn("不要传密码", prompt_blob)
+        self.assertNotIn("password=", prompt_blob)
+        self.assertNotIn("password", prompt_blob)
+        log_blob = " ".join(str(call) for call in self.logger.mock_calls)
+        self.assertNotIn("20002", log_blob)
+        self.assertNotIn("password", log_blob)
+
+    # -- HTTP layer -----------------------------------------------------
+    def test_post_uses_fixed_https_endpoint_and_json_body(self):
+        import urllib.request as urllib_request
+
+        plugin, _context = self._plugin()
+        plugin._post_food_submit_sync = (
+            MODULE.QQBotEnhancerPlugin._post_food_submit_sync.__get__(plugin)
+        )
+        captured = {}
+
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                captured["url"] = request.full_url
+                captured["method"] = request.get_method()
+                captured["headers"] = {
+                    key.lower(): value
+                    for key, value in request.header_items()
+                }
+                captured["body"] = request.data
+                return FakeHttpResponse(
+                    b'{"success": true, "restaurant_id": 9}',
+                    content_type="application/json",
+                    url="https://food.dlsz.top/api/upload",
+                )
+
+        with mock.patch.object(
+            urllib_request, "build_opener", return_value=FakeOpener()
+        ):
+            status, body = plugin._post_food_submit_sync(
+                {
+                    "name": "老王火锅",
+                    "password": "20002",
+                    "location_id": 7,
+                    "taste_score": 4.5,
+                    "value_score": 3.0,
+                    "comment": "汤底香",
+                }
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["success"])
+        self.assertEqual(
+            captured["url"], "https://food.dlsz.top/api/upload"
+        )
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(
+            captured["headers"]["content-type"],
+            "application/json; charset=utf-8",
+        )
+        sent = json_module.loads(captured["body"])
+        self.assertEqual(sent["password"], "20002")
+        self.assertNotIn("review_date", sent)
+
+    def test_post_rejects_cross_host_redirect_response(self):
+        import urllib.request as urllib_request
+
+        plugin, _context = self._plugin()
+        plugin._post_food_submit_sync = (
+            MODULE.QQBotEnhancerPlugin._post_food_submit_sync.__get__(plugin)
+        )
+
+        class EvilOpener:
+            def open(self, request, timeout=None):
+                return FakeHttpResponse(
+                    b'{"success": true}',
+                    content_type="application/json",
+                    url="https://evil.example/api/upload",
+                )
+
+        with mock.patch.object(
+            urllib_request, "build_opener", return_value=EvilOpener()
+        ):
+            with self.assertRaises(MODULE.food_engine.FoodAPIError):
+                plugin._post_food_submit_sync(
+                    {
+                        "name": "x",
+                        "password": "20002",
+                        "location_id": 1,
+                        "taste_score": 1.0,
+                        "value_score": 1.0,
+                        "comment": "x",
+                    }
+                )
+
+    def test_post_maps_http_400_json_body(self):
+        import urllib.request as urllib_request
+
+        plugin, _context = self._plugin()
+        plugin._post_food_submit_sync = (
+            MODULE.QQBotEnhancerPlugin._post_food_submit_sync.__get__(plugin)
+        )
+
+        def raising_open(request, timeout=None):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(
+                    '{"error": "用户名「测试用户」在该店铺已存在"}'.encode(
+                        "utf-8"
+                    )
+                ),
+            )
+
+        with mock.patch.object(
+            urllib_request, "build_opener",
+            return_value=SimpleNamespace(open=raising_open),
+        ):
+            status, body = plugin._post_food_submit_sync(
+                {
+                    "name": "老王火锅",
+                    "password": "20002",
+                    "location_id": 7,
+                    "taste_score": 4.5,
+                    "value_score": 3.0,
+                    "comment": "汤底香",
+                }
+            )
+        self.assertEqual(status, 400)
+        self.assertIn("已存在", body["error"])
+
+    # -- fixed host / SSRF ---------------------------------------------
+    def test_only_fixed_submit_url_is_accepted(self):
+        food = importlib.import_module("food")
+        self.assertTrue(
+            food.validate_food_submit_url(
+                "https://food.dlsz.top/api/upload"
+            )
+        )
+        for url in (
+            "",
+            "http://food.dlsz.top/api/upload",
+            "https://food.dlsz.top/api/upload?next=http://evil",
+            "https://food.dlsz.top/api/upload#frag",
+            "https://evil.example/api/upload",
+            "https://food.dlsz.top/api/other",
+            "https://food.dlsz.top:8443/api/upload",
+            "https://user:pw@food.dlsz.top/api/upload",
+            "file:///etc/passwd",
+            "http://127.0.0.1/api/upload",
+            "http://169.254.169.254/api/upload",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(food.validate_food_submit_url(url))
+        self.assertEqual(
+            food.FOOD_SUBMIT_URL, "https://food.dlsz.top/api/upload"
+        )
+
+    def test_marker_cannot_carry_arbitrary_url(self):
+        safe_tools = importlib.import_module("safe_tools")
+        intent = safe_tools.parse_tool_markers(
+            '[[tool:submit_food_review url="http://127.0.0.1/api/upload"]]'
+        ).intents[0]
+        self.assertFalse(intent.valid)
+        for marker in (
+            '[[tool:submit_food_review restaurant="http://evil.example/x"]]',
+            '[[tool:submit_food_review location="\\\\server\\share"]]',
+            '[[tool:submit_food_review restaurant="老王" password="123456"]]',
+        ):
+            with self.subTest(marker=marker):
+                self.assertFalse(
+                    safe_tools.parse_tool_markers(marker).intents[0].valid
+                )
+
+    # -- one submission / tool catalog ---------------------------------
+    async def test_two_markers_execute_no_submission(self):
+        double = self.MARKER_ALL + " " + self.MARKER_ALL
+        plugin, _context = self._plugin(responder=double)
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(self.posts, [])
+        self.assertNotIn("[[tool:", results[0].text)
+
+    async def test_disabled_submission_never_posts_or_advertises(self):
+        plugin, _context = self._plugin(food_submit_enabled=False)
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(self.posts, [])
+        self.assertNotIn("[[tool:", results[0].text)
+        self.assertNotIn(
+            "submit_food_review", plugin._safe_tool_system_instruction()
+        )
+
+    async def test_memory_mode_catalog_is_injected_once(self):
+        plugin, _context = self._plugin(memory_mode="astrbot")
+        req = SimpleNamespace(system_prompt="base prompt")
+        event = self._private_event("帮我把老王火锅加到 food")
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertIn("submit_food_review", req.system_prompt)
+        self.assertIn("密钥", req.system_prompt)
+        await plugin.inject_agent_current_sender_identity(event, req)
+        self.assertEqual(
+            req.system_prompt.count("# Food Submit Tool Catalog"), 1
+        )
+
+    def test_direct_prompt_lists_submit_tool_only_when_enabled(self):
+        enabled, _context = self._plugin()
+        self.assertIn(
+            "submit_food_review", enabled._safe_tool_system_instruction()
+        )
+        disabled, _context = self._plugin(
+            safe_tools_allow_submit_food_review=False
+        )
+        self.assertNotIn(
+            "submit_food_review", disabled._safe_tool_system_instruction()
+        )
+
+    # -- group food-only participation ---------------------------------
+    async def test_textless_food_image_asks_fields_without_posting(self):
+        plugin, _context = self._plugin()
+
+        async def caption(event):
+            return "一碗面条"
+
+        plugin._food_image_caption = caption
+        event = FakeEvent(
+            [Image(url="https://example.com/food.png")],
+            private=False,
+            group_id="group-food",
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(len(results), 1)
+        text = results[0].text
+        for label in ("店名", "位置", "味道分", "性价比分", "评价"):
+            self.assertIn(label, text)
+        self.assertTrue(event.call_llm)
+
+    async def test_non_food_image_stays_silent_in_group(self):
+        plugin, context = self._plugin()
+
+        async def caption(event):
+            return "一只猫猫表情包"
+
+        plugin._food_image_caption = caption
+        event = FakeEvent(
+            [Image(url="https://example.com/cat.png")],
+            private=False,
+            group_id="group-cat",
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+
+    async def test_food_miss_does_not_fall_back_to_ambient(self):
+        plugin, context = self._plugin(
+            food_nl_probability=0.0,
+            ambient_group_chat_enabled=True,
+            ambient_group_keyword_enabled=True,
+            ambient_group_topic_keywords=["火锅"],
+        )
+        event = FakeEvent(
+            [Plain("今天去吃了火锅，味道不错")],
+            message_str="今天去吃了火锅，味道不错",
+            private=False,
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertEqual(context.calls, [])
+        self.assertTrue(event.call_llm)
+
+    async def test_group_food_message_participates_and_submits(self):
+        plugin, context = self._plugin()
+        text = "今天去老王火锅，帮我加到 food：南关区，口味4.5，性价比3，汤底香"
+        event = FakeEvent([Plain(text)], message_str=text, private=False)
+        results = await run_handler(plugin, event)
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(len(context.calls), 1)
+        self.assertEqual(len(results), 1)
+        self.assertIn("已提交到 food.dlsz.top", results[0].text)
+        # Non-@ participation @s the speaker so the reply has context.
+        self.assertTrue(
+            any(isinstance(comp, At) for comp in results[0].chain)
+        )
+        self.assertTrue(event.call_llm)
+
+    async def test_memory_mode_marker_executes_one_submission(self):
+        marker = (
+            '帮你看了一下 [[tool:submit_food_review restaurant="老王火锅" '
+            'location="南关区" taste="4.5" value="3" comment="汤底香"]]'
+        )
+        plugin, _context = self._plugin(memory_mode="astrbot", responder=marker)
+        event = self._private_event(
+            "帮我把老王火锅加到 food：南关区，口味4.5，性价比3，汤底香"
+        )
+        results = await run_handler(plugin, event)
+        self.assertEqual(results, [])
+        self.assertTrue(event.get_extra("qqbot_enhancer_memory_reply"))
+        event.result = FakeResult([Plain(marker)])
+        await plugin.attach_memory_mode_sticker(event)
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(
+            event.result.text,
+            "帮你看了一下\n已提交到 food.dlsz.top：老王火锅（南关区），"
+            "口味 4.5 / 性价比 3。",
+        )
+
+    def test_option_reports_food_submit_and_food_nl_status(self):
+        plugin, _context = self._plugin()
+        option = plugin._build_option_text()
+        self.assertIn("AI 美食提交：已启用", option)
+        self.assertIn("美食话题参与：开启", option)
+        disabled, _context = self._plugin(food_submit_enabled=False)
+        self.assertIn("AI 美食提交：未启用", disabled._build_option_text())
+
+    # -- pure helpers ---------------------------------------------------
+    def test_pure_helpers_scores_tags_intents_and_errors(self):
+        food = importlib.import_module("food")
+        self.assertEqual(food.parse_food_score("4.5"), 4.5)
+        self.assertEqual(food.parse_food_score("４．５"), 4.5)
+        self.assertIsNone(food.parse_food_score("0.05"))
+        self.assertIsNone(food.parse_food_score("6"))
+        self.assertIsNone(food.parse_food_score("好吃"))
+        self.assertEqual(
+            food.split_food_tags("火锅，夜宵, 火锅"), ["火锅", "夜宵"]
+        )
+        self.assertTrue(
+            food.detect_food_add_intent("帮我添加这家店到 food")
+        )
+        self.assertFalse(food.detect_food_add_intent("我吃过这家店"))
+        self.assertTrue(food.is_food_submit_confirmation("添加吧"))
+        self.assertTrue(food.is_food_submit_confirmation("好的"))
+        self.assertFalse(food.is_food_submit_confirmation("明天吃火锅"))
+        validation = food.validate_food_submission(
+            {"restaurant": "老王火锅", "taste": "4.5"}
+        )
+        self.assertEqual(
+            validation["missing"], ["location", "value", "comment"]
+        )
+        self.assertEqual(validation["invalid"], [])
+        self.assertEqual(
+            food.food_submit_missing_labels(["taste"]),
+            ["味道分（0.1-5）"],
+        )
+        self.assertTrue(
+            food.parse_food_submit_response(
+                200, {"success": True, "restaurant_id": 3}
+            )["ok"]
+        )
+        # A 200 without success:true must not be reported as success.
+        self.assertFalse(
+            food.parse_food_submit_response(200, {"ok": True})["ok"]
+        )
+        for status, body, kind in (
+            (400, {"error": "用户名「x」在该店铺已存在"}, "duplicate_username"),
+            (400, {"error": "位置「南关区」已存在"}, "location_exists"),
+            (404, {"error": "餐厅不存在"}, "restaurant_not_found"),
+            (400, {"error": "评价不能为空"}, "missing_field"),
+            (400, {"error": "味道分必须在0.5-5之间"}, "invalid_score"),
+            (400, {"code": "DUPLICATE_USERNAME"}, "duplicate_username"),
+            (500, {}, "server"),
+            (302, {}, "redirect"),
+        ):
+            with self.subTest(status=status, body=body):
+                self.assertEqual(
+                    food.parse_food_submit_response(status, body)["kind"],
+                    kind,
+                )

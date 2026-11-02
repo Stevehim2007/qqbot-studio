@@ -60,6 +60,57 @@ DEFAULTS: dict[str, Any] = {
     "food_error_reply": "餐厅查询暂时失败，请稍后再试。",
     "food_cooldown_reply": "餐厅查询太频繁，请 {seconds} 秒后再试。",
     "food_invalid_query_reply": "关键词不合法，只允许普通文字，不要输入 URL 或路径。",
+    "food_submit_enabled": True,
+    "safe_tools_allow_submit_food_review": True,
+    "food_submit_timeout_seconds": 12,
+    "food_submit_max_response_bytes": 100_000,
+    "food_submit_cooldown_seconds": 60,
+    "food_submit_draft_ttl_seconds": 600,
+    "food_submit_name_max_chars": 100,
+    "food_submit_location_max_chars": 60,
+    "food_submit_comment_max_chars": 500,
+    "food_submit_tag_max_chars": 20,
+    "food_submit_tags_max_count": 5,
+    "food_submit_username_max_chars": 32,
+    "food_submit_username_fallback": "群友",
+    "food_submit_missing_reply": (
+        "还差这些信息：{missing}。补全后我再提交到 food.dlsz.top。"
+    ),
+    "food_submit_success_reply": (
+        "已提交到 food.dlsz.top：{name}（{location}），"
+        "口味 {taste} / 性价比 {value}。"
+    ),
+    "food_submit_ask_add_reply": (
+        "要把这条评价添加到 food.dlsz.top 吗？回复「添加」我就用刚才的信息提交。"
+    ),
+    "food_submit_duplicate_username_reply": (
+        "这家店已有同名评价（可能你之前提交过），本次没有重复写入。"
+    ),
+    "food_submit_location_exists_reply": (
+        "位置「{location}」已存在，换个更具体的写法（或带上所属区县）我再提交。"
+    ),
+    "food_submit_restaurant_not_found_reply": (
+        "站点没有找到这家店，请确认店名和位置后再试。"
+    ),
+    "food_submit_score_reply": "分数需要在 0.1-5 之间：{fields}。",
+    "food_submit_invalid_reply": "站点没有接受这次提交：{reason}",
+    "food_submit_error_reply": "提交到 food.dlsz.top 失败，请稍后再试。",
+    "food_submit_disabled_reply": "自动提交美食评价功能当前未启用。",
+    "food_submit_cooldown_reply": "提交太频繁，请 {seconds} 秒后再试。",
+    "food_submit_image_prompt_reply": (
+        "这是美食图吗喵？想记录评价的话，告诉我店名、位置、"
+        "味道分（0.1-5）、性价比分（0.1-5）和一段评价，我再帮你提交。"
+    ),
+    "food_submit_ambiguous_location_reply": (
+        "「{location}」匹配到多个位置：{options}。请说得更具体一点，我再提交。"
+    ),
+    "food_nl_enabled": True,
+    "food_nl_probability": 0.35,
+    "food_nl_cooldown_seconds": 120,
+    "food_nl_min_message_chars": 4,
+    "food_nl_image_enabled": True,
+    "food_nl_image_probability": 0.25,
+    "food_nl_image_without_caption_enabled": False,
     "option_max_plugins": 20,
     "option_max_chars": 1800,
     "user_sticker_reaction_enabled": True,
@@ -226,6 +277,12 @@ DEFAULTS: dict[str, Any] = {
     "safe_tools_allow_send_sticker": True,
     "safe_tools_allow_collect_sticker": True,
     "safe_tools_allow_list_categories": True,
+    "safe_tools_allow_fetch_webpage": True,
+    "web_fetch_timeout_seconds": 10,
+    "web_fetch_max_response_bytes": 262144,
+    "web_fetch_max_chars": 4000,
+    "web_fetch_max_redirects": 3,
+    "web_fetch_cooldown_seconds": 10,
     "safe_tools_sticker_prefix": "给你一个表情：",
     "safe_tools_collect_cooldown_seconds": 30,
     "max_images_per_message": 4,

@@ -1189,6 +1189,63 @@
     "type": "bool",
     "default": true
   },
+  "safe_tools_allow_fetch_webpage": {
+    "description": "允许 fetch_webpage 工具读取公开网页",
+    "type": "bool",
+    "default": true,
+    "hint": "仅公开 HTTP(S) 文本网页（HTML/纯文本/JSON/XML）；本机、内网、link-local、云元数据地址、DNS 重绑定、Cookie/登录态、JSONP 与二进制内容全部拒绝。"
+  },
+  "web_fetch_timeout_seconds": {
+    "description": "fetch_webpage 单次请求超时秒数",
+    "type": "int",
+    "default": 10,
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    }
+  },
+  "web_fetch_max_response_bytes": {
+    "description": "fetch_webpage 响应体最大字节数",
+    "type": "int",
+    "default": 262144,
+    "slider": {
+      "min": 1024,
+      "max": 1048576,
+      "step": 1024
+    }
+  },
+  "web_fetch_max_chars": {
+    "description": "fetch_webpage 返回正文最大字符数",
+    "type": "int",
+    "default": 4000,
+    "slider": {
+      "min": 500,
+      "max": 8000,
+      "step": 100
+    }
+  },
+  "web_fetch_max_redirects": {
+    "description": "fetch_webpage 最多跟随跳转次数",
+    "type": "int",
+    "default": 3,
+    "slider": {
+      "min": 0,
+      "max": 5,
+      "step": 1
+    },
+    "hint": "每一次跳转都会重新校验目标是否为公开 HTTP(S) 地址。"
+  },
+  "web_fetch_cooldown_seconds": {
+    "description": "fetch_webpage 每会话冷却秒数",
+    "type": "int",
+    "default": 10,
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 1
+    }
+  },
   "safe_tools_sticker_prefix": {
     "description": "安全工具发送表情时前缀文字",
     "type": "string",
@@ -1420,5 +1477,240 @@
       "max": 10,
       "step": 1
     }
+  },
+  "food_submit_enabled": {
+    "description": "启用 AI 自然语言提交餐厅/评价（POST food.dlsz.top）",
+    "type": "bool",
+    "default": true
+  },
+  "safe_tools_allow_submit_food_review": {
+    "description": "允许 AI 调用 submit_food_review 安全工具",
+    "type": "bool",
+    "default": true
+  },
+  "food_submit_timeout_seconds": {
+    "description": "美食提交请求超时秒数",
+    "type": "int",
+    "default": 12,
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    }
+  },
+  "food_submit_max_response_bytes": {
+    "description": "美食提交响应最大字节数",
+    "type": "int",
+    "default": 100000,
+    "slider": {
+      "min": 1000,
+      "max": 1000000,
+      "step": 1000
+    }
+  },
+  "food_submit_cooldown_seconds": {
+    "description": "同一用户提交美食评价冷却秒数",
+    "type": "int",
+    "default": 60,
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 10
+    }
+  },
+  "food_submit_draft_ttl_seconds": {
+    "description": "缺字段草稿保留秒数（超时后重新收集）",
+    "type": "int",
+    "default": 600,
+    "slider": {
+      "min": 60,
+      "max": 3600,
+      "step": 60
+    }
+  },
+  "food_submit_name_max_chars": {
+    "description": "店名最大字符数",
+    "type": "int",
+    "default": 100,
+    "slider": {
+      "min": 1,
+      "max": 200,
+      "step": 1
+    }
+  },
+  "food_submit_location_max_chars": {
+    "description": "位置最大字符数",
+    "type": "int",
+    "default": 60,
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "food_submit_comment_max_chars": {
+    "description": "评价内容最大字符数",
+    "type": "int",
+    "default": 500,
+    "slider": {
+      "min": 1,
+      "max": 2000,
+      "step": 10
+    }
+  },
+  "food_submit_tag_max_chars": {
+    "description": "单个标签最大字符数",
+    "type": "int",
+    "default": 20,
+    "slider": {
+      "min": 1,
+      "max": 40,
+      "step": 1
+    }
+  },
+  "food_submit_tags_max_count": {
+    "description": "单次提交最多标签数",
+    "type": "int",
+    "default": 5,
+    "slider": {
+      "min": 0,
+      "max": 10,
+      "step": 1
+    }
+  },
+  "food_submit_username_max_chars": {
+    "description": "提交用户名最大字符数（群昵称截断）",
+    "type": "int",
+    "default": 32,
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "food_submit_username_fallback": {
+    "description": "取不到群昵称时的用户名",
+    "type": "text",
+    "default": "群友"
+  },
+  "food_submit_missing_reply": {
+    "description": "缺字段追问模板（{missing}）",
+    "type": "text",
+    "default": "还差这些信息：{missing}。补全后我再提交到 food.dlsz.top。"
+  },
+  "food_submit_success_reply": {
+    "description": "成功提交模板（{name}/{location}/{taste}/{value}）",
+    "type": "text",
+    "default": "已提交到 food.dlsz.top：{name}（{location}），口味 {taste} / 性价比 {value}。"
+  },
+  "food_submit_ask_add_reply": {
+    "description": "普通美食聊天询问是否添加模板",
+    "type": "text",
+    "default": "要把这条评价添加到 food.dlsz.top 吗？回复「添加」我就用刚才的信息提交。"
+  },
+  "food_submit_duplicate_username_reply": {
+    "description": "用户名重复（已提交过）提示",
+    "type": "text",
+    "default": "这家店已有同名评价（可能你之前提交过），本次没有重复写入。"
+  },
+  "food_submit_location_exists_reply": {
+    "description": "位置已存在提示（{location}）",
+    "type": "text",
+    "default": "位置「{location}」已存在，换个更具体的写法（或带上所属区县）我再提交。"
+  },
+  "food_submit_restaurant_not_found_reply": {
+    "description": "餐厅不存在提示",
+    "type": "text",
+    "default": "站点没有找到这家店，请确认店名和位置后再试。"
+  },
+  "food_submit_invalid_reply": {
+    "description": "站点拒绝提交提示（{reason}）",
+    "type": "text",
+    "default": "站点没有接受这次提交：{reason}"
+  },
+  "food_submit_error_reply": {
+    "description": "提交网络/未知错误提示",
+    "type": "text",
+    "default": "提交到 food.dlsz.top 失败，请稍后再试。"
+  },
+  "food_submit_disabled_reply": {
+    "description": "提交功能关闭提示",
+    "type": "text",
+    "default": "自动提交美食评价功能当前未启用。"
+  },
+  "food_submit_cooldown_reply": {
+    "description": "提交冷却提示（{seconds}）",
+    "type": "text",
+    "default": "提交太频繁，请 {seconds} 秒后再试。"
+  },
+  "food_submit_image_prompt_reply": {
+    "description": "只有美食图没有文字时的追问",
+    "type": "text",
+    "default": "这是美食图吗喵？想记录评价的话，告诉我店名、位置、味道分（0.1-5）、性价比分（0.1-5）和一段评价，我再帮你提交。"
+  },
+  "food_submit_ambiguous_location_reply": {
+    "description": "位置匹配到多个时的追问（{location}/{options}）",
+    "type": "text",
+    "default": "「{location}」匹配到多个位置：{options}。请说得更具体一点，我再提交。"
+  },
+  "food_nl_enabled": {
+    "description": "启用群聊美食话题自然语言参与（不含指令）",
+    "type": "bool",
+    "default": true
+  },
+  "food_nl_probability": {
+    "description": "美食话题参与概率（与 ambient 概率互斥）",
+    "type": "float",
+    "default": 0.35,
+    "slider": {
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05
+    }
+  },
+  "food_nl_cooldown_seconds": {
+    "description": "同一会话美食话题参与冷却秒数",
+    "type": "int",
+    "default": 120,
+    "slider": {
+      "min": 0,
+      "max": 1800,
+      "step": 30
+    }
+  },
+  "food_nl_min_message_chars": {
+    "description": "美食文字消息最短参与字数",
+    "type": "int",
+    "default": 4,
+    "slider": {
+      "min": 1,
+      "max": 50,
+      "step": 1
+    }
+  },
+  "food_nl_image_enabled": {
+    "description": "允许美食图（可无文字）触发追问",
+    "type": "bool",
+    "default": true
+  },
+  "food_nl_image_probability": {
+    "description": "无文字美食图参与概率",
+    "type": "float",
+    "default": 0.25,
+    "slider": {
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05
+    }
+  },
+  "food_submit_score_reply": {
+    "description": "本地分数越界追问（{fields}）",
+    "type": "text",
+    "default": "分数需要在 0.1-5 之间：{fields}。"
+  },
+  "food_nl_image_without_caption_enabled": {
+    "description": "无视觉描述能力时也允许美食图触发追问（更吵，默认关闭）",
+    "type": "bool",
+    "default": false
   }
 }

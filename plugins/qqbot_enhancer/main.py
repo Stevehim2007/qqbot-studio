@@ -53,6 +53,7 @@ try:  # Loaded as a package by AstrBot.
     from .songs import SONG_SUFFIXES, list_song_files, resolve_song_file
     from . import conversations as conversation_engine
     from . import food as food_engine
+    from . import web_fetch as web_fetch_engine
     from . import personas as persona_engine
     from . import persona_bridge as persona_bridge_engine
     from . import safe_tools as safe_tools_engine
@@ -90,6 +91,7 @@ except ImportError:  # Loaded directly by a test harness.
     from songs import SONG_SUFFIXES, list_song_files, resolve_song_file
     import conversations as conversation_engine
     import food as food_engine
+    import web_fetch as web_fetch_engine
     import personas as persona_engine
     import persona_bridge as persona_bridge_engine
     import safe_tools as safe_tools_engine
@@ -115,7 +117,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "2.3.0"
+PLUGIN_FALLBACK_VERSION = "2.4.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -181,6 +183,13 @@ class _LimitedSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject every redirect hop for the password-bearing food POST."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class QQBotEnhancerPlugin(Star):
     """高优先级消息监听器：@/私聊必回，群聊非 @ 概率回复。"""
 
@@ -210,6 +219,10 @@ class QQBotEnhancerPlugin(Star):
         self._last_auto_collect_at: dict[str, float] = {}
         self._last_safe_tool_collect_at: dict[str, float] = {}
         self._last_food_at: dict[str, float] = {}
+        self._last_food_submit_at: dict[str, float] = {}
+        self._last_food_nl_at: dict[str, float] = {}
+        self._food_submit_drafts: dict[str, dict[str, Any]] = {}
+        self._last_web_fetch_at: dict[str, float] = {}
         self._last_collected_by_session: dict[str, dict[str, Any]] = {}
         self._recent_chat_identity: dict[str, list[dict[str, Any]]] = {}
         self._last_ambient_at: dict[str, float] = {}
@@ -352,7 +365,25 @@ class QQBotEnhancerPlugin(Star):
             bot_mentioned = self._is_bot_mentioned(event, components)
             explicit = is_private or bot_mentioned
 
-            if not explicit:
+            # Natural-language food participation for non-@ group messages.
+            # Food messages are decided by this path only, so ambient never
+            # double-triggers on the same message.
+            if not explicit and self._cfg_bool("food_nl_enabled"):
+                food_decision = await self._food_nl_decide(
+                    event,
+                    message_text,
+                    has_image=has_image,
+                )
+                if food_decision == "food":
+                    mode = "food"
+                elif food_decision == "silent":
+                    if self._cfg_bool(
+                        "block_default_llm_for_group_non_at"
+                    ):
+                        event.should_call_llm(True)
+                    return
+
+            if not explicit and mode != "food":
                 if self._cfg_bool("ambient_group_chat_enabled"):
                     # Ambient is the single non-@ decision path. A miss must
                     # not fall through to the old generic probability path.
@@ -376,7 +407,7 @@ class QQBotEnhancerPlugin(Star):
                             event.should_call_llm(True)
                         return
                     mode = "random"
-            else:
+            elif mode != "food":
                 mode = "explicit"
 
             # Explicit @/private reclassification of the most recent saved
@@ -550,6 +581,40 @@ class QQBotEnhancerPlugin(Star):
                     yielded = True
                     return
 
+            # A pending draft can be confirmed with a bare "要/添加"; finish it
+            # deterministically instead of relying on model memory.
+            if self._food_submit_flag_enabled() and (
+                self._food_submit_draft(event) is not None
+            ):
+                confirm_reply = await self._handle_food_submit_confirmation(
+                    event,
+                    message_text,
+                )
+                if confirm_reply is not None:
+                    should_stop = True
+                    event.should_call_llm(True)
+                    if mode in ("ambient", "food"):
+                        confirm_reply = self._prepend_speaker_mention_to_result(
+                            event,
+                            confirm_reply,
+                        )
+                    yield confirm_reply
+                    yielded = True
+                    return
+
+            # Food image without any text: ask for the missing fields locally
+            # instead of silently dropping the message or submitting empties.
+            if mode == "food" and has_image and not message_text.strip():
+                should_stop = True
+                event.should_call_llm(True)
+                result = event.plain_result(
+                    self._cfg_str("food_submit_image_prompt_reply")
+                )
+                result = self._prepend_speaker_mention_to_result(event, result)
+                yield result
+                yielded = True
+                return
+
             if self._memory_mode() == "astrbot":
                 # 交给 AstrBot 默认 Agent：它会使用会话管理器、人格和持久化
                 # 对话历史。非 @ 概率命中时，临时把事件标记为可唤醒，让默认
@@ -559,7 +624,7 @@ class QQBotEnhancerPlugin(Star):
                     "qqbot_enhancer_sticker_text",
                     message_text or event.message_str,
                 )
-                if mode == "ambient":
+                if mode in ("ambient", "food"):
                     event.set_extra(
                         "qqbot_enhancer_ambient_participate",
                         True,
@@ -593,7 +658,7 @@ class QQBotEnhancerPlugin(Star):
                         self._finalize_reply(reply_text)
                     )
                 )
-                if mode == "ambient":
+                if mode in ("ambient", "food"):
                     final_tool_result = self._prepend_speaker_mention_to_result(
                         event,
                         final_tool_result,
@@ -610,7 +675,7 @@ class QQBotEnhancerPlugin(Star):
                     and not self._ai_tool_protocol_active()
                 ),
             )
-            if mode == "ambient":
+            if mode in ("ambient", "food"):
                 result = self._prepend_speaker_mention_to_result(
                     event,
                     result,
@@ -843,8 +908,15 @@ class QQBotEnhancerPlugin(Star):
         self._last_food_at[key] = now
         return 0
 
-    def _read_food_response(self, response: Any) -> str:
-        max_bytes = self._cfg_int("food_max_response_bytes", 1)
+    def _read_food_response(
+        self,
+        response: Any,
+        *,
+        max_bytes: int | None = None,
+    ) -> str:
+        if max_bytes is None:
+            max_bytes = self._cfg_int("food_max_response_bytes", 1)
+        max_bytes = max(1, int(max_bytes))
         headers = getattr(response, "headers", None)
         content_length = ""
         content_type = ""
@@ -912,16 +984,22 @@ class QQBotEnhancerPlugin(Star):
             timeout=timeout,
         )
 
-    async def _search_food_location(
+    async def _search_food_locations(
         self,
         query: str,
-    ) -> dict[str, Any] | None:
+    ) -> list[dict[str, Any]]:
         url = food_engine.build_food_url(
             food_engine.FOOD_LOCATIONS_PATH,
             {"q": query},
         )
         payload = await self._fetch_food_json(url)
-        items = food_engine.extract_food_items(payload)
+        return food_engine.extract_food_items(payload)
+
+    async def _search_food_location(
+        self,
+        query: str,
+    ) -> dict[str, Any] | None:
+        items = await self._search_food_locations(query)
         return food_engine.select_food_location(items, query)
 
     async def _resolve_food_args(
@@ -1045,6 +1123,580 @@ class QQBotEnhancerPlugin(Star):
             return event.plain_result(
                 self._cfg_str("food_error_reply")
             )
+
+    # ------------------------------------------------------------------
+    # Natural-language food review submission (fixed POST endpoint)
+    # ------------------------------------------------------------------
+    def _food_submit_flag_enabled(self) -> bool:
+        return bool(
+            self._cfg_bool("safe_tools_enabled")
+            and self._cfg_bool("safe_tools_marker_enabled")
+            and self._cfg_bool("safe_tools_allow_submit_food_review")
+            and self._cfg_bool("food_submit_enabled")
+        )
+
+    def _food_submit_key(self, event: AstrMessageEvent) -> str:
+        return f"{event.unified_msg_origin}:{event.get_sender_id()}"
+
+    def _prune_food_submit_drafts(self, now: float) -> None:
+        ttl = max(1, self._cfg_int("food_submit_draft_ttl_seconds", 1))
+        for key, draft in list(self._food_submit_drafts.items()):
+            try:
+                updated = float(draft.get("updated", 0.0))
+            except (TypeError, ValueError):
+                updated = 0.0
+            if now - updated > ttl:
+                self._food_submit_drafts.pop(key, None)
+
+    def _food_submit_draft(
+        self,
+        event: AstrMessageEvent,
+    ) -> dict[str, Any] | None:
+        key = self._food_submit_key(event)
+        draft = self._food_submit_drafts.get(key)
+        if not draft:
+            return None
+        ttl = max(1, self._cfg_int("food_submit_draft_ttl_seconds", 1))
+        try:
+            updated = float(draft.get("updated", 0.0))
+        except (TypeError, ValueError):
+            updated = 0.0
+        if self._clock() - updated > ttl:
+            self._food_submit_drafts.pop(key, None)
+            return None
+        return draft
+
+    def _merge_food_submit_fields(
+        self,
+        event: AstrMessageEvent,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        draft = self._food_submit_draft(event)
+        merged: dict[str, Any] = dict(draft.get("fields", {})) if draft else {}
+        restaurant = fields.get("restaurant")
+        if (
+            restaurant
+            and merged.get("restaurant")
+            and restaurant != merged["restaurant"]
+        ):
+            merged = {}
+        merged.update(
+            {
+                key: value
+                for key, value in fields.items()
+                if value not in (None, "", [])
+            }
+        )
+        return merged
+
+    def _save_food_submit_draft(
+        self,
+        event: AstrMessageEvent,
+        fields: dict[str, Any],
+    ) -> None:
+        key = self._food_submit_key(event)
+        if not fields:
+            self._food_submit_drafts.pop(key, None)
+            return
+        self._food_submit_drafts[key] = {
+            "fields": dict(fields),
+            "updated": self._clock(),
+        }
+
+    def _clear_food_submit_draft(self, event: AstrMessageEvent) -> None:
+        self._food_submit_drafts.pop(self._food_submit_key(event), None)
+
+    def _food_submit_missing(self, fields: dict[str, Any]) -> list[str]:
+        return [
+            key
+            for key, _label in food_engine.FOOD_SUBMIT_REQUIRED
+            if key not in fields
+        ]
+
+    def _food_submit_missing_message(self, fields: dict[str, Any]) -> str:
+        return self._format_collected_reply(
+            self._cfg_str("food_submit_missing_reply"),
+            missing="、".join(
+                food_engine.food_submit_missing_labels(
+                    self._food_submit_missing(fields)
+                )
+            ),
+        )
+
+    def _food_submit_cooldown_remaining(
+        self,
+        event: AstrMessageEvent,
+    ) -> int:
+        now = self._clock()
+        self._prune_state(now)
+        key = f"{event.unified_msg_origin}:{event.get_sender_id()}"
+        cooldown = max(0, self._cfg_int("food_submit_cooldown_seconds", 0))
+        last = self._last_food_submit_at.get(key)
+        if last is not None and cooldown > 0:
+            remaining = cooldown - (now - last)
+            if remaining > 0:
+                return max(1, int(math.ceil(remaining)))
+        self._last_food_submit_at[key] = now
+        return 0
+
+    def _food_submit_username(self, event: AstrMessageEvent) -> str:
+        limit = max(1, self._cfg_int("food_submit_username_max_chars", 1))
+        nickname = food_engine.sanitize_food_submit_text(
+            self._safe_identity_nickname(event),
+            max_chars=limit,
+        )
+        if nickname:
+            return nickname
+        fallback = food_engine.sanitize_food_submit_text(
+            self._cfg_str("food_submit_username_fallback"),
+            max_chars=limit,
+        )
+        return fallback or "群友"
+
+    @staticmethod
+    def _join_food_submit_text(clean_text: Any, message: Any) -> str:
+        base = str(clean_text or "").strip()
+        tail = str(message or "").strip()
+        if base and tail:
+            return f"{base}\n{tail}"
+        return base or tail
+
+    def _food_submit_error_message(
+        self,
+        result: dict[str, Any],
+        fields: dict[str, Any],
+    ) -> str:
+        kind = str(result.get("kind", ""))
+        if kind == "duplicate_username":
+            return self._cfg_str(
+                "food_submit_duplicate_username_reply"
+            )
+        if kind == "location_exists":
+            return self._format_collected_reply(
+                self._cfg_str("food_submit_location_exists_reply"),
+                location=str(fields.get("location", "")),
+            )
+        if kind == "restaurant_not_found":
+            return self._cfg_str(
+                "food_submit_restaurant_not_found_reply"
+            )
+        if kind in ("missing_field", "invalid_score", "rejected"):
+            return self._format_collected_reply(
+                self._cfg_str("food_submit_invalid_reply"),
+                reason=food_engine.food_submit_error_reason(result),
+            )
+        return self._cfg_str("food_submit_error_reply")
+
+    def _post_food_submit_sync(
+        self,
+        payload: dict[str, Any],
+    ) -> tuple[int, Any]:
+        """Blocking fixed-host POST; body contains the password, never log it."""
+
+        url = food_engine.FOOD_SUBMIT_URL
+        if not food_engine.validate_food_submit_url(url):
+            raise food_engine.FoodAPIError("invalid food submit url")
+        timeout = max(1, self._cfg_int("food_submit_timeout_seconds", 1))
+        max_bytes = max(
+            1,
+            self._cfg_int("food_submit_max_response_bytes", 1),
+        )
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "User-Agent": IMAGE_SEARCH_USER_AGENT,
+                "Accept": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept-Encoding": "identity",
+            },
+            method="POST",
+        )
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                final_url = response.geturl()
+                if not food_engine.validate_food_submit_url(final_url):
+                    raise food_engine.FoodAPIError(
+                        "food submit redirect rejected"
+                    )
+                status = int(getattr(response, "status", 0) or 0) or 200
+                text = self._read_food_response(
+                    response,
+                    max_bytes=max_bytes,
+                )
+        except urllib.error.HTTPError as exc:
+            status = int(getattr(exc, "code", 0) or 0)
+            try:
+                raw = exc.read(max_bytes + 1) or b""
+            except Exception:
+                raw = b""
+            finally:
+                try:
+                    exc.close()
+                except Exception:
+                    pass
+            text = (
+                raw.decode("utf-8", errors="replace")
+                if len(raw) <= max_bytes
+                else ""
+            )
+        try:
+            return status, json.loads(text) if text.strip() else {}
+        except (TypeError, ValueError):
+            return status, {}
+
+    async def _resolve_food_submit_location(
+        self,
+        location: str,
+    ) -> dict[str, Any]:
+        try:
+            items = await self._search_food_locations(location)
+        except asyncio.TimeoutError:
+            return {"error": "timeout"}
+        except Exception:
+            return {"error": "error"}
+        needle = str(location or "").strip().casefold()
+        for item in items:
+            name = str(item.get("name", "")).strip()
+            if name.casefold() == needle and item.get("id") is not None:
+                return {
+                    "location_id": item.get("id"),
+                    "name": name,
+                }
+        if len(items) == 1 and items[0].get("id") is not None:
+            return {
+                "location_id": items[0].get("id"),
+                "name": str(items[0].get("name", "")).strip(),
+            }
+        if len(items) > 1:
+            options = []
+            for item in items[:3]:
+                path = str(
+                    item.get("path", "") or item.get("name", "")
+                ).strip()
+                if path:
+                    options.append(path)
+            return {"error": "ambiguous", "options": options}
+        return {"new_location_name": str(location)}
+
+    async def _perform_food_submit(
+        self,
+        event: AstrMessageEvent,
+        fields: dict[str, Any],
+        clean_text: Any = "",
+    ):
+        # Defense in depth: never submit a partial review, whatever the caller.
+        if self._food_submit_missing(fields):
+            self._save_food_submit_draft(event, fields)
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._food_submit_missing_message(fields),
+                )
+            )
+        resolved = await self._resolve_food_submit_location(
+            str(fields.get("location", ""))
+        )
+        if resolved.get("error") == "ambiguous":
+            self._save_food_submit_draft(event, fields)
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._format_collected_reply(
+                        self._cfg_str(
+                            "food_submit_ambiguous_location_reply"
+                        ),
+                        location=str(fields.get("location", "")),
+                        options="；".join(
+                            resolved.get("options", [])[:3]
+                        )
+                        or "多个同名地点",
+                    ),
+                )
+            )
+        if resolved.get("error"):
+            self._save_food_submit_draft(event, fields)
+            logger.info(
+                "qqbot_enhancer food_submit success=False kind=location_%s",
+                resolved.get("error"),
+            )
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._cfg_str("food_submit_error_reply"),
+                )
+            )
+        remaining = self._food_submit_cooldown_remaining(event)
+        if remaining > 0:
+            self._save_food_submit_draft(event, fields)
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._format_collected_reply(
+                        self._cfg_str("food_submit_cooldown_reply"),
+                        seconds=remaining,
+                    ),
+                )
+            )
+        payload = food_engine.build_food_submit_payload(
+            fields,
+            username=self._food_submit_username(event),
+            # Password = sender QQ, injected here only; never model-visible.
+            password=str(event.get_sender_id() or "").strip(),
+            location_id=resolved.get("location_id"),
+            new_location_name=str(resolved.get("new_location_name", "")),
+        )
+        if not payload:
+            logger.info(
+                "qqbot_enhancer food_submit success=False kind=payload"
+            )
+            self._save_food_submit_draft(event, fields)
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._cfg_str("food_submit_error_reply"),
+                )
+            )
+        timeout = max(1, self._cfg_int("food_submit_timeout_seconds", 1))
+        try:
+            status, body = await asyncio.wait_for(
+                asyncio.to_thread(self._post_food_submit_sync, payload),
+                timeout=timeout + 2,
+            )
+        except asyncio.TimeoutError:
+            logger.info(
+                "qqbot_enhancer food_submit success=False kind=timeout"
+            )
+            self._save_food_submit_draft(event, fields)
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._cfg_str("food_submit_error_reply"),
+                )
+            )
+        except Exception:
+            logger.info(
+                "qqbot_enhancer food_submit success=False kind=internal"
+            )
+            self._save_food_submit_draft(event, fields)
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._cfg_str("food_submit_error_reply"),
+                )
+            )
+        result = food_engine.parse_food_submit_response(status, body)
+        if result.get("ok"):
+            self._clear_food_submit_draft(event)
+            event.set_extra("qqbot_enhancer_food_submit_done", True)
+            logger.info(
+                "qqbot_enhancer food_submit success=True restaurant_id=%s",
+                result.get("restaurant_id"),
+            )
+            message = self._format_collected_reply(
+                self._cfg_str("food_submit_success_reply"),
+                name=str(fields.get("restaurant", "")),
+                location=str(fields.get("location", "")),
+                taste=f"{float(fields['taste']):g}",
+                value=f"{float(fields['value']):g}",
+            )
+            return event.plain_result(
+                self._join_food_submit_text(clean_text, message)
+            )
+        kind = str(result.get("kind", ""))
+        logger.info(
+            "qqbot_enhancer food_submit success=False kind=%s",
+            kind,
+        )
+        if kind == "duplicate_username":
+            # Already submitted under this username; do not retry the write.
+            self._clear_food_submit_draft(event)
+        else:
+            self._save_food_submit_draft(event, fields)
+        return event.plain_result(
+            self._join_food_submit_text(
+                clean_text,
+                self._food_submit_error_message(result, fields),
+            )
+        )
+
+    async def _execute_food_submit(
+        self,
+        event: AstrMessageEvent,
+        intent: Any,
+        clean_text: str,
+    ):
+        if not self._food_submit_flag_enabled():
+            return None
+        if event.get_extra("qqbot_enhancer_food_submit_done"):
+            # One submission per reply.
+            return None
+        validation = food_engine.validate_food_submission(
+            intent.args,
+            name_max=max(
+                1, self._cfg_int("food_submit_name_max_chars", 1)
+            ),
+            location_max=max(
+                1, self._cfg_int("food_submit_location_max_chars", 1)
+            ),
+            comment_max=max(
+                1, self._cfg_int("food_submit_comment_max_chars", 1)
+            ),
+            tag_max=max(
+                1, self._cfg_int("food_submit_tag_max_chars", 1)
+            ),
+            tag_count=max(
+                0, self._cfg_int("food_submit_tags_max_count", 0)
+            ),
+        )
+        draft_before = self._food_submit_draft(event) is not None
+        fields = self._merge_food_submit_fields(
+            event, validation["fields"]
+        )
+        # Only an explicit "add/record/upload" request may write production
+        # data. A pending draft also counts so a bare confirmation can finish
+        # the submission we asked about.
+        if (
+            not food_engine.detect_food_add_intent(
+                self._message_text(event)
+            )
+            and not draft_before
+        ):
+            self._save_food_submit_draft(event, fields)
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    self._cfg_str("food_submit_ask_add_reply"),
+                )
+            )
+        invalid = list(validation["invalid"])
+        if self._food_submit_missing(fields) or invalid:
+            self._save_food_submit_draft(event, fields)
+            messages = []
+            if self._food_submit_missing(fields):
+                messages.append(self._food_submit_missing_message(fields))
+            if invalid:
+                messages.append(
+                    self._format_collected_reply(
+                        self._cfg_str("food_submit_score_reply"),
+                        fields="、".join(
+                            food_engine.food_submit_missing_labels(invalid)
+                        ),
+                    )
+                )
+            return event.plain_result(
+                self._join_food_submit_text(
+                    clean_text,
+                    "\n".join(messages),
+                )
+            )
+        return await self._perform_food_submit(event, fields, clean_text)
+
+    async def _handle_food_submit_confirmation(
+        self,
+        event: AstrMessageEvent,
+        message_text: str,
+    ):
+        if not food_engine.is_food_submit_confirmation(message_text):
+            return None
+        draft = self._food_submit_draft(event)
+        if not draft:
+            return None
+        fields = dict(draft.get("fields", {}))
+        if self._food_submit_missing(fields):
+            return event.plain_result(
+                self._food_submit_missing_message(fields)
+            )
+        return await self._perform_food_submit(event, fields, "")
+
+    async def _food_image_caption(self, event: AstrMessageEvent) -> str:
+        try:
+            refs = await self._collect_image_refs(event)
+            if not refs:
+                return ""
+            caption = await self._caption_images(event, refs)
+            return str(caption or "").strip()[:200]
+        except Exception:
+            return ""
+
+    async def _food_nl_decide(
+        self,
+        event: AstrMessageEvent,
+        message_text: str,
+        *,
+        has_image: bool,
+    ) -> str | None:
+        """Decide group food participation: "food", "silent" or None."""
+
+        if self._food_submit_draft(event) is not None:
+            # Answering our own missing-fields question: continue the dialogue.
+            return "food"
+        text = str(message_text or "").strip()
+        if not text:
+            if not has_image or not self._cfg_bool("food_nl_image_enabled"):
+                return None
+            if self._rng.random() >= self._cfg_float(
+                "food_nl_image_probability", 0.0, 1.0
+            ):
+                return None
+            caption = await self._food_image_caption(event)
+            if caption:
+                # Vision evidence available: participate only for food images.
+                if not food_engine.detect_food_relevance(caption):
+                    return None
+            elif not self._cfg_bool(
+                "food_nl_image_without_caption_enabled"
+            ):
+                # Without vision evidence stay silent instead of guessing.
+                return None
+            if self._food_nl_cooldown_remaining(event) > 0:
+                return None
+            return "food"
+        if not food_engine.detect_food_relevance(text):
+            return None
+        if self._food_nl_cooldown_remaining(event) > 0:
+            return "silent"
+        if len(text) < max(
+            1, self._cfg_int("food_nl_min_message_chars", 1)
+        ):
+            return "silent"
+        if self._rng.random() >= self._cfg_float(
+            "food_nl_probability", 0.0, 1.0
+        ):
+            return "silent"
+        return "food"
+
+    def _food_nl_cooldown_remaining(self, event: AstrMessageEvent) -> int:
+        now = self._clock()
+        self._prune_state(now)
+        key = event.unified_msg_origin
+        cooldown = max(0, self._cfg_int("food_nl_cooldown_seconds", 0))
+        last = self._last_food_nl_at.get(key)
+        if last is not None and cooldown > 0:
+            remaining = cooldown - (now - last)
+            if remaining > 0:
+                return max(1, int(math.ceil(remaining)))
+        self._last_food_nl_at[key] = now
+        return 0
+
+    def _food_submit_tool_catalog_instruction(self) -> str:
+        """AstrBot memory mode catalog for the food submission tool."""
+
+        if self._memory_mode() != "astrbot":
+            return ""
+        if not self._food_submit_flag_enabled():
+            return ""
+        return (
+            "用户明确要求把餐厅/评价添加、记录或上传到 food.dlsz.top 时，"
+            "在回复末尾写一次 "
+            '[[tool:submit_food_review restaurant="店名" location="位置" '
+            'taste="4.5" value="3.5" comment="评价" tags="火锅,夜宵"]]；'
+            "必填店名/位置/味道分/性价比分/评价内容，缺哪个就留空并照常调用"
+            "一次（插件会追问缺少项），不要编造分数；"
+            "不要传密码/QQ/日期，密钥由插件用发送者 QQ 自动注入且不显示。"
+            "普通美食聊天不要调用，最多一次，不要解释标记。"
+        )
 
     async def _await_conversation_api(self, value):
         if inspect.isawaitable(value):
@@ -2426,6 +3078,32 @@ class QQBotEnhancerPlugin(Star):
         natural_language = "开启" if self._cfg_bool(
             "image_search_natural_language_enabled"
         ) else "关闭"
+        web_fetch_enabled = self._cfg_bool(
+            "safe_tools_enabled"
+        ) and self._cfg_bool("safe_tools_allow_fetch_webpage")
+        food_submit_option_line = (
+            "AI 美食提交：已启用（仅 POST https://food.dlsz.top/api/upload；"
+            "缺字段会追问；密钥默认发送者 QQ，不显示不记录）"
+            if self._food_submit_flag_enabled()
+            else "AI 美食提交：未启用（food_submit_enabled / "
+            "safe_tools_allow_submit_food_review）"
+        )
+        food_nl_option_line = (
+            f"美食话题参与：{'开启' if self._cfg_bool('food_nl_enabled') else '关闭'}；"
+            f"概率 {self._cfg_float('food_nl_probability', 0.0, 1.0):.0%}；"
+            f"冷却 {self._cfg_int('food_nl_cooldown_seconds', 0)}s；"
+            f"最短 {self._cfg_int('food_nl_min_message_chars', 1)} 字；"
+            f"美食图 {self._cfg_float('food_nl_image_probability', 0.0, 1.0):.0%}"
+        )
+        web_fetch_option_line = (
+            "AI 网页访问：已启用（仅公开 HTTP(S) 文本网页；"
+            f"超时 {self._cfg_int('web_fetch_timeout_seconds', 1)}s；"
+            f"正文最多 {self._cfg_int('web_fetch_max_chars', 1)} 字；"
+            f"最多 {self._cfg_int('web_fetch_max_redirects', 0)} 次跳转；"
+            f"冷却 {self._cfg_int('web_fetch_cooldown_seconds', 0)}s）"
+            if web_fetch_enabled
+            else "AI 网页访问：未启用（safe_tools_allow_fetch_webpage）"
+        )
 
         lines = [
             f"{display_name} 用法速览（v{version}）",
@@ -2471,6 +3149,9 @@ class QQBotEnhancerPlugin(Star):
                 "内置 stickers 与用户收藏表情都会参与正常回复；"
                 "/表情状态 可只读诊断保存失败原因。"
             ),
+            web_fetch_option_line,
+            food_submit_option_line,
+            food_nl_option_line,
             (
                 "限制：一个 AstrBot conversation 独立 persona/提示词/记忆；"
                 "工具仅白名单且不控制电脑；一次最多一条文字+一个附件；"
@@ -2611,6 +3292,10 @@ class QQBotEnhancerPlugin(Star):
             + len(self._last_auto_collect_at)
             + len(self._last_safe_tool_collect_at)
             + len(self._last_food_at)
+            + len(self._last_food_submit_at)
+            + len(self._last_food_nl_at)
+            + len(self._food_submit_drafts)
+            + len(self._last_web_fetch_at)
             + len(self._recent_chat_identity)
             + len(self._last_ambient_at)
             + len(self._ambient_group_message_count)
@@ -2631,6 +3316,9 @@ class QQBotEnhancerPlugin(Star):
             self._last_auto_collect_at,
             self._last_safe_tool_collect_at,
             self._last_food_at,
+            self._last_food_submit_at,
+            self._last_food_nl_at,
+            self._last_web_fetch_at,
             self._last_ambient_at,
         ):
             for key, timestamp in list(mapping.items()):
@@ -2639,6 +3327,7 @@ class QQBotEnhancerPlugin(Star):
         for key in list(self._last_sticker_file):
             if key not in self._last_sticker_at:
                 self._last_sticker_file.pop(key, None)
+        self._prune_food_submit_drafts(now)
         self._prune_pending_user_media(now)
         self._prune_chat_identity_history(now)
         self._prune_sticker_ai_auto_collect_times(now)
@@ -4592,6 +5281,26 @@ class QQBotEnhancerPlugin(Star):
             parts.append("可用标签：" + "、".join(sorted(tags)[:12]))
         return "\n".join(parts)
 
+    def _web_fetch_tool_catalog_instruction(self) -> str:
+        """AstrBot memory mode catalog for the public-web reader only."""
+
+        if self._memory_mode() != "astrbot":
+            return ""
+        if not (
+            self._cfg_bool("safe_tools_enabled")
+            and self._cfg_bool("safe_tools_marker_enabled")
+            and self._cfg_bool("safe_tools_allow_fetch_webpage")
+        ):
+            return ""
+        return (
+            "需要查看某个公开网页时，可在回复末尾写一次 "
+            '[[tool:fetch_webpage url="https://food.dlsz.top" max_chars=3000]]；'
+            "只支持公开 HTTP(S) 文本网页（HTML/纯文本/JSON/XML），"
+            f"单次最多 {self._cfg_int('web_fetch_max_chars', 1)} 字、"
+            f"超时 {self._cfg_int('web_fetch_timeout_seconds', 1)}s；"
+            "无法访问登录页、内网/本机地址或二进制文件，失败时不要编造内容。"
+        )
+
     def _enabled_safe_tool_names(self) -> list[str]:
         if not self._cfg_bool("safe_tools_enabled"):
             return []
@@ -4604,6 +5313,10 @@ class QQBotEnhancerPlugin(Star):
             names.append("collect_sticker")
         if self._cfg_bool("safe_tools_allow_list_categories"):
             names.append("list_sticker_categories")
+        if self._cfg_bool("safe_tools_allow_fetch_webpage"):
+            names.append("fetch_webpage")
+        if self._food_submit_flag_enabled():
+            names.append("submit_food_review")
         return names
 
     def _safe_tool_system_instruction(self) -> str:
@@ -4945,6 +5658,18 @@ class QQBotEnhancerPlugin(Star):
                 persona_bridge_engine.inject_sticker_tool_catalog(
                     req,
                     catalog,
+                )
+            web_catalog = self._web_fetch_tool_catalog_instruction()
+            if web_catalog:
+                persona_bridge_engine.inject_web_fetch_tool_catalog(
+                    req,
+                    web_catalog,
+                )
+            food_catalog = self._food_submit_tool_catalog_instruction()
+            if food_catalog:
+                persona_bridge_engine.inject_food_submit_tool_catalog(
+                    req,
+                    food_catalog,
                 )
         except Exception:
             event.set_extra(
@@ -5867,6 +6592,30 @@ class QQBotEnhancerPlugin(Star):
             self._last_sticker_tool_failure = ""
         return path
 
+    def _web_fetch_failure_text(self, clean_text: str, reason: str) -> str:
+        if reason == "cooldown":
+            message = "网页访问太频繁，请稍后再试。"
+        elif reason == "internal":
+            message = "无法读取该网页。"
+        else:
+            message = web_fetch_engine.safe_error_message(reason)
+        text = str(clean_text or "").strip()
+        return f"{text}\n{message}".strip() if text else message
+
+    async def _fetch_webpage_text(self, url: str, max_chars: int) -> Any:
+        timeout = self._cfg_int("web_fetch_timeout_seconds", 1)
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                web_fetch_engine.fetch_page_text,
+                url,
+                timeout=timeout,
+                max_bytes=self._cfg_int("web_fetch_max_response_bytes", 1024),
+                max_chars=max_chars,
+                max_redirects=self._cfg_int("web_fetch_max_redirects", 0),
+            ),
+            timeout=timeout + 2,
+        )
+
     async def _execute_safe_tool(
         self,
         event: AstrMessageEvent,
@@ -5983,6 +6732,62 @@ class QQBotEnhancerPlugin(Star):
                     category=category,
                 )
             )
+
+        if name == "submit_food_review":
+            return await self._execute_food_submit(event, intent, clean_text)
+
+        if name == "fetch_webpage":
+            if not self._cfg_bool("safe_tools_allow_fetch_webpage"):
+                return None
+            session_key = event.unified_msg_origin
+            now = self._clock()
+            last = self._last_web_fetch_at.get(session_key)
+            if (
+                last is not None
+                and now - last < self._cfg_int("web_fetch_cooldown_seconds", 0)
+            ):
+                return event.plain_result(
+                    self._web_fetch_failure_text(clean_text, "cooldown")
+                )
+            self._last_web_fetch_at[session_key] = now
+            url = str(intent.args.get("url", "") or "").strip()
+            try:
+                requested = int(intent.args.get("max_chars", "0") or 0)
+            except (TypeError, ValueError):
+                requested = 0
+            max_chars = max(1, self._cfg_int("web_fetch_max_chars", 1))
+            if requested > 0:
+                max_chars = min(max_chars, requested)
+            try:
+                page = await self._fetch_webpage_text(url, max_chars)
+            except asyncio.TimeoutError:
+                logger.info(
+                    "qqbot_enhancer fetch_webpage success=False reason=timeout"
+                )
+                return event.plain_result(
+                    self._web_fetch_failure_text(clean_text, "network")
+                )
+            except web_fetch_engine.WebFetchError as exc:
+                logger.info(
+                    "qqbot_enhancer fetch_webpage success=False reason=%s",
+                    exc.reason,
+                )
+                return event.plain_result(
+                    self._web_fetch_failure_text(clean_text, exc.reason)
+                )
+            except Exception:
+                logger.info(
+                    "qqbot_enhancer fetch_webpage success=False reason=internal"
+                )
+                return event.plain_result(
+                    self._web_fetch_failure_text(clean_text, "internal")
+                )
+            logger.info(
+                "qqbot_enhancer fetch_webpage success=True host=%s chars=%s",
+                urllib.parse.urlsplit(page.url).hostname or "",
+                len(page.text),
+            )
+            return event.plain_result(web_fetch_engine.format_page_text(page))
 
         if name == "list_sticker_categories":
             if not self._cfg_bool("safe_tools_allow_list_categories"):

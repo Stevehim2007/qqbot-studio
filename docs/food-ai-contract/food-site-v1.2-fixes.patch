@@ -1,0 +1,77 @@
+--- a/app.py
++++ b/app.py
+@@ -981,6 +981,31 @@
+     return jsonify({'success': True})
+ 
+ 
++@app.route('/api/admin/restaurants/<int:restaurant_id>', methods=['DELETE'])
++@admin_required
++def admin_delete_restaurant(restaurant_id):
++    """删除餐厅：评价与标签关联一并清理（标签本身保留），纠错记录保留（FK 置空）。单个事务。"""
++    restaurant = db.session.get(Restaurant, restaurant_id)
++    if not restaurant:
++        return jsonify({'error': '餐厅不存在'}), 404
++
++    try:
++        deleted_reviews = Review.query.filter_by(restaurant_id=restaurant_id).delete(synchronize_session=False)
++        deleted_restaurant_tags = RestaurantTag.query.filter_by(restaurant_id=restaurant_id).delete(synchronize_session=False)
++        db.session.delete(restaurant)
++        db.session.commit()
++    except Exception:
++        db.session.rollback()
++        return jsonify({'error': '删除失败，已回滚'}), 500
++
++    return jsonify({
++        'success': True,
++        'restaurant_id': restaurant_id,
++        'deleted_reviews': deleted_reviews,
++        'deleted_restaurant_tags': deleted_restaurant_tags,
++    })
++
++
+ @app.route('/api/admin/restaurants/<int:restaurant_id>', methods=['PUT'])
+ @admin_required
+ def admin_edit_restaurant(restaurant_id):
+--- a/static/js/main.js
++++ b/static/js/main.js
+@@ -85,7 +85,10 @@
+     function selectLocation(id, name) {
+         selectedLocationId = id;
+         document.querySelectorAll('.tree-node-header').forEach(function (h) { h.classList.remove('active'); });
+-        document.querySelector('[data-location-id="' + id + '"]').classList.add('active');
++        // 搜索结果的位置可能还没在树里渲染（树是懒加载的）；拿不到节点就跳过高亮，
++        // 不能让 querySelector 返回 null 抛错，否则后面的视图切换/加载全都不执行。
++        var node = document.querySelector('.tree-node-header[data-location-id="' + id + '"]');
++        if (node) node.classList.add('active');
+         document.getElementById('welcomeScreen').style.display = 'none';
+         document.getElementById('restaurantView').style.display = 'block';
+         document.getElementById('currentLocation').textContent = name;
+--- a/static/js/admin.js
++++ b/static/js/admin.js
+@@ -354,6 +354,7 @@
+             html += '<div class="admin-restaurant-actions">';
+             html += '<button onclick="window._editRestaurant(' + r.id + ',\'' + escapeHTML(r.name) + '\',' + r.location_id + ',' + r.is_closed + ')">编辑信息</button>';
+             html += '<button class="btn-danger" onclick="window._toggleClose(' + r.id + ',' + r.is_closed + ')">' + (r.is_closed ? '重新开业' : '标记关闭') + '</button>';
++            html += '<button class="btn-danger" onclick="window._deleteRestaurant(' + r.id + ',\'' + escapeJS(r.name) + '\',' + (r.review_count || 0) + ')">删除饭店</button>';
+             html += '</div>';
+             html += '<div class="admin-tag-row" style="margin-top:6px;font-size:12px">';
+             if (r.tags) for (var k = 0; k < r.tags.length; k++) {
+@@ -374,6 +375,18 @@
+             await loadAllData();
+         } catch (err) { showToast(err.message, 'error'); }
+     };
++
++    window._deleteRestaurant = async function (id, name, reviewCount) {
++        var msg = '确定删除「' + name + '」吗？';
++        msg += '\n\n将同时删除该饭店的 ' + reviewCount + ' 条评价和标签关联（标签本身保留，其他饭店不受影响）。';
++        msg += '\n\n此操作不可撤销！';
++        if (!confirm(msg)) return;
++        try {
++            await fetchJSON('/api/admin/restaurants/' + id, { method: 'DELETE' });
++            showToast('饭店已删除', 'success');
++            await loadAllData();
++        } catch (err) { showToast(err.message, 'error'); }
++    };
+ 
+     window._editRestaurant = function (id, name, locId, isClosed) {
+         var bodyHTML =

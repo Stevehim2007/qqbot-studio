@@ -11,6 +11,18 @@
 
 
 
+## qqbot_enhancer 2.4.0（插件）
+
+- 新增 AI 自然语言美食提交：群里自然说“帮我加到 food/记录评价”，AI 用 `submit_food_review`
+  marker 提取店名/位置/味道分/性价比分/评价/标签，插件按 t1 契约 POST `https://food.dlsz.top/api/upload`。
+- 写入门槛：只有明确添加意图或待补全草稿才写；普通聊天不写生产数据；缺字段中文追问、分数 0.1–5 校验、
+  一次回复最多一次提交、重复用户名不重试；站点错误按 v1.1 `code`/v1 文本映射为可操作中文。
+- 密钥默认发送者 QQ，由插件注入请求体，不进入 prompt/日志/回复；日期不提取，站点默认当天；用户名默认群昵称。
+- 群聊非 @ 只对美食消息/图片参与（概率/冷却/最短字数），与 ambient 概率互斥不双触发；无文字美食图只追问不提交。
+- direct 与 AstrBot memory 双模式注入幂等工具 catalog；`/option` 显示美食提交与美食话题状态。
+- 新增 `docs/food-ai-submission.md`（契约/安全/测试证据/猫娘群 Bot 提示词）。
+- 全量 497 tests OK。
+
 ## v4.0.4
 
 - 修复 AstrBot memory 结果链 marker 丢失 extra 时 `send_sticker` 不发图的问题。
