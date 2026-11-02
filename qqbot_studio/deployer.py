@@ -23,7 +23,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import __version__
-from .astrbot_api import AstrBotAPIError, AstrBotClient
+from .astrbot_api import (
+    AstrBotAPIError,
+    AstrBotClient,
+    AstrBotTransientError,
+    call_with_retry,
+)
 from .configgen import generate_artifacts, image_names_for_prefix, mirror_prefixes, set_image_names
 from .dockerctl import DockerController, DockerError
 from .store import (
@@ -1506,13 +1511,39 @@ class DeployManager:
     def _api_response_data(response: dict[str, Any]) -> Any:
         return response.get("data", response)
 
+    @staticmethod
+    def _invalidate_login(client: AstrBotClient) -> None:
+        """Drop a cached dashboard token after the connection was dropped."""
+
+        invalidate = getattr(client, "invalidate_token", None)
+        if callable(invalidate):
+            invalidate()
+
     def _list_plugins_via_api(self, client: AstrBotClient) -> dict[str, Any]:
-        """Call the real v4.29 plugin list route, with legacy fallback."""
+        """Call the real v4.29 plugin list route, with legacy fallback.
+
+        A dashboard that is (re)starting accepts the connection and then closes
+        it, which surfaces as ``Broken pipe``/``RemoteDisconnected``.  Listing
+        plugins is a read, so one extra attempt with a fresh login is safe;
+        authentication failures are never retried and persistent errors are
+        surfaced instead of hidden.
+        """
 
         last_error: Exception | None = None
         for path in ("/api/v1/plugins", "/api/plugin/get"):
             try:
-                response = self._api_request(client, "GET", path, timeout=20)
+                # ``login()`` already retried transient drops internally, so the
+                # composed call only needs one extra attempt here.
+                response = call_with_retry(
+                    lambda path=path: self._api_request(client, "GET", path, timeout=20),
+                    attempts=2,
+                    on_retry=lambda _exc: self._invalidate_login(client),
+                )
+            except AstrBotTransientError as exc:
+                # The legacy route would hit the same dead connection; stop and
+                # report so the UI can suggest waiting for AstrBot to restart.
+                last_error = exc
+                break
             except Exception as exc:  # noqa: BLE001 - route/version fallback
                 last_error = exc
                 if int(getattr(exc, "status_code", 0) or 0) in (401, 403):
@@ -1610,6 +1641,10 @@ class DeployManager:
                 last_error = exc
                 if int(getattr(exc, "status_code", 0) or 0) in (401, 403):
                     break
+                if isinstance(exc, AstrBotTransientError):
+                    # The first PUT may already have landed before the
+                    # connection dropped; writing again could duplicate it.
+                    break
                 continue
             return {
                 "plugin_id": plugin_id,
@@ -1657,6 +1692,9 @@ class DeployManager:
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 if int(getattr(exc, "status_code", 0) or 0) in (401, 403):
+                    break
+                if isinstance(exc, AstrBotTransientError):
+                    # Ambiguous outcome: the toggle may have applied already.
                     break
                 # A 400/409 is an operation error from the real endpoint.
                 if int(getattr(exc, "status_code", 0) or 0) not in (404, 405, 0):
@@ -2039,7 +2077,10 @@ class DeployManager:
             "route": route,
             "cached": False,
             "restart_required": False,
-            "message": "无法连接 AstrBot，已降级显示本地插件目录；启动实例后可实时启停插件。",
+            "message": (
+                "无法连接 AstrBot（可能正在启动或重启），已降级显示本地插件目录；"
+                "请稍后重试，或启动实例后实时启停插件。"
+            ),
             "error": "；".join(errors),
         }
 

@@ -9,7 +9,8 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from qqbot_studio.astrbot_api import AstrBotAPIError
+from qqbot_studio import astrbot_api
+from qqbot_studio.astrbot_api import AstrBotAPIError, AstrBotTransientError
 from qqbot_studio.deployer import DeployManager, DeploymentError, Job, PERSONA_ID
 from qqbot_studio.dockerctl import CommandResult, DockerError, DockerStatus
 from qqbot_studio.store import Store
@@ -145,6 +146,58 @@ class FakePluginApi(FakeApi):
                     item["activated"] = enabled
             return {"status": "ok", "message": "操作成功。", "data": {}}
         raise AstrBotAPIError("not found", status_code=404)
+
+
+BROKEN_PIPE_MESSAGE = (
+    "无法连接 AstrBot：[Errno 32] Broken pipe。"
+    "AstrBot 可能正在启动或重启，或连接被中断，请稍后重试。"
+)
+
+
+class FlakyPluginApi(FakePluginApi):
+    """Simulates an AstrBot that drops the connection ``failures`` times."""
+
+    def __init__(self, failures=1, action="login"):
+        super().__init__()
+        self.failures = failures
+        self.action = action
+        self.login_calls = 0
+        self.invalidations = 0
+        self.list_calls = 0
+
+    def invalidate_token(self):
+        self.invalidations += 1
+
+    def login(self, force=False):
+        self.login_calls += 1
+        if force:
+            self.invalidations += 1
+        if self.action == "login" and self.failures > 0:
+            self.failures -= 1
+            raise AstrBotTransientError("AstrBot 登录失败：" + BROKEN_PIPE_MESSAGE)
+        return "fake-token"
+
+    def _request(self, method, path, *, payload=None, token=None, timeout=None):
+        if method == "GET" and path == "/api/v1/plugins":
+            self.list_calls += 1
+            if self.action == "list" and self.failures > 0:
+                self.failures -= 1
+                raise AstrBotTransientError(BROKEN_PIPE_MESSAGE)
+        return super()._request(
+            method, path, payload=payload, token=token, timeout=timeout
+        )
+
+
+class UnauthorizedPluginApi(FakePluginApi):
+    """AstrBot rejects the dashboard password: must never be retried."""
+
+    def __init__(self):
+        super().__init__()
+        self.login_calls = 0
+
+    def login(self, force=False):
+        self.login_calls += 1
+        raise AstrBotAPIError("AstrBot 登录失败：用户名或密码错误", status_code=401)
 
 
 class FallbackDocker(FakeDocker):
@@ -615,6 +668,118 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(listing["plugins"][0]["id"], "qqbot_enhancer")
         with self.assertRaises(DeploymentError):
             self.manager.set_plugin_enabled("qqbot_enhancer", True)
+
+    def _write_local_plugin(self):
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "metadata.yaml").write_text(
+            "name: qqbot_enhancer\ndisplay_name: QQ Bot 增强回复\nversion: 1.4.1\n",
+            encoding="utf-8",
+        )
+
+    def test_plugin_list_retries_login_broken_pipe(self):
+        self._mark_deployed()
+        self._write_local_plugin()
+        api = FlakyPluginApi(failures=1, action="login")
+        self.manager._api_client_factory = lambda base, user, password: api
+
+        with mock.patch.object(astrbot_api, "RETRY_DELAYS", ()):
+            listing = self.manager.get_plugins()
+
+        self.assertTrue(listing["ok"], listing.get("error"))
+        self.assertTrue(listing["api_available"])
+        self.assertEqual(listing["route"], "/api/v1/plugins")
+        self.assertEqual(
+            [item["id"] for item in listing["plugins"]], ["qqbot_enhancer", "builtin_help"]
+        )
+        self.assertEqual(api.list_calls, 1)
+        # The stale token was dropped before the retry re-authenticated.
+        self.assertGreaterEqual(api.invalidations, 1)
+        # A retried read must never write plugin state again.
+        self.assertEqual(api.updated_configs, [])
+        self.assertEqual(api.toggled, [])
+
+    def test_plugin_list_retries_mid_request_disconnect(self):
+        self._mark_deployed()
+        self._write_local_plugin()
+        api = FlakyPluginApi(failures=1, action="list")
+        self.manager._api_client_factory = lambda base, user, password: api
+
+        with mock.patch.object(astrbot_api, "RETRY_DELAYS", ()):
+            listing = self.manager.get_plugins()
+
+        self.assertTrue(listing["ok"], listing.get("error"))
+        self.assertEqual(api.list_calls, 2)
+        self.assertEqual(api.updated_configs, [])
+        self.assertEqual(api.toggled, [])
+
+    def test_plugin_list_persistent_disconnect_is_bounded_and_actionable(self):
+        self._mark_deployed()
+        self._write_local_plugin()
+        api = FlakyPluginApi(failures=99, action="login")
+        self.manager._api_client_factory = lambda base, user, password: api
+
+        with mock.patch.object(astrbot_api, "RETRY_DELAYS", ()):
+            listing = self.manager.get_plugins()
+
+        self.assertFalse(listing["ok"])
+        self.assertFalse(listing["api_available"])
+        # Bounded retries: one extra attempt, never an infinite loop.
+        self.assertEqual(api.login_calls, 2)
+        self.assertEqual(api.list_calls, 0)
+        # The persistent error is surfaced with an actionable hint, not hidden.
+        self.assertIn("Broken pipe", listing["error"])
+        self.assertIn("重启", listing["error"])
+        self.assertIn("降级", listing["message"])
+        # Local plugin fallback still works.
+        self.assertEqual([item["id"] for item in listing["plugins"]], ["qqbot_enhancer"])
+        self.assertEqual(api.updated_configs, [])
+        self.assertEqual(api.toggled, [])
+
+    def test_plugin_list_auth_failure_is_not_retried(self):
+        self._mark_deployed()
+        self._write_local_plugin()
+        api = UnauthorizedPluginApi()
+        self.manager._api_client_factory = lambda base, user, password: api
+
+        with mock.patch.object(astrbot_api, "RETRY_DELAYS", ()):
+            listing = self.manager.get_plugins()
+
+        self.assertFalse(listing["ok"])
+        self.assertEqual(api.login_calls, 1)
+        self.assertIn("用户名或密码错误", listing["error"])
+
+    def test_plugin_writes_are_not_repeated_after_disconnect(self):
+        self._mark_deployed()
+        self._write_local_plugin()
+
+        class DropWriteApi(FakePluginApi):
+            def __init__(self):
+                super().__init__()
+                self.write_calls = []
+
+            def _request(self, method, path, *, payload=None, token=None, timeout=None):
+                if method in ("PUT", "PATCH", "POST") and path != "/api/v1/personas":
+                    self.write_calls.append((method, path))
+                    raise AstrBotTransientError(BROKEN_PIPE_MESSAGE)
+                return super()._request(
+                    method, path, payload=payload, token=token, timeout=timeout
+                )
+
+        api = DropWriteApi()
+        with self.assertRaises(RuntimeError) as caught:
+            self.manager._save_plugin_config_via_api(api, "qqbot_enhancer", {"reply_probability": 0.3})
+        # Exactly one write attempt: the legacy route is not tried with the
+        # application's outcome still unknown.
+        self.assertEqual(api.write_calls, [("PUT", "/api/v1/plugins/config")])
+        self.assertIn("Broken pipe", str(caught.exception))
+
+        with self.assertRaises(RuntimeError):
+            self.manager._set_plugin_enabled_via_api(api, "qqbot_enhancer", False)
+        self.assertEqual(
+            api.write_calls,
+            [("PUT", "/api/v1/plugins/config"), ("PATCH", "/api/v1/plugins/enabled")],
+        )
 
     def test_plugin_fallback_reads_persisted_disabled_state(self):
         self._mark_deployed()

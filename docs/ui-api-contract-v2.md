@@ -551,6 +551,14 @@ GET /api/instances/<instance_id>/plugins
 - `enabled` 来自 AstrBot 的 `activated` 字段；AstrBot 不可达时降级读取本地插件目录和
   `data_v4.db` 的禁用列表，此时 `enabled` 可能为 `null`，且 `api_available=false`。
 - 降级响应仍是 HTTP 200 JSON，但 `ok=false`，前端据此禁用启停开关。Docker 不可用不能导致 500。
+- 瞬时断连可重试：AstrBot 启动/重启期间会先接受 TCP 连接再关闭，客户端看到的是
+  `[Errno 32] Broken pipe` / `RemoteDisconnected` / `ConnectionResetError`。登录与插件列表读取
+  （只读）在**有上限**的重试内自动恢复（登录 3 次、列表整体再加 1 次，退避 0.3s/0.8s），
+  每次重试前丢弃缓存的 token 并重建 opener；`401/403` 与持久性 TLS 错误不重试。
+- 重试只针对只读请求：插件配置保存、启停等写操作遇到断连会**直接报错**，不会改走旧版路由
+  重写一次，避免同一次操作落两遍。
+- 重试仍失败时 `error` 给出可操作提示（“AstrBot 可能正在启动或重启……请稍后重试”），
+  只包含错误原因、不含密码/密钥/文件路径；前端继续用本地插件目录降级展示。
 
 ### 8.2 实例插件启停
 

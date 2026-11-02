@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import http.client
 import json
+import ssl
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 
 class AstrBotAPIError(RuntimeError):
@@ -15,6 +17,48 @@ class AstrBotAPIError(RuntimeError):
     def __init__(self, message: str, *, status_code: int = 0) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class AstrBotTransientError(AstrBotAPIError):
+    """The connection broke mid-request; the same read may work on retry."""
+
+
+# Transient dashboard disconnects (a starting/restarting AstrBot accepts the
+# TCP connection and then closes it) are worth a bounded retry.  Module-level
+# so tests can drive the timings without sleeping.
+RETRY_ATTEMPTS = 3
+RETRY_DELAYS: tuple[float, ...] = (0.3, 0.8)
+
+
+def call_with_retry(
+    func: Callable[[], Any],
+    *,
+    attempts: int | None = None,
+    delays: tuple[float, ...] | None = None,
+    on_retry: Callable[[AstrBotTransientError], None] | None = None,
+) -> Any:
+    """Run a read-only call, retrying only transient connection failures.
+
+    Authentication and HTTP errors are raised immediately: retrying a rejected
+    password or a missing route only adds latency.  ``on_retry`` runs between
+    attempts so callers can drop a token that died with the connection.
+    """
+
+    budget = RETRY_ATTEMPTS if attempts is None else max(1, attempts)
+    waits = RETRY_DELAYS if delays is None else delays
+    for index in range(budget):
+        try:
+            return func()
+        except AstrBotTransientError as exc:
+            if index + 1 >= budget:
+                raise
+            if on_retry is not None:
+                try:
+                    on_retry(exc)
+                except Exception:  # noqa: BLE001 - the next attempt reports the real error
+                    pass
+            if waits:
+                time.sleep(waits[min(index, len(waits) - 1)])
 
 
 class AstrBotClient:
@@ -33,9 +77,29 @@ class AstrBotClient:
         self.password = password
         self.timeout = timeout
         self._token = ""
+        self._opener = self._build_opener()
+
+    @staticmethod
+    def _build_opener() -> urllib.request.OpenerDirector:
         # Local dashboard calls must bypass HTTP(S)_PROXY inherited from the
         # shell; a proxy would commonly refuse loopback addresses.
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def _reset_opener(self) -> None:
+        """Close the current opener and build a fresh one for the next try."""
+
+        closer = getattr(self._opener, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:  # noqa: BLE001 - cleanup must never mask the error
+                pass
+        self._opener = self._build_opener()
+
+    def invalidate_token(self) -> None:
+        """Forget the cached token; it died with the dropped connection."""
+
+        self._token = ""
 
     # ------------------------------------------------------------------
     # HTTP primitives
@@ -69,9 +133,18 @@ class AstrBotClient:
             body = exc.read().decode("utf-8", "replace")
             message = self._error_message(body) or f"AstrBot 返回 HTTP {exc.code}"
             raise AstrBotAPIError(message, status_code=int(exc.code)) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
-            raise AstrBotAPIError(f"无法连接 AstrBot：{reason}") from exc
+            # A broken pipe / reset / remote close leaves the opener holding a
+            # half-closed connection, so rebuild it before the caller retries.
+            self._reset_opener()
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                # Persistent TLS misconfiguration: retrying cannot help.
+                raise AstrBotAPIError(f"无法连接 AstrBot：{reason}") from exc
+            raise AstrBotTransientError(
+                f"无法连接 AstrBot：{reason}。AstrBot 可能正在启动或重启，"
+                "或连接被中断，请稍后重试。"
+            ) from exc
 
         try:
             parsed = json.loads(body) if body.strip() else {}
@@ -123,17 +196,30 @@ class AstrBotClient:
         )
 
     def login(self, *, force: bool = False) -> str:
-        if self._token and not force:
+        if force:
+            # A token cached before the connection dropped is worthless and
+            # would only turn the next call into a silent 401.
+            self.invalidate_token()
+        if self._token:
             return self._token
         last_error: AstrBotAPIError | None = None
         for path in ("/api/v1/auth/login", "/api/auth/login"):
             try:
-                response = self._request(
-                    "POST",
-                    path,
-                    payload={"username": self.username, "password": self.password},
-                    timeout=25,
+                # Login is read-only (it only mints a session token), so a
+                # transient Broken pipe / reset is safe to retry.
+                response = call_with_retry(
+                    lambda path=path: self._request(
+                        "POST",
+                        path,
+                        payload={"username": self.username, "password": self.password},
+                        timeout=25,
+                    )
                 )
+            except AstrBotTransientError as exc:
+                # Still dropping after the bounded retries: the dashboard is
+                # down/restarting, so the legacy route would fail identically.
+                last_error = exc
+                break
             except AstrBotAPIError as exc:
                 last_error = exc
                 # Fall back to the legacy endpoint only when the v1 route is
@@ -148,6 +234,8 @@ class AstrBotClient:
                 self._token = token
                 return token
             last_error = AstrBotAPIError("AstrBot 登录响应中没有 token")
+        if isinstance(last_error, AstrBotTransientError):
+            raise AstrBotTransientError(f"AstrBot 登录失败：{last_error}") from last_error
         if last_error:
             raise AstrBotAPIError(f"AstrBot 登录失败：{last_error}", status_code=last_error.status_code)
         raise AstrBotAPIError("AstrBot 登录失败：没有可用的登录接口")
@@ -194,7 +282,10 @@ class AstrBotClient:
             self._request("PUT", "/api/v1/personas/by-id", payload=payload, token=token)
             return
         except AstrBotAPIError as exc:
-            if exc.status_code in (401, 403):
+            if exc.status_code in (401, 403) or isinstance(exc, AstrBotTransientError):
+                # A write may already have been applied before the connection
+                # dropped; writing again through the legacy route could
+                # duplicate it, so surface the disconnect instead.
                 raise
             first_error = exc
         # Older dashboards expose the same operation under /api/persona/update.
