@@ -1,7 +1,7 @@
 # 部署通知：food.dlsz.top v1.2 修复 + 可选 t1 评价接口补丁
 
-**状态：`NOT_APPLIED_READ_ONLY_MOUNT`**
-**生产未部署，未做任何线上变更。** 本文是给 food.dlsz.top 项目所有者（有写权限的一方）的执行单。
+**状态：`APPLIED_AND_LIVE_VERIFIED`**
+**生产已完成部署并只读核验生效。** 本文保留为部署记录、回滚手册和验收清单。
 
 生成时间：2026-11-02 · 交付方：food-site-agent（只读沙箱内）
 
@@ -134,3 +134,19 @@ supervisorctl restart <项目名>
 - ❌ 无数据库变更。
 - ❌ 未改 QQ Bot 插件/核心代码。
 - ⚠️ 站点无 CSRF token（admin 仅 session 鉴权）——保持现状，见 `FOOD_SITE_FIXES.md` §6。
+
+
+## 8. 实际部署结果（2026-11-02 22:16）
+
+- 目标：`/www/wwwroot/food.dlsz.top`
+- 应用版本：`v1.2-with-review-codes`
+- 备份：`.deploy-backup/20261102-221631/`（app.py + static/js/main.js + static/js/admin.js + BEFORE.sha256）
+- 生产文件 SHA-256：
+  - `app.py` = `0d249d34f618f2538a4cf7ac986c8a7917bd6d629657d51a9c88f79f5e15014a`
+  - `static/js/main.js` = `11027f22fb78da9209ce03f999bea7654412bc70f001924ddfa21b64abb7c072`
+  - `static/js/admin.js` = `846e6df61f68bd9b827ca12525e9ac73c2615db187bcbaafcb01a937c3e8ddfa`
+- 未修改 `instance/foodlisten.db`、`data/`、历史备份；数据库 SHA 基线 `0beca8fc…` 保持不变。
+- AST OK、`node --check` OK；gunicorn master PID 1153213 已重启，4 workers 运行新代码。
+- 线上核验：`GET /` 200、`GET /admin` 200、`DELETE /api/admin/restaurants/1` 未登录返回 401、`GET /api/locations/search?q=日新` 200。
+- 浏览器 UI 验收仍需人工登录后点击验证；真实管理员删除操作未执行。
+- 本机源目录在部署验证时已为可写；早期只读挂载记录已失效。

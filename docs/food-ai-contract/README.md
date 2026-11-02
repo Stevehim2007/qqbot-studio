@@ -1,4 +1,4 @@
-# food-ai-contract — food.dlsz.top AI 评价接口契约（t1 交付物，**未部署**）
+# food-ai-contract — food.dlsz.top AI 评价接口契约（t1 交付物，v1.2 已部署）
 
 QQ Bot Studio 侧接入 food.dlsz.top 时用的接口契约、可选补丁与契约测试。
 
@@ -11,7 +11,7 @@ POST https://food.dlsz.top/api/upload     Content-Type: application/json
 ```
 
 线上当前行为（v1）已在 `API_AI_REVIEW.md` §2–§4 逐字段固定，并由测试覆盖。
-**补丁未应用、生产未部署**：站点源码在本机是只读挂载，`app.py` 没有任何改动。
+**v1.2-with-review-codes 已应用于生产并只读核验生效**；见 `DEPLOYMENT_NOTICE.md` §8。
 
 ## 文件
 
