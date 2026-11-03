@@ -4065,7 +4065,6 @@
         rowElement.remove();
         syncEmpty();
       });
-      updateSummary();
 
       if (row.invalid) {
         rowElement.classList.add('is-invalid');
@@ -4096,6 +4095,7 @@
       effective.dataset.memoryPolicy = 'row-effective';
       fields.appendChild(effective);
       rowElement.appendChild(fields);
+      updateSummary();
       rowElement._setMemoryPolicyEditing = setEditing;
       rowElement._updateMemoryPolicySummary = updateSummary;
       return rowElement;
