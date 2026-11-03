@@ -160,6 +160,15 @@ class LLMExtractionTests(AsyncMemoryTestCase):
         self.assertEqual(len(service.export_all()), 1)  # heuristic row only
         self.assertTrue(client.last_error)
 
+    async def test_zero_budget_means_no_call_at_all(self):
+        stub = StubTransport(FACTS)
+        service, client = self._service_with_stub(stub, llm={"max_calls": 0})
+        service.enqueue_turn(self.context(private_event("1001")), "我喜欢麻辣火锅")
+        await service.drain()
+        self.assertEqual(stub.calls, [], "max_calls=0 必须等于不调用，而不是无限调用")
+        self.assertTrue(client.budget_exhausted)
+        self.assertEqual(len(service.export_all()), 1)  # heuristic row only
+
     async def test_call_budget_stops_extra_calls(self):
         stub = StubTransport(FACTS)
         service, client = self._service_with_stub(stub, llm={"max_calls": 2})

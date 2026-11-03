@@ -1,4 +1,4 @@
-From fe25ec4ba191921341f4d2a648fc203c0c36d531 Mon Sep 17 00:00:00 2001
+From e0bd32dd1b51d4f8eb4dc903a58b25db86ddac7a Mon Sep 17 00:00:00 2001
 From: memory-patch <memory-patch@local>
 Date: Tue, 3 Nov 2026 12:14:40 +0800
 Subject: [PATCH] feat(memory): native long-term memory with per-group policy
@@ -11,7 +11,7 @@ Subject: [PATCH] feat(memory): native long-term memory with per-group policy
  astrbot/core/memory/embed.py                  | 276 +++++
  astrbot/core/memory/extract.py                | 194 ++++
  astrbot/core/memory/integration.py            | 140 +++
- astrbot/core/memory/llm_extract.py            | 351 +++++++
+ astrbot/core/memory/llm_extract.py            | 353 +++++++
  astrbot/core/memory/policy.py                 | 346 +++++++
  astrbot/core/memory/reflect.py                | 309 ++++++
  astrbot/core/memory/render.py                 |  60 ++
@@ -20,7 +20,7 @@ Subject: [PATCH] feat(memory): native long-term memory with per-group policy
  astrbot/core/memory/text.py                   | 136 +++
  astrbot/core/memory/types.py                  | 191 ++++
  .../method/agent_sub_stages/internal.py       |  12 +
- 15 files changed, 3972 insertions(+)
+ 15 files changed, 3974 insertions(+)
  create mode 100644 astrbot/core/memory/__init__.py
  create mode 100644 astrbot/core/memory/embed.py
  create mode 100644 astrbot/core/memory/extract.py
@@ -833,10 +833,10 @@ index 0000000..32ed401
 +    return [int(item) for item in value if isinstance(item, int)]
 diff --git a/astrbot/core/memory/llm_extract.py b/astrbot/core/memory/llm_extract.py
 new file mode 100644
-index 0000000..df974e9
+index 0000000..d4fd5de
 --- /dev/null
 +++ b/astrbot/core/memory/llm_extract.py
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,353 @@
 +"""Optional LLM-assisted extraction -- off by default, fail-open, bounded.
 +
 +The heuristic extractor stays the default.  When an operator enables this
@@ -1025,7 +1025,9 @@ index 0000000..df974e9
 +
 +    @property
 +    def budget_exhausted(self) -> bool:
-+        return bool(self.settings.max_calls) and self.calls >= int(self.settings.max_calls)
++        # ``max_calls == 0`` means "no call at all" (the safe reading of a
++        # zero budget), never "unlimited".
++        return self.calls >= int(self.settings.max_calls)
 +
 +    async def __call__(self, text: str, context: MemoryContext) -> list[Candidate]:
 +        """Return extra candidates; always resolves (never raises)."""

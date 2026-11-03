@@ -23,8 +23,8 @@ integrations/astrbot-memory/
 ├── fixtures/memory_config.example.json
 ├── fixtures/memory_policy.example.json  # 按群策略样例（含 group_member 与非法项，验证 fail-safe）
 ├── fixtures/reflection_example.json    # 记忆整理样例（期望的重复/矛盾/低价值/过期计数）
-├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 策略冒烟 → 跑测试（194 tests）
-└── tests/                          # 194 个兼容性测试（unittest，无第三方依赖）
+├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 策略冒烟 → 跑测试（195 tests）
+└── tests/                          # 195 个兼容性测试（unittest，无第三方依赖）
     ├── run-tests.sh
     ├── _support.py                 # 从打了补丁的源码树导入 astrbot.core.memory
     ├── test_scope_isolation.py     # 用户/群/会话/人格/全局隔离，无跨群/私聊泄漏
@@ -306,7 +306,7 @@ QQ Bot Studio 侧接线（`ASTRBOT_IMAGE` 换成本地构建的 tag）属于 `qq
 ## 4. 测试与验证
 
 ```bash
-# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 策略冒烟 → 194 个测试
+# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 策略冒烟 → 195 个测试
 integrations/astrbot-memory/scripts/verify-patch.sh
 
 # 已有打补丁的源码树时
@@ -328,7 +328,7 @@ ASTRBOT_SRC=/opt/AstrBot python3 -m unittest test_speaker_scope test_reflection 
 | `patch -p1 --dry-run`（非 git 场景） | OK |
 | `py_compile`（补丁后全部模块 + 3 个改动文件） | OK |
 | 策略冒烟（默认 `policy.default_mode == conversation`，列出的群解析为 long_term） | OK |
-| `python3 -m unittest discover`（集成补丁测试，194 tests） | OK |
+| `python3 -m unittest discover`（集成补丁测试，195 tests） | OK |
 | `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（主仓库，仓库根执行，760 tests @ 提交 5d50d68 快照） | OK |
 | 基线行为（`memory.enable=false`） | 钩子立即返回，`system_prompt` 与上游一致（见 `test_injection.py::test_disabled_memory_leaves_the_prompt_untouched`） |
 | v1.2 新能力专项 | `test_speaker_scope` / `test_reflection` / `test_llm_extract` / `test_semantic` / `test_optional_config` 全部 OK（LLM 用 stub，无真实调用） |
