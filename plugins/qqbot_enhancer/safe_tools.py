@@ -338,6 +338,7 @@ def tool_instruction(enabled_tools: list[str]) -> str:
             "缺哪个就留空并照常调用一次（插件会追问缺少项），"
             "location 可以直接写完整地址（如 中国/吉林省/长春市/南关区 或 中国长春市南关区），"
             "插件会自动拆分并创建缺失的上级/子级位置，用户不用手动拆；"
+            "群聊已配置默认城市时 location 只写区县即可，插件会合并城市；"
             "不要编造分数，不要传密码/QQ/日期"
         )
     if "search_food_restaurants" in enabled_tools:

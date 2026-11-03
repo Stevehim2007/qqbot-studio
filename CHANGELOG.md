@@ -11,7 +11,11 @@
 
 - 测试分支：继承正式版 `4.2.0`，新增 AstrBot 原生长期记忆、按群 `conversation/long_term` 策略、Studio 记忆策略面板、参数分组面板和 stable/test 更新回退功能。
 - 测试版不等同于正式版；长期记忆/策略需真实 AstrBot/Docker E2E 后才可合并。
-- 主仓库测试：646 tests OK；AstrBot memory patch：125 tests OK（评审快照）。
+- 主仓库测试：671 tests OK；AstrBot memory patch：125 tests OK（评审快照）。
+- 美食智能（qqbot_enhancer t28）：按群默认地点 `food_group_locations`（JSON）+ 群名安全推断城市（仅显式
+  `省/市/州` 后缀），「长春火锅」在已知长春群自动补城市、区县合并为完整路径，未知群仍追问；
+  已有位置完整路径直接复用 `location_id`，`位置已存在`/`LOCATION_EXISTS` 只重解析并重试一次，
+  不重复创建、无半截写入。
 
 ## v4.2.0 — 更新通道（稳定/测试）与同大版本任意回滚
 

@@ -292,6 +292,8 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | `food_submit_draft_ttl_seconds` | int | `600` | 缺字段草稿有效期 |
 | `food_submit_name_max_chars` / `_location_` / `_comment_` / `_tag_` | int | `100/60/500/20` | 字段长度上限 |
 | `food_submit_location_max_parts` / `_part_max_chars` | int | `6 / 30` | 地址自动拆分的层级数/单层长度 |
+| `food_group_locations` | text(JSON) | `"{}"` | 按群默认地点：`{"群号":"吉林省/长春市"}`，群内查询/提交自动带上并合并用户区县 |
+| `food_group_location_infer_from_name` | bool | `true` | 从群名安全推断城市（仅显式 省/市/州 后缀；不读消息文本） |
 | `food_submit_tags_max_count` | int | `5` | 标签数上限 |
 | `food_submit_username_max_chars` / `_fallback` | int/string | `32` / `群友` | 用户名来源 |
 | `food_nl_enabled` | bool | `true` | 群聊美食话题自然语言参与 |
@@ -773,6 +775,8 @@ find -P "$DATA_DIR/collected_stickers" -type f -exec chmod 644 {} +
 - 固定 host `food.dlsz.top`，仅 HTTPS，标准库 HTTP(S)，不拼接 shell/命令。
 - 关键词/地点只做长度、控制字符、URL/path 校验后 `urlencode`；不允许用户自定义 host/URL。
 - 两段参数会尝试地点在前/在后，先查 locations，命中后 q + location_id 查 restaurants；无地点直接 q。
+- 群默认地点（`food_group_locations` / 群名推断）存在时：单段「长春火锅」拆成关键词「火锅」+ 长春市查询；无地点参数时默认按群城市过滤；群上下文解析失败只降级为全国关键词查询，不报错。
+- 已有位置复用：完整路径直接取 `location_id`；部分存在取最深父级 + 缺失尾段；站点返回「位置已存在」/`LOCATION_EXISTS` 时只重解析并带 `location_id` 重试一次，不重复创建、不产生半截写入。
 - 请求有 `food_timeout_seconds` 超时、`food_max_response_bytes` 大小限制、固定 host 重定向校验、非 JSON/网络错误/无结果中文降级。
 - 最多展示 `food_max_results`（硬上限 5）家：店名、地点、标签、均分/口味/性价比、评价数、最新评价日期，附 `https://food.dlsz.top`；不输出原始 JSON/路径。
 - `event.should_call_llm(True)` + yield + `stop_event`，不额外 LLM；每用户会话 `food_cooldown_seconds` 冷却。

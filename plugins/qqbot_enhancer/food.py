@@ -643,6 +643,153 @@ def match_food_location(
     }
 
 
+# ---------------------------------------------------------------------------
+# Per-group location context (explicit map + safe group-name inference)
+# ---------------------------------------------------------------------------
+FOOD_GROUP_LOCATION_JSON_MAX_CHARS = 20_000
+FOOD_GROUP_LOCATION_MAX_ENTRIES = 200
+FOOD_GROUP_LOCATION_MAX_PARTS = 6
+FOOD_GROUP_NAME_MAX_CHARS = 60
+FOOD_GROUP_CITY_SUFFIXES = ("省", "市", "州")
+
+
+def parse_food_group_locations(
+    raw: Any,
+    *,
+    max_parts: int = FOOD_GROUP_LOCATION_MAX_PARTS,
+    max_part_chars: int = 30,
+) -> dict[str, list[str]]:
+    """Parse the ``food_group_locations`` JSON mapping (text or dict) safely.
+
+    Invalid JSON, non-object payloads, unsafe group ids and unsafe location
+    values are dropped instead of raising, so one bad editor entry can never
+    break food handling for every group.
+    """
+
+    data = raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text or len(text) > FOOD_GROUP_LOCATION_JSON_MAX_CHARS:
+            return {}
+        try:
+            data = json.loads(text)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    result: dict[str, list[str]] = {}
+    for index, (key, value) in enumerate(data.items()):
+        if index >= FOOD_GROUP_LOCATION_MAX_ENTRIES:
+            break
+        group_id = sanitize_food_submit_text(key, max_chars=40)
+        if not group_id:
+            continue
+        parts = split_food_location_path(
+            value,
+            max_parts=max_parts,
+            max_part_chars=max_part_chars,
+        )
+        if parts:
+            result[group_id] = parts
+    return result
+
+
+def infer_food_group_location_parts(
+    raw: Any,
+    *,
+    max_parts: int = FOOD_GROUP_LOCATION_MAX_PARTS,
+    max_part_chars: int = 30,
+) -> list[str]:
+    """Infer a city/省 context from an AstrBot group name.
+
+    Only segments that explicitly end with 省/市/州 count, e.g.
+    "长春市火锅交流群" -> ["长春市"]; "长春火锅群" carries no administrative
+    suffix and is ignored on purpose (configure ``food_group_locations``).
+    """
+
+    text = sanitize_food_submit_text(
+        raw, max_chars=FOOD_GROUP_NAME_MAX_CHARS
+    )
+    if not text:
+        return []
+    limit_chars = max(1, int(max_part_chars))
+    parts = [
+        segment
+        for segment in _split_chinese_location_segments(text)
+        if segment
+        and len(segment) <= limit_chars
+        and any(
+            segment.endswith(suffix) for suffix in FOOD_GROUP_CITY_SUFFIXES
+        )
+    ]
+    return parts[: max(1, int(max_parts))]
+
+
+def merge_food_location_with_context(
+    parts: list[str],
+    context: list[str],
+) -> list[str]:
+    """Merge a group-city context into a user-provided location path.
+
+    - user path already contains the context -> user path unchanged
+    - user starts with 中国 or another 省/市/州 -> user path wins
+    - otherwise prepend the context, de-duplicating overlapping segments
+    """
+
+    user = [str(part).strip() for part in (parts or []) if str(part).strip()]
+    ctx = [str(part).strip() for part in (context or []) if str(part).strip()]
+    if not ctx:
+        return user
+    if not user:
+        return ctx
+    norm_user = [part.casefold() for part in user]
+    norm_ctx = [part.casefold() for part in ctx]
+    if "/".join(norm_ctx) in "/".join(norm_user):
+        return user
+    if user[0] == "中国":
+        return user
+    if norm_ctx[0] == norm_user[0]:
+        # Same province named by both sides: keep the more specific context.
+        return ctx + user[1:]
+    if any(
+        user[0].endswith(suffix) for suffix in FOOD_GROUP_CITY_SUFFIXES
+    ):
+        return user
+    if norm_ctx[: len(norm_user)] == norm_user:
+        return ctx
+    for depth in range(min(len(norm_ctx), len(norm_user)), 0, -1):
+        if norm_ctx[-depth:] == norm_user[:depth]:
+            return ctx + user[depth:]
+    return ctx + user
+
+
+def strip_food_group_city_prefix(
+    keyword: str,
+    context: list[str],
+) -> tuple[str, bool]:
+    """Split "长春火锅" into ("火锅", True) when the group city is 长春."""
+
+    text = str(keyword or "").strip()
+    if not text or not context:
+        return text, False
+    leaf = str(context[-1]).strip()
+    root = leaf
+    for suffix in FOOD_GROUP_CITY_SUFFIXES:
+        if root.endswith(suffix) and len(root) > len(suffix):
+            root = root[: -len(suffix)]
+            break
+    for candidate in (leaf, root):
+        if (
+            candidate
+            and len(text) > len(candidate)
+            and text.startswith(candidate)
+        ):
+            rest = text[len(candidate):].strip(" 的，,。.")
+            if rest:
+                return rest, True
+    return text, False
+
+
 def validate_food_submit_url(url: str) -> bool:
     """Only the one fixed https://food.dlsz.top/api/upload endpoint is valid."""
 
