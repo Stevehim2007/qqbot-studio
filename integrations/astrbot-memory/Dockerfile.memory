@@ -48,6 +48,9 @@ COPY --from=source /src/astrbot/core/pipeline/process_stage/method/agent_sub_sta
 COPY integrations/astrbot-memory/fixtures/memory_config.example.json \
      /opt/astrbot-memory/memory_config.example.json
 
-# Memory stays OFF unless the mounted data/config/astrbot_config.json enables it:
-#   "memory": { "enable": true }
+# Memory stays OFF unless the mounted data/cmd_config.json enables it.  AstrBot
+# v4.29.3 reads ASTRBOT_CONFIG_PATH = <data>/cmd_config.json; a wrong filename
+# does not raise, memory just never turns on:
+#   "memory": { "enable": true, "policy": { "default_mode": "conversation", ... } }
+# The file is loaded at AstrBot startup, so restart the container after editing it.
 # The sidecar DB lands in data/astrbot_memory.db (inside the AstrBot data volume).

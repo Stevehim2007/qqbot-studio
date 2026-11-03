@@ -59,5 +59,57 @@ class ReadmeConsistencyTests(MemoryTestCase):
             self.assertIn("export(scope_type", text, path.name)
 
 
+class ConfigPathAndRestartDocsTests(unittest.TestCase):
+    """The config path and restart semantics must match AstrBot v4.29.3 + the panel."""
+
+    DOCS = {
+        "README": REPO_ROOT / "integrations" / "astrbot-memory" / "README.md",
+        "Dockerfile": REPO_ROOT / "integrations" / "astrbot-memory" / "Dockerfile.memory",
+        "memory-policy": REPO_ROOT / "docs" / "memory-policy.md",
+    }
+
+    def _read(self, name: str) -> str:
+        return self.DOCS[name].read_text(encoding="utf-8")
+
+    def test_docs_point_at_cmd_config_only(self):
+        for name in self.DOCS:
+            with self.subTest(name):
+                text = self._read(name)
+                self.assertNotIn("astrbot_config.json", text, f"{name} 仍指向错误的配置文件名")
+                self.assertIn("cmd_config.json", text, f"{name} 缺少正确的 cmd_config.json 路径")
+
+    def test_readme_states_the_actual_config_path_constant(self):
+        readme = self._read("README")
+        self.assertIn("ASTRBOT_CONFIG_PATH", readme)
+        self.assertIn("data/cmd_config.json", readme)
+
+    def test_restart_wording_is_consistent_with_patch_behaviour(self):
+        readme = self._read("README")
+        # File edits: AstrBot loads cmd_config.json at startup -> restart required.
+        self.assertIn("直接改文件需要重启 AstrBot", readme)
+        self.assertIn("restart_required=true", readme)
+        # In-memory config updates: the patch's refresh applies on the next turn.
+        self.assertIn("下一轮", readme)
+        self.assertIn("refresh_config()", readme)
+        # The old, contradictory claims must be gone.
+        self.assertNotIn("下一轮读取就会生效", readme)
+        self.assertNotIn("不必重启进程", readme)
+        self.assertNotIn("重启 AstrBot：", readme)
+
+    def test_panel_docs_and_implementation_agree(self):
+        panel_docs = self._read("memory-policy")
+        self.assertIn("restart_required=true", panel_docs)
+        self.assertIn("hot_reload=false", panel_docs)
+        self.assertIn("cmd_config.json", panel_docs)
+        self.assertIn("refresh_config()", panel_docs)
+
+        studio_code = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in sorted((REPO_ROOT / "qqbot_studio").rglob("*.py"))
+        )
+        self.assertIn("cmd_config.json", studio_code, "Studio 应读写 AstrBot 的 cmd_config.json")
+        self.assertIn("memory.policy", studio_code)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,9 @@
 - 面板写的是 AstrBot 配置文件；上游**没有** `memory.policy` 的在线接口，所以保存后需要
   AstrBot 重启或重新加载配置才生效（面板不调用热重载，`restart_required=true`、`hot_reload=false`）。
   生效后按群门禁在下一轮消息按最新策略执行（AstrBot 侧策略缓存最多 5 秒）。
+- 补丁侧 `refresh_config()` 只在「AstrBot 进程内的配置对象已被更新」（重启加载 / 配置重载 /
+  Dashboard 保存）后于下一轮生效；它**不会**让 AstrBot 主动重读 `cmd_config.json` 文件，所以面板的
+  `restart_required=true` 不因补丁而改变。详见 `integrations/astrbot-memory/README.md` §3.2 与局限 10。
 
 ## 2. 策略结构（与 astrbot/core/memory/policy.py 一致）
 

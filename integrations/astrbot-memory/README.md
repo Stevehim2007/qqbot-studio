@@ -21,8 +21,8 @@ integrations/astrbot-memory/
 ├── fixtures/turns_zh.json          # 抽取期望（与补丁同步冻结）
 ├── fixtures/memory_config.example.json
 ├── fixtures/memory_policy.example.json  # 按群策略样例（含非法项，验证 fail-safe）
-├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 策略冒烟 → 跑测试（121 tests）
-└── tests/                          # 121 个兼容性测试（unittest，无第三方依赖）
+├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 策略冒烟 → 跑测试（125 tests）
+└── tests/                          # 125 个兼容性测试（unittest，无第三方依赖）
     ├── run-tests.sh
     ├── _support.py                 # 从打了补丁的源码树导入 astrbot.core.memory
     ├── test_scope_isolation.py     # 用户/群/会话/人格/全局隔离，无跨群/私聊泄漏
@@ -173,7 +173,7 @@ python3 -m py_compile astrbot/core/memory/*.py astrbot/core/astr_main_agent.py \
 
 ### 3.2 启用
 
-改 `data/config/astrbot_config.json` 的 `memory` 段（示例见 `fixtures/memory_config.example.json`），重启 AstrBot：
+改 AstrBot 的配置文件 **`data/cmd_config.json`** 里的 `memory` 段（AstrBot v4.29.3 的 `ASTRBOT_CONFIG_PATH = <data>/cmd_config.json`；路径写错不会报错，记忆只会一直不生效，所以请照抄这里的文件名。示例见 `fixtures/memory_config.example.json`）：
 
 ```json
 "memory": {
@@ -192,7 +192,14 @@ python3 -m py_compile astrbot/core/memory/*.py astrbot/core/astr_main_agent.py \
 
 > 注意 `enable: true` 只是"打开记忆子系统"，**具体哪个群记忆由 `policy` 决定**；`policy.default_mode` 默认 `conversation`，即不列出来的群/私聊一律不记。上例只让群 `838796241` 使用长期记忆。
 >
-> 该配置段**不在 Dashboard WebUI 的设置表单里**（补丁没有改 `astrbot/core/config/default.py` 里那张上千行的 schema），这是刻意的最小化取舍，见“局限”。改完 `astrbot_config.json` 后 AstrBot 下一轮读取就会生效（`enable` 与 `policy` 都热更新），不必重启进程。
+> 该配置段**不在 Dashboard WebUI 的设置表单里**（补丁没有改 `astrbot/core/config/default.py` 里那张上千行的 schema），这是刻意的最小化取舍，见“局限”。
+
+**生效时机（与 `docs/memory-policy.md`、Studio「记忆策略」面板一致）**：
+
+1. `cmd_config.json` 只在 AstrBot 启动时读入内存（`astrbot_config_mgr` 缓存），所以**直接改文件需要重启 AstrBot**（或触发 AstrBot 自己的配置重载）才生效；
+2. Studio 的记忆策略面板写的就是这个 `data/cmd_config.json`，因此它保存后返回 `restart_required=true` / `hot_reload=false`，不会宣称已生效；
+3. 补丁里的 `refresh_config()` 是第二层：**一旦进程内的配置对象变了**（Dashboard 保存、配置重载、或重启加载），`enable` / `policy` / 预算就在**下一轮消息**生效，不需要为记忆策略再单独重启一次（策略缓存最多 5 秒刷新）；
+4. 例外：改 `db_path` 必须重启（服务单例按旧路径缓存连接，见局限 10）。
 
 ### 3.3 Docker 镜像 overlay（`Dockerfile.memory`）
 
@@ -211,7 +218,7 @@ QQ Bot Studio 侧接线（`ASTRBOT_IMAGE` 换成本地构建的 tag）属于 `qq
 ## 4. 测试与验证
 
 ```bash
-# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 策略冒烟 → 121 个测试
+# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 策略冒烟 → 125 个测试
 integrations/astrbot-memory/scripts/verify-patch.sh
 
 # 已有打补丁的源码树时
@@ -228,7 +235,7 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 | `patch -p1 --dry-run`（非 git 场景） | OK |
 | `py_compile`（补丁后全部模块 + 3 个改动文件） | OK |
 | 策略冒烟（默认 `policy.default_mode == conversation`，列出的群解析为 long_term） | OK |
-| `python3 -m unittest discover`（集成补丁测试，121 tests） | OK |
+| `python3 -m unittest discover`（集成补丁测试，125 tests） | OK |
 | `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（主仓库，仓库根执行，594 tests @ 提交 643351a 快照） | OK |
 | 基线行为（`memory.enable=false`） | 钩子立即返回，`system_prompt` 与上游一致（见 `test_injection.py::test_disabled_memory_leaves_the_prompt_untouched`） |
 
@@ -255,6 +262,6 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 6. **Docker 镜像未构建**：本环境无 Docker daemon；`Dockerfile.memory` 未经过 `docker build` 验证，官方镜像的源码路径/启动方式需按实际镜像调整。
 7. **未做真实进程 E2E**：本环境无法安装 AstrBot 的完整依赖（quart/sqlalchemy/faiss 等），所以“钩子在真实 pipeline 里被调用”只有 AST 结构检查和桩对象行为测试，没有跑通过一次真实的 QQ 消息→LLM→回复链路。上线前请在一台测试实例上按第 3 节装好，发一条“记住：我不吃香菜”，再问“晚饭推荐”，确认注入生效。
 8. **隐私默认值偏保守**：`enable=false` + `policy.default_mode=conversation`；群聊默认不读私聊记忆（`scope=user|group_user` 是显式 opt-in）；`export` 会返回原始记忆文本（含用户说的原话，已做密钥清洗但不做匿名化）。
-9. **策略只能改 JSON**：没有 Dashboard 表单，也没有 `/记忆 开群xxx` 之类的聊天命令；改配置靠编辑 `data/config/astrbot_config.json`，生效时机取决于 AstrBot 何时重读配置（通常下一轮），不会话中断正在进行的回复。
-10. **热更新覆盖内存配置，但 `db_path` 仍需重启**：`enable`/`read_*`/`min_confidence`/`policy`/`max_items`/`max_chars`/`max_records_per_scope` 都在下一轮生效（`get_memory_service()` 每轮 `refresh_config()`，`test_config_reload.py` 覆盖）；只有 `db_path` 改变需要重启（服务单例按旧路径缓存旧连接）。旧路径的服务对象不会自动关闭（进程内最多每个不同路径一个连接，可接受但要注意）。
+9. **策略只能改 JSON / 面板**：AstrBot 侧没有 `/记忆 开群xxx` 之类的聊天命令；改配置靠编辑 `data/cmd_config.json` 或 Studio 的「记忆策略」面板。文件改动要等 AstrBot 重启/重载才生效（面板明确 `restart_required=true`），生效后按群门禁在下一轮消息应用，不会中断正在进行的回复。
+10. **热更新只覆盖“进程内已加载的配置”，`db_path` 仍需重启**：`enable`/`read_*`/`min_confidence`/`policy`/`max_items`/`max_chars`/`max_records_per_scope` 在配置对象更新后的下一轮生效（`get_memory_service()` 每轮 `refresh_config()`，`test_config_reload.py` 覆盖）；但**直接编辑 `cmd_config.json` 文件本身不会被 AstrBot 自动重读**，需要重启/重载（见 §3.2）。`db_path` 改变无论如何都要重启（服务单例按旧路径缓存旧连接）。旧路径的服务对象不会自动关闭（进程内最多每个不同路径一个连接，可接受但要注意）。
 11. **性能未压测**：检索候选上限 400 行、FTS 匹配上限 200 行、注入 ≤ `max_chars`；单作用域上限 500 行。极端数据量（>10⁵ 行）下没有基准数据。
