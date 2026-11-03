@@ -9,6 +9,8 @@
 
 ## v4.2.1-beta.1 — 测试版：长期记忆、美食智能与按群策略
 
+- 记忆策略增加 `data/astrbot/memory_policy.json` 持久化 sidecar；AstrBot 重启重写 `cmd_config.json` 后策略不再丢失，面板读取 sidecar 优先。
+
 - 测试分支：继承正式版 `4.2.0`，新增 AstrBot 原生长期记忆、按群 `conversation/long_term` 策略、Studio 记忆策略面板、参数分组面板和 stable/test 更新回退功能。
 - 测试版不等同于正式版；长期记忆/策略需真实 AstrBot/Docker E2E 后才可合并。
 - 主仓库测试：671 tests OK；AstrBot memory patch：125 tests OK（评审快照）。

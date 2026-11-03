@@ -943,6 +943,7 @@ index 0000000..d500476
 +
 +import asyncio
 +import copy
++import json
 +import logging
 +import os
 +import threading
@@ -992,6 +993,26 @@ index 0000000..d500476
 +_PURGE_EVERY_TURNS = 50
 +
 +
++def _load_policy_sidecar() -> dict | None:
++    """Read the Studio-managed durable policy override, if present.
++
++    AstrBot rewrites ``cmd_config.json`` during start/stop; an external edit
++    to ``memory.policy`` can be lost.  Studio writes the same policy here and
++    the memory service prefers it when readable.  Any failure is ignored:
++    policy persistence must never break a chat reply.
++    """
++    try:
++        raw_path = os.environ.get("ASTRBOT_MEMORY_POLICY_PATH")
++        path = Path(raw_path) if raw_path else default_data_dir() / "memory_policy.json"
++        payload = json.loads(path.read_text(encoding="utf-8-sig"))
++    except Exception:
++        return None
++    if not isinstance(payload, dict):
++        return None
++    policy = payload.get("policy", payload)
++    return copy.deepcopy(policy) if isinstance(policy, dict) else None
++
++
 +def normalise_config(config: Mapping | None) -> dict:
 +    """Merge a user ``memory`` config section over the defaults."""
 +
@@ -1015,7 +1036,12 @@ index 0000000..d500476
 +    # The policy section is arbitrary nested config: copy it so per-service
 +    # instances never share (or mutate) the module default, and hand it to the
 +    # parser untouched -- invalid values are rejected there, not sanitised here.
-+    raw_policy = section.get("policy", DEFAULT_MEMORY_CONFIG["policy"]) if section else DEFAULT_MEMORY_CONFIG["policy"]
++    sidecar_policy = _load_policy_sidecar()
++    raw_policy = (
++        sidecar_policy
++        if sidecar_policy is not None
++        else (section.get("policy", DEFAULT_MEMORY_CONFIG["policy"]) if section else DEFAULT_MEMORY_CONFIG["policy"])
++    )
 +    merged["policy"] = copy.deepcopy(raw_policy) if raw_policy is not None else {"default_mode": MODE_CONVERSATION}
 +    return merged
 +

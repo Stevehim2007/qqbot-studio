@@ -927,10 +927,12 @@ class MemoryConfigPermissionTests(unittest.TestCase):
             self.assertFalse(state["writable"])
             self.assertEqual(state["read_channel"], "host")
             self.assertTrue(state["actions"])
-            with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
-                manager.set_memory_policy(_long_term_payload())
-        self.assertIn("不会伪造已保存的值", str(caught.exception))
-        self.assertTrue(caught.exception.actions)
+            saved = manager.set_memory_policy(_long_term_payload())
+            self.assertTrue(saved["saved"])
+            self.assertIn("sidecar 已保存", saved.get("warning", ""))
+        self.assertTrue(
+            (self.store.data_dir / "data" / "astrbot" / "memory_policy.json").exists()
+        )
 
     # -- write fallback ------------------------------------------------
     def test_permission_denied_write_goes_through_container_atomically(self) -> None:
@@ -974,12 +976,12 @@ class MemoryConfigPermissionTests(unittest.TestCase):
         )
         manager = self._manager(docker)
         with self._deny(path):
-            with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
-                manager.set_memory_policy(_long_term_payload())
-        message = str(caught.exception)
-        self.assertIn("策略未保存", message)
-        self.assertIn("不会伪造已保存的值", message)
-        self.assertNotIn("saved", message.lower())
+            saved = manager.set_memory_policy(_long_term_payload())
+        self.assertTrue(saved["saved"])
+        self.assertIn("sidecar 已保存", saved.get("warning", ""))
+        self.assertTrue(
+            (self.store.data_dir / "data" / "astrbot" / "memory_policy.json").exists()
+        )
 
     def test_oversized_config_is_refused_without_partial_write(self) -> None:
         path = self._write_host_config({"memory": {"enable": True}})
@@ -989,13 +991,26 @@ class MemoryConfigPermissionTests(unittest.TestCase):
             original = manager._CONTAINER_CONFIG_MAX_PAYLOAD
             manager._CONTAINER_CONFIG_MAX_PAYLOAD = 10
             try:
-                with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
-                    manager.set_memory_policy(_long_term_payload())
+                saved = manager.set_memory_policy(_long_term_payload())
             finally:
                 manager._CONTAINER_CONFIG_MAX_PAYLOAD = original
-        self.assertIn("过大", str(caught.exception))
-        self.assertNotIn(self._container_path(), [call[1][1] for call in docker.calls if call[1][:1] == ("python3",)] and [])
+        self.assertTrue(saved["saved"])
+        self.assertIn("sidecar 已保存", saved.get("warning", ""))
         self.assertEqual(docker.files[self._container_path()], json.dumps({"memory": {"enable": True}}))
+
+    def test_sidecar_policy_survives_cmd_config_rewrite(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}})
+        manager = self._manager(_FakeDocker(running=False))
+        manager.set_memory_policy(_long_term_payload())
+        # Simulate AstrBot's restart rewrite: BOM + no policy key.
+        path.write_bytes(
+            b"\xef\xbb\xbf"
+            + json.dumps({"memory": {"enable": True}}, ensure_ascii=False).encode("utf-8")
+        )
+        state = manager.get_memory_policy()
+        self.assertTrue(state["available"])
+        self.assertEqual(state["groups"][0]["group_id"], "838796241")
+        self.assertEqual(state["groups"][0]["effective_mode"], "long_term")
 
     def test_host_config_with_utf8_bom_is_accepted(self) -> None:
         path = _cmd_config_path(self.store)
@@ -1027,9 +1042,12 @@ class MemoryConfigPermissionTests(unittest.TestCase):
         with self._deny(path):
             state = manager.get_memory_policy()
             self.assertNotIn("sk-very-secret-token", json.dumps(state, ensure_ascii=False))
-            with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
-                manager.set_memory_policy(_long_term_payload())
-        self.assertNotIn("sk-very-secret-token", str(caught.exception))
+            saved = manager.set_memory_policy(_long_term_payload())
+            self.assertTrue(saved["saved"])
+        self.assertNotIn("sk-very-secret-token", json.dumps(saved, ensure_ascii=False))
+        self.assertTrue(
+            (self.store.data_dir / "data" / "astrbot" / "memory_policy.json").exists()
+        )
 
     def test_poisoned_container_name_is_refused(self) -> None:
         class _RecordingDocker(DockerController):

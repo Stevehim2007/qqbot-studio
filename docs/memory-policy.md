@@ -73,6 +73,18 @@ AstrBot 的 `parse_policy` 是**整条降级**：一个字段非法，这条策�
 校验覆盖：`mode`/`scope` 枚举、`extract`/`inject` 布尔、`max_items 1..50`、`max_chars 80..8000`、
 私聊 `scope` 只能是 `user`、条目必须是对象、未知字段（会警告但 AstrBot 忽略）、以及 strip 后重复的群号。
 
+### 2.1.1 持久化 sidecar（AstrBot 重启后不丢策略）
+
+AstrBot 会在启动/停止时重写 `cmd_config.json`，外部直接写入的 `memory.policy` 可能被覆盖。
+因此 Studio 以 `data/astrbot/memory_policy.json` 作为**权威策略副本**：
+
+- 保存策略时先原子写 sidecar，再写 `cmd_config.json` 兼容副本；
+- 读取时 sidecar 优先，因此 AstrBot 重启重写配置后，面板仍能读到策略；
+- 打补丁的 AstrBot memory service 也读取同一个 sidecar（`ASTRBOT_MEMORY_POLICY_PATH` 可覆盖路径），
+  并在每次 `refresh_config()` 时合并；
+- sidecar 与 `cmd_config.json` 一样只写 JSON 策略，不碰 `astrbot_memory.db`、不记录聊天内容；
+- 权限不足时沿用同一套容器内原子读写通道。
+
 ## 2.2 配置文件权限：本机读不到就走容器（不降低安全性）
 
 `cmd_config.json` 由 AstrBot 容器以 root 写入（常见 0600），Studio 用户经常**读或写被拒绝**

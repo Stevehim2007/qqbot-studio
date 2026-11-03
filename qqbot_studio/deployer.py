@@ -1924,6 +1924,7 @@ class DeployManager:
     # denies access the same JSON is read/written through ``docker exec`` with a
     # fixed argv (no shell), an atomic temp-file + rename and mode 0600.
     ASTRBOT_CONFIG_CONTAINER_PATH = "/AstrBot/data/cmd_config.json"
+    ASTRBOT_MEMORY_POLICY_CONTAINER_PATH = "/AstrBot/data/memory_policy.json"
     _CONTAINER_CONFIG_MAX_PAYLOAD = 96_000  # base64 chars in argv
 
     _CONTAINER_WRITE_SCRIPT = (
@@ -2023,6 +2024,72 @@ class DeployManager:
         if not isinstance(data, dict):
             return None, f"容器内 {self.ASTRBOT_CONFIG_CONTAINER_PATH} 顶层不是 object。", ""
         return data, "", "container"
+
+    def _memory_policy_sidecar_path(self) -> Path:
+        return self.astrbot_data_dir / "memory_policy.json"
+
+    def _read_memory_policy_sidecar(self) -> tuple[dict[str, Any] | None, str]:
+        """Read the durable policy sidecar (host first, container on EACCES).
+
+        AstrBot rewrites cmd_config.json on restart; external writes to
+        memory.policy can therefore be lost.  The sidecar is the canonical
+        Studio copy and the memory patch reads it as an override.
+        """
+        path = self._memory_policy_sidecar_path()
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except FileNotFoundError:
+            return None, ""
+        except PermissionError as host_error:
+            name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+            runner = getattr(self.docker, "exec_in_container", None)
+            available, _reason = self._astrbot_container_available()
+            if not available or not callable(runner):
+                return None, f"无法读取记忆策略 sidecar（{host_error}），且容器不可用。"
+            result = runner(
+                name,
+                ["cat", self.ASTRBOT_MEMORY_POLICY_CONTAINER_PATH],
+                timeout=20,
+            )
+            if result.returncode != 0:
+                return None, f"无法读取记忆策略 sidecar：{(result.stderr or result.stdout or '').strip()[:300]}"
+            text = result.stdout or ""
+        except OSError as exc:
+            return None, f"无法读取记忆策略 sidecar：{self.redact_sensitive_text(str(exc))}"
+        try:
+            data = json.loads(text.lstrip("\ufeff"))
+        except ValueError as exc:
+            return None, f"记忆策略 sidecar 不是合法 JSON：{exc}"
+        if not isinstance(data, dict):
+            return None, "记忆策略 sidecar 顶层不是 object。"
+        return data, ""
+
+    def _write_memory_policy_sidecar(self, policy: dict[str, Any]) -> tuple[str, str]:
+        path = self._memory_policy_sidecar_path()
+        payload = {"policy": policy}
+        try:
+            self._write_private_json(path, payload)
+            return "host", ""
+        except OSError as exc:
+            if not (isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM)):
+                return "", f"无法写入记忆策略 sidecar：{self.redact_sensitive_text(str(exc))}"
+            host_error = self.redact_sensitive_text(str(exc))
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        available, unavailable_reason = self._astrbot_container_available()
+        if not available or not callable(runner):
+            return "", f"本机写入记忆策略 sidecar 被拒绝（{host_error}），且{unavailable_reason or '容器不可用'}"
+        raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        encoded = base64.b64encode(raw).decode("ascii")
+        result = runner(
+            name,
+            ["python3", "-c", self._CONTAINER_WRITE_SCRIPT, self.ASTRBOT_MEMORY_POLICY_CONTAINER_PATH, encoded],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            detail = self.redact_sensitive_text((result.stderr or result.stdout or "").strip())
+            return "", f"容器内写入记忆策略 sidecar 失败：{detail[:300] or result.returncode}"
+        return "container", ""
 
     def _write_astrbot_config(self, data: dict[str, Any]) -> tuple[str, str]:
         """Persist ``cmd_config.json`` host-first, container-atomic on EPERM."""
@@ -2417,6 +2484,16 @@ class DeployManager:
                 )
             return payload
 
+        sidecar, sidecar_error = self._read_memory_policy_sidecar()
+        if sidecar is not None:
+            sidecar_policy = sidecar.get("policy", sidecar)
+            if isinstance(sidecar_policy, dict):
+                memory = data.get("memory")
+                memory = memory if isinstance(memory, dict) else {}
+                memory = dict(memory)
+                memory["policy"] = sidecar_policy
+                data = dict(data)
+                data["memory"] = memory
         memory = data.get("memory")
         memory = memory if isinstance(memory, dict) else {}
         payload.update(available=True, supported=True)
@@ -2572,13 +2649,22 @@ class DeployManager:
         memory["policy"] = section
         updated = dict(data)
         updated["memory"] = memory
-        write_channel, write_error = self._write_astrbot_config(updated)
-        if not write_channel:
+        sidecar_channel, sidecar_error = self._write_memory_policy_sidecar(section)
+        if not sidecar_channel:
             container_ready, _reason = self._astrbot_container_available()
             raise MemoryPolicyWriteUnavailableError(
-                f"{write_error}。策略未保存；Studio 不会伪造已保存的值。",
+                f"{sidecar_error}。策略未保存；Studio 不会伪造已保存的值。",
                 actions=self._config_permission_actions(container_available=container_ready),
             )
+        write_channel, write_error = self._write_astrbot_config(updated)
+        if not write_channel:
+            # The durable sidecar is authoritative for the patched memory
+            # service; keep it and report a non-fatal compatibility warning.
+            payload = self.get_memory_policy()
+            payload["saved"] = True
+            payload["write_channel"] = sidecar_channel
+            payload["warning"] = f"sidecar 已保存，但 cmd_config.json 兼容副本未写入：{write_error}"
+            return payload
         result = self.get_memory_policy()
         result["write_channel"] = write_channel
         result["saved"] = True
