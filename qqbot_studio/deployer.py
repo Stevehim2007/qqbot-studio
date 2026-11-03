@@ -1148,7 +1148,7 @@ class DeployManager:
         last_reason = ""
         for attempt in range(attempts):
             try:
-                text = path.read_text(encoding="utf-8")
+                text = path.read_text(encoding="utf-8-sig")
             except FileNotFoundError:
                 return {}, ""
             except (OSError, UnicodeError) as exc:
@@ -1979,7 +1979,7 @@ class DeployManager:
 
         path = self.astrbot_cmd_config_path
         try:
-            path.read_text(encoding="utf-8")
+            path.read_text(encoding="utf-8-sig")
         except FileNotFoundError:
             return None, f"实例尚未部署 AstrBot：缺少 {path}", ""
         except PermissionError as exc:
@@ -2017,7 +2017,7 @@ class DeployManager:
                 "",
             )
         try:
-            data = json.loads(result.stdout or "")
+            data = json.loads((result.stdout or "").lstrip("\ufeff"))
         except ValueError as exc:
             return None, f"容器内 {self.ASTRBOT_CONFIG_CONTAINER_PATH} 不是合法 JSON：{exc}", ""
         if not isinstance(data, dict):

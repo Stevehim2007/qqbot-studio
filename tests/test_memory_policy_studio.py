@@ -997,6 +997,25 @@ class MemoryConfigPermissionTests(unittest.TestCase):
         self.assertNotIn(self._container_path(), [call[1][1] for call in docker.calls if call[1][:1] == ("python3",)] and [])
         self.assertEqual(docker.files[self._container_path()], json.dumps({"memory": {"enable": True}}))
 
+    def test_host_config_with_utf8_bom_is_accepted(self) -> None:
+        path = _cmd_config_path(self.store)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"memory": {"enable": True}}).encode("utf-8"))
+        state = self._manager(_FakeDocker(running=False)).get_memory_policy()
+        self.assertTrue(state["available"])
+        self.assertTrue(state["supported"])
+        self.assertEqual(state["read_channel"], "host")
+
+    def test_container_config_with_utf8_bom_is_accepted(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}})
+        container_payload = json.dumps({"memory": {"enable": True}}, ensure_ascii=False)
+        docker = _FakeDocker(files={self._container_path(): "\ufeff" + container_payload})
+        with self._deny(path):
+            state = self._manager(docker).get_memory_policy()
+        self.assertTrue(state["available"])
+        self.assertTrue(state["supported"])
+        self.assertEqual(state["read_channel"], "container")
+
     # -- safety ---------------------------------------------------------
     def test_no_secret_is_echoed_from_container_errors(self) -> None:
         path = self._write_host_config({"memory": {"enable": True}})
