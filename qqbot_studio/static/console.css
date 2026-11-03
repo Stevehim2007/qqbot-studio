@@ -1272,3 +1272,34 @@ body.console-modal-open { overflow: hidden; }
 .memory-policy-empty { margin: 0; color: #6b7c8c; font-size: 12px; }
 .memory-policy-footer { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .memory-policy-budget-field input { max-width: 180px; }
+.memory-policy-private-notes { display: grid; gap: 4px; }
+.memory-policy-row-invalid {
+  margin: 0;
+  padding: 7px 9px;
+  color: #b42318;
+  background: #fff4f4;
+  border: 1px solid #f0c2c2;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.memory-policy-row-errors {
+  margin: 0;
+  padding-left: 18px;
+  color: #b42318;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.memory-policy-row-unknown {
+  margin: 0;
+  color: #8a5a00;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.memory-policy-row-effective {
+  margin: 0;
+  color: #4a5a68;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.memory-policy-row.is-invalid { border-color: #e08585; background: #fff9f9; }

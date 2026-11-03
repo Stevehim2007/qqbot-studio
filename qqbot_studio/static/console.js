@@ -928,7 +928,12 @@
       privateInject: true,
       privateMaxItems: '',
       privateMaxChars: '',
+      privateConfigured: true,
+      privateInvalid: false,
+      privateErrors: [],
+      privateEffectiveMode: 'conversation',
       rows: [],
+      invalidRows: 0,
       modeOptions: [
         { value: 'conversation', label: '会话记忆' },
         { value: 'long_term', label: '长期记忆' }
@@ -957,6 +962,19 @@
   function normaliseMemoryPolicyScope(value) {
     const scope = textValue(value, '').trim().toLowerCase();
     return ['group', 'user', 'group_user'].includes(scope) ? scope : 'group';
+  }
+
+  function memoryPolicyStringList(raw) {
+    return (Array.isArray(raw) ? raw : [])
+      .map((item) => textValue(item, '').trim())
+      .filter(Boolean);
+  }
+
+  function memoryPolicyEffectiveMode(value) {
+    // null/absent means "unknown" (e.g. duplicate group ids), which must not
+    // be rendered as if the row were effectively long_term.
+    if (value === null || value === undefined || value === '') return '';
+    return normaliseMemoryPolicyMode(value);
   }
 
   function memoryPolicyBudgetText(value) {
@@ -1014,7 +1032,13 @@
         extract: record.extract !== false,
         inject: record.inject !== false,
         maxItems: memoryPolicyBudgetText(record.max_items),
-        maxChars: memoryPolicyBudgetText(record.max_chars)
+        maxChars: memoryPolicyBudgetText(record.max_chars),
+        // AstrBot degrades the whole entry to conversation on any invalid
+        // field, so `effectiveMode` (not `mode`) is what is really in force.
+        invalid: record.invalid === true,
+        errors: memoryPolicyStringList(record.errors),
+        unknownFields: memoryPolicyStringList(record.unknown_fields),
+        effectiveMode: memoryPolicyEffectiveMode(record.effective_mode)
       });
     }
     return {
@@ -1029,6 +1053,11 @@
       privateInject: privateRecord.inject !== false,
       privateMaxItems: memoryPolicyBudgetText(privateRecord.max_items),
       privateMaxChars: memoryPolicyBudgetText(privateRecord.max_chars),
+      privateConfigured: privateRecord.configured !== false,
+      privateInvalid: privateRecord.invalid === true,
+      privateErrors: memoryPolicyStringList(privateRecord.errors),
+      privateEffectiveMode: memoryPolicyEffectiveMode(privateRecord.effective_mode),
+      invalidRows: Number(root.invalid_rows) > 0 ? Number(root.invalid_rows) : 0,
       rows,
       modeOptions: memoryPolicyOptions(root.mode_options, base.modeOptions),
       scopeOptions: memoryPolicyOptions(root.scope_options, base.scopeOptions),
@@ -3590,6 +3619,18 @@
     return '未知';
   }
 
+  function memoryPolicyModeLabel(policy, mode) {
+    const options = (policy && policy.modeOptions) || [];
+    const match = options.find((option) => option.value === mode);
+    return match ? match.label : (mode === 'long_term' ? '长期记忆' : '会话记忆');
+  }
+
+  function memoryPolicyEffectiveText(policy, mode) {
+    if (!mode) return '未知（配置非法或重复，无法确定哪个生效）';
+    if (mode === 'conversation') return 'conversation（只用会话历史）';
+    return memoryPolicyModeLabel(policy, mode);
+  }
+
   function buildMemoryPolicySection(instance) {
     const policy = (instance.v3 && instance.v3.memoryPolicy) || emptyMemoryPolicyState();
     const disabled = policy.supported !== true;
@@ -3620,7 +3661,8 @@
     if (policy.status === 'unsupported' || policy.status === 'error') {
       setV3Status(statusElement, policy.error || '记忆策略接口暂不可用，未保存任何值。', policy.status === 'unsupported' ? 'warning' : 'error');
     } else if (policy.message) {
-      setV3Status(statusElement, policy.message, policy.memoryEnabled === false ? 'warning' : 'info');
+      const tone = policy.memoryEnabled === false || policy.invalidRows > 0 ? 'warning' : 'info';
+      setV3Status(statusElement, policy.message, tone);
     }
     section.appendChild(statusElement);
 
@@ -3722,6 +3764,28 @@
     privateToggles.appendChild(makeBudget('private-max-items', policy.privateMaxItems, policy.limits.maxItems, '私聊最大条数'));
     privateToggles.appendChild(makeBudget('private-max-chars', policy.privateMaxChars, policy.limits.maxChars, '私聊最大字符'));
     defaults.appendChild(privateToggles);
+    const privateNotes = makeElement('div', 'memory-policy-private-notes');
+    privateNotes.dataset.memoryPolicy = 'private-notes';
+    if (!policy.privateConfigured) {
+      privateNotes.appendChild(makeElement(
+        'p',
+        'memory-policy-hint',
+        `未单独配置私聊策略：私聊跟随默认模式（当前 ${memoryPolicyModeLabel(policy, policy.privateEffectiveMode)}）。`
+      ));
+    }
+    if (policy.privateInvalid) {
+      privateNotes.appendChild(makeElement(
+        'p',
+        'memory-policy-row-invalid',
+        '私聊策略配置非法：AstrBot 会把私聊策略降级为 conversation（不是 long_term 生效），请按下面的原因修正。'
+      ));
+      const privateErrors = makeElement('ul', 'memory-policy-row-errors');
+      privateErrors.dataset.memoryPolicy = 'private-errors';
+      for (const item of policy.privateErrors || []) privateErrors.appendChild(makeElement('li', '', item));
+      privateNotes.appendChild(privateErrors);
+    }
+    if (!privateNotes.childNodes.length) privateNotes.hidden = true;
+    defaults.appendChild(privateNotes);
     section.appendChild(defaults);
 
     const groupsHeader = makeElement('div', 'memory-policy-groups-header');
@@ -3782,6 +3846,34 @@
         syncEmpty();
       });
       rowElement.appendChild(removeButton);
+      if (row.invalid) {
+        rowElement.classList.add('is-invalid');
+        rowElement.appendChild(makeElement(
+          'p',
+          'memory-policy-row-invalid',
+          '该行配置非法：AstrBot 会把整条降级为 conversation，不会按 long_term 生效；请按下面的原因修正后保存。'
+        ));
+      }
+      if ((row.unknownFields || []).length) {
+        rowElement.appendChild(makeElement(
+          'p',
+          'memory-policy-row-unknown',
+          `未知字段 ${row.unknownFields.join(', ')} 会被 AstrBot 忽略（可能是拼写错误）。`
+        ));
+      }
+      if ((row.errors || []).length) {
+        const rowErrors = makeElement('ul', 'memory-policy-row-errors');
+        rowErrors.dataset.memoryPolicy = 'row-errors';
+        for (const item of row.errors) rowErrors.appendChild(makeElement('li', '', item));
+        rowElement.appendChild(rowErrors);
+      }
+      const effective = makeElement(
+        'p',
+        'memory-policy-row-effective',
+        `实际生效：${memoryPolicyEffectiveText(policy, row.effectiveMode)}`
+      );
+      effective.dataset.memoryPolicy = 'row-effective';
+      rowElement.appendChild(effective);
       return rowElement;
     }
 

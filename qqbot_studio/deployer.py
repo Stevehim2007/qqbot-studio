@@ -2049,48 +2049,104 @@ class DeployManager:
         return section
 
     @staticmethod
-    def _policy_row(group_id: str, raw: Any, warnings: list[str]) -> dict[str, Any]:
-        """Tolerant read of one stored entry (flags bad values, never raises)."""
+    def _policy_row(
+        group_id: str,
+        raw: Any,
+        warnings: list[str],
+        *,
+        is_private: bool = False,
+        where: str | None = None,
+    ) -> dict[str, Any]:
+        """Tolerant read of one stored entry -- report, never rewrite.
 
-        where = f"memory.policy.groups.{group_id}"
+        Mirrors ``astrbot/core/memory/policy.py`` fail-safe semantics: the whole
+        entry is degraded to ``conversation`` as soon as one field fails
+        validation, so ``effective_mode`` describes what AstrBot will really do
+        while ``mode``/``scope`` keep the stored (possibly invalid) values.  The
+        UI must not present an invalid entry as an effective ``long_term`` one.
+        """
+
+        label = where or f"memory.policy.groups.{group_id}"
         row: dict[str, Any] = {
             "group_id": group_id,
-            "mode": "conversation",
-            "scope": MEMORY_POLICY_SCOPE_GROUP,
+            "mode": MEMORY_POLICY_DEFAULT_MODE,
+            "scope": MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP,
             "extract": True,
             "inject": True,
             "max_items": None,
             "max_chars": None,
+            "unknown_fields": [],
+            "errors": [],
+            "invalid": False,
+            "effective_mode": MEMORY_POLICY_DEFAULT_MODE,
+            "effective_scope": MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP,
         }
+
+        def fail(field_name: str, problem: str) -> None:
+            row["invalid"] = True
+            row["errors"].append(problem)
+            prefix = f"{label}.{field_name}" if field_name else label
+            warnings.append(f"{prefix}：{problem}")
+
         if not isinstance(raw, dict):
-            warnings.append(f"{where} 不是对象，AstrBot 会按 conversation 处理。")
+            fail("", "条目不是对象")
+            warnings.append(f"{label}：该行配置非法，AstrBot 会把整条降级为 conversation。")
             return row
+
+        allowed = {"mode", "scope", "extract", "inject", "max_items", "max_chars"}
+        unknown = sorted(str(key) for key in raw if key not in allowed)
+        if unknown:
+            row["unknown_fields"] = unknown
+            warnings.append(
+                f"{label}：未知字段 {', '.join(unknown)} 会被 AstrBot 忽略（可能是拼写错误）。"
+            )
+
         mode = DeployManager._policy_mode(raw.get("mode"))
         if mode is None:
-            warnings.append(f"{where}.mode 非法：{raw.get('mode')!r}；AstrBot 会按 conversation 处理。")
+            fail("mode", f"非法值 {raw.get('mode')!r}（只允许 conversation / long_term）")
         else:
             row["mode"] = mode
+
         raw_scope = raw.get("scope")
         if raw_scope is None:
-            row["scope"] = MEMORY_POLICY_SCOPE_GROUP
+            row["scope"] = MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP
         elif isinstance(raw_scope, str) and raw_scope.strip().lower() in MEMORY_POLICY_SCOPES:
             row["scope"] = raw_scope.strip().lower()
+            if is_private and row["scope"] != MEMORY_POLICY_SCOPE_USER:
+                fail("scope", f"私聊只允许 scope=user，收到 {row['scope']!r}")
         else:
-            warnings.append(f"{where}.scope 非法：{raw_scope!r}；AstrBot 会按 conversation 处理。")
+            fail("scope", f"非法值 {raw_scope!r}（只允许 group / user / group_user）")
+
         for name in ("extract", "inject"):
             if name in raw and raw[name] is not None:
                 if isinstance(raw[name], bool):
                     row[name] = raw[name]
                 else:
-                    warnings.append(f"{where}.{name} 不是 true/false，AstrBot 会按默认值处理。")
-        for name in ("max_items", "max_chars"):
+                    fail(name, f"必须是 true/false，收到 {raw[name]!r}")
+
+        for name, bounds in (
+            ("max_items", MEMORY_POLICY_MAX_ITEMS),
+            ("max_chars", MEMORY_POLICY_MAX_CHARS),
+        ):
             value = raw.get(name)
             if value is None:
                 continue
             if isinstance(value, bool) or not isinstance(value, int):
-                warnings.append(f"{where}.{name} 不是整数，AstrBot 会忽略它。")
+                fail(name, f"必须是整数，收到 {value!r}")
+            elif not bounds[0] <= value <= bounds[1]:
+                fail(name, f"必须在 {bounds[0]}..{bounds[1]} 之间，收到 {value}")
             else:
                 row[name] = value
+
+        if row["invalid"]:
+            row["effective_mode"] = MEMORY_POLICY_DEFAULT_MODE
+            row["effective_scope"] = (
+                MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP
+            )
+            warnings.append(f"{label}：该行配置非法，AstrBot 会把整条降级为 conversation。")
+        else:
+            row["effective_mode"] = row["mode"]
+            row["effective_scope"] = row["scope"]
         return row
 
     def get_memory_policy(self) -> dict[str, Any]:
@@ -2126,9 +2182,16 @@ class DeployManager:
                 "inject": True,
                 "max_items": None,
                 "max_chars": None,
+                "configured": False,
+                "invalid": False,
+                "errors": [],
+                "unknown_fields": [],
+                "effective_mode": MEMORY_POLICY_DEFAULT_MODE,
+                "effective_scope": MEMORY_POLICY_SCOPE_USER,
             },
             "groups": [],
             "warnings": [],
+            "invalid_rows": 0,
             "memory_enabled": None,
             "patch_hint": "unknown",
             "restart_required": True,
@@ -2169,27 +2232,83 @@ class DeployManager:
         payload["default_mode"] = default_mode
 
         raw_private = section.get("private")
-        if isinstance(raw_private, dict):
-            private_row = self._policy_row("private", raw_private, warnings)
+        private_row = dict(payload["private"])
+        if isinstance(raw_private, dict) and raw_private:
+            private_row = self._policy_row(
+                "private", raw_private, warnings, is_private=True, where="memory.policy.private"
+            )
             private_row.pop("group_id", None)
-            private_row["scope"] = MEMORY_POLICY_SCOPE_USER
-            payload["private"] = private_row
-        elif raw_private is not None:
-            warnings.append("memory.policy.private 不是对象，AstrBot 按 conversation 处理。")
+            private_row["configured"] = True
+        elif not raw_private:
+            # AstrBot ignores a falsy private entry, so private chats follow
+            # default_mode.  Show that instead of inventing conversation.
+            private_row.update(
+                {
+                    "configured": False,
+                    "mode": default_mode,
+                    "scope": MEMORY_POLICY_SCOPE_USER,
+                    "effective_mode": default_mode,
+                    "effective_scope": MEMORY_POLICY_SCOPE_USER,
+                    "invalid": False,
+                    "errors": [],
+                    "unknown_fields": [],
+                }
+            )
+        else:
+            warnings.append(
+                "memory.policy.private 不是对象，AstrBot 会把私聊策略降级为 conversation。"
+            )
+            private_row.update(
+                {
+                    "configured": True,
+                    "invalid": True,
+                    "errors": ["配置不是对象"],
+                    "effective_mode": MEMORY_POLICY_DEFAULT_MODE,
+                }
+            )
+        payload["private"] = private_row
 
         raw_groups = section.get("groups")
         if raw_groups is not None and not isinstance(raw_groups, dict):
             warnings.append("memory.policy.groups 不是对象，AstrBot 会忽略所有按群策略。")
         elif isinstance(raw_groups, dict):
             rows = []
+            seen_keys: dict[str, list[str]] = {}
             for key in sorted(raw_groups, key=lambda item: str(item)):
                 if not isinstance(key, str) or not key.strip():
                     warnings.append(f"memory.policy.groups 的键非法：{key!r}；AstrBot 会忽略它。")
                     continue
-                rows.append(self._policy_row(key.strip(), raw_groups[key], warnings))
+                name = key.strip()
+                seen_keys.setdefault(name, []).append(str(key))
+                rows.append(self._policy_row(name, raw_groups[key], warnings))
+            for name, raw_keys in seen_keys.items():
+                if len(raw_keys) < 2:
+                    continue
+                # AstrBot strips keys, so these entries collapse into one
+                # policy whose winner depends on JSON order: report "unknown"
+                # instead of guessing which one wins.
+                warnings.append(
+                    f"memory.policy.groups 中群号 {name} 重复（{', '.join(raw_keys)}）："
+                    "AstrBot 只保留其中一个，无法确定哪一个生效；请删除多余条目。"
+                )
+                for row in rows:
+                    if row["group_id"] != name:
+                        continue
+                    row["invalid"] = True
+                    row["errors"].append("群号重复：AstrBot 只保留其中一个，无法确定哪一个生效")
+                    row["effective_mode"] = None
             payload["groups"] = rows
+        invalid_rows = sum(1 for row in payload["groups"] if row["invalid"])
+        if payload["private"].get("invalid"):
+            invalid_rows += 1
+        payload["invalid_rows"] = invalid_rows
         payload["warnings"] = warnings
         notes = [payload["warning"]]
+        if payload["invalid_rows"]:
+            notes.append(
+                f"发现 {payload['invalid_rows']} 条非法策略：AstrBot 会把它们按 conversation 处理"
+                "（不是 long_term 生效）；请按 warnings 逐条修正后重新保存。"
+            )
         if payload["memory_enabled"] is False:
             notes.append("AstrBot 的 memory.enable 当前为 false：长期记忆总开关关闭，按群策略保存后也不会生效，需要先打开记忆总开关。")
         if payload["memory_enabled"] is None:

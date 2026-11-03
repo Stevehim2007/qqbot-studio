@@ -32,7 +32,12 @@
 - 只读 JSON 配置，从不读取记忆数据库内容；日志/响应不含其它配置值或密钥。
 - 插件参数编辑器（T17 P2）：保存成功后刷新比较基线使「已修改」标记正确清除；校验失败时清除
   搜索/分组/只看已修改过滤并滚动聚焦到出错字段；保存载荷仍包含全部 256 个字段。
-- 测试：`tests/test_memory_policy_studio.py`（23 项）、`tests/test_memory_policy_ui_static.py`（12 项，
+- 非法存量策略如实上报（t24/t26 复查修正）：private `scope=group`、`max_items=999` 越界、未知字段、
+  非法 mode/scope/类型、strip 后重复群号都会逐条进 `warnings[]`（字段+原因+降级后果），每条策略新增
+  `invalid`/`errors[]`/`unknown_fields[]`/`effective_mode`/`effective_scope` 和顶层 `invalid_rows`；
+  不再把 private 的 `scope=group` 静默改成 `user`，也不会把非法条目显示成生效中的 long_term
+  （面板标红 + 「实际生效：conversation」，重复群号显示「未知」）。`private` 未配置时如实显示跟随默认模式。
+- 测试：`tests/test_memory_policy_studio.py`（33 项）、`tests/test_memory_policy_ui_static.py`（19 项，
   含 node 契约与 256 字段回归）；文档见 `docs/memory-policy.md`。未做真实 AstrBot 进程 E2E。
 
 ## v4.1.1 — 网页智能阅读 + 饭店搜索/地址创建 + AstrBot 断连修复

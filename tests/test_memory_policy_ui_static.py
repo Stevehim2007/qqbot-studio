@@ -167,6 +167,68 @@ class MemoryPolicyStaticContractTests(unittest.TestCase):
         self.assertTrue("'/api/memory'" in self.console_js or "/api/memory`" in self.console_js)
 
 
+class MemoryPolicyWarningContractTests(unittest.TestCase):
+    """t26 P2: invalid rows must be visible, never shown as effective."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
+
+    def test_rows_render_invalid_state_and_reasons(self) -> None:
+        for token in (
+            "rowElement.classList.add('is-invalid')",
+            "该行配置非法：AstrBot 会把整条降级为 conversation",
+            "dataset.memoryPolicy = 'row-errors'",
+            "dataset.memoryPolicy = 'row-effective'",
+            "实际生效：",
+            "未知字段 ${row.unknownFields.join(', ')} 会被 AstrBot 忽略",
+        ):
+            self.assertTrue(token in self.console_js, token)
+
+    def test_private_invalid_state_is_surfaced(self) -> None:
+        for token in (
+            "privateInvalid",
+            "privateErrors",
+            "dataset.memoryPolicy = 'private-notes'",
+            "dataset.memoryPolicy = 'private-errors'",
+            "私聊策略配置非法：AstrBot 会把私聊策略降级为 conversation",
+            "未单独配置私聊策略：私聊跟随默认模式",
+            "privateConfigured",
+        ):
+            self.assertTrue(token in self.console_js, token)
+
+    def test_panel_message_turns_into_a_warning_when_rows_are_invalid(self) -> None:
+        self.assertTrue(
+            "policy.memoryEnabled === false || policy.invalidRows > 0 ? 'warning' : 'info'"
+            in self.console_js
+        )
+        self.assertTrue("invalidRows: Number(root.invalid_rows)" in self.console_js)
+        self.assertTrue("memory-policy-row-effective" in self.console_css)
+        self.assertTrue("memory-policy-row-invalid" in self.console_css)
+
+    def test_unknown_effective_mode_never_renders_as_long_term(self) -> None:
+        js = self.console_js
+        self.assertTrue("function memoryPolicyEffectiveMode(value)" in js)
+        self.assertTrue("if (value === null || value === undefined || value === '') return '';" in js)
+        self.assertTrue("未知（配置非法或重复，无法确定哪个生效）" in js)
+
+    def test_every_warning_is_rendered(self) -> None:
+        # The warnings list is built from the full server array (no slicing).
+        self.assertTrue("for (const item of policy.warnings || [])" in self.console_js)
+        self.assertTrue("warningList.hidden = !(policy.warnings || []).length" in self.console_js)
+
+    def test_normaliser_keeps_invalid_bits(self) -> None:
+        for token in (
+            "invalid: record.invalid === true",
+            "errors: memoryPolicyStringList(record.errors)",
+            "unknownFields: memoryPolicyStringList(record.unknown_fields)",
+            "effectiveMode: memoryPolicyEffectiveMode(record.effective_mode)",
+            "privateInvalid: privateRecord.invalid === true",
+        ):
+            self.assertTrue(token in self.console_js, token)
+
+
 class PluginSavePipelineContractTests(unittest.TestCase):
     """T17 P2: payload completeness, badge baseline refresh, reveal plan."""
 

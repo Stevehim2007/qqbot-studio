@@ -246,6 +246,198 @@ class MemoryPolicyBackendTests(unittest.TestCase):
         self.assertIn("default_mode", " ".join(state["warnings"]))
         self.assertEqual(path.read_text(encoding="utf-8"), before)
 
+    # -- t26 P2: invalid rows must be reported, never silently normalized ----
+    def _policy_state(self, policy: dict) -> tuple[dict, str]:
+        path = _write_config(self.store, {"memory": {"enable": True, "policy": policy}})
+        return self.manager.get_memory_policy(), path.read_text(encoding="utf-8")
+
+    def test_private_scope_group_is_reported_not_rewritten(self) -> None:
+        state, raw_before = self._policy_state(
+            {
+                "default_mode": "conversation",
+                "private": {"mode": "long_term", "scope": "group"},
+                "groups": {},
+            }
+        )
+        private = state["private"]
+        # The stored values are preserved verbatim: no silent scope rewrite.
+        self.assertEqual(private["mode"], "long_term")
+        self.assertEqual(private["scope"], "group")
+        self.assertTrue(private["invalid"])
+        joined = " ".join(state["warnings"])
+        self.assertIn("memory.policy.private.scope", joined)
+        self.assertIn("私聊只允许 scope=user", joined)
+        self.assertIn("私聊只允许 scope=user", private["errors"][0])
+        self.assertIn("降级为 conversation", joined)
+        # AstrBot degrades the entry, so Studio must not claim long_term is live.
+        self.assertEqual(private["effective_mode"], "conversation")
+        self.assertEqual(private["effective_scope"], "user")
+        self.assertEqual(state["invalid_rows"], 1)
+        self.assertIn("不是 long_term 生效", state["message"])
+        # Read-only: GET never rewrites the stored config.
+        self.assertEqual(
+            (_cmd_config_path(self.store)).read_text(encoding="utf-8"), raw_before
+        )
+
+    def test_private_long_term_without_scope_is_valid(self) -> None:
+        state, _raw = self._policy_state({"private": {"mode": "long_term"}})
+        self.assertFalse(state["private"]["invalid"])
+        self.assertEqual(state["private"]["effective_mode"], "long_term")
+        self.assertEqual(state["private"]["scope"], "user")
+        self.assertEqual(state["invalid_rows"], 0)
+
+    def test_unconfigured_private_follows_default_mode(self) -> None:
+        state, _raw = self._policy_state({"default_mode": "long_term", "private": {}})
+        self.assertFalse(state["private"]["configured"])
+        self.assertFalse(state["private"]["invalid"])
+        # AstrBot ignores a falsy private entry -> it follows default_mode.
+        self.assertEqual(state["private"]["effective_mode"], "long_term")
+
+    def test_max_items_out_of_range_is_reported(self) -> None:
+        state, _raw = self._policy_state(
+            {
+                "groups": {
+                    "111111": {"mode": "long_term", "max_items": 999},
+                    "222222": {"mode": "long_term", "max_chars": 10},
+                }
+            }
+        )
+        rows = {row["group_id"]: row for row in state["groups"]}
+        self.assertTrue(rows["111111"]["invalid"])
+        self.assertTrue(rows["222222"]["invalid"])
+        self.assertEqual(rows["111111"]["effective_mode"], "conversation")
+        self.assertEqual(rows["222222"]["effective_mode"], "conversation")
+        self.assertEqual(state["invalid_rows"], 2)
+        joined = " ".join(state["warnings"])
+        self.assertIn("memory.policy.groups.111111.max_items：必须在 1..50 之间，收到 999", joined)
+        self.assertIn("memory.policy.groups.222222.max_chars：必须在 80..8000 之间，收到 10", joined)
+        self.assertIn("降级为 conversation", joined)
+
+    def test_unknown_row_keys_are_warned(self) -> None:
+        state, _raw = self._policy_state(
+            {"groups": {"111111": {"mode": "long_term", "max_item": 5, "scop": "user"}}}
+        )
+        row = state["groups"][0]
+        self.assertEqual(row["unknown_fields"], ["max_item", "scop"])
+        self.assertFalse(row["invalid"])
+        self.assertEqual(row["effective_mode"], "long_term")
+        joined = " ".join(state["warnings"])
+        self.assertIn("未知字段 max_item, scop", joined)
+        self.assertIn("AstrBot 忽略", joined)
+
+    def test_duplicate_group_ids_are_reported_as_unknown(self) -> None:
+        state, _raw = self._policy_state(
+            {
+                "groups": {
+                    "333333": {"mode": "long_term"},
+                    " 333333": {"mode": "conversation"},
+                }
+            }
+        )
+        self.assertEqual(len(state["groups"]), 2)
+        for row in state["groups"]:
+            self.assertTrue(row["invalid"])
+            self.assertIsNone(row["effective_mode"])
+        self.assertEqual(state["invalid_rows"], 2)
+        joined = " ".join(state["warnings"])
+        self.assertIn("群号 333333 重复", joined)
+        self.assertIn("无法确定哪一个生效", joined)
+
+    def test_invalid_scope_and_type_are_reported(self) -> None:
+        state, _raw = self._policy_state(
+            {
+                "groups": {
+                    "111111": {"mode": "long_term", "scope": "everyone"},
+                    "222222": {"mode": "long_term", "extract": "yes"},
+                    "333333": {"mode": "never"},
+                    "444444": "not-an-object",
+                }
+            }
+        )
+        rows = {row["group_id"]: row for row in state["groups"]}
+        for group_id in ("111111", "222222", "333333", "444444"):
+            self.assertTrue(rows[group_id]["invalid"], group_id)
+            self.assertEqual(rows[group_id]["effective_mode"], "conversation", group_id)
+            self.assertTrue(rows[group_id]["errors"], group_id)
+        joined = " ".join(state["warnings"])
+        for needle in (
+            "只允许 group / user / group_user",
+            "必须是 true/false",
+            "只允许 conversation / long_term",
+            "条目不是对象",
+        ):
+            self.assertIn(needle, joined)
+
+    def test_valid_rows_still_report_effective_long_term(self) -> None:
+        state, _raw = self._policy_state(
+            {"groups": {"111111": {"mode": "long_term", "scope": "group_user", "max_items": 8}}}
+        )
+        row = state["groups"][0]
+        self.assertFalse(row["invalid"])
+        self.assertEqual(row["errors"], [])
+        self.assertEqual(row["effective_mode"], "long_term")
+        self.assertEqual(row["effective_scope"], "group_user")
+        self.assertEqual(state["invalid_rows"], 0)
+        self.assertNotIn("非法策略", state["message"])
+
+    def test_warnings_survive_the_http_response(self) -> None:
+        policy = {
+            "private": {"mode": "long_term", "scope": "group"},
+            "groups": {"111111": {"mode": "long_term", "max_items": 999}},
+        }
+        _write_config(self.store, {"memory": {"enable": True, "policy": policy}})
+        status, body = self._http_get()
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(body["invalid_rows"], 2)
+        self.assertTrue(body["warnings"])
+        self.assertIn("私聊只允许 scope=user", " ".join(body["warnings"]))
+        self.assertEqual(body["private"]["effective_mode"], "conversation")
+
+    def test_saving_the_same_invalid_values_is_rejected(self) -> None:
+        _write_config(self.store, {"memory": {"enable": True}})
+        for payload in (
+            {"default_mode": "conversation", "private": {"mode": "long_term", "scope": "group"}},
+            {
+                "default_mode": "conversation",
+                "groups": [{"group_id": "111111", "mode": "long_term", "max_items": 999}],
+            },
+            {
+                "default_mode": "conversation",
+                "groups": [{"group_id": "111111", "mode": "long_term", "unknown": 1}],
+            },
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(DeploymentError):
+                    self.manager.set_memory_policy(payload)
+
+    def _http_get(self) -> tuple[int, dict]:
+        """GET the policy endpoint over a real local HTTP server."""
+
+        studio = StudioManager(root=self.tmp.name)
+        meta = studio.create_instance("warn-bot")
+        # Move the config we just wrote into the instance data dir.
+        target = (
+            Path(self.tmp.name) / "instances" / str(meta["id"]) / "data" / "astrbot" / "cmd_config.json"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_cmd_config_path(self.store).read_text(encoding="utf-8"), encoding="utf-8")
+        server = create_server(studio, host="127.0.0.1", port=0, token="warn-token")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address[:2]
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            request = urllib.request.Request(
+                f"http://{host}:{port}/api/instances/{meta['id']}/memory-policy"
+            )
+            request.add_header("X-QB-Token", "warn-token")
+            with opener.open(request, timeout=5) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
     def test_memory_database_content_is_never_exposed(self) -> None:
         _write_config(self.store, {"memory": {"enable": True}})
         db = Path(self.store.data_dir) / "data" / "astrbot" / "astrbot_memory.db"
