@@ -2694,6 +2694,13 @@
     saveButton.type = 'button';
     saveButton.setAttribute('id', 'ai-tools-save');
     actions.appendChild(saveButton);
+    const restartButton = makeElement('button', 'btn btn-secondary btn-small', '重启 AstrBot');
+    restartButton.type = 'button';
+    restartButton.setAttribute('id', 'ai-tools-restart');
+    restartButton.addEventListener('click', () => {
+      void restartAstrBotForSettings(instance, (message, tone) => setAiToolsStatus(ui, message, tone), restartButton);
+    });
+    actions.appendChild(restartButton);
     section.appendChild(actions);
     const status = makeElement('p', 'ai-tools-status');
     status.setAttribute('id', 'ai-tools-status');
@@ -3736,6 +3743,28 @@
     return memoryPolicyModeLabel(policy, mode);
   }
 
+  async function restartAstrBotForSettings(instance, setStatus, button) {
+    if (!instance || !instance.id) return;
+    const original = button ? button.textContent : '';
+    if (button) button.disabled = true;
+    try {
+      setStatus('正在重启 AstrBot…', 'info');
+      const data = await apiRequest(instancePath('/api/action', instance.id), {
+        method: 'POST',
+        body: { action: 'restart' }
+      });
+      const message = textValue(data && data.message, '重启指令已发送；请等待 AstrBot 恢复后刷新。');
+      setStatus(message, 'success');
+    } catch (error) {
+      setStatus(formatError(error, '重启 AstrBot 失败。'), 'error');
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+  }
+
   function buildMemoryPolicySection(instance) {
     const policy = (instance.v3 && instance.v3.memoryPolicy) || emptyMemoryPolicyState();
     const disabled = policy.supported !== true;
@@ -4105,11 +4134,23 @@
     }
 
     const footer = makeElement('div', 'memory-policy-footer');
-    const saveButton = makeElement('button', 'btn btn-primary memory-policy-save', '保存记忆策略');
+    const saveButton = makeElement('button', 'btn btn-primary btn-small memory-policy-save', '保存记忆策略');
     saveButton.type = 'button';
     saveButton.dataset.memoryPolicy = 'save';
     saveButton.disabled = disabled;
     footer.appendChild(saveButton);
+    const restartButton = makeElement('button', 'btn btn-secondary btn-small memory-policy-restart', '重启 AstrBot');
+    restartButton.type = 'button';
+    restartButton.dataset.memoryPolicy = 'restart';
+    restartButton.disabled = disabled;
+    restartButton.addEventListener('click', () => {
+      void restartAstrBotForSettings(
+        instance,
+        (message, tone) => setV3Status(statusElement, message, tone),
+        restartButton
+      );
+    });
+    footer.appendChild(restartButton);
     footer.appendChild(makeElement(
       'span',
       'memory-policy-hint',

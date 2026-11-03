@@ -1417,3 +1417,15 @@ body.console-modal-open { overflow: hidden; }
 @media (max-width: 480px) {
   .ai-tools-module-body .ai-sticker-number-grid { grid-template-columns: 1fr; }
 }
+
+/* Restart controls next to save actions */
+.memory-policy-footer .memory-policy-restart { flex: 0 0 auto; }
+.memory-policy-footer .memory-policy-hint { flex: 1 1 280px; }
+.ai-tools-actions { display: flex; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+.ai-tools-actions .btn { min-height: 32px; }
+
+/* Polished compact action buttons */
+.memory-policy-save { border-radius: 999px; padding-inline: 16px; box-shadow: 0 5px 14px rgba(20, 166, 125, .18); }
+.memory-policy-add { border-radius: 999px; }
+.memory-policy-restart, #ai-tools-restart { border-radius: 999px; background: #fff; }
+#ai-tools-save { border-radius: 999px; padding-inline: 16px; box-shadow: 0 5px 14px rgba(20, 166, 125, .18); }
