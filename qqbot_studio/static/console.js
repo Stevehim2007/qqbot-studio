@@ -950,6 +950,13 @@
       configPath: '',
       memoryEnabled: null,
       hotReload: false,
+      actions: [],
+      permissionDenied: false,
+      readChannel: '',
+      writeChannel: '',
+      readable: false,
+      writable: false,
+      containerRunning: false,
       dirty: false
     };
   }
@@ -1011,10 +1018,15 @@
     const root = asRecord(raw);
     const configPath = textValue(root.config_path, '');
     if (root.ok === false) {
+      const permissionDenied = root.permission_denied === true
+        || (root.supported === true && root.available === false);
       return {
         ...base,
-        status: 'unsupported',
+        status: permissionDenied ? 'error' : 'unsupported',
+        supported: permissionDenied ? true : root.supported === true,
+        permissionDenied,
         configPath,
+        actions: memoryPolicyStringList(root.actions),
         message: textValue(root.message, ''),
         error: textValue(root.error || root.message, '当前实例不支持保存记忆策略。')
       };
@@ -1043,9 +1055,18 @@
     }
     return {
       ...base,
-      status: root.available === false ? 'unsupported' : 'ok',
+      status: root.available === false
+        ? (root.supported === false ? 'unsupported' : 'error')
+        : 'ok',
       available: root.available !== false,
       supported: root.supported !== false,
+      actions: memoryPolicyStringList(root.actions),
+      permissionDenied: root.permission_denied === true,
+      readChannel: textValue(root.read_channel, ''),
+      writeChannel: textValue(root.write_channel, ''),
+      readable: root.readable === true,
+      writable: root.writable !== false,
+      containerRunning: root.container_running === true,
       saved: root.saved === true,
       defaultMode: normaliseMemoryPolicyMode(root.default_mode),
       privateMode: normaliseMemoryPolicyMode(privateRecord.mode),
@@ -3658,8 +3679,16 @@
     const statusElement = makeElement('p', 'instance-v3-status');
     statusElement.dataset.memoryPolicy = 'status';
     statusElement.setAttribute('role', 'status');
-    if (policy.status === 'unsupported' || policy.status === 'error') {
-      setV3Status(statusElement, policy.error || '记忆策略接口暂不可用，未保存任何值。', policy.status === 'unsupported' ? 'warning' : 'error');
+    if (policy.status === 'unsupported') {
+      setV3Status(statusElement, policy.error || '记忆策略接口暂不可用，未保存任何值。', 'warning');
+    } else if (policy.status === 'error') {
+      setV3Status(
+        statusElement,
+        policy.permissionDenied
+          ? (policy.message || '本机无法读写 AstrBot 配置文件；请按下面的步骤处理，Studio 不会伪造已保存的值。')
+          : (policy.error || '记忆策略读取失败，未保存任何值。'),
+        'error'
+      );
     } else if (policy.message) {
       const tone = policy.memoryEnabled === false || policy.invalidRows > 0 ? 'warning' : 'info';
       setV3Status(statusElement, policy.message, tone);
@@ -3677,6 +3706,29 @@
     errorElement.setAttribute('role', 'alert');
     errorElement.hidden = true;
     section.appendChild(errorElement);
+
+    const actionsList = makeElement('ul', 'memory-policy-actions');
+    actionsList.dataset.memoryPolicy = 'actions';
+    for (const item of policy.actions || []) actionsList.appendChild(makeElement('li', '', item));
+    actionsList.hidden = !(policy.actions || []).length;
+    section.appendChild(actionsList);
+
+    if (policy.readChannel || policy.permissionDenied) {
+      const channelNotes = [];
+      if (policy.readChannel) {
+        channelNotes.push(policy.readChannel === 'container'
+          ? '配置文件由 AstrBot 容器持有：已通过容器内命令读写（原子写入 0600）。'
+          : '配置文件由本机 Studio 用户读写。');
+      }
+      if (policy.permissionDenied && !policy.writable) {
+        channelNotes.push('当前无法写入：保存会明确失败，不会显示“已保存”。');
+      }
+      if (channelNotes.length) {
+        const channelLine = makeElement('p', 'memory-policy-hint', channelNotes.join(' '));
+        channelLine.dataset.memoryPolicy = 'channel';
+        section.appendChild(channelLine);
+      }
+    }
 
     const unsupported = makeElement('p', 'memory-policy-unsupported', '');
     unsupported.dataset.memoryPolicy = 'unsupported';
@@ -3985,7 +4037,15 @@
         // Re-render from the server response so no saved value is invented.
         section.replaceWith(buildMemoryPolicySection(instance));
       } catch (error) {
-        setPolicyError(formatError(error, '记忆策略保存失败。'));
+        const payload = error && error.data && typeof error.data === 'object' ? error.data : null;
+        const steps = payload ? memoryPolicyStringList(payload.actions) : [];
+        const detail = formatError(error, '记忆策略保存失败。');
+        setPolicyError(steps.length ? `${detail} ${steps.join(' ')}` : detail);
+        if (payload && payload.supported === true) {
+          // Permission/container problem: the panel stays usable, but nothing
+          // was saved and the steps say how to fix it.
+          setV3Status(statusElement, '未保存：请按上方步骤处理后重试。Studio 不会显示伪造的已保存状态。', 'error');
+        }
         const firstInput = section.querySelector('input, select');
         if (firstInput && typeof firstInput.focus === 'function') firstInput.focus();
       } finally {

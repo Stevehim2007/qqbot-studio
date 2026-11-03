@@ -31,6 +31,7 @@ from .deployer import (
     PROMPT_PROFILES_MAX_REQUEST_BYTES,
     DeploymentError,
     MemoryPolicyUnsupportedError,
+    MemoryPolicyWriteUnavailableError,
 )
 from .dockerctl import DockerError
 from .store import default_data_dir
@@ -369,6 +370,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "scope_options": [],
             "limits": {},
             "memory_enabled": None,
+            "read_channel": "",
+            "write_channel": "",
+            "readable": False,
+            "writable": False,
+            "container_running": False,
+            "permission_denied": False,
+            "actions": [],
             "patch_hint": "unknown",
             "restart_required": False,
             "hot_reload": False,
@@ -839,6 +847,22 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "logs": manager.get_logs(service, lines)})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+        except MemoryPolicyWriteUnavailableError as exc:
+            # A permission/container problem is not "unsupported": keep the
+            # instance editable-looking and return repair steps, never a fake save.
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "available": False,
+                    "supported": True,
+                    "saved": False,
+                    "permission_denied": True,
+                    "actions": list(getattr(exc, "actions", []) or []),
+                    "message": str(exc),
+                    "error": str(exc),
+                },
+            )
         except MemoryPolicyUnsupportedError as exc:
             self._json(
                 HTTPStatus.CONFLICT,
@@ -1228,6 +1252,20 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "message": message})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+        except MemoryPolicyWriteUnavailableError as exc:
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "available": False,
+                    "supported": True,
+                    "saved": False,
+                    "permission_denied": True,
+                    "actions": list(getattr(exc, "actions", []) or []),
+                    "message": str(exc),
+                    "error": str(exc),
+                },
+            )
         except MemoryPolicyUnsupportedError as exc:
             self._json(
                 HTTPStatus.CONFLICT,

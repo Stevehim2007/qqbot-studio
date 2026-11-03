@@ -73,6 +73,28 @@ AstrBot 的 `parse_policy` 是**整条降级**：一个字段非法，这条策�
 校验覆盖：`mode`/`scope` 枚举、`extract`/`inject` 布尔、`max_items 1..50`、`max_chars 80..8000`、
 私聊 `scope` 只能是 `user`、条目必须是对象、未知字段（会警告但 AstrBot 忽略）、以及 strip 后重复的群号。
 
+## 2.2 配置文件权限：本机读不到就走容器（不降低安全性）
+
+`cmd_config.json` 由 AstrBot 容器以 root 写入（常见 0600），Studio 用户经常**读或写被拒绝**
+（`[Errno 13] Permission denied`）。这时面板**不会**变成"不支持"，而是自动切换通道：
+
+1. **本机文件优先**：能读能写时行为不变（原子写、0600）。
+2. **容器通道**：本机 `EACCES/EPERM` 时，用 `docker exec` 在 AstrBot 容器内读写
+   `/AstrBot/data/cmd_config.json`（宿主 `./data/astrbot` 的挂载点）：
+   - 读：`docker exec <容器> cat <路径>`，argv 直接传参，**不经过 shell**；
+   - 写：`docker exec <容器> python3 -c <固定脚本> <路径> <base64 JSON>`，脚本先写
+     `*.studio.tmp`、`flush+fsync`、`chmod 0600`，再 `os.replace()` 原子替换；
+   - 容器名校验（`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`），非法容器名（如实例配置被投毒成
+     `--privileged`）直接拒绝，不会执行 docker；
+   - 载荷上限 96 KB（base64 后）。超过则拒绝并提示修权限，绝不截断/半写。
+3. **两条通道都不行**（容器未运行或容器内也拒绝写）：返回 HTTP **503**，`supported` 仍为 `true`、
+   `saved:false`、`permission_denied:true`，并给出 `actions`（启动实例 / `chown+chmod` 修复权限）；
+   面板显示"未保存"，**不会**显示已保存或把面板标成不支持。
+
+GET 新增字段：`read_channel`（`host`/`container`）、`write_channel`、`readable`、`writable`
+（用 `os.access(W_OK)` 实测，不是根据"能读"推断）、`container_running`、`permission_denied`、`actions[]`。
+错误文本一律先脱敏（`redact_sensitive_text`），不会把配置内容或密钥回显到面板/日志。
+
 ## 3. 接口
 
 | 方法 | 路径 | 说明 |
@@ -133,7 +155,8 @@ POST 请求体：
    AstrBot 会忽略 `memory.policy`。面板用 `patch_hint` 标注"无法从配置确认"，不宣称已生效。
 4. 面板不写 `memory.enable` 等其它记忆总开关，保持与 AstrBot WebUI/JSON 的既有值一致。
 5. 删除群策略行 = 该群回到 `default_mode`；长期记忆里已经写入的历史记录不会被删除（清理由 AstrBot 侧 TTL/forget 负责）。
-6. 非法条目只能被**报告**，不能替用户猜意图：面板不会自动把 `scope=group` 改成 `user`、也不会把
+6. 容器通道需要 AstrBot 容器正在运行；容器停止时只能显示修复步骤，不能在面板里"先存着"。
+7. 非法条目只能被**报告**，不能替用户猜意图：面板不会自动把 `scope=group` 改成 `user`、也不会把
    `max_items=999` 裁到 50 —— 必须由用户改正后保存（保存接口本身仍会 400 拒绝这些值）。
 
 ## 7. 契约测试
@@ -142,6 +165,9 @@ POST 请求体：
   保留、群增删、私聊策略、脏配置告警、25 类非法输入、200 行上限、空预算省略、无跨实例污染、
   无记忆库内容泄漏、无令牌=403、旧后端=501；以及 t26 的行级告警：private `scope=group` 不被改写、
   `max_items=999`/`max_chars=10` 越界、未知字段、非法 scope/类型、重复群号、生效模式不冒充
-  long_term、GET 不改写配置、HTTP 响应带全部 warnings。
+  long_term、GET 不改写配置、HTTP 响应带全部 warnings；以及 t30 的权限通道：本机 EACCES 时改走
+  `docker exec cat`、容器内原子写（tmp+os.replace+chmod 0600，argv 无 shell）、容器不可用/容器内
+  拒绝写 → 503 + actions 且 `saved:false`、只读宿主机不可写、超大配置拒绝写入、非法容器名不进 docker、
+  容器错误信息不含密钥（脱敏）。
 - `tests/test_memory_policy_ui_static.py`：面板/字段/标记静态契约、警告文案、不支持态不伪造、
   256 字段保存载荷完整性、"已修改"基线刷新与校验失败时的可见性计划（node）。

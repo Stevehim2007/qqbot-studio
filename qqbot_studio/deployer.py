@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import copy
+import errno
 import glob
 import hashlib
 import json
@@ -92,6 +94,18 @@ MEMORY_POLICY_GROUP_ID_RE = re.compile(r"^(?:[a-z][a-z0-9_.-]{0,31}:)?[0-9]{4,20
 
 class MemoryPolicyUnsupportedError(DeploymentError):
     """The instance cannot persist a memory policy (no AstrBot config yet)."""
+
+
+class MemoryPolicyWriteUnavailableError(DeploymentError):
+    """The config exists but neither the host nor the container channel can write.
+
+    This is *not* an "unsupported instance": the panel stays usable, the write
+    is refused and the caller gets actionable repair steps.
+    """
+
+    def __init__(self, message: str, *, actions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.actions = list(actions or [])
 
 
 @dataclass
@@ -1902,6 +1916,168 @@ class DeployManager:
     # ------------------------------------------------------------------
     # Per-group long-term memory policy (AstrBot ``memory.policy``)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # AstrBot config IO: host file first, container fallback on EPERM
+    # ------------------------------------------------------------------
+    # ``cmd_config.json`` is owned by the AstrBot container (root, 0600), so the
+    # Studio user often cannot read or write it directly.  When the host file
+    # denies access the same JSON is read/written through ``docker exec`` with a
+    # fixed argv (no shell), an atomic temp-file + rename and mode 0600.
+    ASTRBOT_CONFIG_CONTAINER_PATH = "/AstrBot/data/cmd_config.json"
+    _CONTAINER_CONFIG_MAX_PAYLOAD = 96_000  # base64 chars in argv
+
+    _CONTAINER_WRITE_SCRIPT = (
+        "import base64,json,os,sys\n"
+        "path=sys.argv[1]\n"
+        "payload=base64.b64decode(sys.argv[2])\n"
+        "if not path.startswith('/AstrBot/data/') or '..' in path:\n"
+        "    raise SystemExit('bad path')\n"
+        "json.loads(payload)\n"
+        "tmp=path+'.studio.tmp'\n"
+        "fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)\n"
+        "with os.fdopen(fd,'wb') as handle:\n"
+        "    handle.write(payload)\n"
+        "    handle.flush()\n"
+        "    os.fsync(handle.fileno())\n"
+        "os.chmod(tmp,0o600)\n"
+        "os.replace(tmp,path)\n"
+        "os.chmod(path,0o600)\n"
+        "print('ok')\n"
+    )
+
+    def _astrbot_container_available(self) -> tuple[bool, str]:
+        """Return whether the AstrBot container can be used for config IO."""
+
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        if not name:
+            return False, "未配置 AstrBot 容器名。"
+        if not DockerController.valid_container_name(name):
+            # A poisoned instance config must never reach docker exec.
+            return False, "实例配置中的 AstrBot 容器名非法。"
+        running = getattr(self.docker, "is_container_running", None)
+        if not callable(running):
+            # Older/duck-typed docker clients: probe with a harmless exec.
+            probe = getattr(self.docker, "exec_in_container", None)
+            if not callable(probe):
+                return False, "当前 Docker 客户端不支持容器内读写。"
+            result = probe(name, ["true"], timeout=8)
+            return (result.returncode == 0, "" if result.returncode == 0 else "容器不可执行。")
+        try:
+            ok = bool(running(name))
+        except Exception as exc:  # noqa: BLE001 - optional probe, fail closed
+            return False, self.redact_sensitive_text(str(exc)) or "容器状态读取失败。"
+        return ok, "" if ok else "AstrBot 容器未运行。"
+
+    def _read_astrbot_config(self) -> tuple[dict[str, Any] | None, str, str]:
+        """Read ``cmd_config.json`` from the host, falling back to the container.
+
+        Returns ``(data, error, channel)`` where channel is ``"host"``,
+        ``"container"`` or ``""``.  Only a permission error on the host file
+        triggers the container path; parse errors and missing files stay host
+        errors so a broken config is never masked by a different source.
+        """
+
+        path = self.astrbot_cmd_config_path
+        try:
+            path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None, f"实例尚未部署 AstrBot：缺少 {path}", ""
+        except PermissionError as exc:
+            return self._read_astrbot_config_from_container(exc)
+        except OSError as exc:
+            if isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM):
+                return self._read_astrbot_config_from_container(exc)
+            return None, f"无法读取 AstrBot 配置：{self.redact_sensitive_text(str(exc))}", ""
+        data, read_error = self._read_json_object_with_error(path)
+        if read_error:
+            return None, f"无法读取 AstrBot 配置：{read_error}", ""
+        if data is None:
+            return None, f"无法读取 AstrBot 配置：{path}", ""
+        return data, "", "host"
+
+    def _read_astrbot_config_from_container(
+        self, host_error: BaseException | None = None
+    ) -> tuple[dict[str, Any] | None, str, str]:
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        available, unavailable_reason = self._astrbot_container_available()
+        if not available or not callable(runner):
+            detail = self.redact_sensitive_text(str(host_error)) if host_error else ""
+            return (
+                None,
+                f"本机读取 AstrBot 配置文件被拒绝（{detail or 'Permission denied'}），且{unavailable_reason or '容器内读写不可用'}",
+                "",
+            )
+        result = runner(name, ["cat", self.ASTRBOT_CONFIG_CONTAINER_PATH], timeout=20)
+        if result.returncode != 0:
+            detail = self.redact_sensitive_text((result.stderr or result.stdout or "").strip())
+            return (
+                None,
+                f"本机读取被拒绝，容器内读取也失败：{detail[:400] or f'退出码 {result.returncode}'}",
+                "",
+            )
+        try:
+            data = json.loads(result.stdout or "")
+        except ValueError as exc:
+            return None, f"容器内 {self.ASTRBOT_CONFIG_CONTAINER_PATH} 不是合法 JSON：{exc}", ""
+        if not isinstance(data, dict):
+            return None, f"容器内 {self.ASTRBOT_CONFIG_CONTAINER_PATH} 顶层不是 object。", ""
+        return data, "", "container"
+
+    def _write_astrbot_config(self, data: dict[str, Any]) -> tuple[str, str]:
+        """Persist ``cmd_config.json`` host-first, container-atomic on EPERM."""
+
+        path = self.astrbot_cmd_config_path
+        try:
+            self._write_private_json(path, data)
+            return "host", ""
+        except OSError as exc:
+            if not (isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM)):
+                return "", f"无法写入 AstrBot 配置：{self.redact_sensitive_text(str(exc))}"
+            host_error = self.redact_sensitive_text(str(exc))
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        available, unavailable_reason = self._astrbot_container_available()
+        if not available or not callable(runner):
+            return "", (
+                f"本机写入 AstrBot 配置被拒绝（{host_error}），且{unavailable_reason or '容器内读写不可用'}"
+            )
+        try:
+            payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        except (TypeError, ValueError) as exc:
+            return "", f"无法序列化 AstrBot 配置：{self.redact_sensitive_text(str(exc))}"
+        encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+        if len(encoded) > self._CONTAINER_CONFIG_MAX_PAYLOAD:
+            return "", (
+                f"AstrBot 配置过大（{len(payload)} 字节），无法通过容器内命令安全写入；"
+                "请修复本机权限后重试（sudo chown/chmod 该文件）。"
+            )
+        result = runner(
+            name,
+            ["python3", "-c", self._CONTAINER_WRITE_SCRIPT, self.ASTRBOT_CONFIG_CONTAINER_PATH, encoded],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            detail = self.redact_sensitive_text((result.stderr or result.stdout or "").strip())
+            return "", f"本机写入被拒绝，容器内写入也失败：{detail[:400] or f'退出码 {result.returncode}'}"
+        return "container", ""
+
+    def _config_permission_actions(self, *, container_available: bool) -> list[str]:
+        """Actionable, secret-free next steps for a permission problem."""
+
+        path = self.astrbot_cmd_config_path
+        if container_available:
+            return [
+                "已自动改用 AstrBot 容器内读写（docker exec，原子写入 0600），无需手工改权限。",
+                f"如需恢复本机直读写，请以 AstrBot 运行用户身份修复权限：sudo chown root:root {path} "
+                "且让 Studio 用户可读（sudo chmod 640），或继续使用容器通道。",
+            ]
+        return [
+            "先启动该实例的 AstrBot 容器（控制台“启动”或 docker compose up -d astrbot），"
+            "启动后 Studio 会自动改用容器内读写。",
+            f"或者以 root 修复本机权限：sudo chown $(id -u):$(id -g) {path} && sudo chmod 600 {path}。",
+        ]
+
     def _astrbot_memory_config(self) -> tuple[dict[str, Any] | None, str]:
         """Return AstrBot's ``memory`` config section (never the memory database).
 
@@ -1909,14 +2085,9 @@ class DeployManager:
         never opened here: this panel only reads/writes JSON configuration.
         """
 
-        path = self.astrbot_cmd_config_path
-        if not path.exists():
-            return None, f"实例尚未部署 AstrBot：缺少 {path}"
-        data, read_error = self._read_json_object_with_error(path)
-        if read_error:
-            return None, f"无法读取 AstrBot 配置：{read_error}"
+        data, read_error, _channel = self._read_astrbot_config()
         if data is None:
-            return None, f"无法读取 AstrBot 配置：{path}"
+            return None, read_error
         section = data.get("memory")
         return (section if isinstance(section, dict) else {}), ""
 
@@ -2193,6 +2364,13 @@ class DeployManager:
             "warnings": [],
             "invalid_rows": 0,
             "memory_enabled": None,
+            "read_channel": "",
+            "write_channel": "",
+            "readable": False,
+            "writable": False,
+            "container_running": False,
+            "permission_denied": False,
+            "actions": [],
             "patch_hint": "unknown",
             "restart_required": True,
             "hot_reload": False,
@@ -2203,16 +2381,60 @@ class DeployManager:
             "message": "",
             "error": "",
         }
-        memory, read_error = self._astrbot_memory_config()
-        if memory is None:
+        data, read_error, read_channel = self._read_astrbot_config()
+        container_ready, _container_reason = self._astrbot_container_available()
+        if data is None:
+            permission_denied = "拒绝" in read_error or "Permission" in read_error
             payload["error"] = read_error
-            payload["message"] = (
-                f"{read_error}。记忆策略需要写入 AstrBot 的 cmd_config.json，"
-                "因此当前实例显示为不支持；Studio 不会伪造已保存的值。"
-            )
+            payload["read_channel"] = ""
+            payload["write_channel"] = ""
+            payload["readable"] = False
+            payload["writable"] = False
+            payload["container_running"] = container_ready
+            payload["permission_denied"] = permission_denied
+            if permission_denied:
+                # A permission problem is not an unsupported instance: keep
+                # ``supported`` true and hand out repair steps instead.
+                payload["supported"] = True
+                payload["actions"] = self._config_permission_actions(
+                    container_available=container_ready
+                )
+                payload["message"] = (
+                    "本机无法访问 AstrBot 配置文件（权限问题），"
+                    + (
+                        "Studio 已改用容器内读写；请刷新后重试。"
+                        if container_ready
+                        else "且 AstrBot 容器当前不可用；请先启动实例，或按建议修复文件权限。"
+                    )
+                )
+            else:
+                payload["actions"] = self._config_permission_actions(
+                    container_available=container_ready
+                )
+                payload["message"] = (
+                    f"{read_error}。记忆策略需要 AstrBot 的 cmd_config.json，"
+                    "因此当前实例显示为不支持；Studio 不会伪造已保存的值。"
+                )
             return payload
 
+        memory = data.get("memory")
+        memory = memory if isinstance(memory, dict) else {}
         payload.update(available=True, supported=True)
+        payload["read_channel"] = read_channel
+        payload["write_channel"] = "host" if read_channel == "host" else "container"
+        payload["readable"] = True
+        # Host readability does not imply host writability (the container often
+        # owns the file as root 0600), so probe W_OK instead of guessing.
+        try:
+            host_writable = os.access(self.astrbot_cmd_config_path, os.W_OK)
+        except OSError:
+            host_writable = False
+        payload["writable"] = bool(host_writable or container_ready)
+        payload["container_running"] = container_ready
+        payload["permission_denied"] = False
+        payload["actions"] = (
+            [] if payload["writable"] else self._config_permission_actions(container_available=False)
+        )
         enable = memory.get("enable")
         payload["memory_enabled"] = enable if isinstance(enable, bool) else None
         payload["patch_hint"] = "detected" if "memory" in memory else "unknown"
@@ -2333,25 +2555,32 @@ class DeployManager:
         """
 
         section = self.validate_memory_policy(payload)
-        path = self.astrbot_cmd_config_path
-        memory, read_error = self._astrbot_memory_config()
-        if memory is None:
+        data, read_error, _read_channel = self._read_astrbot_config()
+        if data is None:
+            container_ready, _reason = self._astrbot_container_available()
+            if "拒绝" in read_error or "Permission" in read_error:
+                raise MemoryPolicyWriteUnavailableError(
+                    f"{read_error}。无法保存记忆策略；Studio 不会伪造已保存的值。",
+                    actions=self._config_permission_actions(container_available=container_ready),
+                )
             raise MemoryPolicyUnsupportedError(
                 f"{read_error}。无法保存记忆策略；Studio 不会伪造已保存的值。"
             )
-        data, _data_error = self._read_json_object_with_error(path)
-        if data is None:
-            raise MemoryPolicyUnsupportedError(f"无法读取 AstrBot 配置：{path}")
-        memory = dict(memory)
+        memory = data.get("memory")
+        memory = dict(memory) if isinstance(memory, dict) else {}
         previous = memory.get("policy")
         memory["policy"] = section
         updated = dict(data)
         updated["memory"] = memory
-        try:
-            self._write_private_json(path, updated)
-        except OSError as exc:
-            raise MemoryPolicyUnsupportedError(f"无法写入 AstrBot 配置：{exc}") from exc
+        write_channel, write_error = self._write_astrbot_config(updated)
+        if not write_channel:
+            container_ready, _reason = self._astrbot_container_available()
+            raise MemoryPolicyWriteUnavailableError(
+                f"{write_error}。策略未保存；Studio 不会伪造已保存的值。",
+                actions=self._config_permission_actions(container_available=container_ready),
+            )
         result = self.get_memory_policy()
+        result["write_channel"] = write_channel
         result["saved"] = True
         result["changed"] = previous != section
         notes = ["记忆策略已保存到 AstrBot 的 memory.policy。"]

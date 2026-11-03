@@ -25,6 +25,14 @@
 
 ### 记忆策略面板（Studio）
 
+- 修复「cmd_config.json 权限被拒 → 面板显示不支持」：本机 `EACCES/EPERM` 时自动改用 AstrBot 容器内读写
+  （`docker exec`，argv 直传不经 shell；容器内写 `*.studio.tmp` → fsync → `chmod 0600` → `os.replace`
+  原子替换；容器名校验，载荷上限 96 KB）。两条通道都不可用（容器未启动/容器内拒绝）时返回 503 +
+  `actions`（启动实例 / chown+chmod 修权限）、`supported` 仍为 true、`saved:false`，面板显示"未保存"，
+  绝不伪造已保存状态。GET 新增 `read_channel/write_channel/readable/writable/container_running/
+  permission_denied/actions`（`writable` 用 `os.access(W_OK)` 实测）。错误信息统一脱敏，日志/响应不含密钥。
+
+
 - 控制台实例设置新增「记忆策略」面板：默认模式（conversation/long_term）、私聊模式、
   按群增删改行（群号、模式、scope=group/user/group_user、抽取/注入开关、最大条数/字符）。
 - 新增 `GET/POST /api/instances/<id>/memory-policy`（兼容 `/api/memory-policy?instance=`）：

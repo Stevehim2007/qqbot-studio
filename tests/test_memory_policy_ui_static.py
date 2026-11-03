@@ -229,6 +229,53 @@ class MemoryPolicyWarningContractTests(unittest.TestCase):
             self.assertTrue(token in self.console_js, token)
 
 
+class MemoryPolicyPermissionUiContractTests(unittest.TestCase):
+    """t30: a permission error is actionable, never "unsupported" or "saved"."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
+
+    def test_permission_state_is_error_not_unsupported(self) -> None:
+        js = self.console_js
+        self.assertTrue("permissionDenied" in js)
+        self.assertTrue("root.permission_denied === true" in js)
+        self.assertTrue("root.supported === true && root.available === false" in js)
+        self.assertTrue("status: permissionDenied ? 'error' : 'unsupported'" in js)
+        self.assertTrue("policy.permissionDenied" in js)
+
+    def test_actions_and_channel_are_rendered(self) -> None:
+        js = self.console_js
+        for token in (
+            "dataset.memoryPolicy = 'actions'",
+            "memory-policy-actions",
+            "dataset.memoryPolicy = 'channel'",
+            "已通过容器内命令读写（原子写入 0600）",
+            "当前无法写入：保存会明确失败，不会显示“已保存”。",
+        ):
+            self.assertTrue(token in js, token)
+        self.assertTrue("memory-policy-actions" in self.console_css)
+
+    def test_save_failure_keeps_panel_usable_without_fake_save(self) -> None:
+        js = self.console_js
+        for token in (
+            "const steps = payload ? memoryPolicyStringList(payload.actions) : [];",
+            "未保存：请按上方步骤处理后重试。Studio 不会显示伪造的已保存状态。",
+            "payload.supported === true",
+        ):
+            self.assertTrue(token in js, token)
+
+    def test_normaliser_reads_channel_fields(self) -> None:
+        for token in (
+            "readChannel: textValue(root.read_channel, '')",
+            "writeChannel: textValue(root.write_channel, '')",
+            "writable: root.writable !== false",
+            "containerRunning: root.container_running === true",
+        ):
+            self.assertTrue(token in self.console_js, token)
+
+
 class PluginSavePipelineContractTests(unittest.TestCase):
     """T17 P2: payload completeness, badge baseline refresh, reveal plan."""
 

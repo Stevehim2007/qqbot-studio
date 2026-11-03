@@ -1303,3 +1303,10 @@ body.console-modal-open { overflow: hidden; }
   line-height: 1.5;
 }
 .memory-policy-row.is-invalid { border-color: #e08585; background: #fff9f9; }
+.memory-policy-actions {
+  margin: 0;
+  padding-left: 18px;
+  color: #5b6b7a;
+  font-size: 12px;
+  line-height: 1.6;
+}

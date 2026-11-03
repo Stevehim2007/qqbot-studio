@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -11,11 +13,14 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+import qqbot_studio.deployer as deployer_module
+from qqbot_studio.dockerctl import CommandResult, DockerController
 from qqbot_studio.deployer import (
     MEMORY_POLICY_MAX_GROUPS,
     DeploymentError,
     DeployManager,
     MemoryPolicyUnsupportedError,
+    MemoryPolicyWriteUnavailableError,
 )
 from qqbot_studio.server import create_server
 from qqbot_studio.store import Store
@@ -761,6 +766,347 @@ class MemoryPolicyUnsupportedBackendTests(unittest.TestCase):
         self.assertFalse(body["available"])
         self.assertFalse(body["supported"])
         self.assertIn("未提供记忆策略接口", body["error"])
+
+class _FakeDocker:
+    """Docker client double: only the container IO surface used by Studio."""
+
+    ASTRBOT_CONTAINER = "qqbot-astrbot"
+
+    def __init__(
+        self,
+        *,
+        running: bool = True,
+        files: dict[str, str] | None = None,
+        write_error: str = "",
+    ) -> None:
+        self.running = running
+        self.files = dict(files or {})
+        self.write_error = write_error
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def is_container_running(self, name: str) -> bool:
+        return self.running and name == self.ASTRBOT_CONTAINER
+
+    def exec_in_container(self, container: str, argv, *, timeout: int = 60) -> CommandResult:
+        command = tuple(str(item) for item in argv)
+        self.calls.append((container, command))
+        if command[:1] == ("cat",):
+            path = command[1]
+            if path in self.files:
+                return CommandResult(command, 0, self.files[path], "")
+            return CommandResult(command, 1, "", f"cat: {path}: No such file or directory")
+        if command[:1] == ("python3",):
+            if self.write_error:
+                return CommandResult(command, 13, "", self.write_error)
+            payload = base64.b64decode(command[4]).decode("utf-8")
+            json.loads(payload)
+            self.files[command[3]] = payload
+            return CommandResult(command, 0, "ok\n", "")
+        return CommandResult(command, 0, "", "")
+
+
+class MemoryConfigPermissionTests(unittest.TestCase):
+    """t30: cmd_config.json owned by the container must stay editable."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(self.tmp.name)
+        self.tmp_dirs: list[tempfile.TemporaryDirectory] = [self.tmp]
+
+    def tearDown(self) -> None:
+        for item in self.tmp_dirs:
+            item.cleanup()
+
+    # -- helpers -------------------------------------------------------
+    def _manager(self, docker) -> DeployManager:
+        return DeployManager(store=self.store, docker=docker)
+
+    def _write_host_config(self, payload: dict):
+        return _write_config(self.store, payload)
+
+    def _deny(self, path: Path, *, read: bool = True, write: bool = True):
+        """Make host access raise EACCES for ``path`` only."""
+
+        real_read = Path.read_text
+
+        def fake_read(inner, *args, **kwargs):
+            if Path(inner) == path:
+                raise PermissionError(13, "Permission denied", str(inner))
+            return real_read(inner, *args, **kwargs)
+
+        class _Patches:
+            def __enter__(self):
+                self._patches = []
+                if read:
+                    self._patches.append(mock.patch.object(Path, "read_text", fake_read))
+                if write:
+                    real_write = DeployManager._write_private_json
+
+                    def fake_write(inner_path, value):
+                        if Path(inner_path) == path:
+                            raise PermissionError(13, "Permission denied", str(inner_path))
+                        return real_write(inner_path, value)
+
+                    self._patches.append(
+                        mock.patch.object(
+                            DeployManager, "_write_private_json", staticmethod(fake_write)
+                        )
+                    )
+                for item in self._patches:
+                    item.start()
+                return self
+
+            def __exit__(self, *exc_info):
+                for item in reversed(self._patches):
+                    item.stop()
+                return False
+
+        return _Patches()
+
+    def _container_path(self) -> str:
+        return DeployManager.ASTRBOT_CONFIG_CONTAINER_PATH
+
+    # -- read fallback -------------------------------------------------
+    def test_permission_denied_read_uses_container(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}, "platform_settings": {}})
+        docker = _FakeDocker(files={
+            self._container_path(): json.dumps(
+                {"memory": {"enable": True, "policy": {"groups": {"111111": {"mode": "long_term"}}}},
+                 "platform_settings": {"unique_session": False}},
+                ensure_ascii=False,
+            )
+        })
+        manager = self._manager(docker)
+        with self._deny(path):
+            state = manager.get_memory_policy()
+        self.assertTrue(state["available"])
+        self.assertTrue(state["supported"])
+        self.assertFalse(state["permission_denied"])
+        self.assertEqual(state["read_channel"], "container")
+        self.assertEqual(state["write_channel"], "container")
+        self.assertTrue(state["writable"])
+        self.assertEqual(state["groups"][0]["group_id"], "111111")
+        self.assertEqual(state["groups"][0]["effective_mode"], "long_term")
+        self.assertEqual(docker.calls[0][1][:2], ("cat", self._container_path()))
+
+    def test_container_unavailable_gives_actionable_status(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}})
+        docker = _FakeDocker(running=False)
+        manager = self._manager(docker)
+        with self._deny(path):
+            state = manager.get_memory_policy()
+        # Not "unsupported": the panel must stay usable and explain the fix.
+        self.assertTrue(state["supported"])
+        self.assertFalse(state["available"])
+        self.assertTrue(state["permission_denied"])
+        self.assertFalse(state["writable"])
+        self.assertFalse(state["container_running"])
+        joined = " ".join(state["actions"])
+        self.assertIn("启动", joined)
+        self.assertIn("chmod", joined)
+        self.assertNotIn("不支持", state["message"])
+        self.assertEqual(state["groups"], [])
+
+    def test_read_only_host_without_container_reports_not_writable(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}})
+        manager = self._manager(_FakeDocker(running=False))
+        # Simulate a container-owned 0600 file: readable here, not writable.
+        real_access = os.access
+
+        def fake_access(target, mode, **kwargs):
+            if Path(target) == path and mode == os.W_OK:
+                return False
+            return real_access(target, mode, **kwargs)
+
+        with mock.patch.object(deployer_module.os, "access", fake_access), self._deny(
+            path, read=False
+        ):
+            state = manager.get_memory_policy()
+            self.assertTrue(state["available"])
+            self.assertTrue(state["readable"])
+            self.assertFalse(state["writable"])
+            self.assertEqual(state["read_channel"], "host")
+            self.assertTrue(state["actions"])
+            with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
+                manager.set_memory_policy(_long_term_payload())
+        self.assertIn("不会伪造已保存的值", str(caught.exception))
+        self.assertTrue(caught.exception.actions)
+
+    # -- write fallback ------------------------------------------------
+    def test_permission_denied_write_goes_through_container_atomically(self) -> None:
+        path = self._write_host_config(
+            {"memory": {"enable": True, "max_items": 6}, "platform_settings": {"unique_session": False}}
+        )
+        docker = _FakeDocker(files={
+            self._container_path(): json.dumps(
+                {"memory": {"enable": True, "max_items": 6},
+                 "platform_settings": {"unique_session": False}}
+            )
+        })
+        manager = self._manager(docker)
+        with self._deny(path):
+            saved = manager.set_memory_policy(_long_term_payload())
+        self.assertTrue(saved["saved"])
+        self.assertEqual(saved["write_channel"], "container")
+        self.assertEqual(saved["groups"][0]["group_id"], "838796241")
+        # The container write is an argv (no shell) with an atomic script.
+        write_call = [call for call in docker.calls if call[1][:1] == ("python3",)][0]
+        argv = write_call[1]
+        self.assertEqual(argv[0], "python3")
+        self.assertEqual(argv[1], "-c")
+        self.assertIn("os.replace(tmp,path)", argv[2])
+        self.assertIn("os.chmod(tmp,0o600)", argv[2])
+        self.assertEqual(argv[3], self._container_path())
+        self.assertNotIn("sh", argv)
+        self.assertNotIn("-c shell", argv)
+        written = json.loads(docker.files[self._container_path()])
+        self.assertEqual(written["memory"]["policy"]["groups"]["838796241"]["mode"], "long_term")
+        # Unrelated settings are preserved on the container side too.
+        self.assertEqual(written["platform_settings"], {"unique_session": False})
+        self.assertEqual(written["memory"]["enable"], True)
+        self.assertEqual(written["memory"]["max_items"], 6)
+
+    def test_container_write_failure_never_fakes_saved_state(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}})
+        docker = _FakeDocker(
+            files={self._container_path(): json.dumps({"memory": {"enable": True}})},
+            write_error="Permission denied",
+        )
+        manager = self._manager(docker)
+        with self._deny(path):
+            with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
+                manager.set_memory_policy(_long_term_payload())
+        message = str(caught.exception)
+        self.assertIn("策略未保存", message)
+        self.assertIn("不会伪造已保存的值", message)
+        self.assertNotIn("saved", message.lower())
+
+    def test_oversized_config_is_refused_without_partial_write(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}})
+        docker = _FakeDocker(files={self._container_path(): json.dumps({"memory": {"enable": True}})})
+        manager = self._manager(docker)
+        with self._deny(path):
+            original = manager._CONTAINER_CONFIG_MAX_PAYLOAD
+            manager._CONTAINER_CONFIG_MAX_PAYLOAD = 10
+            try:
+                with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
+                    manager.set_memory_policy(_long_term_payload())
+            finally:
+                manager._CONTAINER_CONFIG_MAX_PAYLOAD = original
+        self.assertIn("过大", str(caught.exception))
+        self.assertNotIn(self._container_path(), [call[1][1] for call in docker.calls if call[1][:1] == ("python3",)] and [])
+        self.assertEqual(docker.files[self._container_path()], json.dumps({"memory": {"enable": True}}))
+
+    # -- safety ---------------------------------------------------------
+    def test_no_secret_is_echoed_from_container_errors(self) -> None:
+        path = self._write_host_config({"memory": {"enable": True}})
+        docker = _FakeDocker(
+            files={self._container_path(): json.dumps({"memory": {"enable": True}})},
+            write_error="failed for sk-very-secret-token",
+        )
+        manager = self._manager(docker)
+        with self._deny(path):
+            state = manager.get_memory_policy()
+            self.assertNotIn("sk-very-secret-token", json.dumps(state, ensure_ascii=False))
+            with self.assertRaises(MemoryPolicyWriteUnavailableError) as caught:
+                manager.set_memory_policy(_long_term_payload())
+        self.assertNotIn("sk-very-secret-token", str(caught.exception))
+
+    def test_poisoned_container_name_is_refused(self) -> None:
+        class _RecordingDocker(DockerController):
+            pass
+
+        calls: list[list[str]] = []
+
+        def runner(command, cwd, timeout, extra_env):
+            calls.append(list(command))
+            raise AssertionError("runner must not be called for an invalid container name")
+
+        docker = DockerController(self.store.data_dir, runner=runner)
+        result = docker.exec_in_container("qqbot-astrbot; rm -rf /", ["cat", "/AstrBot/data/cmd_config.json"])
+        self.assertEqual(result.returncode, 125)
+        self.assertIn("非法容器名", result.stderr)
+        self.assertEqual(calls, [])
+        # And a poisoned instance config cannot reach docker at all.
+        poisoned = _FakeDocker(files={})
+        poisoned.ASTRBOT_CONTAINER = "--privileged"
+        manager = self._manager(poisoned)
+        self.assertFalse(manager._astrbot_container_available()[0])
+
+    def test_container_argv_avoids_shell_interpretation(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command, cwd, timeout, extra_env):
+            calls.append(list(command))
+            return CommandResult(tuple(command), 0, "{}", "")
+
+        docker = DockerController(self.store.data_dir, runner=runner)
+        docker.exec_in_container("qqbot-astrbot", ["cat", "/AstrBot/data/cmd_config.json"])
+        self.assertEqual(calls[0][:4], ["docker", "exec", "qqbot-astrbot", "cat"])
+        self.assertIsInstance(calls[0], list)
+        self.assertNotIn("-c", calls[0])
+
+    # -- HTTP surface ---------------------------------------------------
+    def test_http_permission_denied_is_503_not_unsupported(self) -> None:
+        studio = StudioManager(root=self.tmp.name)
+        meta = studio.create_instance("perm-bot")
+        instance_id = str(meta["id"])
+        config = (
+            Path(self.tmp.name) / "instances" / instance_id / "data" / "astrbot" / "cmd_config.json"
+        )
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({"memory": {"enable": True}}), encoding="utf-8")
+
+        class _NoDockerStudio(StudioManager):
+            pass
+
+        manager = studio.get_manager(instance_id)
+        manager.docker = _FakeDocker(running=False)
+        real_read = Path.read_text
+
+        def fake_read(inner, *args, **kwargs):
+            if Path(inner) == config:
+                raise PermissionError(13, "Permission denied", str(inner))
+            return real_read(inner, *args, **kwargs)
+
+        server = create_server(studio, host="127.0.0.1", port=0, token="perm-token")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address[:2]
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            base = f"http://{host}:{port}"
+            with mock.patch.object(Path, "read_text", fake_read):
+                request = urllib.request.Request(
+                    f"{base}/api/instances/{instance_id}/memory-policy"
+                )
+                request.add_header("X-QB-Token", "perm-token")
+                with opener.open(request, timeout=5) as response:
+                    state = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(state["supported"])
+                self.assertFalse(state["available"])
+                self.assertTrue(state["actions"])
+                self.assertNotIn("不支持", state["message"])
+
+                body = json.dumps(_long_term_payload()).encode("utf-8")
+                post = urllib.request.Request(
+                    f"{base}/api/instances/{instance_id}/memory-policy",
+                    data=body,
+                    method="POST",
+                )
+                post.add_header("Content-Type", "application/json")
+                post.add_header("X-QB-Token", "perm-token")
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    opener.open(post, timeout=5)
+                self.assertEqual(caught.exception.code, 503)
+                payload = json.loads(caught.exception.read().decode("utf-8"))
+                self.assertFalse(payload["saved"])
+                self.assertTrue(payload["supported"])
+                self.assertTrue(payload["actions"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
 
 
 if __name__ == "__main__":
