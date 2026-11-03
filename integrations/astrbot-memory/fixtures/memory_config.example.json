@@ -1,0 +1,21 @@
+{
+  "memory": {
+    "enable": true,
+    "db_path": "",
+    "max_chars": 800,
+    "max_items": 6,
+    "min_confidence": 0.35,
+    "ttl_days": 0,
+    "write_private_scope": "user",
+    "write_group_scope": "group",
+    "read_user": true,
+    "read_group": true,
+    "read_conversation": true,
+    "read_persona": true,
+    "read_global": true,
+    "heuristic_extract": true,
+    "llm_extract": false,
+    "queue_size": 64,
+    "max_records_per_scope": 500
+  }
+}
