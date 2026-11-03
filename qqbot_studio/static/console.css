@@ -1310,3 +1310,46 @@ body.console-modal-open { overflow: hidden; }
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* Compact group-policy rows: collapsed summary + edit/delete on the right */
+.memory-policy-row-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.memory-policy-row-summary-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.memory-policy-row-title {
+  color: #1f2d3a;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.memory-policy-row-meta {
+  color: #6b7c8c;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.memory-policy-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+.memory-policy-row-fields {
+  display: grid;
+  gap: 9px;
+  padding-top: 9px;
+  border-top: 1px dashed #e1eaf2;
+}
+.memory-policy-row-fields[hidden] { display: none; }
+.memory-policy-edit { white-space: nowrap; }
+.memory-policy-delete { color: #b42318; white-space: nowrap; }
+@media (max-width: 560px) {
+  .memory-policy-row-summary { align-items: flex-start; }
+  .memory-policy-row-actions { flex-direction: column; align-items: stretch; }
+}

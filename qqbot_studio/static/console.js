@@ -3646,6 +3646,11 @@
     return match ? match.label : (mode === 'long_term' ? '长期记忆' : '会话记忆');
   }
 
+  function memoryPolicyOptionLabel(options, value, fallback) {
+    const match = (options || []).find((option) => option.value === value);
+    return match ? match.label : (fallback || value || '');
+  }
+
   function memoryPolicyEffectiveText(policy, mode) {
     if (!mode) return '未知（配置非法或重复，无法确定哪个生效）';
     if (mode === 'conversation') return 'conversation（只用会话历史）';
@@ -3861,6 +3866,32 @@
     function makeGroupRow(row) {
       const rowElement = makeElement('div', 'memory-policy-row');
       rowElement.dataset.memoryPolicyRow = '';
+
+      const summary = makeElement('div', 'memory-policy-row-summary');
+      const summaryCopy = makeElement('div', 'memory-policy-row-summary-copy');
+      const summaryTitle = makeElement('strong', 'memory-policy-row-title', '新群策略');
+      const summaryMeta = makeElement('span', 'memory-policy-row-meta', '');
+      summaryCopy.appendChild(summaryTitle);
+      summaryCopy.appendChild(summaryMeta);
+      const summaryActions = makeElement('div', 'memory-policy-row-actions');
+
+      const editButton = makeElement('button', 'btn btn-ghost memory-policy-edit', '编辑');
+      editButton.type = 'button';
+      editButton.dataset.memoryPolicyEdit = '';
+      editButton.disabled = disabled;
+      const removeButton = makeElement('button', 'btn btn-ghost memory-policy-delete', '删除');
+      removeButton.type = 'button';
+      removeButton.dataset.memoryPolicyDelete = '';
+      removeButton.disabled = disabled;
+      summaryActions.appendChild(editButton);
+      summaryActions.appendChild(removeButton);
+      summary.appendChild(summaryCopy);
+      summary.appendChild(summaryActions);
+      rowElement.appendChild(summary);
+
+      const fields = makeElement('div', 'memory-policy-row-fields');
+      fields.hidden = true;
+
       const idField = makeElement('label', 'memory-policy-field');
       idField.appendChild(makeElement('span', 'memory-policy-label', '群号'));
       const idInput = document.createElement('input');
@@ -3870,44 +3901,72 @@
       idInput.value = row.groupId || '';
       idInput.disabled = disabled;
       idField.appendChild(idInput);
-      rowElement.appendChild(idField);
+      fields.appendChild(idField);
 
       const modeField = makeElement('label', 'memory-policy-field');
       modeField.appendChild(makeElement('span', 'memory-policy-label', '模式'));
-      modeField.appendChild(makeSelect('mode', policy.modeOptions, row.mode || 'long_term'));
-      rowElement.appendChild(modeField);
+      const modeSelect = makeSelect('mode', policy.modeOptions, row.mode || 'long_term');
+      modeField.appendChild(modeSelect);
+      fields.appendChild(modeField);
 
       const scopeField = makeElement('label', 'memory-policy-field');
       scopeField.appendChild(makeElement('span', 'memory-policy-label', 'scope'));
-      scopeField.appendChild(makeSelect('scope', policy.scopeOptions, row.scope || 'group'));
-      rowElement.appendChild(scopeField);
+      const scopeSelect = makeSelect('scope', policy.scopeOptions, row.scope || 'group');
+      scopeField.appendChild(scopeSelect);
+      fields.appendChild(scopeField);
 
       const toggles = makeElement('div', 'memory-policy-toggles');
-      toggles.appendChild(makeCheckbox('extract', row.extract !== false, '抽取'));
-      toggles.appendChild(makeCheckbox('inject', row.inject !== false, '注入'));
+      const extractCheck = makeCheckbox('extract', row.extract !== false, '抽取');
+      const injectCheck = makeCheckbox('inject', row.inject !== false, '注入');
+      toggles.appendChild(extractCheck);
+      toggles.appendChild(injectCheck);
       toggles.appendChild(makeBudget('max-items', row.maxItems, policy.limits.maxItems, '最大条数'));
       toggles.appendChild(makeBudget('max-chars', row.maxChars, policy.limits.maxChars, '最大字符'));
-      rowElement.appendChild(toggles);
+      fields.appendChild(toggles);
 
-      const removeButton = makeElement('button', 'btn btn-ghost memory-policy-delete', '删除');
-      removeButton.type = 'button';
-      removeButton.dataset.memoryPolicyDelete = '';
-      removeButton.disabled = disabled;
+      function updateSummary() {
+        const groupId = String(idInput.value || '').trim();
+        const budget = [];
+        const maxItems = rowElement.querySelector('[data-field="max-items"]');
+        const maxChars = rowElement.querySelector('[data-field="max-chars"]');
+        if (maxItems && String(maxItems.value || '').trim()) budget.push(`条数 ${maxItems.value}`);
+        if (maxChars && String(maxChars.value || '').trim()) budget.push(`字符 ${maxChars.value}`);
+        summaryTitle.textContent = groupId || '未填写群号';
+        summaryMeta.textContent = [
+          memoryPolicyModeLabel(policy, modeSelect.value),
+          memoryPolicyOptionLabel(policy.scopeOptions, scopeSelect.value, scopeSelect.value),
+          extractCheck.checked ? '抽取' : '不抽取',
+          injectCheck.checked ? '注入' : '不注入',
+          ...budget,
+        ].join(' · ') + (row.invalid ? ' · 配置非法，实际降级 conversation' : '');
+      }
+
+      function setEditing(editing) {
+        fields.hidden = !editing;
+        rowElement.classList.toggle('is-editing', editing);
+        editButton.textContent = editing ? '完成' : '编辑';
+        if (editing && typeof idInput.focus === 'function') idInput.focus();
+      }
+
+      rowElement.addEventListener('input', updateSummary);
+      rowElement.addEventListener('change', updateSummary);
+      editButton.addEventListener('click', () => setEditing(fields.hidden));
       removeButton.addEventListener('click', () => {
         rowElement.remove();
         syncEmpty();
       });
-      rowElement.appendChild(removeButton);
+      updateSummary();
+
       if (row.invalid) {
         rowElement.classList.add('is-invalid');
-        rowElement.appendChild(makeElement(
+        fields.appendChild(makeElement(
           'p',
           'memory-policy-row-invalid',
           '该行配置非法：AstrBot 会把整条降级为 conversation，不会按 long_term 生效；请按下面的原因修正后保存。'
         ));
       }
       if ((row.unknownFields || []).length) {
-        rowElement.appendChild(makeElement(
+        fields.appendChild(makeElement(
           'p',
           'memory-policy-row-unknown',
           `未知字段 ${row.unknownFields.join(', ')} 会被 AstrBot 忽略（可能是拼写错误）。`
@@ -3917,7 +3976,7 @@
         const rowErrors = makeElement('ul', 'memory-policy-row-errors');
         rowErrors.dataset.memoryPolicy = 'row-errors';
         for (const item of row.errors) rowErrors.appendChild(makeElement('li', '', item));
-        rowElement.appendChild(rowErrors);
+        fields.appendChild(rowErrors);
       }
       const effective = makeElement(
         'p',
@@ -3925,7 +3984,10 @@
         `实际生效：${memoryPolicyEffectiveText(policy, row.effectiveMode)}`
       );
       effective.dataset.memoryPolicy = 'row-effective';
-      rowElement.appendChild(effective);
+      fields.appendChild(effective);
+      rowElement.appendChild(fields);
+      rowElement._setMemoryPolicyEditing = setEditing;
+      rowElement._updateMemoryPolicySummary = updateSummary;
       return rowElement;
     }
 
@@ -3935,13 +3997,12 @@
     section.appendChild(groupsContainer);
 
     addButton.addEventListener('click', () => {
-      groupsContainer.insertBefore(
-        makeGroupRow({ groupId: '', mode: 'long_term', scope: 'group', extract: true, inject: true, maxItems: '', maxChars: '' }),
-        emptyText
-      );
+      const rowElement = makeGroupRow({ groupId: '', mode: 'long_term', scope: 'group', extract: true, inject: true, maxItems: '', maxChars: '' });
+      groupsContainer.insertBefore(rowElement, emptyText);
       syncEmpty();
-      const firstInput = groupsContainer.querySelector('[data-memory-policy-row] [data-field="group-id"]');
-      if (firstInput && typeof firstInput.focus === 'function') firstInput.focus();
+      if (typeof rowElement._setMemoryPolicyEditing === 'function') {
+        rowElement._setMemoryPolicyEditing(true);
+      }
     });
 
     function rowValue(rowElement, field) {

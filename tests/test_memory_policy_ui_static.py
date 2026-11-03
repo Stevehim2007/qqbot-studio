@@ -55,6 +55,7 @@ FIELD_TOKENS = (
 MARKER_TOKENS = (
     "dataset.memoryPolicyRow",
     "dataset.memoryPolicyDelete",
+    "dataset.memoryPolicyEdit",
     "dataset.memoryPolicy = 'add'",
     "dataset.memoryPolicy = 'save'",
     "dataset.memoryPolicy = 'warning'",
@@ -98,6 +99,18 @@ class MemoryPolicyStaticContractTests(unittest.TestCase):
             "max_chars: budgetValue(rowValue(rowElement, 'max-chars'))",
         ):
             self.assertTrue(token in self.console_js, token)
+
+    def test_rows_collapse_to_summary_with_edit_and_delete_actions(self) -> None:
+        for token in (
+            "memory-policy-row-summary",
+            "memory-policy-row-actions",
+            "memory-policy-row-fields",
+            "editButton.dataset.memoryPolicyEdit = ''",
+            "removeButton.dataset.memoryPolicyDelete = ''",
+            "setEditing(fields.hidden)",
+            "fields.hidden = true",
+        ):
+            self.assertTrue(token in self.console_js or token in self.console_css, token)
 
     def test_add_and_delete_rows_are_supported(self) -> None:
         for token in (
