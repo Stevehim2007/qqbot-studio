@@ -536,5 +536,47 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
 
 
+    def test_console_plugin_parameter_group_navigation_contract(self) -> None:
+        for element_id in (
+            "plugin-config-groups", "plugin-config-modified-only",
+            "plugin-config-fields", "plugin-config-empty",
+            "plugin-config-filter-count", "plugin-config-loading",
+        ):
+            self.assertIn(element_id, self.console_parser.ids)
+        for token in (
+            "renderPluginConfigGroupNav", "selectPluginConfigGroup",
+            "pluginConfigService.groupPluginFields",
+            "pluginConfigService.pluginFieldSearchText",
+            "pluginConfigService.pluginFieldValueChanged",
+            "plugin-config-group-btn", "aria-current", "aria-expanded",
+            "plugin-field-breadcrumb", "plugin-config-group-section",
+            "只看已修改", "高级/其他", "全部参数",
+            "pluginSectionExpanded", "savePluginConfigScroll",
+            "没有匹配的参数。", "没有已修改的参数。",
+            "dataset.groupId", "plugin-config-group-section-count",
+        ):
+            self.assertIn(token, self.console_js)
+        for style in (
+            ".plugin-config-layout", ".plugin-config-groups",
+            ".plugin-config-group-btn",
+            '.plugin-config-group-btn[aria-current="true"]',
+            ".plugin-config-group-section", ".plugin-field-breadcrumb",
+            ".plugin-field-modified", ".plugin-config-field.is-modified",
+            ".plugin-config-modified-toggle",
+        ):
+            self.assertIn(style, self.console_css)
+        for title in (
+            "常用回复", "识图/搜索", "表情包", "本地点歌", "会话/人格",
+            "记忆", "Food", "网页访问", "安全工具", "高级/其他",
+        ):
+            self.assertIn(title, self.plugin_config_service_js)
+        self.assertNotIn("document.createElement('details')", self.console_js)
+        for forbidden in ("localStorage", "sessionStorage", "innerHTML"):
+            self.assertNotIn(forbidden, self.console_js)
+        # Save contract stays unchanged: every rendered entry is collected.
+        self.assertIn("for (const entry of config.entries)", self.console_js)
+        self.assertIn("values[entry.key] = result.value;", self.console_js)
+
+
 if __name__ == "__main__":
     unittest.main()

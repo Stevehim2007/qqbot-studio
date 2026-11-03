@@ -310,7 +310,11 @@ Native 版本不能依赖 `/proc`、`sudo`、`/etc/localtime`、Compose 服务�
    - schema 类型/options/labels/slider/default/description/hint 归一化；
    - 敏感 Key/token/password/secret/credential 字段过滤；
    - values 按 schema 白名单过滤；
-   - `load(instanceId, pluginId)` / `save(instanceId, pluginId, values)` 统一 GET/POST 路径。
+   - `load(instanceId, pluginId)` / `save(instanceId, pluginId, values)` 统一 GET/POST 路径；
+   - 纯函数分组/搜索/已修改判定：`PLUGIN_UI_GROUPS`（常用回复/识图搜索/表情包/本地点歌/
+     会话人格/记忆/Food/网页访问/安全工具/高级其他）、`groupPluginFields()` 按 schema 前缀
+     推断或用 `ui_groups`/`group` 元数据覆盖、`pluginFilterSchemaFields()`（key/label/
+     description/hint/group）、`pluginFieldValueChanged()`；不丢弃任何字段。
 3. [`static/components/instance-settings.js`](../qqbot_studio/static/components/instance-settings.js)
    - 实例设置 modal open/close/refresh、内容回调 `renderSections`；
    - `onVisibilityChange` 协调 body 滚动锁；
@@ -344,8 +348,8 @@ Native 版本不能依赖 `/proc`、`sudo`、`/etc/localtime`、Compose 服务�
 
 #### 4E Phase 4 剩余债务
 
-- 插件参数编辑器 DOM 渲染/搜索结果/表单控件生成仍在 `console.js`，可继续拆为
-  `plugin-config-editor` 组件。
+- 插件参数编辑器 DOM 渲染/表单控件生成仍在 `console.js`（分组导航/搜索/已修改过滤的
+  纯逻辑已下沉到 `plugin-config.js`），可继续拆为 `plugin-config-editor` 组件。
 - 实例卡片、资源统计、记忆切换、更新/删除仍是 `console.js` 内部渲染函数。
 - `app.js` 和 `assistant.html` 已复用共享 API/数据 helper，但 DOM 渲染、页面状态和组件边界
   仍未拆分；独立助手页不再是完全内联的自包含脚本，依赖同源 `services/api.js`。

@@ -224,13 +224,22 @@
       </header>
       <div class="plugin-config-toolbar">
         <label for="plugin-config-search">搜索参数</label>
-        <input id="plugin-config-search" type="search" autocomplete="off" placeholder="按名称或说明过滤字段">
+        <input id="plugin-config-search" type="search" autocomplete="off" placeholder="按名称、说明、提示或分组过滤字段">
+        <label class="plugin-config-modified-toggle" for="plugin-config-modified-only">
+          <input id="plugin-config-modified-only" type="checkbox">
+          <span>只看已修改</span>
+        </label>
         <span id="plugin-config-filter-count" class="plugin-config-filter-count" role="status"></span>
       </div>
       <div id="plugin-config-body" class="plugin-config-body">
         <p id="plugin-config-loading" class="plugin-config-loading" role="status">正在读取参数…</p>
-        <div id="plugin-config-fields" class="plugin-config-fields"></div>
-        <p id="plugin-config-empty" class="plugin-config-empty" hidden>没有可编辑的参数。</p>
+        <div class="plugin-config-layout">
+          <nav id="plugin-config-groups" class="plugin-config-groups" aria-label="参数分组"></nav>
+          <div class="plugin-config-fields-pane">
+            <div id="plugin-config-fields" class="plugin-config-fields"></div>
+            <p id="plugin-config-empty" class="plugin-config-empty" hidden>没有可编辑的参数。</p>
+          </div>
+        </div>
         <p id="plugin-config-error" class="plugin-config-error" role="alert" hidden></p>
         <p id="plugin-config-status" class="plugin-config-status" role="status" hidden></p>
       </div>
