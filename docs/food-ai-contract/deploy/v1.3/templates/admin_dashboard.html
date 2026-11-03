@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="admin-layout">
+    <div class="admin-header">
+        <h2>管理员后台</h2>
+        <div>
+            <a href="/admin/backup" class="btn-sm">备份管理</a>
+            <a href="/admin/corrections" class="btn-sm">纠错审批</a>
+            <a href="/admin/feedback" class="btn-sm">反馈收集</a>
+            <a href="/admin/logout" class="btn-sm">退出登录</a>
+        </div>
+    </div>
+    <div class="admin-body" id="adminBody">
+        <div class="admin-left" id="adminLeft">
+            <h3>位置管理</h3>
+            <div class="admin-location-tree" id="adminLocationTree"></div>
+            <div class="new-location-row" id="adminNewLocRow">
+                <input type="text" id="newLocName" placeholder="新位置名称（多层用 / 或 - 分隔，如：长春大学-xx校区-xx楼）">
+                <div class="tree-select-wrapper">
+                    <div class="tree-trigger" id="adminNewLocParentTrigger">
+                        <span class="tree-trigger-text">点击选择父级位置</span>
+                        <span class="tree-trigger-arrow">▼</span>
+                    </div>
+                    <div class="tree-dropdown" id="adminTreeDropdown"></div>
+                </div>
+                <input type="hidden" id="newLocParent" value="">
+                <button class="btn-sm btn-primary" id="addLocBtn">添加</button>
+            </div>
+        </div>
+        <div class="admin-resize-handle" id="adminResizeHandle"></div>
+        <div class="admin-right" id="adminRight">
+            <h3>饭店管理</h3>
+            <input type="text" id="adminSearch" placeholder="搜索饭店..." class="admin-search">
+            <div id="adminRestaurantList"></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="modalOverlay" style="display:none">
+    <div class="modal-box" id="modalContent"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="{{ url_for('static', filename='js/markdown.js') }}"></script>
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

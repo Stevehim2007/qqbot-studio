@@ -1,0 +1,632 @@
+diff -ruN base/app.py new/app.py
+--- a/app.py	2026-11-03 19:35:01.692004410 +0800
++++ b/app.py	2026-11-03 19:35:01.698869891 +0800
+@@ -237,6 +237,63 @@
+     return '/'.join(reversed(parts))
+ 
+ 
++LOCATION_PATH_CTE = """
++    WITH RECURSIVE loc_path(id, name, parent_id, path, depth) AS (
++        SELECT id, name, parent_id, name, 0 FROM locations WHERE parent_id IS NULL
++        UNION ALL
++        SELECT l.id, l.name, l.parent_id, p.path || '/' || l.name, p.depth + 1
++        FROM locations l JOIN loc_path p ON l.parent_id = p.id
++        WHERE p.depth < 64
++    )
++"""
++
++# 位置搜索的分隔符：/ \ - — – > → ／ ＼ 以及空白
++LOCATION_QUERY_SEP_PATTERN = re.compile(r'[/\\\-—–>→／＼\s]+')
++
++
++def _like_escape(term):
++    return term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
++
++
++def search_location_paths(q, limit=20):
++    """按全路径搜索位置（递归 CTE 现算 full_path，无 schema 迁移、无物化列）。
++
++    命中任一形式即可：
++      - 连续全路径：长春市朝阳区 / 中国吉林省长春市朝阳区（去 / 后包含匹配）
++      - 单级名称：朝阳区
++      - 多段分量：吉林省/长春市、长春市 朝阳区（每段都需在路径中）
++    返回按「完全相等优先 → 路径短优先」排序的行（id/name/path）。
++    """
++    terms = [t for t in LOCATION_QUERY_SEP_PATTERN.split(q or '') if t]
++    if not terms:
++        return []
++    clauses = []
++    params = {}
++    for i, term in enumerate(terms[:6]):
++        key = 't%d' % i
++        params[key] = '%' + _like_escape(term) + '%'
++        clauses.append(
++            "(path LIKE :{k} ESCAPE '\\' OR REPLACE(path, '/', '') LIKE :{k} ESCAPE '\\')".format(k=key)
++        )
++    params['exact'] = ''.join(terms)
++    params['limit'] = limit
++    sql = (
++        LOCATION_PATH_CTE
++        + ' SELECT id, name, path FROM loc_path WHERE ' + ' AND '.join(clauses)
++        + " ORDER BY (REPLACE(path, '/', '') = :exact) DESC, LENGTH(path), id LIMIT :limit"
++    )
++    return db.session.execute(text(sql), params).fetchall()
++
++
++def matching_location_ids(q):
++    """位置全路径命中的位置及其所有后代 ID（按位置搜饭店用）。"""
++    matched = [row.id for row in search_location_paths(q, limit=200)]
++    ids = set(matched)
++    for loc_id in matched:
++        ids.update(get_all_sub_location_ids(loc_id))
++    return sorted(ids)
++
++
+ def months_ago(dt, months):
+     year = dt.year
+     month = dt.month - months
+@@ -416,10 +473,10 @@
+     q = (request.args.get('q') or '').strip()
+     if not q:
+         return jsonify([])
+-    locs = Location.query.filter(Location.name.contains(q)).order_by(Location.sort_order).limit(20).all()
++    rows = search_location_paths(q)
+     return jsonify([
+-        {'id': l.id, 'name': l.name, 'path': location_full_path(l)}
+-        for l in locs
++        {'id': row.id, 'name': row.name, 'path': row.path}
++        for row in rows
+     ])
+ 
+ 
+@@ -494,6 +551,11 @@
+                 query = query.filter(Restaurant.id.in_(matching_ids))
+             else:
+                 return jsonify([])
++        elif search_type == 'location':
++            matched_location_ids = matching_location_ids(q)
++            if not matched_location_ids:
++                return jsonify([])
++            query = query.filter(Restaurant.location_id.in_(matched_location_ids))
+         else:
+             query = query.filter(Restaurant.name.contains(q))
+ 
+@@ -579,6 +641,14 @@
+             Restaurant.id.in_(matching_ids),
+             Restaurant.is_closed == False
+         )
++    elif search_type == 'location':
++        matched_location_ids = matching_location_ids(q)
++        if not matched_location_ids:
++            return jsonify([])
++        query = Restaurant.query.filter(
++            Restaurant.location_id.in_(matched_location_ids),
++            Restaurant.is_closed == False
++        )
+     else:
+         query = Restaurant.query.filter(
+             Restaurant.name.contains(q),
+@@ -639,6 +709,7 @@
+         return jsonify({'error': '店名不能为空', 'code': 'MISSING_NAME'}), 400
+ 
+     created_restaurant = False
++    created_location = False
+ 
+     if restaurant_id:
+         restaurant = db.session.get(Restaurant, restaurant_id)
+@@ -648,16 +719,17 @@
+     else:
+         if not location_id and not new_location_name:
+             return jsonify({'error': '位置不能为空', 'code': 'MISSING_LOCATION'}), 400
++        # 先解析位置链：整条链已存在时复用末级位置；只有缺失的尾段才创建。
++        if new_location_name:
++            chain_names = split_location_names(new_location_name)
++            if not chain_names:
++                return jsonify({'error': '位置名称不能为空', 'code': 'MISSING_LOCATION'}), 400
++            loc, existed = ensure_location_chain(chain_names, new_location_parent_id)
++            location_id = loc.id
++            created_location = not existed
+         restaurant = Restaurant.query.filter_by(name=name, location_id=location_id).first()
+         if not restaurant:
+             created_restaurant = True
+-            if new_location_name:
+-                chain_names = split_location_names(new_location_name)
+-                loc, existed = ensure_location_chain(chain_names, new_location_parent_id)
+-                if existed:
+-                    db.session.rollback()
+-                    return jsonify({'error': '位置「' + chain_names[-1] + '」已存在', 'code': 'LOCATION_EXISTS'}), 400
+-                location_id = loc.id
+             restaurant = Restaurant(name=name, location_id=location_id)
+             db.session.add(restaurant)
+             db.session.flush()
+@@ -743,6 +815,7 @@
+         'restaurant_created': created_restaurant,
+         'review_id': review.id,
+         'location_id': restaurant.location_id,
++        'location_created': created_location,
+         'location_path': location_full_path(restaurant.location) if restaurant.location else '',
+         'tags': saved_tags,
+     })
+diff -ruN base/static/js/admin.js new/static/js/admin.js
+--- a/static/js/admin.js	2026-11-03 19:35:01.693787261 +0800
++++ b/static/js/admin.js	2026-11-03 19:35:01.700465136 +0800
+@@ -32,6 +32,11 @@
+         return div.innerHTML;
+     }
+ 
++    // markdown.js 未加载（旧缓存 / 分步部署）时退化为纯文本 + 换行
++    var renderMarkdown = window.renderMarkdown || function (src) {
++        return escapeHTML(src == null ? '' : src).replace(/\r\n|\r|\n/g, '<br>');
++    };
++
+     function escapeJS(str) {
+         return escapeHTML(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r/g, '').replace(/\n/g, ' ');
+     }
+@@ -343,7 +348,7 @@
+             for (var j = 0; j < (r.reviews || []).length; j++) {
+                 var rev = r.reviews[j];
+                 html += '<div class="admin-review-item"><div class="admin-review-info">';
+-                html += '<div>' + escapeHTML(rev.comment || '') + '</div>';
++                html += '<div class="admin-review-comment">' + renderMarkdown(rev.comment) + '</div>';
+                 html += '<div class="meta">' + escapeHTML(rev.username) + ' · ' + rev.date;
+                 if (rev.taste_score != null) html += ' · 味道' + rev.taste_score;
+                 if (rev.value_score != null) html += ' · 性价比' + rev.value_score;
+diff -ruN base/static/js/location-path.js new/static/js/location-path.js
+--- a/static/js/location-path.js	1970-01-01 08:00:00.000000000 +0800
++++ b/static/js/location-path.js	2026-11-03 19:35:38.903666335 +0800
+@@ -0,0 +1,70 @@
++/* 位置路径工具（纯函数，零依赖）：
++ * 把用户输入/后端 path 统一成「按分隔符切开的分量」，用于上传页判断
++ * 「这个位置是已存在的行政区划」还是「需要新建」。
++ * 分隔符与后端 app.py LOCATION_QUERY_SEP_PATTERN 保持一致：/ \ - — – > → ／ ＼ 空白。
++ */
++(function () {
++    var SEP_RE = /[\/\\\-—–>→／＼\s]+/;
++
++    function splitPath(value) {
++        return String(value == null ? '' : value).split(SEP_RE).filter(function (part) {
++            return part.length > 0;
++        });
++    }
++
++    function normalizePath(value) {
++        return splitPath(value).join('/');
++    }
++
++    function normalizeFlat(value) {
++        return splitPath(value).join('');
++    }
++
++    function findPathMatches(results, typedPath) {
++        var target = normalizeFlat(typedPath);
++        if (!target) return [];
++        var exact = [];
++        var suffix = [];
++        for (var i = 0; i < (results || []).length; i++) {
++            var row = results[i];
++            var flat = normalizeFlat(row.path || row.name);
++            if (!flat) continue;
++            if (flat === target) exact.push(row);
++            else if (flat.length > target.length && flat.slice(-target.length) === target) suffix.push(row);
++        }
++        return exact.length ? exact : suffix;
++    }
++
++    // 唯一命中才返回（多条同名/同后缀由用户点选，避免误选）
++    function findExactPathMatch(results, typedPath) {
++        var matches = findPathMatches(results, typedPath);
++        return matches.length === 1 ? matches[0] : null;
++    }
++
++    // 从「全路径」拆出已存在的最长前缀 + 缺失尾段（用于只暂存缺失的尾段）
++    function splitExistingPrefix(results, typedPath) {
++        var parts = splitPath(typedPath);
++        if (parts.length < 2) return null;
++        for (var count = parts.length - 1; count >= 1; count--) {
++            var prefix = parts.slice(0, count).join('');
++            for (var i = 0; i < (results || []).length; i++) {
++                var flat = normalizeFlat(results[i].path || results[i].name);
++                if (flat === prefix) {
++                    return {existing: results[i], tail: parts.slice(count).join('/')};
++                }
++            }
++        }
++        return null;
++    }
++
++    var api = {
++        splitPath: splitPath,
++        normalizePath: normalizePath,
++        normalizeFlat: normalizeFlat,
++        findPathMatches: findPathMatches,
++        findExactPathMatch: findExactPathMatch,
++        splitExistingPrefix: splitExistingPrefix
++    };
++    window.foodLocationPath = api;
++    if (typeof module !== 'undefined' && module.exports) module.exports = api;
++})();
+diff -ruN base/static/js/main.js new/static/js/main.js
+--- a/static/js/main.js	2026-11-03 19:35:01.693759939 +0800
++++ b/static/js/main.js	2026-11-03 19:35:01.700400431 +0800
+@@ -16,10 +16,22 @@
+         return div.innerHTML;
+     }
+ 
++    function escapeAttrValue(str) {
++        // 属性值转义：quote 也要转，否则 data-comment="..." 会被评价内容截断
++        return String(str == null ? '' : str)
++            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
++            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
++    }
++
+     function escapeAttr(str) {
+         return (str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+     }
+ 
++    // markdown.js 未加载（旧缓存 / 分步部署）时退化为纯文本 + 换行，不至于整块渲染失败
++    var renderMarkdown = window.renderMarkdown || function (src) {
++        return escapeHTML(src == null ? '' : src).replace(/\r\n|\r|\n/g, '<br>');
++    };
++
+     function buildTreeItems(nodes) {
+         if (!nodes || nodes.length === 0) return '';
+         let html = '';
+@@ -238,12 +250,12 @@
+                 return '<div class="review-item">' +
+                     '<div class="review-item-body">' +
+                     revScores +
+-                    '<p>' + escapeHTML(rev.comment || '') + '</p>' +
++                    '<p class="review-comment">' + renderMarkdown(rev.comment) + '</p>' +
+                     '<div class="review-meta"><span>' + escapeHTML(rev.username) + '</span><span>' + rev.date + '</span></div>' +
+                     '</div>' +
+                     '<button class="review-edit-btn" data-review-id="' + rev.id +
+                     '" data-taste="' + (rev.taste_score || '') + '" data-value="' + (rev.value_score || '') +
+-                    '" data-comment="' + escapeHTML(rev.comment || '') + '">修改</button>' +
++                    '" data-comment="' + escapeAttrValue(rev.comment || '') + '">修改</button>' +
+                     '</div>';
+             }).join('');
+             reviewsHTML = '<div class="review-toggle" data-restaurant-id="' + r.id + '">查看评价 (' + r.reviews.length + '条) ▼</div>' +
+@@ -304,7 +316,7 @@
+             '<div class="form-group half"><label>性价比分</label>' +
+             '<input type="number" id="editValue" min="0.1" max="5" step="0.0001" value="' + value + '"></div></div>' +
+             '<div class="form-group"><label>评价</label>' +
+-            '<textarea id="editComment" rows="4">' + comment + '</textarea></div>' +
++            '<textarea id="editComment" rows="4">' + escapeHTML(comment) + '</textarea></div>' +
+             '<div class="modal-actions"><button class="btn-cancel" id="modalCancel">取消</button>' +
+             '<button class="btn-save" id="modalSave">保存修改</button></div>' +
+             '<div class="login-error" id="editError"></div>';
+diff -ruN base/static/js/markdown.js new/static/js/markdown.js
+--- a/static/js/markdown.js	1970-01-01 08:00:00.000000000 +0800
++++ b/static/js/markdown.js	2026-11-03 19:35:01.700536056 +0800
+@@ -0,0 +1,56 @@
++/* 极简 Markdown 子集渲染器（零依赖，先转义后渲染）。
++ *
++ * 支持：**粗体**、*斜体*、`行内代码`、```代码块```、[文本](链接)、换行。
++ * 安全模型：
++ *   1. 渲染前对整段原文做 HTML 转义，原始 HTML（<script>/<img onerror=...>）只会显示成文本；
++ *   2. 只生成白名单标签：strong/em/code/pre/a/br，属性只有 a 的 href/target/rel；
++ *   3. 链接协议白名单 http(s)/mailto，javascript:/data:/vbscript: 等不渲染为 <a>，退化为原文。
++ * 因此可以在 innerHTML 里使用 renderMarkdown(comment)，但不要绕过它直接插原文。
++ */
++(function () {
++    var ESCAPE_MAP = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
++
++    function escapeHtml(value) {
++        return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
++            return ESCAPE_MAP[ch];
++        });
++    }
++
++    var SAFE_LINK = /^(?:https?:\/\/|mailto:)/i;
++
++    function renderMarkdown(src) {
++        // 控制字符（含占位符用的 \u0001）先清掉，避免与内部占位符冲突
++        var text = escapeHtml(String(src == null ? '' : src).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ''));
++        var fences = [];
++        var codes = [];
++
++        text = text.replace(/```([\s\S]*?)```/g, function (match, code) {
++            fences.push(code.replace(/^\n+|\n+$/g, ''));
++            return '\u0001F' + (fences.length - 1) + '\u0001';
++        });
++        text = text.replace(/`([^`\n]+)`/g, function (match, code) {
++            codes.push(code);
++            return '\u0001C' + (codes.length - 1) + '\u0001';
++        });
++        text = text.replace(/\[([^\]\n]+)\]\(([^()\s]+)\)/g, function (match, label, href) {
++            var url = href.replace(/&amp;/g, '&');
++            if (!SAFE_LINK.test(url) || /[\u0000-\u001f]/.test(href)) return match;
++            return '<a href="' + href + '" target="_blank" rel="noopener noreferrer nofollow">' + label + '</a>';
++        });
++        text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
++        text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
++        text = text.replace(/\r\n|\r|\n/g, '<br>');
++        text = text.replace(/\u0001C(\d+)\u0001/g, function (match, index) {
++            return '<code>' + codes[+index] + '</code>';
++        });
++        text = text.replace(/\u0001F(\d+)\u0001/g, function (match, index) {
++            return '<pre><code>' + fences[+index] + '</code></pre>';
++        });
++        return text;
++    }
++
++    var api = {renderMarkdown: renderMarkdown, escapeHtml: escapeHtml};
++    window.renderMarkdown = renderMarkdown;
++    window.escapeHTML = window.escapeHTML || escapeHtml;
++    if (typeof module !== 'undefined' && module.exports) module.exports = api;
++})();
+diff -ruN base/static/js/upload.js new/static/js/upload.js
+--- a/static/js/upload.js	2026-11-03 19:35:01.693729855 +0800
++++ b/static/js/upload.js	2026-11-03 19:36:11.393887873 +0800
+@@ -190,7 +190,7 @@
+         document.getElementById('newLocationBtn').style.display = '';
+         document.getElementById('locationLocked').style.display = 'none';
+         document.getElementById('locationTriggerText').textContent = pendingNewLocation ?
+-            pendingNewLocation.name + ' (暂存)' : '点击选择位置区域';
++            (pendingNewLocation.label || pendingNewLocation.name + ' (暂存)') : '点击选择位置区域';
+         document.getElementById('locationSelect').value = '';
+         if (!pendingNewLocation) {
+             document.getElementById('locationTrigger').classList.remove('has-selection');
+@@ -293,13 +293,86 @@
+         });
+     }
+ 
+-    // ── New location staging ────────────────────────────────────────────────
++    // ── Existing administrative location resolution ("新建位置" 行) ─────────
++    // 上传页的位置是「可选择已有行政区划」：输入全路径时先查 /api/locations/search，
++    // 命中唯一已存在位置就直接选中它（hidden locationSelect + location_id），
++    // 不再把它当新位置、不发 new_location_name、不显示「上传后创建」。
++
++    function pathTools() { return window.foodLocationPath || null; }
++
++    function resetNewLocationParent() {
++        document.getElementById('newLocationParentId').value = '';
++        var trigger = document.getElementById('newLocationParentTrigger');
++        trigger.querySelector('.tree-trigger-text').textContent = '点击选择父级位置';
++        trigger.classList.remove('has-selection');
++    }
++
++    function clearNewLocationMatches() {
++        var box = document.getElementById('newLocationMatches');
++        box.innerHTML = '';
++        box.classList.remove('show');
++        document.getElementById('newLocationHint').textContent = '';
++    }
++
++    function renderNewLocationMatches(results) {
++        var box = document.getElementById('newLocationMatches');
++        if (!results || results.length === 0) { box.innerHTML = ''; box.classList.remove('show'); return; }
++        box.innerHTML = results.map(function (r) {
++            return '<div class="autocomplete-item" data-loc-id="' + r.id + '">' +
++                '<span class="item-name">' + escapeHTML(r.name) + '</span>' +
++                '<span class="item-loc">' + escapeHTML(r.path || '') + '</span></div>';
++        }).join('');
++        box.classList.add('show');
++    }
++
++    function selectExistingLocation(loc) {
++        pendingNewLocation = null;                       // 不发 new_location_name
++        document.getElementById('locationSelect').value = loc.id;   // → location_id
++        document.getElementById('locationTrigger').classList.add('has-selection');
++        document.getElementById('locationTriggerText').textContent = loc.path || loc.name;
++        document.getElementById('newLocationRow').style.display = 'none';
++        clearNewLocationMatches();
++        resetNewLocationParent();
++    }
++
++    async function resolveTypedLocation(parts) {
++        var tools = pathTools();
++        if (!tools) return { existing: null, tail: parts.join('/') };
++        var seen = [];
++        // 从最长候选逐级回退：整条路径 → 一直退到根，找已存在的最长前缀
++        for (var count = parts.length; count >= 1; count--) {
++            var candidate = parts.slice(0, count).join('/');
++            var results = await fetchJSON('/api/locations/search?q=' + encodeURIComponent(candidate));
++            var exact = tools.findExactPathMatch(results, candidate);
++            if (exact) return { existing: exact, tail: parts.slice(count).join('/') };
++            if (results.length > 0) seen = seen.concat(results);
++        }
++        // 有同名但无法唯一确定 → 交给用户点选，不能当成新位置
++        return { existing: null, tail: parts.join('/'), matches: seen };
++    }
++
++    function stagePendingLocation(name, parentId, label) {
++        pendingNewLocation = { name: name, parent_id: parentId ? parseInt(parentId) : null, label: label };
++        document.getElementById('locationSelect').value = '';
++        document.getElementById('locationTrigger').classList.add('has-selection');
++        document.getElementById('locationTriggerText').textContent = label;
++        document.getElementById('newLocationRow').style.display = 'none';
++        clearNewLocationMatches();
++        resetNewLocationParent();
++        showToast('位置已暂存', 'success');
++    }
+ 
+     function setupNewLocation() {
++        var nameInput = document.getElementById('newLocationName');
++        var matchesBox = document.getElementById('newLocationMatches');
++        var matchTimer = null;
++        var lastMatches = [];
++
+         document.getElementById('newLocationBtn').addEventListener('click', function () {
+             if (isLocationLocked) return;
+             var row = document.getElementById('newLocationRow');
+             row.style.display = row.style.display === 'none' ? 'flex' : 'none';
++            clearNewLocationMatches();
+             if (row.style.display === 'flex' && locTree.length > 0) {
+                 document.getElementById('treeDropdown').innerHTML = '<input type="text" class="loc-search-input" placeholder="搜索位置，快速定位...">' +
+                     '<div class="tree-dd-body">' + buildTreeOption(locTree, 0) + '</div>';
+@@ -308,23 +381,103 @@
+                     document.getElementById('newLocationParentTrigger').querySelector('.tree-trigger-text').textContent = '已选择: ' + name;
+                 });
+             }
++            if (row.style.display === 'flex') nameInput.focus();
+         });
+ 
+-        document.getElementById('addLocationBtn').addEventListener('click', function () {
+-            var nameInput = document.getElementById('newLocationName');
++        // 输入全路径（长春市/朝阳区、中国/吉林省/长春市/朝阳区 …）→ 走全地址搜索
++        nameInput.addEventListener('input', function () {
++            clearTimeout(matchTimer);
++            // 内容改了 → 清掉之前的自动选择/暂存，避免位置与文字不一致
++            pendingNewLocation = null;
++            document.getElementById('locationSelect').value = '';
++            document.getElementById('locationTrigger').classList.remove('has-selection');
++            clearNewLocationMatches();
++            var q = nameInput.value.trim();
++            if (!q) return;
++            matchTimer = setTimeout(async function () {
++                try {
++                    var results = await fetchJSON('/api/locations/search?q=' + encodeURIComponent(q));
++                    if (nameInput.value.trim() !== q) return;
++                    lastMatches = results;
++                    renderNewLocationMatches(results);
++                    var tools = pathTools();
++                    var exact = tools ? tools.findExactPathMatch(results, q) : null;
++                    if (exact) {
++                        // 唯一命中已存在的位置 → 直接选中，不新建
++                        selectExistingLocation(exact);
++                        nameInput.value = '';
++                        showToast('已选择已存在位置：' + (exact.path || exact.name), 'success');
++                    } else if (results.length > 0) {
++                        document.getElementById('newLocationHint').textContent =
++                            '这些位置已存在，点击可直接选用（不会新建）。';
++                    }
++                } catch (err) { /* silent */ }
++            }, 250);
++        });
++
++        matchesBox.addEventListener('mousedown', function (ev) {
++            var item = ev.target.closest('[data-loc-id]');
++            if (!item) return;
++            ev.preventDefault();
++            var id = parseInt(item.getAttribute('data-loc-id'), 10);
++            var loc = null;
++            for (var i = 0; i < lastMatches.length; i++) if (lastMatches[i].id === id) loc = lastMatches[i];
++            if (!loc) return;
++            nameInput.value = '';
++            selectExistingLocation(loc);
++            showToast('已选择已存在位置：' + (loc.path || loc.name), 'success');
++        });
++
++        document.getElementById('addLocationBtn').addEventListener('click', async function () {
++            var raw = nameInput.value.trim();
++            if (!raw) { showToast('请输入位置名称', 'error'); return; }
+             var parentId = document.getElementById('newLocationParentId').value;
+-            var name = nameInput.value.trim();
+-            if (!name) { showToast('请输入位置名称', 'error'); return; }
+-            pendingNewLocation = { name: name, parent_id: parentId ? parseInt(parentId) : null };
+-            document.getElementById('newLocationRow').style.display = 'none';
++            var tools = pathTools();
++            var parts = tools ? tools.splitPath(raw) : [raw];
++
++            // 单级名称 + 已选父级：父级下已有同名子级 → 直接选用，否则暂存该子级
++            if (parts.length === 1 && parentId) {
++                try {
++                    var kids = await fetchJSON('/api/locations?parent_id=' + parentId);
++                    for (var k = 0; k < kids.length; k++) {
++                        if (kids[k].name !== raw) continue;
++                        var info = await fetchJSON('/api/locations/path?id=' + kids[k].id);
++                        selectExistingLocation({ id: kids[k].id, name: kids[k].name, path: info.path });
++                        nameInput.value = '';
++                        showToast('已存在该位置，已直接选用：' + info.path, 'success');
++                        return;
++                    }
++                } catch (err) { /* 查询失败按新位置处理 */ }
++            }
++
++            if (parts.length > 1 || !parentId) {
++                try {
++                    var resolved = await resolveTypedLocation(parts);
++                    if (resolved.existing && !resolved.tail) {
++                        selectExistingLocation(resolved.existing);
++                        nameInput.value = '';
++                        showToast('已存在该位置，已直接选用：' + (resolved.existing.path || resolved.existing.name), 'success');
++                        return;
++                    }
++                    if (resolved.existing && resolved.tail) {
++                        // 只有前缀存在 → 父级用已存在位置，仅暂存缺失尾段
++                        stagePendingLocation(resolved.tail, resolved.existing.id,
++                            resolved.existing.path + '/' + resolved.tail + '（暂存：仅缺失尾段上传后创建）');
++                        nameInput.value = '';
++                        return;
++                    }
++                    if (resolved.matches && resolved.matches.length > 0) {
++                        // 有同名歧义 → 让用户点选，绝不静默当新位置
++                        lastMatches = resolved.matches;
++                        renderNewLocationMatches(resolved.matches);
++                        document.getElementById('newLocationHint').textContent =
++                            '已有同名位置，请点击选择；确需新建请补充更完整的路径。';
++                        return;
++                    }
++                } catch (err) { /* 搜索失败按全新位置处理 */ }
++            }
++            stagePendingLocation(raw, parentId || null, raw + '（暂存，上传后创建）');
+             nameInput.value = '';
+-            document.getElementById('newLocationParentId').value = '';
+-            document.getElementById('newLocationParentTrigger').querySelector('.tree-trigger-text').textContent = '点击选择父级位置';
+-            document.getElementById('newLocationParentTrigger').classList.remove('has-selection');
+-            document.getElementById('locationTriggerText').textContent = name + ' (暂存，上传后创建)';
+-            document.getElementById('locationSelect').value = '';
+-            document.getElementById('locationTrigger').classList.add('has-selection');
+-            showToast('位置已暂存', 'success');
+         });
+     }
+ 
+diff -ruN base/templates/admin_dashboard.html new/templates/admin_dashboard.html
+--- a/templates/admin_dashboard.html	2026-11-03 19:35:01.694158331 +0800
++++ b/templates/admin_dashboard.html	2026-11-03 19:35:01.701787849 +0800
+@@ -42,5 +42,6 @@
+ 
+ <div class="toast" id="toast"></div>
+ 
++<script src="{{ url_for('static', filename='js/markdown.js') }}"></script>
+ <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+ {% endblock %}
+diff -ruN base/templates/index.html new/templates/index.html
+--- a/templates/index.html	2026-11-03 19:35:01.693994397 +0800
++++ b/templates/index.html	2026-11-03 19:35:01.701749479 +0800
+@@ -28,6 +28,7 @@
+                     <select id="searchType" class="sort-select" style="width:80px">
+                         <option value="name">店名</option>
+                         <option value="review">评价</option>
++                        <option value="location">位置</option>
+                     </select>
+                     <button class="btn-sm" id="tagFilterBtn">标签匹配</button>
+                     <select id="sortSelect" class="sort-select">
+@@ -57,5 +58,6 @@
+         </div>
+     </div>
+ </div>
++<script src="{{ url_for('static', filename='js/markdown.js') }}"></script>
+ <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+ {% endblock %}
+diff -ruN base/templates/upload.html new/templates/upload.html
+--- a/templates/upload.html	2026-11-03 19:35:01.694093428 +0800
++++ b/templates/upload.html	2026-11-03 19:35:52.586082339 +0800
+@@ -43,7 +43,10 @@
+                 <span class="locked-text" id="lockedLocationText"></span>
+             </div>
+             <div class="new-location-row" id="newLocationRow" style="display:none">
+-                <input type="text" id="newLocationName" placeholder="新位置名称（多层用 / 或 - 分隔，如：长春大学-xx校区-xx楼）">
++                <div class="autocomplete-wrapper" style="flex:1;min-width:140px">
++                    <input type="text" id="newLocationName" placeholder="输入完整位置路径（如 中国/吉林省/长春市/朝阳区），已存在则直接选用" style="width:100%">
++                    <div class="autocomplete-dropdown" id="newLocationMatches"></div>
++                </div>
+                 <div class="tree-select-wrapper">
+                     <div class="tree-trigger" id="newLocationParentTrigger">
+                         <span class="tree-trigger-text">点击选择父级位置</span>
+@@ -53,6 +56,7 @@
+                 </div>
+                 <input type="hidden" id="newLocationParentId" value="">
+                 <button type="button" class="btn-sm btn-primary" id="addLocationBtn">暂存</button>
++                <div class="new-location-hint" id="newLocationHint" style="width:100%;color:#999;font-size:12px"></div>
+             </div>
+         </div>
+ 
+@@ -96,5 +100,6 @@
+     </form>
+     <div class="toast" id="toast"></div>
+ </div>
++<script src="{{ url_for('static', filename='js/location-path.js') }}"></script>
+ <script src="{{ url_for('static', filename='js/upload.js') }}"></script>
+ {% endblock %}
