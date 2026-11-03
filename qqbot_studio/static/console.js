@@ -2454,6 +2454,14 @@
       const wrapper = input.closest('.ai-sticker-number-field');
       if (wrapper) wrapper.classList.toggle('is-disabled', input.disabled);
     }
+    for (const [key, status] of Object.entries(ui.moduleStatuses || {})) {
+      if (!status) continue;
+      const enabled = key === 'safe-tools'
+        ? Boolean(ui.inputs.safe_tools_enabled && ui.inputs.safe_tools_enabled.checked)
+        : Boolean(ui.inputs.sticker_enabled && ui.inputs.sticker_enabled.checked);
+      status.textContent = enabled ? '已开启' : '已关闭';
+      status.className = `ai-tools-module-status is-${enabled ? 'enabled' : 'disabled'}`;
+    }
     if (ui.saveButton) ui.saveButton.disabled = disabledBase;
     if (ui.controls) ui.controls.hidden = !ui.supported;
     if (ui.actions) ui.actions.hidden = !ui.supported;
@@ -2497,75 +2505,34 @@
     const controls = makeElement('div', 'ai-tools-controls');
     controls.setAttribute('id', 'ai-tools-controls');
     controls.hidden = true;
-    const masterOption = makeElement('label', 'ai-tool-option is-master');
-    const masterLabel = makeElement('span', 'ai-tool-copy');
-    const masterInput = document.createElement('input');
-    masterInput.setAttribute('type', 'checkbox');
-    masterInput.setAttribute('id', 'ai-tools-enabled');
-    masterInput.dataset.aiToolKey = 'safe_tools_enabled';
-    masterLabel.appendChild(makeElement('strong', '', AI_TOOL_PERMISSIONS[0].label));
-    masterLabel.appendChild(makeElement('small', '', AI_TOOL_PERMISSIONS[0].description));
-    masterOption.appendChild(masterInput);
-    masterOption.appendChild(masterLabel);
-    controls.appendChild(masterOption);
-
-    const subGrid = makeElement('div', 'ai-tools-grid');
-    const inputs = { safe_tools_enabled: masterInput };
+    const inputs = {};
     const numberInputs = {};
-    for (const permission of AI_TOOL_PERMISSIONS.slice(1)) {
-      const option = makeElement('label', 'ai-tool-option');
+    const moduleStatuses = {};
+
+    function makeCheckboxOption(permission, master = false) {
+      const option = makeElement('label', master ? 'ai-tool-option is-master' : 'ai-tool-option');
       const input = document.createElement('input');
       input.setAttribute('type', 'checkbox');
-      input.id = `ai-tools-${permission.key}`;
-      input.dataset.aiToolKey = permission.key;
+      input.id = master
+        ? (permission.key === 'safe_tools_enabled' ? 'ai-tools-enabled' : 'ai-sticker-enabled')
+        : (permission.id || `ai-tools-${permission.key.replace(/_/g, '-')}`);
+      if (master) input.dataset.aiToolKey = permission.key;
+      else input.dataset.aiToolKey = permission.key;
       inputs[permission.key] = input;
       const copy = makeElement('span', 'ai-tool-copy');
       copy.appendChild(makeElement('strong', '', permission.label));
       copy.appendChild(makeElement('small', '', permission.description));
       option.appendChild(input);
       option.appendChild(copy);
-      subGrid.appendChild(option);
+      input.addEventListener('change', () => {
+        setAiToolsError(ui, '');
+        setAiToolsStatus(ui, '', '');
+        syncAiToolsControlState(ui);
+      });
+      return option;
     }
-    controls.appendChild(subGrid);
 
-    const stickerSubsection = makeElement('div', 'ai-tools-subsection');
-    const stickerHeading = makeElement('div', 'ai-tools-subsection-heading');
-    stickerHeading.appendChild(makeElement('h5', '', 'AI 自动表情'));
-    stickerHeading.appendChild(makeElement('p', 'ai-tools-subsection-note', 'direct 模式由插件给模型提供安全表情 marker；memory/astrbot 模式使用本地情绪或分类匹配。只在本地白名单表情库中选择，不需要电脑控制。'));
-    stickerSubsection.appendChild(stickerHeading);
-
-    const stickerMasterOption = makeElement('label', 'ai-tool-option is-master');
-    const stickerMasterInput = document.createElement('input');
-    stickerMasterInput.setAttribute('type', 'checkbox');
-    stickerMasterInput.setAttribute('id', 'ai-sticker-enabled');
-    stickerMasterInput.dataset.aiStickerKey = 'sticker_enabled';
-    inputs.sticker_enabled = stickerMasterInput;
-    const stickerMasterCopy = makeElement('span', 'ai-tool-copy');
-    stickerMasterCopy.appendChild(makeElement('strong', '', AI_STICKER_SWITCHES[0].label));
-    stickerMasterCopy.appendChild(makeElement('small', '', AI_STICKER_SWITCHES[0].description));
-    stickerMasterOption.appendChild(stickerMasterInput);
-    stickerMasterOption.appendChild(stickerMasterCopy);
-    stickerSubsection.appendChild(stickerMasterOption);
-
-    const stickerGrid = makeElement('div', 'ai-tools-grid');
-    for (const permission of AI_STICKER_SWITCHES.slice(1)) {
-      const option = makeElement('label', 'ai-tool-option');
-      const input = document.createElement('input');
-      input.setAttribute('type', 'checkbox');
-      input.setAttribute('id', permission.id || `ai-sticker-${permission.key.replace(/^sticker_/, '').replace(/_/g, '-')}`);
-      input.dataset.aiStickerKey = permission.key;
-      inputs[permission.key] = input;
-      const copy = makeElement('span', 'ai-tool-copy');
-      copy.appendChild(makeElement('strong', '', permission.label));
-      copy.appendChild(makeElement('small', '', permission.description));
-      option.appendChild(input);
-      option.appendChild(copy);
-      stickerGrid.appendChild(option);
-    }
-    stickerSubsection.appendChild(stickerGrid);
-
-    const stickerNumberGrid = makeElement('div', 'ai-sticker-number-grid');
-    for (const field of AI_STICKER_NUMBERS) {
+    function makeNumberOption(field) {
       const wrapper = makeElement('label', 'ai-sticker-number-field');
       wrapper.appendChild(makeElement('strong', '', field.label));
       const input = document.createElement('input');
@@ -2574,7 +2541,7 @@
       input.setAttribute('min', String(field.min));
       input.setAttribute('max', String(field.max));
       input.setAttribute('step', String(field.step));
-      input.setAttribute('id', field.id || `ai-sticker-${field.key.replace(/^sticker_/, '').replace(/_/g, '-')}`);
+      input.id = field.id || `ai-sticker-${field.key.replace(/^sticker_/, '').replace(/_/g, '-')}`;
       input.dataset.aiStickerKey = field.key;
       input.value = String(field.defaultValue);
       numberInputs[field.key] = input;
@@ -2582,11 +2549,75 @@
       wrapper.appendChild(makeElement('small', '', field.key === 'sticker_cooldown_seconds'
         ? '两次自动表情之间的最小间隔；0 表示不增加额外冷却。'
         : `0–1 之间的概率；默认 ${field.defaultValue}。`));
-      stickerNumberGrid.appendChild(wrapper);
+      input.addEventListener('input', () => {
+        setAiToolsError(ui, '');
+        setAiToolsStatus(ui, '', '');
+      });
+      return wrapper;
     }
-    stickerSubsection.appendChild(stickerNumberGrid);
-    controls.appendChild(stickerSubsection);
+
+    function makeModule(key, title, description, options, masterKey, numberFields = []) {
+      const module = makeElement('div', 'ai-tools-module');
+      module.dataset.aiToolsModule = key;
+      module.classList.toggle('is-open', key === 'safe-tools');
+      const summary = makeElement('button', 'ai-tools-module-summary');
+      summary.type = 'button';
+      summary.setAttribute('aria-expanded', key === 'safe-tools' ? 'true' : 'false');
+      const copy = makeElement('span', 'ai-tools-module-copy');
+      copy.appendChild(makeElement('strong', '', title));
+      copy.appendChild(makeElement('small', '', description));
+      const status = makeElement('span', 'ai-tools-module-status', '读取中');
+      summary.appendChild(copy);
+      summary.appendChild(status);
+      moduleStatuses[key] = status;
+
+      const body = makeElement('div', 'ai-tools-module-body');
+      body.hidden = key !== 'safe-tools';
+      summary.addEventListener('click', () => {
+        body.hidden = !body.hidden;
+        module.classList.toggle('is-open', !body.hidden);
+        summary.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
+      });
+      const master = AI_TOOL_PERMISSIONS.find((item) => item.key === masterKey)
+        || AI_STICKER_SWITCHES.find((item) => item.key === masterKey);
+      if (master) body.appendChild(makeCheckboxOption(master, true));
+      const grid = makeElement('div', 'ai-tools-grid');
+      for (const permission of options) grid.appendChild(makeCheckboxOption(permission, false));
+      body.appendChild(grid);
+      if (numberFields.length) {
+        const numberGrid = makeElement('div', 'ai-sticker-number-grid');
+        for (const field of numberFields) numberGrid.appendChild(makeNumberOption(field));
+        body.appendChild(numberGrid);
+      }
+      module.appendChild(summary);
+      module.appendChild(body);
+      controls.appendChild(module);
+    }
+
+    makeModule(
+      'safe-tools',
+      '安全工具',
+      '只开放白名单插件能力；无电脑控制、终端、Shell 或任意文件访问。',
+      AI_TOOL_PERMISSIONS.slice(1),
+      'safe_tools_enabled'
+    );
+    makeModule(
+      'sticker',
+      'AI 自动表情',
+      '从本实例本地表情库选择；direct 模式由插件给模型提供安全表情 marker；memory/astrbot 模式使用本地情绪或分类匹配；不会读取任意文件或执行系统命令。',
+      AI_STICKER_SWITCHES.slice(1),
+      'sticker_enabled',
+      AI_STICKER_NUMBERS
+    );
     section.appendChild(controls);
+
+    const fullConfigHint = makeElement(
+      'p',
+      'ai-tools-full-config-hint',
+      '这里是安全快捷面板；完整参数仍在「插件管理 → qqbot_enhancer」中维护。'
+    );
+    section.appendChild(fullConfigHint);
+
 
     const actions = makeElement('div', 'ai-tools-actions');
     const saveButton = makeElement('button', 'btn btn-primary btn-small', '保存 AI 工具与表情设置');
@@ -2634,6 +2665,7 @@
       pluginState,
       inputs,
       numberInputs,
+      moduleStatuses,
       supported: Boolean(cachedValues),
       unsupportedReason: '',
       loadFailed: false,
@@ -2641,35 +2673,6 @@
       loadingConfig: true,
       saving: false
     };
-    masterInput.addEventListener('change', () => {
-      setAiToolsError(ui, '');
-      setAiToolsStatus(ui, '', '');
-      syncAiToolsControlState(ui);
-    });
-    for (const permission of AI_TOOL_PERMISSIONS.slice(1)) {
-      inputs[permission.key].addEventListener('change', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-      });
-    }
-    stickerMasterInput.addEventListener('change', () => {
-      setAiToolsError(ui, '');
-      setAiToolsStatus(ui, '', '');
-      syncAiToolsControlState(ui);
-    });
-    for (const permission of AI_STICKER_SWITCHES.slice(1)) {
-      inputs[permission.key].addEventListener('change', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-        syncAiToolsControlState(ui);
-      });
-    }
-    for (const field of AI_STICKER_NUMBERS) {
-      numberInputs[field.key].addEventListener('input', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-      });
-    }
     saveButton.addEventListener('click', () => void saveAiToolsConfig(instance, ui));
     retryButton.addEventListener('click', () => void loadAiToolsConfig(instance, ui));
     syncAiToolsControlState(ui);

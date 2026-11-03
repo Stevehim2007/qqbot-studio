@@ -585,3 +585,11 @@ class ControlAssistantStaticTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AiToolsModularStaticTests(unittest.TestCase):
+    def test_ai_tools_is_split_into_collapsible_modules(self) -> None:
+        js = (ROOT / "qqbot_studio" / "static" / "console.js").read_text(encoding="utf-8")
+        css = (ROOT / "qqbot_studio" / "static" / "console.css").read_text(encoding="utf-8")
+        for token in ("ai-tools-module", "dataset.aiToolsModule", "安全工具", "自动表情", "ai-tools-module-status", "ai-tools-full-config-hint"):
+            self.assertTrue(token in js or token in css, token)
