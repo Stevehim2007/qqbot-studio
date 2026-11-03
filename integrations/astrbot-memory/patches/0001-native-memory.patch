@@ -1,25 +1,27 @@
-From f9006c02c9e3a717258e4a5b9b9433ffe8900869 Mon Sep 17 00:00:00 2001
-From: memory-patch <memory@local>
-Date: Tue, 3 Nov 2026 10:53:56 +0800
-Subject: [PATCH] feat(memory): native long-term memory service (SQLite
- sidecar)
+From 9fd69a12ef63b5c24be16bd6b82c68248f188329 Mon Sep 17 00:00:00 2001
+From: memory-patch <memory-patch@local>
+Date: Tue, 3 Nov 2026 12:10:46 +0800
+Subject: [PATCH] feat(memory): native long-term memory with per-group policy
+ (AstrBot v4.29.3)
 
 ---
  astrbot/core/astr_main_agent.py               |   5 +
- astrbot/core/config/default.py                |  22 +
- astrbot/core/memory/__init__.py               |  50 ++
- astrbot/core/memory/extract.py                | 181 +++++++
- astrbot/core/memory/integration.py            | 120 +++++
+ astrbot/core/config/default.py                |  38 ++
+ astrbot/core/memory/__init__.py               |  67 ++
+ astrbot/core/memory/extract.py                | 189 ++++++
+ astrbot/core/memory/integration.py            | 140 ++++
+ astrbot/core/memory/policy.py                 | 337 ++++++++++
  astrbot/core/memory/render.py                 |  59 ++
- astrbot/core/memory/service.py                | 462 ++++++++++++++++
- astrbot/core/memory/store.py                  | 507 ++++++++++++++++++
- astrbot/core/memory/text.py                   | 121 +++++
- astrbot/core/memory/types.py                  | 169 ++++++
+ astrbot/core/memory/service.py                | 617 ++++++++++++++++++
+ astrbot/core/memory/store.py                  | 507 ++++++++++++++
+ astrbot/core/memory/text.py                   | 121 ++++
+ astrbot/core/memory/types.py                  | 169 +++++
  .../method/agent_sub_stages/internal.py       |  12 +
- 11 files changed, 1708 insertions(+)
+ 12 files changed, 2261 insertions(+)
  create mode 100644 astrbot/core/memory/__init__.py
  create mode 100644 astrbot/core/memory/extract.py
  create mode 100644 astrbot/core/memory/integration.py
+ create mode 100644 astrbot/core/memory/policy.py
  create mode 100644 astrbot/core/memory/render.py
  create mode 100644 astrbot/core/memory/service.py
  create mode 100644 astrbot/core/memory/store.py
@@ -50,10 +52,10 @@ index 59183b8..1534c2c 100644
      if tz is None:
          tz = plugin_context.get_config().get("timezone")
 diff --git a/astrbot/core/config/default.py b/astrbot/core/config/default.py
-index dd1b088..855032c 100644
+index dd1b088..3bd679f 100644
 --- a/astrbot/core/config/default.py
 +++ b/astrbot/core/config/default.py
-@@ -89,6 +89,28 @@ WEBHOOK_SUPPORTED_PLATFORMS = [
+@@ -89,6 +89,44 @@ WEBHOOK_SUPPORTED_PLATFORMS = [
  # 默认配置
  DEFAULT_CONFIG = {
      "config_version": 5,
@@ -78,16 +80,32 @@ index dd1b088..855032c 100644
 +        "llm_extract": False,
 +        "queue_size": 64,
 +        "max_records_per_scope": 500,
++        # 按群策略：默认所有群/私聊都只用会话历史（conversation），
++        # 需要长期记忆的群单独列在 groups 里（见 integrations/astrbot-memory/CONTRACT.md §5）。
++        "policy": {
++            "default_mode": "conversation",
++            # "private": {"mode": "long_term", "scope": "user", "extract": True, "inject": True},
++            # "groups": {
++            #     "aiocqhttp:838796241": {
++            #         "mode": "long_term",
++            #         "scope": "group_user",
++            #         "extract": True,
++            #         "inject": True,
++            #         "max_items": 8,
++            #         "max_chars": 1500,
++            #     },
++            # },
++        },
 +    },
      "platform_settings": {
          "unique_session": False,
          "rate_limit": {
 diff --git a/astrbot/core/memory/__init__.py b/astrbot/core/memory/__init__.py
 new file mode 100644
-index 0000000..4c901be
+index 0000000..68f017b
 --- /dev/null
 +++ b/astrbot/core/memory/__init__.py
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,67 @@
 +"""AstrBot native long-term memory (SQLite sidecar, fail-open).
 +
 +Public API:
@@ -97,6 +115,9 @@ index 0000000..4c901be
 +* :func:`reset_memory_services` -- close cached services (tests/config reload)
 +* :mod:`astrbot.core.memory.integration` -- the two pipeline hooks
 +  (``inject_memory`` before the LLM, ``enqueue_extraction`` after the reply)
++* :mod:`astrbot.core.memory.policy` -- per-chat policy: only listed groups
++  (``mode="long_term"``) read/write long-term memory, everyone else stays
++  conversation-only, invalid config fails safe
 +
 +The package only depends on the standard library, so importing it can never
 +add a startup requirement to AstrBot. Retrieval is read-only and bounded;
@@ -104,6 +125,14 @@ index 0000000..4c901be
 +"""
 +
 +from .integration import build_context, enqueue_extraction, inject_memory
++from .policy import (
++    MODE_CONVERSATION,
++    MODE_LONG_TERM,
++    MemoryPolicy,
++    PolicyResolver,
++    group_policy_key,
++    parse_policy,
++)
 +from .service import (
 +    DEFAULT_MEMORY_CONFIG,
 +    MemoryService,
@@ -125,25 +154,31 @@ index 0000000..4c901be
 +    "Candidate",
 +    "DEFAULT_MEMORY_CONFIG",
 +    "MemoryContext",
++    "MemoryPolicy",
 +    "MemoryRecord",
 +    "MemoryService",
 +    "MemoryStore",
++    "MODE_CONVERSATION",
++    "MODE_LONG_TERM",
++    "PolicyResolver",
 +    "SCOPE_TYPES",
 +    "build_context",
++    "group_policy_key",
 +    "enqueue_extraction",
 +    "get_memory_service",
 +    "inject_memory",
 +    "normalise_config",
++    "parse_policy",
 +    "reset_memory_services",
 +    "resolve_db_path",
 +    "scope_ids",
 +]
 diff --git a/astrbot/core/memory/extract.py b/astrbot/core/memory/extract.py
 new file mode 100644
-index 0000000..7858541
+index 0000000..5375d77
 --- /dev/null
 +++ b/astrbot/core/memory/extract.py
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,189 @@
 +"""Memory extraction: heuristics first, optional LLM extractor second.
 +
 +Heuristic extraction is free (regex + tokenising, no model call), so it can run
@@ -247,18 +282,24 @@ index 0000000..7858541
 +    context: MemoryContext,
 +    *,
 +    limit: int = MAX_CANDIDATES_PER_TURN,
++    scopes: list[tuple[str, str]] | None = None,
 +) -> list[Candidate]:
-+    """Extract memory candidates from a user message without calling a model."""
++    """Extract memory candidates from a user message without calling a model.
++
++    ``scopes`` overrides the context default write scope (the per-chat policy
++    picks it, e.g. ``user`` for a group that opted into ``scope="user"``); the
++    content template's subject follows the scope actually used.
++    """
 +
 +    cleaned = _clean_input(text)
 +    if not cleaned or contains_secret(cleaned):
 +        # Never mine a message that looks like it contains credentials.
 +        return []
 +    cleaned = scrub_secrets(cleaned)
-+    scopes = context.write_scopes()
-+    if not scopes:
++    write_scopes = list(scopes) if scopes is not None else context.write_scopes()
++    if not write_scopes:
 +        return []
-+    scope_type, scope_id = scopes[0]
++    scope_type, scope_id = write_scopes[0]
 +    subject = "本群" if scope_type == "group" else "用户"
 +    candidates: list[Candidate] = []
 +    seen_keys: set[str] = set()
@@ -297,6 +338,8 @@ index 0000000..7858541
 +    user_text: str,
 +    assistant_text: str,
 +    context: MemoryContext,
++    *,
++    scopes: list[tuple[str, str]] | None = None,
 +) -> list[Candidate]:
 +    """Heuristics plus a small confirmation boost from the assistant reply.
 +
@@ -304,7 +347,7 @@ index 0000000..7858541
 +    confidence; the reply text is never itself mined for facts.
 +    """
 +
-+    candidates = heuristic_extract(user_text, context)
++    candidates = heuristic_extract(user_text, context, scopes=scopes)
 +    if not candidates:
 +        return []
 +    reply = (assistant_text or "").lower()
@@ -327,10 +370,10 @@ index 0000000..7858541
 +    ]
 diff --git a/astrbot/core/memory/integration.py b/astrbot/core/memory/integration.py
 new file mode 100644
-index 0000000..aff348d
+index 0000000..32ed401
 --- /dev/null
 +++ b/astrbot/core/memory/integration.py
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,140 @@
 +"""AstrBot pipeline integration: retrieve before the LLM, extract after the reply.
 +
 +Both entry points are fail-open: a broken/unavailable memory database must
@@ -353,6 +396,9 @@ index 0000000..aff348d
 +BLOCK_CHARS_EXTRA_KEY = "_memory_block_chars"
 +
 +
++_GROUP_MESSAGE_TYPES = frozenset({"groupmessage", "group_message", "groupmsg", "group"})
++
++
 +def _safe(getter, default=None):
 +    try:
 +        value = getter()
@@ -367,6 +413,8 @@ index 0000000..aff348d
 +    platform = str(_safe(lambda: event.get_platform_name(), "") or "")
 +    user_id = str(_safe(lambda: event.get_sender_id(), "") or "")
 +    group_id = str(_safe(lambda: event.get_group_id(), "") or "")
++    umo = str(_safe(lambda: event.unified_msg_origin, "") or "")
++    group_id = group_id or _group_id_from_umo(umo)
 +    is_private = bool(_safe(lambda: event.is_private_chat(), not group_id))
 +    conversation = getattr(req, "conversation", None) if req is not None else None
 +    conversation_id = str(getattr(conversation, "cid", "") or "")
@@ -374,7 +422,6 @@ index 0000000..aff348d
 +    if not persona_id and conversation is not None:
 +        persona_id = str(getattr(conversation, "persona_id", "") or "")
 +    if not platform:
-+        umo = str(_safe(lambda: event.unified_msg_origin, "") or "")
 +        platform = umo.split(":", 1)[0] if ":" in umo else ""
 +    return MemoryContext(
 +        platform=platform,
@@ -384,6 +431,22 @@ index 0000000..aff348d
 +        persona_id=persona_id,
 +        is_private=is_private,
 +    )
++
++
++def _group_id_from_umo(umo: str) -> str:
++    """Group id from ``platform:message_type:session_id`` (AstrBot UMO form).
++
++    Only used when the event does not expose ``group_id`` directly, so a group
++    turn is never mistaken for a private chat (which would apply the private
++    policy to a group).  The middle segment must look like a group type.
++    """
++
++    parts = umo.split(":")
++    if len(parts) < 3:
++        return ""
++    if parts[1].strip().lower() not in _GROUP_MESSAGE_TYPES:
++        return ""
++    return parts[-1].strip()
 +
 +
 +def inject_memory(
@@ -451,6 +514,349 @@ index 0000000..aff348d
 +
 +    value = _safe(lambda: event.get_extra(INJECTED_EXTRA_KEY), []) or []
 +    return [int(item) for item in value if isinstance(item, int)]
+diff --git a/astrbot/core/memory/policy.py b/astrbot/core/memory/policy.py
+new file mode 100644
+index 0000000..bc303f8
+--- /dev/null
++++ b/astrbot/core/memory/policy.py
+@@ -0,0 +1,337 @@
++"""Per-group long-term memory policy (which chats are allowed to remember).
++
++Config contract (``memory.policy``, see CONTRACT.md §5)::
++
++    {
++      "default_mode": "conversation",
++      "private": {"mode": "long_term", "scope": "user", "extract": true,
++                  "inject": true, "max_items": 8, "max_chars": 1500},
++      "groups": {
++        "aiocqhttp:838796241": {"mode": "long_term", "scope": "group_user",
++                                "extract": true, "inject": true,
++                                "max_items": 8, "max_chars": 1500}
++      }
++    }
++
++Rules:
++
++* ``default_mode`` -- mode for chats that are not listed (private chats fall
++  back to ``private`` when given, else to ``default_mode``).
++* ``mode`` is required in every entry.  ``conversation`` = this chat never
++  reads or writes long-term memory (AstrBot's own conversation history is not
++  affected); ``long_term`` = read/write the scopes below.
++* ``scope`` -- ``group`` (this group only), ``user`` (the sender's personal
++  memory only; enabling it in a group is an explicit opt-in to use that
++  person's private memories there), ``group_user`` (read group + sender user,
++  write group).  Private chats only accept ``user``.
++* ``extract`` / ``inject`` are independent: write-only and read-only are valid.
++* ``max_items`` / ``max_chars`` are optional per-entry budgets; when absent the
++  service-wide ``memory.max_items`` / ``memory.max_chars`` apply.
++
++Anything invalid (unknown mode/scope, non-boolean flags, out-of-range budgets,
++a listing that is not an object) degrades that entry -- or the whole policy
++when ``default_mode`` is bad -- to ``conversation``.  Failing safe means "stop
++remembering", never "remember more".
++
++The identity used for the lookup comes from the event's group id (platform
++prefixed) or its UMO, never from message text.  Parsed tables are cached by
++config fingerprint with a short TTL so policy edits take effect without a
++restart: a changed config produces a new fingerprint, hence a re-parse.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import logging
++import threading
++import time
++from collections.abc import Mapping
++from dataclasses import dataclass
++
++logger = logging.getLogger("astrbot.memory")
++
++MODE_CONVERSATION = "conversation"
++MODE_LONG_TERM = "long_term"
++MODES = (MODE_CONVERSATION, MODE_LONG_TERM)
++
++SCOPE_GROUP = "group"
++SCOPE_USER = "user"
++SCOPE_GROUP_USER = "group_user"
++ALLOWED_SCOPES = (SCOPE_GROUP, SCOPE_USER, SCOPE_GROUP_USER)
++
++DEFAULT_MAX_ITEMS_MIN, DEFAULT_MAX_ITEMS_MAX = 1, 50
++DEFAULT_MAX_CHARS_MIN, DEFAULT_MAX_CHARS_MAX = 80, 8000
++
++POLICY_TTL_SECONDS = 5.0
++"""Parsed-policy cache TTL.  A config edit invalidates it immediately (the
++fingerprint changes); the TTL only bounds how long an unchanged entry lives.
++"""
++
++_CACHE_MAX_ENTRIES = 8
++
++
++@dataclass(frozen=True)
++class MemoryPolicy:
++    """Resolved policy for one chat turn."""
++
++    mode: str = MODE_CONVERSATION
++    scope: str = SCOPE_GROUP
++    extract: bool = True
++    inject: bool = True
++    max_items: int | None = None
++    max_chars: int | None = None
++    source: str = "default"
++    error: str = ""
++
++    @property
++    def long_term(self) -> bool:
++        return self.mode == MODE_LONG_TERM
++
++    @property
++    def inactive(self) -> bool:
++        return not self.long_term
++
++    def as_dict(self) -> dict:
++        return {
++            "mode": self.mode,
++            "scope": self.scope,
++            "extract": self.extract,
++            "inject": self.inject,
++            "max_items": self.max_items,
++            "max_chars": self.max_chars,
++            "source": self.source,
++            "error": self.error,
++        }
++
++
++@dataclass(frozen=True)
++class PolicyTable:
++    """A parsed ``memory.policy`` section (all entries + defaults)."""
++
++    default_mode: str = MODE_CONVERSATION
++    private: MemoryPolicy | None = None
++    groups: Mapping[str, MemoryPolicy] | None = None
++    errors: tuple[str, ...] = ()
++
++    def entry_for(
++        self,
++        *,
++        platform: str = "",
++        group_id: str = "",
++        is_private: bool = True,
++    ) -> MemoryPolicy:
++        group_id = str(group_id or "").strip()
++        platform = str(platform or "").strip()
++        if is_private or not group_id:
++            if self.private is not None:
++                return self.private
++            return _default_policy(self.default_mode, is_private=True, errors=self.errors)
++        groups = self.groups or {}
++        for key in (group_policy_key(platform, group_id), group_id):
++            entry = groups.get(key)
++            if entry is not None:
++                return entry
++        return _default_policy(self.default_mode, is_private=False, errors=self.errors)
++
++
++class PolicyResolver:
++    """Cache parsed policy tables by config fingerprint (TTL + invalidation)."""
++
++    def __init__(self, ttl: float = POLICY_TTL_SECONDS, clock=time.monotonic) -> None:
++        self.ttl = max(0.0, float(ttl))
++        self.clock = clock
++        self._cache: dict[str, tuple[float, PolicyTable]] = {}
++        self._lock = threading.Lock()
++        self.parses = 0
++
++    def table(self, section) -> PolicyTable:
++        fingerprint = section_fingerprint(section)
++        now = self.clock()
++        with self._lock:
++            hit = self._cache.get(fingerprint)
++            if hit is not None and hit[0] > now:
++                return hit[1]
++        table = parse_policy(section)
++        with self._lock:
++            self._cache[fingerprint] = (now + self.ttl, table)
++            self._trim()
++        self.parses += 1
++        if table.errors:
++            logger.warning("长期记忆策略配置有 %d 处非法项（已按 conversation 处理）：%s", len(table.errors), "; ".join(table.errors))
++        return table
++
++    def resolve(
++        self,
++        section,
++        *,
++        platform: str = "",
++        group_id: str = "",
++        is_private: bool = True,
++    ) -> MemoryPolicy:
++        return self.table(section).entry_for(platform=platform, group_id=group_id, is_private=is_private)
++
++    def invalidate(self) -> None:
++        with self._lock:
++            self._cache.clear()
++
++    def _trim(self) -> None:
++        """Keep the cache small: drop the entries closest to expiry."""
++        if len(self._cache) <= _CACHE_MAX_ENTRIES:
++            return
++        ordered = sorted(self._cache.items(), key=lambda item: item[1][0])
++        for fingerprint, _ in ordered[: len(self._cache) - _CACHE_MAX_ENTRIES]:
++            self._cache.pop(fingerprint, None)
++
++
++def group_policy_key(platform: str, group_id: str) -> str:
++    """Platform-prefixed group identity, e.g. ``aiocqhttp:838796241``."""
++
++    platform = str(platform or "").strip()
++    group_id = str(group_id or "").strip()
++    return f"{platform}:{group_id}" if platform else group_id
++
++
++def section_fingerprint(section) -> str:
++    """Stable fingerprint of a policy section (cache key + change detection)."""
++
++    try:
++        payload = json.dumps(section, sort_keys=True, ensure_ascii=False, default=str)
++    except Exception:  # noqa: BLE001 - exotic mapping/config type
++        try:
++            payload = repr(section)
++        except Exception:  # noqa: BLE001 - give up, force a re-parse each call
++            payload = ""
++    return hashlib.sha1(payload.encode("utf-8", "replace")).hexdigest()
++
++
++def parse_policy(section) -> PolicyTable:
++    """Validate an arbitrary ``memory.policy`` value into a ``PolicyTable``."""
++
++    errors: list[str] = []
++    if section is None:
++        return PolicyTable()
++    if not isinstance(section, Mapping):
++        return PolicyTable(errors=("policy 不是对象（已按 conversation 处理）",))
++
++    raw_default = section.get("default_mode", MODE_CONVERSATION)
++    default_mode = _normalise_mode(raw_default)
++    if default_mode is None:
++        errors.append(f"default_mode 非法：{raw_default!r}（已按 conversation 处理）")
++        default_mode = MODE_CONVERSATION
++
++    private: MemoryPolicy | None = None
++    raw_private = section.get("private")
++    if raw_private:
++        try:
++            private = _parse_entry(raw_private, is_private=True, source="private")
++        except _Invalid as exc:
++            errors.append(f"private: {exc}")
++            private = MemoryPolicy(MODE_CONVERSATION, SCOPE_USER, source="private", error=str(exc))
++
++    groups: dict[str, MemoryPolicy] = {}
++    raw_groups = section.get("groups")
++    if raw_groups is not None and not isinstance(raw_groups, Mapping):
++        errors.append("groups 不是对象（所有群按 default_mode 处理）")
++    elif isinstance(raw_groups, Mapping):
++        for key, raw in raw_groups.items():
++            if not isinstance(key, str) or not key.strip():
++                errors.append(f"groups 的键非法：{key!r}")
++                continue
++            name = key.strip()
++            try:
++                groups[name] = _parse_entry(raw, is_private=False, source=f"groups:{name}")
++            except _Invalid as exc:
++                errors.append(f"groups:{name}: {exc}")
++                groups[name] = MemoryPolicy(MODE_CONVERSATION, SCOPE_GROUP, source=f"groups:{name}", error=str(exc))
++
++    return PolicyTable(default_mode=default_mode, private=private, groups=groups, errors=tuple(errors))
++
++
++class _Invalid(ValueError):
++    """A policy entry failed validation; the caller degrades it to conversation."""
++
++
++def _normalise_mode(value) -> str | None:
++    if not isinstance(value, str):
++        return None
++    mode = value.strip().lower()
++    return mode if mode in MODES else None
++
++
++def _parse_entry(raw, *, is_private: bool, source: str) -> MemoryPolicy:
++    if not isinstance(raw, Mapping):
++        raise _Invalid("策略条目必须是对象")
++    mode = _normalise_mode(raw.get("mode"))
++    if mode is None:
++        raise _Invalid(f"mode 必须是 {MODES} 之一，收到 {raw.get('mode')!r}")
++
++    raw_scope = raw.get("scope")
++    if raw_scope is None:
++        scope = SCOPE_USER if is_private else SCOPE_GROUP
++    else:
++        scope = raw_scope.strip().lower() if isinstance(raw_scope, str) else None
++        if scope not in ALLOWED_SCOPES:
++            raise _Invalid(f"scope 必须是 {ALLOWED_SCOPES} 之一，收到 {raw_scope!r}")
++    if is_private and scope != SCOPE_USER:
++        raise _Invalid("私聊只支持 scope=user")
++
++    return MemoryPolicy(
++        mode=mode,
++        scope=scope,
++        extract=_require_bool(raw, "extract", True),
++        inject=_require_bool(raw, "inject", True),
++        max_items=_require_int(raw, "max_items", DEFAULT_MAX_ITEMS_MIN, DEFAULT_MAX_ITEMS_MAX),
++        max_chars=_require_int(raw, "max_chars", DEFAULT_MAX_CHARS_MIN, DEFAULT_MAX_CHARS_MAX),
++        source=source,
++    )
++
++
++def _require_bool(raw: Mapping, name: str, default: bool) -> bool:
++    if name not in raw or raw[name] is None:
++        return default
++    value = raw[name]
++    if not isinstance(value, bool):
++        raise _Invalid(f"{name} 必须是 true/false，收到 {value!r}")
++    return value
++
++
++def _require_int(raw: Mapping, name: str, low: int, high: int) -> int | None:
++    if name not in raw or raw[name] is None:
++        return None
++    value = raw[name]
++    if isinstance(value, bool) or not isinstance(value, int):
++        raise _Invalid(f"{name} 必须是整数，收到 {value!r}")
++    if not low <= value <= high:
++        raise _Invalid(f"{name} 必须在 {low}..{high} 之间，收到 {value}")
++    return value
++
++
++def _default_policy(mode: str, *, is_private: bool, errors: tuple[str, ...] = ()) -> MemoryPolicy:
++    # Config errors that shaped the default (bad default_mode, unparsable
++    # section) travel with the resolved default so callers can see why a chat
++    # fell back to conversation.
++    return MemoryPolicy(
++        mode=mode,
++        scope=SCOPE_USER if is_private else SCOPE_GROUP,
++        source="private-default" if is_private else "default",
++        error="; ".join(errors),
++    )
++
++
++__all__ = [
++    "ALLOWED_SCOPES",
++    "MODE_CONVERSATION",
++    "MODE_LONG_TERM",
++    "MODES",
++    "MemoryPolicy",
++    "POLICY_TTL_SECONDS",
++    "PolicyResolver",
++    "PolicyTable",
++    "SCOPE_GROUP",
++    "SCOPE_GROUP_USER",
++    "SCOPE_USER",
++    "group_policy_key",
++    "parse_policy",
++    "section_fingerprint",
++]
 diff --git a/astrbot/core/memory/render.py b/astrbot/core/memory/render.py
 new file mode 100644
 index 0000000..6a42704
@@ -518,10 +924,10 @@ index 0000000..6a42704
 +    return HEADER + "\n" + "\n".join(lines) + "\n" + FOOTER, rendered
 diff --git a/astrbot/core/memory/service.py b/astrbot/core/memory/service.py
 new file mode 100644
-index 0000000..d1485bf
+index 0000000..5d0e943
 --- /dev/null
 +++ b/astrbot/core/memory/service.py
-@@ -0,0 +1,462 @@
+@@ -0,0 +1,617 @@
 +"""Memory service: configuration, bounded retrieval, queued extraction.
 +
 +Design rules (they are the contract of this service):
@@ -538,6 +944,7 @@ index 0000000..d1485bf
 +from __future__ import annotations
 +
 +import asyncio
++import copy
 +import logging
 +import os
 +import threading
@@ -546,6 +953,14 @@ index 0000000..d1485bf
 +from pathlib import Path
 +
 +from .extract import LLMExtractor, confirmed_extract
++from .policy import (
++    MODE_CONVERSATION,
++    SCOPE_GROUP,
++    SCOPE_GROUP_USER,
++    SCOPE_USER,
++    MemoryPolicy,
++    PolicyResolver,
++)
 +from .render import DEFAULT_MAX_CHARS, DEFAULT_MAX_ITEMS, render_memory_block
 +from .store import MemoryStore
 +from .text import normalise_value
@@ -571,6 +986,9 @@ index 0000000..d1485bf
 +    "llm_extract": False,
 +    "queue_size": 64,
 +    "max_records_per_scope": 500,
++    # Per-chat gate: nothing is remembered unless a chat is listed with
++    # mode="long_term" (privacy default; see policy.py / CONTRACT.md §5).
++    "policy": {"default_mode": MODE_CONVERSATION},
 +}
 +
 +_PURGE_EVERY_TURNS = 50
@@ -596,6 +1014,11 @@ index 0000000..d1485bf
 +    merged["max_records_per_scope"] = max(20, int(merged.get("max_records_per_scope") or 500))
 +    merged["min_confidence"] = min(1.0, max(0.0, float(merged.get("min_confidence") or 0.35)))
 +    merged["ttl_days"] = max(0, int(merged.get("ttl_days") or 0))
++    # The policy section is arbitrary nested config: copy it so per-service
++    # instances never share (or mutate) the module default, and hand it to the
++    # parser untouched -- invalid values are rejected there, not sanitised here.
++    raw_policy = section.get("policy", DEFAULT_MEMORY_CONFIG["policy"]) if section else DEFAULT_MEMORY_CONFIG["policy"]
++    merged["policy"] = copy.deepcopy(raw_policy) if raw_policy is not None else {"default_mode": MODE_CONVERSATION}
 +    return merged
 +
 +
@@ -647,6 +1070,8 @@ index 0000000..d1485bf
 +        self._worker: asyncio.Task | None = None
 +        self._worker_loop: asyncio.AbstractEventLoop | None = None
 +        self._turns_since_purge = 0
++        self._policy_resolver = PolicyResolver()
++        self.gated_turns = 0
 +        self._lock = threading.Lock()
 +
 +    # ------------------------------------------------------------------
@@ -679,34 +1104,115 @@ index 0000000..d1485bf
 +        self._queue = None
 +        self._store.close()
 +
++    def refresh_config(self, config: Mapping | None) -> bool:
++        """Apply a hot-reloaded config (policy cache is invalidated)."""
++
++        merged = normalise_config(config)
++        if merged == self.config:
++            return False
++        self.config = merged
++        self._policy_resolver.invalidate()
++        logger.info("长期记忆配置已热更新（策略缓存已失效，无需重启）")
++        return True
++
++    # ------------------------------------------------------------------
++    # policy (which chats may remember, and how)
++    # ------------------------------------------------------------------
++    def policy_for(self, context: MemoryContext) -> MemoryPolicy:
++        """Resolve the per-chat policy for this turn (fail-safe conversation)."""
++
++        try:
++            section = self.config.get("policy")
++            return self._policy_resolver.resolve(
++                section,
++                platform=context.platform,
++                group_id=context.group_id,
++                is_private=context.is_private,
++            )
++        except Exception as exc:  # noqa: BLE001 - never break a reply on config
++            self.last_error = f"长期记忆策略解析失败（已按 conversation 处理）：{exc}"
++            logger.warning(self.last_error)
++            return MemoryPolicy(error=str(exc))
++
++    def _policy_scopes(self, context: MemoryContext, policy: MemoryPolicy) -> list[tuple[str, str]]:
++        """Long-term scopes this policy allows for this turn."""
++
++        if not policy.long_term:
++            return []
++        scopes: list[tuple[str, str]] = []
++        if policy.scope in (SCOPE_USER, SCOPE_GROUP_USER) and self.config["read_user"]:
++            if context.user_scope[1]:
++                scopes.append(context.user_scope)
++        if policy.scope in (SCOPE_GROUP, SCOPE_GROUP_USER) and self.config["read_group"]:
++            if context.group_scope:
++                scopes.append(context.group_scope)
++        return scopes
++
++    def _write_scope(self, context: MemoryContext, policy: MemoryPolicy) -> tuple[str, str] | None:
++        """Single scope automatic extraction may write for this turn."""
++
++        if not (policy.long_term and policy.extract):
++            return None
++        if context.is_private or not context.group_id:
++            return context.user_scope if policy.scope == SCOPE_USER else None
++        if policy.scope == SCOPE_USER:
++            # Explicit opt-in: this group's turns feed the sender's own memory.
++            return context.user_scope
++        # group / group_user both write the shared group scope (no dual write:
++        # one fact, one row, one owner).
++        return context.group_scope
++
 +    # ------------------------------------------------------------------
 +    # retrieval
 +    # ------------------------------------------------------------------
-+    def _readable_scopes(self, context: MemoryContext) -> list[tuple[str, str]]:
-+        return context.readable_scopes(
-+            users=bool(self.config["read_user"]),
-+            groups=bool(self.config["read_group"]),
-+            conversation=bool(self.config["read_conversation"]),
-+            persona=bool(self.config["read_persona"]),
-+            global_scope=bool(self.config["read_global"]),
++    def _readable_scopes(
++        self,
++        context: MemoryContext,
++        policy: MemoryPolicy | None = None,
++    ) -> list[tuple[str, str]]:
++        policy = policy if policy is not None else self.policy_for(context)
++        if not policy.long_term:
++            return []
++        scopes = self._policy_scopes(context, policy)
++        # conversation/persona/global are not group facts: they stay governed by
++        # the read_* flags even when a chat is gated off from long-term memory...
++        # except that a conversation-mode chat reads nothing at all (return above).
++        scopes.extend(
++            context.readable_scopes(
++                users=False,
++                groups=False,
++                conversation=bool(self.config["read_conversation"]),
++                persona=bool(self.config["read_persona"]),
++                global_scope=bool(self.config["read_global"]),
++            )
 +        )
++        return list(dict.fromkeys(scopes))
 +
 +    def retrieve(self, context: MemoryContext, query: str) -> tuple[str, list[MemoryRecord]]:
 +        """Return the bounded memory block for this turn and the used records."""
 +
 +        if not self.enabled or not (query or "").strip():
 +            return "", []
++        policy = self.policy_for(context)
++        if not (policy.long_term and policy.inject):
++            self.gated_turns += 1
++            return "", []
++        scopes = self._readable_scopes(context, policy)
++        if not scopes:
++            return "", []
++        max_items = int(policy.max_items or self.config["max_items"])
++        max_chars = int(policy.max_chars or self.config["max_chars"])
 +        try:
 +            records = self._store.search(
-+                self._readable_scopes(context),
++                scopes,
 +                query,
-+                limit=max(1, int(self.config["max_items"]) * 3),
++                limit=max(1, max_items * 3),
 +                min_confidence=float(self.config["min_confidence"]),
 +            )
 +            block, used = render_memory_block(
 +                records,
-+                max_chars=int(self.config["max_chars"]),
-+                max_items=int(self.config["max_items"]),
++                max_chars=max_chars,
++                max_items=max_items,
 +            )
 +            if not block:
 +                return "", []
@@ -730,6 +1236,10 @@ index 0000000..d1485bf
 +        """Queue one finished turn for extraction. Never blocks, never raises."""
 +
 +        if not self.enabled:
++            return False
++        policy = self.policy_for(context)
++        if not (policy.long_term and policy.extract):
++            self.gated_turns += 1
 +            return False
 +        if not (user_text or "").strip() and not explicit_candidates:
 +            return False
@@ -782,9 +1292,15 @@ index 0000000..d1485bf
 +        assistant_text: str,
 +        explicit: tuple[Candidate, ...] = (),
 +    ) -> None:
++        policy = self.policy_for(context)
++        write_scope = self._write_scope(context, policy)
++        if write_scope is None:
++            # Toggled off (or extract disabled) while this turn sat in the queue.
++            self.gated_turns += 1
++            return
 +        candidates: list[Candidate] = list(explicit)
 +        if self.config.get("heuristic_extract", True):
-+            candidates.extend(confirmed_extract(user_text, assistant_text, context))
++            candidates.extend(confirmed_extract(user_text, assistant_text, context, scopes=[write_scope]))
 +        extractor = self._llm_extractor
 +        if extractor is not None and self.config.get("llm_extract"):
 +            try:
@@ -792,18 +1308,34 @@ index 0000000..d1485bf
 +            except Exception as exc:  # noqa: BLE001 - optional extractor is fail-open
 +                logger.warning("长期记忆 LLM 抽取失败（已忽略）：%s", exc)
 +        if candidates:
-+            await asyncio.to_thread(self.store_candidates, candidates)
++            await asyncio.to_thread(self.store_candidates, candidates, allowed_scopes=[write_scope])
 +        self.processed_turns += 1
 +        self._turns_since_purge += 1
 +        if self._turns_since_purge >= _PURGE_EVERY_TURNS:
 +            self._turns_since_purge = 0
 +            await asyncio.to_thread(self._safe_purge_expired)
 +
-+    def store_candidates(self, candidates: Iterable[Candidate]) -> dict[str, int]:
-+        """Synchronous formation for already-extracted candidates."""
++    def store_candidates(
++        self,
++        candidates: Iterable[Candidate],
++        *,
++        allowed_scopes: Iterable[tuple[str, str]] | None = None,
++    ) -> dict[str, int]:
++        """Synchronous formation for already-extracted candidates.
++
++        ``allowed_scopes`` is the write allow-list of the automatic pipeline
++        (from the per-chat policy).  Candidates aimed at any other scope are
++        dropped instead of remapped -- remapping would push a fact extracted
++        for one chat into another (a leak).  ``None`` (plugins/tests) means
++        "explicit write, no gate".
++        """
 +
 +        results = {"created": 0, "updated": 0, "skipped": 0}
++        allowed = {(str(t), str(i)) for t, i in allowed_scopes} if allowed_scopes is not None else None
 +        for candidate in candidates:
++            if allowed is not None and (candidate.scope_type, candidate.scope_id) not in allowed:
++                results["gated"] = results.get("gated", 0) + 1
++                continue
 +            try:
 +                ttl = candidate.ttl_seconds
 +                if ttl is None and self.config["ttl_days"]:
@@ -880,11 +1412,18 @@ index 0000000..d1485bf
 +        *,
 +        limit: int = 8,
 +    ) -> list[MemoryRecord]:
++        policy = self.policy_for(context)
++        if not (self.enabled and policy.long_term and policy.inject):
++            self.gated_turns += 1
++            return []
++        scopes = self._readable_scopes(context, policy)
++        if not scopes:
++            return []
 +        try:
 +            return self._store.search(
-+                self._readable_scopes(context),
++                scopes,
 +                query,
-+                limit=limit,
++                limit=min(int(limit), int(policy.max_items or limit)),
 +                min_confidence=float(self.config["min_confidence"]),
 +            )
 +        except Exception as exc:  # noqa: BLE001 - fail open
@@ -920,10 +1459,25 @@ index 0000000..d1485bf
 +                "enabled": self.enabled,
 +                "processed_turns": self.processed_turns,
 +                "dropped_turns": self.dropped_turns,
++                "gated_turns": self.gated_turns,
++                "policy": self._policy_summary(),
 +                "last_error": self.last_error or self._store.last_error,
 +            }
 +        )
 +        return payload
++
++    def _policy_summary(self) -> dict:
++        try:
++            section = self.config.get("policy")
++            groups = section.get("groups") if isinstance(section, Mapping) else None
++            return {
++                "default_mode": section.get("default_mode", MODE_CONVERSATION) if isinstance(section, Mapping) else MODE_CONVERSATION,
++                "groups": len(groups) if isinstance(groups, Mapping) else 0,
++                "private": bool(isinstance(section, Mapping) and section.get("private")),
++                "parses": self._policy_resolver.parses,
++            }
++        except Exception:  # noqa: BLE001 - stats must never raise
++            return {"default_mode": MODE_CONVERSATION, "groups": 0, "private": False}
 +
 +
 +_SERVICES: dict[str, MemoryService] = {}
@@ -944,6 +1498,13 @@ index 0000000..d1485bf
 +        if service is None:
 +            service = MemoryService(merged, db_path=key)
 +            _SERVICES[key] = service
++        else:
++            # Hot reload: AstrBot re-reads its config every turn, so a policy
++            # edit must apply to the cached service without a restart.
++            try:
++                service.refresh_config(merged)
++            except Exception as exc:  # noqa: BLE001 - stale config beats a crash
++                logger.warning("长期记忆配置热更新失败（继续用旧配置）：%s", exc)
 +        return service
 +
 +

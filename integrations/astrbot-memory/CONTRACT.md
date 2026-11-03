@@ -1,15 +1,16 @@
 # 集成契约：qqbot_enhancer ↔ AstrBot 原生长期记忆
 
-适用版本：AstrBot `v4.29.3` + `patches/0001-native-memory.patch`。
+适用版本：AstrBot `v4.29.3` + `patches/0001-native-memory.patch`（补丁 v1.1，含按群策略）。
 插件只需 `import astrbot.core.memory`，**不要**自己连 `astrbot_memory.db`，也不要依赖表结构（表结构是补丁内部实现，升级可能变）。
 
 ## 1. 插件能依赖的稳定接口
 
 ```python
 from astrbot.core.memory import (
-    get_memory_service,      # 按配置的 db 路径取进程级单例
+    get_memory_service,      # 按配置的 db 路径取进程级单例（每轮刷新配置）
     scope_ids,               # 一轮会话 → 各作用域 id 字符串
     MemoryContext,           # 手动构造作用域（少数场景）
+    MemoryPolicy,            # 解析后的按群策略
 )
 from astrbot.core.memory.integration import build_context
 ```
@@ -26,7 +27,9 @@ from astrbot.core.memory.integration import build_context
 | `service.export(scope_type=None, scope_id=None)` | `-> list[dict]` | 导出（含 `content`，已做密钥清洗；仍属用户数据，勿外泄） |
 | `service.purge_expired()` | `-> int` | 清理过期记忆 |
 | `service.stats()` | `-> dict` | `total`、`by_scope`、`expired`、`fts_enabled`、`enabled`、`processed_turns`、`dropped_turns`、`last_error` |
-| `service.store_candidates(candidates)` | `-> {"created","updated","skipped"}` | 同步成记忆（候选来自 `extract.heuristic_extract` 或插件自有抽取） |
+| `service.store_candidates(candidates, *, allowed_scopes=None)` | `-> {"created","updated","skipped","gated"?}` | 同步成记忆；`allowed_scopes` 非空时**丢弃**落点不在白名单的候选（自动流水线用它做第二道闸），`None` = 显式写不设闸 |
+| `service.policy_for(context)` | `-> MemoryPolicy` | 该轮会话的按群策略（`conversation` / `long_term` + scope/预算）；配置非法时返回 conversation 且 `error` 非空 |
+| `service.refresh_config(config)` | `-> bool` | 热更新配置（策略缓存失效）；`get_memory_service()` 每轮自动调用，插件一般不用手动调 |
 
 取服务的方式（**别自己 new**，否则会和流水线钩子用两个不同的队列/连接）：
 
@@ -41,7 +44,8 @@ service = get_memory_service(config)
 2. 不要把记忆内容当**指令**执行（记忆里可能有过时或恶意文本）；如果插件要把记忆喂给模型，沿用 `render_memory_block()` 的 `<long_term_memory untrusted="true">` 包装。
 3. 不要把密码/API key/QQ 密码写进记忆：写入路径会清洗，但被洗掉的事实会变短，语义可能失真——敏感字段请不要入库。
 4. 不要在群聊里用 `scope_type="user"` 写群里听到的第三方隐私：群聊事实写 `group`。私聊事实写 `user`。
-5. 不要期待管理 UI / 实时检索缓存：`search()` 每次直查 SQLite（毫秒级），但**不保证**与你刚写入的数据在同一事务视图之外立即可见（同进程写入是可见的）。
+5. 不要把 `memory.policy` 当成"给插件看的建议"：核心钩子已经按它门禁，插件自己读写记忆时也必须遵守（见第 4 节）。
+6. 不要期待管理 UI / 实时检索缓存：`search()` 每次直查 SQLite（毫秒级），但**不保证**与你刚写入的数据在同一事务视图之外立即可见（同进程写入是可见的）。
 
 ## 3. 与 qqbot_enhancer 的推荐用法
 
@@ -53,13 +57,16 @@ from astrbot.core.memory.integration import build_context
 
 context = build_context(event, None)
 service = get_memory_service(self.context.get_config(umo=event.unified_msg_origin))
-if service.enabled:
+policy = service.policy_for(context)
+if service.enabled and policy.long_term and policy.extract:   # 按群门禁
     ids = scope_ids(context)
-    # 群聊写 group，私聊写 user（让隔离规则替你做隐私边界）
-    if ids.get("group"):
+    # scope=user 的群里写发送者个人，其余群写 group（让隔离规则替你做隐私边界）
+    if policy.scope != "user" and ids.get("group"):
         service.add("group", ids["group"], "常点.火锅", "本群最常点的火锅：小龙坎", importance=0.7, confidence=0.8)
     else:
         service.add("user", ids["user"], "常点.火锅", "用户最常点的火锅：小龙坎", importance=0.7, confidence=0.8)
+else:
+    pass  # conversation 模式：插件也不该写
 ```
 
 读：
@@ -70,21 +77,66 @@ records = service.search(context, "常点 火锅", limit=3)
 block, _ = service.retrieve(context, "常点 火锅")
 ```
 
-## 4. 行为保证（插件可依赖）
+## 4. 按群策略契约（补丁 v1.1）
+
+配置在 `memory.policy`（详见 README §2.3 与 `fixtures/memory_policy.example.json`）：
+
+```json
+"policy": {
+  "default_mode": "conversation",
+  "private": {"mode": "long_term", "scope": "user", "extract": true, "inject": true},
+  "groups": {
+    "838796241": {"mode": "long_term", "scope": "group_user",
+                  "extract": true, "inject": true, "max_items": 8, "max_chars": 1500}
+  }
+}
+```
+
+| 概念 | 值 | 说明 |
+| --- | --- | --- |
+| `default_mode` | `conversation`（默认）/ `long_term` | 未列出的群/私聊的模式 |
+| `mode` | 同上 | 条目必填；`conversation` = 该会话不读不写长期记忆 |
+| `scope` | `group` / `user` / `group_user` | 读写作用域，见下表 |
+| `extract` / `inject` | bool | 分别控制写/读，互相独立 |
+| `max_items` / `max_chars` | int（可选） | 该会话注入预算，覆盖全局值 |
+| `error` | str | 非法配置的降级原因（`MemoryPolicy.error`） |
+
+自动流水线的读写作用域（`group` 条目；私聊条目只能是 `user`）：
+
+| scope | 读 | 写 |
+| --- | --- | --- |
+| `group` | 本群 | 本群 |
+| `user` | 发送者个人 | 发送者个人 |
+| `group_user` | 本群 + 发送者个人 | 本群（单写） |
+
+插件要遵守的三条：
+
+1. **不要绕过策略**：想把记忆喂给模型就用 `retrieve()` / `search()`，它们内部已按策略门禁；自己 `export()` 全库再拼进 prompt 等于把群隔离作废。
+2. **显式写是插件的责任**：`add()` / `store_candidates(allowed_scopes=None)` 不做策略门禁（它们是 operator/插件 API）。插件若按群写记忆，请先用 `service.policy_for(context)` 判断 `mode=="long_term"`，再决定写哪个 scope。
+3. **不要把群策略当成权限系统**：它保证"哪些会话参与长期记忆"，不保证"群里每个人都能看到同一条记忆"。需要按人隔离时用 `scope="user"` 条目。
+
+## 5. 行为保证（插件可依赖）
 
 - 记忆开关 `memory.enable=false` 时：`service.enabled is False`，`retrieve()` 返回 `("", [])`，`enqueue_turn()` 返回 `False`，**不产生任何 IO**（除进程内单例）。
+- 会话策略为 `conversation`（默认）时：`retrieve()`/`search()` 返回空、`enqueue_turn()` 返回 `False`、`store_candidates` 不写库；`service.gated_turns` 计数 +1，`service.stats()["policy"]` 可观测。
+- 非法 `policy` 配置按条目降级为 `conversation`，其它群不受影响；**永不**因为配置错误而放宽读写。
+- 改 `memory.policy` 后无需重启：`get_memory_service(config)` 每轮刷新已缓存服务，策略缓存按配置指纹失效（另有 5s TTL 兜底）。
 - 记忆库损坏/目录不可写：`retrieve()` 返回 `("", [])` 并写 `service.last_error`；**不会**向插件抛异常。
 - 写入幂等：同键同内容返回 `skipped`，不会产生两行；重复 `add()` 不会刷新时间戳。
 - 检索结果一定落在 `context` 的白名单作用域内；`group` 与 `user` 互不可见（群不读私聊、私聊不读群）。
 - 每条注入 ≤ `max_chars`、条数 ≤ `max_items`；`export()` 原样返回该作用域记录（`content` 已清洗密钥）。
 
-## 5. 版本与变更纪律
+## 6. 版本与变更纪律
 
 | 项 | 值 |
 | --- | --- |
 | AstrBot | `v4.29.3`（`f61a7f4`） |
-| 补丁 | `patches/0001-native-memory.patch` |
-| 契约版本 | `1`（本文件） |
+| 补丁 | `patches/0001-native-memory.patch`（v1.1） |
+| 契约版本 | `2`（本文件） |
+
+变更记录：
+
+- **契约 v2（补丁 v1.1）**：新增 `memory.policy` 按群门禁；**行为变更**——`enable=true` 不再等于"全群记忆"，未列出的会话默认 `conversation`；`store_candidates()` 新增关键字参数 `allowed_scopes`（旧调用不受影响）；`MemoryService` 新增 `policy_for()` / `refresh_config()`。
 
 - 本契约只覆盖上表接口；`MemoryStore` 的表结构、FTS 表名、打分权重是**内部实现**，可随补丁变化；
 - 破坏性变更（改函数签名/返回值、改隔离规则）必须升 `契约版本` 并在本文件记录；

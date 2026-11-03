@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import unittest
 
-from _support import FakeConversation, FakeEvent, FakeRequest, MemoryTestCase, group_event, private_event
+from _support import (
+    FakeConversation,
+    FakeEvent,
+    FakeRequest,
+    MemoryTestCase,
+    group_event,
+    private_event,
+    raw_memory_config,
+)
 
 
 class InjectionTests(MemoryTestCase):
@@ -71,7 +79,7 @@ class InjectionTests(MemoryTestCase):
         self.assertEqual(req.system_prompt, "原系统提示")
 
     def test_singleton_service_reads_the_config_section(self):
-        config = {"memory": {"enable": True, "db_path": str(self.db_path), "max_chars": 200}}
+        config = raw_memory_config(self.db_path, max_chars=200)
         event = private_event("1001", "火锅")
         req = FakeRequest("火锅", "")
         self.memory.reset_memory_services()

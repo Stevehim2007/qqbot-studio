@@ -72,7 +72,8 @@ class FakeEvent:
         self._extras: dict = {}
         if persona_id:
             self._extras["_trace_persona_id"] = persona_id
-        self.unified_msg_origin = f"{platform}:{group_id or 'friend'}:{user_id}"
+        message_type = "GroupMessage" if group_id else "FriendMessage"
+        self.unified_msg_origin = f"{platform}:{message_type}:{group_id or user_id}"
 
     def get_platform_name(self) -> str:
         return self.platform
@@ -110,6 +111,18 @@ def group_event(group_id: str = "2001", user_id: str = "1001", message_str: str 
     return FakeEvent(group_id=group_id, user_id=user_id, message_str=message_str)
 
 
+def raw_memory_config(db_path: str | Path, **overrides) -> dict:
+    """Raw config for ``MemoryService`` with every chat opted into long-term."""
+
+    section = {
+        "enable": True,
+        "db_path": str(db_path),
+        "policy": {"default_mode": "long_term"},
+    }
+    section.update(overrides)
+    return {"memory": section}
+
+
 def memory_config(db_path: str | Path, **overrides) -> dict:
     config = {
         "enable": True,
@@ -118,6 +131,8 @@ def memory_config(db_path: str | Path, **overrides) -> dict:
         "max_items": 4,
         "min_confidence": 0.3,
         "ttl_days": 0,
+        # 既有用例测试存储/检索语义，默认全量开启；策略行为在 test_policy.py 单独覆盖。
+        "policy": {"default_mode": "long_term"},
     }
     config.update(overrides)
     return {"memory": config}

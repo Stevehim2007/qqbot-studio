@@ -49,6 +49,9 @@ python3 -m py_compile \
   "$SRC/astrbot/core/config/default.py" \
   "$SRC/astrbot/core/pipeline/process_stage/method/agent_sub_stages/internal.py"
 
+echo "==> policy smoke (default conversation, listed groups long_term, invalid fails safe)"
+python3 "$HERE/scripts/smoke-policy.py" "$SRC" "$HERE/fixtures/memory_policy.example.json"
+
 echo "==> running compatibility tests"
 cd "$HERE/tests"
 ASTRBOT_SRC="$SRC" python3 -m unittest discover -s . -p "test_*.py" -v

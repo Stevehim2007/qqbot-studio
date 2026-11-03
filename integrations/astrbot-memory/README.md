@@ -1,5 +1,5 @@
 # AstrBot 原生长期记忆（最小源码补丁）
-**Pinned upstream:** AstrBot `v4.29.3`（tag `v4.29.3`，commit `f61a7f4`）· 补丁文件：`patches/0001-native-memory.patch`（11 个文件，8 新增 + 3 修改）· 不 fork、不 vendor 源码。
+**Pinned upstream:** AstrBot `v4.29.3`（tag `v4.29.3`，commit `f61a7f4`）· 补丁文件：`patches/0001-native-memory.patch`（v1.1：12 个文件，9 新增 + 3 修改）· 不 fork、不 vendor 源码。
 
 AstrBot 本身只有会话历史（context），没有跨会话的长期记忆。本目录提供一个**可审查的小补丁**：在 `astrbot/core/` 新增一个 SQLite 边车（sidecar）记忆服务，并在请求/回复生命周期各接一个钩子。设计参考 Stevebot 的“抽取→成记忆→检索注入”思路，但没有复用其运行时/数据库。
 
@@ -7,7 +7,8 @@ AstrBot 本身只有会话历史（context），没有跨会话的长期记忆�
 - **默认关闭**（`memory.enable=false`），未开启时行为与上游 v4.29.3 完全一致；
 - 不新增任何依赖：记忆包只用 Python 标准库；
 - 正常回复**不会多一次模型调用**：抽取是正则启发式 + 异步队列；LLM 抽取是可选接口；
-- 任何记忆故障都 **fail-open**：注入为空、抽取跳过，回复照常。
+- 任何记忆故障都 **fail-open**：注入为空、抽取跳过，回复照常；
+- **按群开关**（v1.1）：只有 `memory.policy` 里显式列为 `long_term` 的群才读写长期记忆，其余群/私聊保持纯会话行为；改配置即时生效，不用重启。
 
 ## 1. 交付物
 
@@ -19,8 +20,9 @@ integrations/astrbot-memory/
 ├── Dockerfile.memory               # 镜像内打补丁的 overlay 构建（本环境未构建）
 ├── fixtures/turns_zh.json          # 抽取期望（与补丁同步冻结）
 ├── fixtures/memory_config.example.json
-├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 跑测试（65 tests）
-└── tests/                          # 65 个兼容性测试（unittest，无第三方依赖）
+├── fixtures/memory_policy.example.json  # 按群策略样例（含非法项，验证 fail-safe）
+├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 策略冒烟 → 跑测试（91 tests）
+└── tests/                          # 91 个兼容性测试（unittest，无第三方依赖）
     ├── run-tests.sh
     ├── _support.py                 # 从打了补丁的源码树导入 astrbot.core.memory
     ├── test_scope_isolation.py     # 用户/群/会话/人格/全局隔离，无跨群/私聊泄漏
@@ -32,6 +34,7 @@ integrations/astrbot-memory/
     ├── test_no_secrets.py          # API key / 密码 / token 不落库、不注入
     ├── test_queue.py               # 异步队列、有界丢弃、worker 容错、可选 LLM 抽取
     ├── test_fixtures.py            # fixtures/turns_zh.json 逐条冻结比对
+    ├── test_policy.py              # 按群策略：门禁/隔离/热更新/fail-safe/scope/读写开关
     └── test_patch_wiring.py        # AST 级接线检查（升级时钩子漂移会报错）
 ```
 
@@ -46,11 +49,13 @@ integrations/astrbot-memory/
 | `store.py` | SQLite 建表/迁移、FTS5 索引（不可用时自动 BM25 回退）、成记忆（create/update/skip）、检索打分、TTL/forget/delete/export/stats |
 | `extract.py` | 启发式抽取规则（偏好/忌口/名字/生日/居住地/职业/单位/宠物/习惯/“记住”指令/英文同类规则）+ 可选 `LLMExtractor` 接口 |
 | `render.py` | 有界注入块渲染（`<long_term_memory untrusted="true">`） |
-| `service.py` | 配置解析、单例（按 db 路径）、检索、异步抽取队列、显式读写 API |
+| `policy.py` | **按群策略**：解析/校验 `memory.policy`、按群 identity 解析、TTL + 指纹缓存（热更新） |
+| `service.py` | 配置解析、单例（按 db 路径）、策略门禁、检索、异步抽取队列、显式读写 API |
 | `integration.py` | 两个流水线钩子：`inject_memory()` / `enqueue_extraction()`，均 fail-open |
 | `__init__.py` | 对外 API |
 
 **作用域与隔离**：`user` / `group` / `conversation` / `persona` / `global`。
+（v1.1 起，自动读写还要先过 `memory.policy` 的按群门禁，见 2.3。）
 
 - 私聊一轮只写 `user`，群聊一轮只写 `group`（`write_scopes()` 强制二选一）；
 - 检索是一张**显式白名单**：私聊读 `user + conversation + persona + global`；群聊读 `group + conversation + persona + global`；
@@ -78,11 +83,59 @@ integrations/astrbot-memory/
 
 **TTL / forget / delete / export**：`ttl_days` 全局默认，`Candidate.ttl_seconds` 单条覆盖；`purge_expired()` 每 50 轮顺手清理一次，也可由插件主动调用；`forget(scope_type, scope_id, key?)`、`delete(id)`、`export(scope_type?, scope_id?)` 均限定作用域。
 
+### 2.3 按群策略（v1.1 新增）
+
+目标：**少数群开长期记忆，其它群和私聊保持纯会话行为**（不读不写长期记忆，AstrBot 自己的会话历史不受影响）。
+
+配置（`memory.policy`，`fixtures/memory_policy.example.json` 是完整样例）：
+
+```json
+"memory": {
+  "enable": true,
+  "policy": {
+    "default_mode": "conversation",
+    "private": {"mode": "long_term", "scope": "user", "extract": true, "inject": true},
+    "groups": {
+      "838796241":       {"mode": "long_term", "scope": "group",      "extract": true, "inject": true},
+      "aiocqhttp:12345": {"mode": "long_term", "scope": "group_user", "extract": true, "inject": true,
+                          "max_items": 8, "max_chars": 1500}
+    }
+  }
+}
+```
+
+| 字段 | 取值 | 语义 |
+| --- | --- | --- |
+| `default_mode` | `conversation`（默认）/ `long_term` | 未列出会话的模式；**默认 conversation = 全部关闭** |
+| `private` | 条目对象 | 私聊专用条目；缺省时私聊跟随 `default_mode`，scope 固定 `user` |
+| `groups` | `{群id: 条目}` | 按群覆盖；键可写裸群号或带平台前缀 `aiocqhttp:12345`（前缀优先） |
+| `mode` | `conversation` / `long_term` | **条目里必填**；`conversation` 时该会话完全不读写长期记忆 |
+| `scope` | `group` / `user` / `group_user` | 见下表 |
+| `extract` | `true`/`false` | 是否允许**写**（抽取入库），与 `inject` 独立 |
+| `inject` | `true`/`false` | 是否允许**读**（检索注入），与 `extract` 独立 |
+| `max_items` / `max_chars` | 1..50 / 80..8000 | 该会话的注入预算；缺省用 `memory.max_items` / `memory.max_chars` |
+
+`scope` 的读写语义（自动抽取/注入，不含插件的显式 API）：
+
+| scope | 群聊读 | 群聊写 | 私聊 |
+| --- | --- | --- | --- |
+| `group`（群条目默认） | 本群 | 本群 | 不适用 |
+| `user` | **发送者个人**（显式选择让本群使用其私有记忆） | 发送者个人 | 只读写自己 |
+| `group_user` | 本群 + 发送者个人 | 本群（单写，避免一条事实两行） | 不适用 |
+
+边界保证：
+
+- 群 identity 取自事件的群 id（`get_group_id()`，缺失时从 UMO `platform:message_type:session_id` 兜底），**不来自消息文本**——私聊里写“群 12345”不会继承该群策略；
+- 群 A 的 `group` 记忆在群 B / 私聊 / 另一个平台都读不到；私聊 `user` 记忆只在私聊或显式 `scope=user|group_user` 的群里可见；
+- 写入还有第二道闸：`store_candidates(..., allowed_scopes=[...])` 会**丢弃**落点不在本会话写作用域内的候选（不重映射，避免把 A 的事实塞进 B）；
+- 非法配置**逐条 fail-safe 到 conversation**：未知 `mode`/`scope`、非布尔的 `extract`、越界的 `max_items`、`groups` 不是对象、私聊配 `scope=group`…… 都只让**那一项**降级为 conversation（其它群照常），原因写进 `MemoryPolicy.error` / `service.stats()["policy"]` / 日志 warning；
+- 热更新：配置文件里的 `policy` 改了以后，下一轮就生效（`get_memory_service()` 每轮用最新配置刷新已缓存的服务，策略缓存按配置指纹失效 + 5s TTL），不需要重启；同一轮已经排进抽取队列的消息会按**处理时刻**的策略再判一次，关掉就丢弃。
+
 ### 2.2 修改：三处最小接线（共 +40 行左右）
 
 | 文件 | 位置 | 内容 |
 | --- | --- | --- |
-| `astrbot/core/config/default.py` | `DEFAULT_CONFIG` 顶部 | 新增 `memory` 配置段（`enable: False`），老配置加载时由 `check_config_integrity` 自动补齐 |
+| `astrbot/core/config/default.py` | `DEFAULT_CONFIG` 顶部 | 新增 `memory` 配置段（`enable: False`，`policy.default_mode: conversation`），老配置加载时由 `check_config_integrity` 自动补齐 |
 | `astrbot/core/astr_main_agent.py` | `_decorate_llm_request()`，`await _ensure_persona_and_skills(...)` 之后 | `inject_memory_block(event, req, plugin_context.get_config(umo=...))`：人格已绑定、`req.prompt` 已有值时注入记忆块
 | `astrbot/core/pipeline/process_stage/method/agent_sub_stages/internal.py` | `final_resp = agent_runner.get_final_llm_resp()` 之后 | `enqueue_extraction(event, req, final_resp.completion_text, ...)`：与上游 `asyncio.create_task(_record_internal_agent_stats(...))` 同一位置，纯后台 |
 
@@ -114,10 +167,23 @@ python3 -m py_compile astrbot/core/memory/*.py astrbot/core/astr_main_agent.py \
 改 `data/config/astrbot_config.json` 的 `memory` 段（示例见 `fixtures/memory_config.example.json`），重启 AstrBot：
 
 ```json
-"memory": { "enable": true, "max_chars": 800, "max_items": 6, "ttl_days": 0 }
+"memory": {
+  "enable": true,
+  "max_chars": 800,
+  "max_items": 6,
+  "ttl_days": 0,
+  "policy": {
+    "default_mode": "conversation",
+    "groups": {
+      "838796241": {"mode": "long_term", "scope": "group", "extract": true, "inject": true}
+    }
+  }
+}
 ```
 
-> 该配置段**不在 Dashboard WebUI 的设置表单里**（补丁没有改 `astrbot/core/config/default.py` 里那张上千行的 schema），这是刻意的最小化取舍，见“局限”。
+> 注意 `enable: true` 只是"打开记忆子系统"，**具体哪个群记忆由 `policy` 决定**；`policy.default_mode` 默认 `conversation`，即不列出来的群/私聊一律不记。上例只让群 `838796241` 使用长期记忆。
+>
+> 该配置段**不在 Dashboard WebUI 的设置表单里**（补丁没有改 `astrbot/core/config/default.py` 里那张上千行的 schema），这是刻意的最小化取舍，见“局限”。改完 `astrbot_config.json` 后 AstrBot 下一轮读取就会生效（`enable` 与 `policy` 都热更新），不必重启进程。
 
 ### 3.3 Docker 镜像 overlay（`Dockerfile.memory`）
 
@@ -135,7 +201,7 @@ QQ Bot Studio 侧接线（`ASTRBOT_IMAGE` 换成本地构建的 tag）属于 `qq
 ## 4. 测试与验证
 
 ```bash
-# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 63 个测试
+# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 策略冒烟 → 91 个测试
 integrations/astrbot-memory/scripts/verify-patch.sh
 
 # 已有打补丁的源码树时
@@ -151,7 +217,8 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 | `git apply --check` on pristine v4.29.3 | OK |
 | `patch -p1 --dry-run`（非 git 场景） | OK |
 | `py_compile`（补丁后全部模块 + 3 个改动文件） | OK |
-| `python3 -m unittest discover`（65 tests） | OK |
+| 策略冒烟（默认 `policy.default_mode == conversation`，列出的群解析为 long_term） | OK |
+| `python3 -m unittest discover`（91 tests） | OK |
 | 基线行为（`memory.enable=false`） | 钩子立即返回，`system_prompt` 与上游一致（见 `test_injection.py::test_disabled_memory_leaves_the_prompt_untouched`） |
 
 **未验证**（见第 6 节）：真实 AstrBot 进程启动、真实 LLM 回复链路 E2E、Docker 镜像构建。
@@ -166,6 +233,7 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 
 ## 6. 已知局限（必须知道）
 
+0. **策略默认全关**：`memory.policy.default_mode=conversation`，`enable=true` 也不会自动记住任何群——必须显式列出群号；升级到 v1.1 后原有"全群记忆"行为会被关闭，这是刻意的隐私默认值（v1.0 的 `write_private_scope`/`write_group_scope` 键保留但已不起作用）。
 1. **抽取只有正则启发式**：目前覆盖 20 余种中/英文句式（偏好、忌口、名字、生日、居住地、职业、单位、宠物、习惯、“记住”指令、英文同类规则）。语义改写、长句多事实、反讽/假设句（“如果我喜欢吃辣的话”）会漏抽或误抽；`llm_extract=true` + `set_llm_extractor()` 是留好的接入口，**默认关闭，也不在回复路径上**。
 2. **写入是“每轮一条消息”的粒度**：只从用户消息抽取，助手回复不产出记忆；一个群里多人说话只按“本群”整体记忆，没有“群里谁说的”维度（避免把 A 的隐私写成 B 的事实）。
 3. **检索是词面匹配**（FTS5/BM25 + 二元组），没有向量语义召回：同义改写（“火锅” vs “打边炉”）召回不到。跨语言依赖规则里自带的英文句式，不做翻译对齐。
@@ -173,5 +241,7 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 5. **无多进程/多实例共享**：每条 AstrBot 进程各开各的 SQLite（WAL、`busy_timeout=3s`）。同一 `data/` 目录被两个进程同时写会争锁——目前只在单容器单进程下验证。
 6. **Docker 镜像未构建**：本环境无 Docker daemon；`Dockerfile.memory` 未经过 `docker build` 验证，官方镜像的源码路径/启动方式需按实际镜像调整。
 7. **未做真实进程 E2E**：本环境无法安装 AstrBot 的完整依赖（quart/sqlalchemy/faiss 等），所以“钩子在真实 pipeline 里被调用”只有 AST 结构检查和桩对象行为测试，没有跑通过一次真实的 QQ 消息→LLM→回复链路。上线前请在一台测试实例上按第 3 节装好，发一条“记住：我不吃香菜”，再问“晚饭推荐”，确认注入生效。
-8. **隐私默认值偏保守**：`enable=false`；群聊不读私聊记忆；`export` 会返回原始记忆文本（含用户说的原话，已做密钥清洗但不做匿名化）。
+8. **隐私默认值偏保守**：`enable=false` + `policy.default_mode=conversation`；群聊默认不读私聊记忆（`scope=user|group_user` 是显式 opt-in）；`export` 会返回原始记忆文本（含用户说的原话，已做密钥清洗但不做匿名化）。
+9. **策略只能改 JSON**：没有 Dashboard 表单，也没有 `/记忆 开群xxx` 之类的聊天命令；改配置靠编辑 `data/config/astrbot_config.json`，生效时机取决于 AstrBot 何时重读配置（通常下一轮），不会话中断正在进行的回复。
+10. **热更新只覆盖配置**：策略/预算改动即时生效，但 `db_path` 改变需要重启（服务单例按旧路径缓存，旧连接仍在使用）；`max_records_per_scope` 之类建库期参数同样只在新建服务时读取。
 9. **性能未压测**：检索候选上限 400 行、FTS 匹配上限 200 行、注入 ≤ `max_chars`；单作用域上限 500 行。极端数据量（>10⁵ 行）下没有基准数据。

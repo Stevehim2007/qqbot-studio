@@ -6,16 +6,20 @@ import asyncio
 import unittest
 from unittest import mock
 
-from _support import AsyncMemoryTestCase, FakeRequest, MemoryTestCase, private_event
+from _support import (
+    AsyncMemoryTestCase,
+    FakeRequest,
+    MemoryTestCase,
+    private_event,
+    raw_memory_config,
+)
 
 
 class FailOpenTests(MemoryTestCase):
     def test_unwritable_db_path_degrades_to_no_memory(self):
         blocker = self.db_path.parent / "blocker"
         blocker.write_text("not a directory", encoding="utf-8")
-        service = self.memory.MemoryService(
-            {"memory": {"enable": True, "db_path": str(blocker / "mem.db")}}
-        )
+        service = self.memory.MemoryService(raw_memory_config(blocker / "mem.db"))
         self.addCleanup(service.close)
         context = self.memory.build_context(private_event("1001"), None)
         self.assertEqual(service.retrieve(context, "麻辣火锅"), ("", []))
@@ -24,9 +28,7 @@ class FailOpenTests(MemoryTestCase):
 
     def test_corrupt_db_file_does_not_raise(self):
         self.db_path.write_bytes(b"this is not a sqlite database")
-        service = self.memory.MemoryService(
-            {"memory": {"enable": True, "db_path": str(self.db_path)}}
-        )
+        service = self.memory.MemoryService(raw_memory_config(self.db_path))
         self.addCleanup(service.close)
         context = self.memory.build_context(private_event("1001"), None)
         self.assertEqual(service.retrieve(context, "麻辣火锅"), ("", []))

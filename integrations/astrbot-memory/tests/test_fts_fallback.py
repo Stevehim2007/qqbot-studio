@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from _support import MemoryTestCase, private_event, sqlite_has_fts5
+from _support import MemoryTestCase, private_event, raw_memory_config, sqlite_has_fts5
 
 
 class FtsFallbackTests(MemoryTestCase):
@@ -27,8 +27,10 @@ class FtsFallbackTests(MemoryTestCase):
         self.assertEqual([record.key for record in records], ["偏好.火锅"])
 
     def test_bm25_fallback_without_fts5(self):
-        service = self.memory.MemoryService({"memory": {"enable": True, "db_path": str(self.db_path)}},
-                                            store=self.memory.MemoryStore(self.db_path / "fallback.db", enable_fts=False))
+        service = self.memory.MemoryService(
+            raw_memory_config(self.db_path),
+            store=self.memory.MemoryStore(self.db_path / "fallback.db", enable_fts=False),
+        )
         self.addCleanup(service.close)
         self.assertFalse(service.fts_enabled)
         self._seed(service)
@@ -48,9 +50,7 @@ class FtsFallbackTests(MemoryTestCase):
         for enable_fts in (True, False):
             path = self.db_path / f"scope-{enable_fts}.db"
             store = self.memory.MemoryStore(path, enable_fts=enable_fts)
-            service = self.memory.MemoryService(
-                {"memory": {"enable": True, "db_path": str(path)}}, store=store
-            )
+            service = self.memory.MemoryService(raw_memory_config(path), store=store)
             self.addCleanup(service.close)
             service.add("group", "aiocqhttp:2001", "偏好.火锅", "本群喜欢麻辣火锅", confidence=0.9)
             service.add("user", "aiocqhttp:1001", "偏好.火锅", "用户喜欢麻辣火锅", confidence=0.9)

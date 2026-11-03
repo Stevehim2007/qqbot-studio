@@ -111,7 +111,7 @@ class PatchWiringTests(unittest.TestCase):
         if not package.is_dir():
             self.skipTest("AstrBot 源码不可用")
         allowed = {
-            "asyncio", "collections", "dataclasses", "hashlib", "json", "logging",
+            "asyncio", "collections", "copy", "dataclasses", "hashlib", "json", "logging",
             "__future__", "math", "os", "pathlib", "re", "sqlite3", "threading", "time", "typing",
         }
         for path in package.glob("*.py"):
@@ -148,6 +148,7 @@ class PatchWiringTests(unittest.TestCase):
             "astrbot/core/memory/__init__.py",
             "astrbot/core/memory/store.py",
             "astrbot/core/memory/integration.py",
+            "astrbot/core/memory/policy.py",
             "astrbot/core/astr_main_agent.py",
             "astrbot/core/config/default.py",
         ):
