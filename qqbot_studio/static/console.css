@@ -1409,3 +1409,11 @@ body.console-modal-open { overflow: hidden; }
   .ai-tools-module-summary { align-items: flex-start; }
   .ai-tools-module-status { margin-left: auto; }
 }
+
+/* Inside collapsible modules, use one readable column rather than a cramped grid */
+.ai-tools-module-body .ai-tools-grid { grid-template-columns: 1fr; }
+.ai-tools-module-body .ai-tool-option { width: 100%; }
+.ai-tools-module-body .ai-sticker-number-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 480px) {
+  .ai-tools-module-body .ai-sticker-number-grid { grid-template-columns: 1fr; }
+}

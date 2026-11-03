@@ -2323,6 +2323,41 @@
       key: 'safe_tools_allow_list_categories',
       label: '查询表情分类',
       description: '允许机器人查询本地表情分类名称。仅白名单；无电脑控制、终端或任意文件访问。'
+    },
+    {
+      key: 'safe_tools_allow_fetch_webpage',
+      label: '读取公开网页',
+      description: '允许 fetch_webpage 读取公开 HTTP(S) 网页；有 SSRF/大小/超时/重定向限制。'
+    },
+    {
+      key: 'web_auto_fetch_enabled',
+      label: '自动读取消息里的 URL',
+      description: '消息含 URL 且处于阅读/提问语境时自动抓取网页正文；裸链接不触发。'
+    },
+    {
+      key: 'web_auto_fetch_question_only',
+      label: '仅提问语境自动读取',
+      description: '只有“怎么安装/这篇文章讲了什么”等阅读语境才自动抓取，普通闲聊不抓。'
+    },
+    {
+      key: 'safe_tools_allow_search_food_restaurants',
+      label: '搜索饭店',
+      description: '允许 search_food_restaurants 按名称/标签/位置查询饭店。'
+    },
+    {
+      key: 'safe_tools_allow_submit_food_review',
+      label: '提交饭店评价',
+      description: '允许 submit_food_review 在明确添加意图下提交评价；不泄露发送者 QQ。'
+    },
+    {
+      key: 'food_enabled',
+      label: 'Food 功能总开关',
+      description: '允许插件处理 Food 相关命令和自然语言请求。'
+    },
+    {
+      key: 'food_search_enabled',
+      label: 'Food 自然语言搜索',
+      description: '允许自然语言搜索饭店；与手动工具开关独立。'
     }
   ];
 
@@ -2436,7 +2471,7 @@
     for (const permission of AI_TOOL_PERMISSIONS) {
       const input = ui.inputs[permission.key];
       if (!input) continue;
-      input.disabled = disabledBase || (!permission.master && !safeMaster);
+      input.disabled = disabledBase || (!permission.master && permission.key.startsWith('safe_tools_allow_') && !safeMaster);
       const option = input.closest('.ai-tool-option');
       if (option) option.classList.toggle('is-disabled', input.disabled);
     }
@@ -2456,9 +2491,19 @@
     }
     for (const [key, status] of Object.entries(ui.moduleStatuses || {})) {
       if (!status) continue;
-      const enabled = key === 'safe-tools'
-        ? Boolean(ui.inputs.safe_tools_enabled && ui.inputs.safe_tools_enabled.checked)
-        : Boolean(ui.inputs.sticker_enabled && ui.inputs.sticker_enabled.checked);
+      let enabled = false;
+      if (key === 'safe-tools') enabled = Boolean(ui.inputs.safe_tools_enabled && ui.inputs.safe_tools_enabled.checked);
+      else if (key === 'sticker') enabled = Boolean(ui.inputs.sticker_enabled && ui.inputs.sticker_enabled.checked);
+      else {
+        const moduleKeys = key === 'web-search'
+          ? ['safe_tools_allow_fetch_webpage', 'web_auto_fetch_enabled', 'web_auto_fetch_question_only']
+          : ['safe_tools_allow_search_food_restaurants', 'safe_tools_allow_submit_food_review', 'food_enabled', 'food_search_enabled'];
+        const count = moduleKeys.filter((item) => ui.inputs[item] && ui.inputs[item].checked).length;
+        enabled = count > 0;
+        status.textContent = count > 0 ? `已开启 ${count} 项` : '未开启';
+        status.className = `ai-tools-module-status is-${enabled ? 'enabled' : 'disabled'}`;
+        continue;
+      }
       status.textContent = enabled ? '已开启' : '已关闭';
       status.className = `ai-tools-module-status is-${enabled ? 'enabled' : 'disabled'}`;
     }
@@ -2598,8 +2643,33 @@
       'safe-tools',
       '安全工具',
       '只开放白名单插件能力；无电脑控制、终端、Shell 或任意文件访问。',
-      AI_TOOL_PERMISSIONS.slice(1),
+      ['safe_tools_allow_search_images', 'safe_tools_allow_send_sticker', 'safe_tools_allow_collect_sticker', 'safe_tools_allow_list_categories']
+        .map((key) => AI_TOOL_PERMISSIONS.find((item) => item.key === key))
+        .filter(Boolean),
       'safe_tools_enabled'
+    );
+    makeModule(
+      'web-search',
+      '搜索与网页',
+      '网页读取、URL 自动阅读和搜索相关能力；受安全工具总开关和插件超时/大小限制约束。',
+      [
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_fetch_webpage'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'web_auto_fetch_enabled'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'web_auto_fetch_question_only'),
+      ].filter(Boolean),
+      null
+    );
+    makeModule(
+      'food-tools',
+      'Food 工具',
+      '饭店搜索与评价提交；评论只写 food.dlsz.top，密码仍由插件内部注入，不进入模型。',
+      [
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_search_food_restaurants'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_submit_food_review'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'food_enabled'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'food_search_enabled'),
+      ].filter(Boolean),
+      null
     );
     makeModule(
       'sticker',
@@ -2695,15 +2765,18 @@
       const snapshot = result.snapshot;
       const availableKeys = new Set((snapshot.schema || []).map((field) => field.key));
       const missing = AI_ALL_CONFIG_KEYS.filter((key) => !availableKeys.has(key));
-      if (missing.length > 0) {
+      if (!availableKeys.size) {
         ui.loadFailed = true;
-        ui.supported = Boolean(lastKnownAiToolsValues.get(instance.id));
-        ui.unsupportedReason = '当前插件版本未提供完整的 AI 工具权限或自动表情参数，请先更新 qqbot_enhancer 插件。';
+        ui.supported = false;
+        ui.unsupportedReason = '当前插件版本没有可用的 AI 工具参数，请先更新 qqbot_enhancer 插件。';
         ui.loadingConfig = false;
         ui.loading.hidden = true;
         setAiToolsError(ui, ui.unsupportedReason);
         syncAiToolsControlState(ui);
         return;
+      }
+      if (missing.length > 0) {
+        ui.schemaWarning = `当前插件未提供部分参数：${missing.join(', ')}；已隐藏/禁用这些项，其余仍可保存。`;
       }
       for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
         const input = ui.inputs[permission.key];
@@ -2726,6 +2799,9 @@
       ui.loadFailed = false;
       ui.loadingConfig = false;
       ui.loading.hidden = true;
+      if (ui.schemaWarning) {
+        setAiToolsStatus(ui, ui.schemaWarning, 'warning');
+      }
       if (!snapshot.apiAvailable) {
         setAiToolsStatus(ui, 'AstrBot 当前离线；保存会写入本地配置，可能需要启动或重启 AstrBot 后生效。', 'warning');
       }
