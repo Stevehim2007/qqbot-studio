@@ -156,7 +156,7 @@ class SchemaContractTests(unittest.TestCase):
         from qqbot_studio import memory_admin
 
         self.assertEqual(
-            memory_admin.SCOPE_TYPES, ("user", "group", "conversation", "persona", "global")
+            memory_admin.SCOPE_TYPES, ("user", "group_member", "group", "conversation", "persona", "global")
         )
         for kind in KINDS:
             self.assertIn(kind, {"fact", "preference", "identity", "profile", "habit", "note"})
@@ -216,6 +216,14 @@ class AdminUnitTests(TempDbTestCase):
         self.assertEqual(created["action"], "created")
         self.assertEqual(admin.channel, "container")
         self.assertEqual(admin.list_records(*GROUP_SCOPE)["total"], 1)
+
+    def test_bare_group_number_is_prefixed_for_admin_queries(self) -> None:
+        from qqbot_studio import memory_admin
+        kind, value = memory_admin.validate_scope("group", "1056821876")
+        self.assertEqual(kind, "group")
+        self.assertEqual(value, "aiocqhttp:1056821876")
+        kind, value = memory_admin.validate_scope("group_member", "1056821876:123456789")
+        self.assertEqual(value, "aiocqhttp:1056821876:123456789")
 
     def test_create_requires_explicit_valid_scope(self) -> None:
         make_db(self.data_dir)

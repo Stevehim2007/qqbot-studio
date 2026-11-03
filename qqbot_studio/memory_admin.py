@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-SCOPE_TYPES = ("user", "group", "conversation", "persona", "global")
+SCOPE_TYPES = ("user", "group_member", "group", "conversation", "persona", "global")
 """Stored scope types; ``group_user``/``speaker`` are policy names, not rows."""
 
 KINDS = ("fact", "preference", "identity", "profile", "habit", "note")
@@ -229,6 +229,13 @@ def validate_scope(scope_type: Any, scope_id: Any) -> tuple[str, str]:
     value = str(scope_id or "").strip()
     if not value:
         raise MemoryAdminError("scope_id 不能为空：所有记忆操作都必须显式限定一个 scope。")
+    # The core stores platform-prefixed ids (aiocqhttp:1056821876).  Accept the
+    # bare group/user number in the admin UI so a user does not have to know
+    # the prefix, while keeping platform-qualified ids untouched.
+    if kind in ("group", "user") and value.isdigit():
+        value = "aiocqhttp:" + value
+    elif kind == "group_member" and re.fullmatch(r"\d{4,20}:\d{4,20}", value):
+        value = "aiocqhttp:" + value
     if len(value) > MAX_SCOPE_ID_CHARS or not _SCOPE_ID_PATTERN.match(value):
         raise MemoryAdminError(
             "scope_id 非法：只允许字母、数字和 _.:@|+-，最长 %d 个字符。" % MAX_SCOPE_ID_CHARS

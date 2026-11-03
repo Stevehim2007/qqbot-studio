@@ -4249,6 +4249,7 @@
   const MEMORY_CONTENT_KINDS = ['fact', 'preference', 'identity', 'profile', 'habit', 'note'];
   const MEMORY_CONTENT_SCOPES = [
     { value: 'group', label: '群聊 group' },
+    { value: 'group_member', label: '群内发言人 group_member' },
     { value: 'user', label: '用户 user' },
     { value: 'conversation', label: '会话 conversation' },
     { value: 'persona', label: '人格 persona' },
@@ -5082,7 +5083,7 @@
     scopeInput.type = 'text';
     scopeInput.className = 'memory-content-input';
     scopeInput.value = state.scopeId;
-    scopeInput.placeholder = 'aiocqhttp:838796241';
+    scopeInput.placeholder = '群号或 aiocqhttp:群号；group_member 填 aiocqhttp:群号:QQ';
     scopeInput.setAttribute('list', 'memory-content-scope-ids');
     scopeInput.dataset.memoryContentField = 'scope-id';
     controls.appendChild(memoryContentField(state, 'scope-id', 'Scope ID', scopeInput));
