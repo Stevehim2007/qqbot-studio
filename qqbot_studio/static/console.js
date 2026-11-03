@@ -4037,14 +4037,16 @@
         const budget = [];
         const maxItems = rowElement.querySelector('[data-field="max-items"]');
         const maxChars = rowElement.querySelector('[data-field="max-chars"]');
+        const extractInput = rowElement.querySelector('[data-field="extract"]');
+        const injectInput = rowElement.querySelector('[data-field="inject"]');
         if (maxItems && String(maxItems.value || '').trim()) budget.push(`条数 ${maxItems.value}`);
         if (maxChars && String(maxChars.value || '').trim()) budget.push(`字符 ${maxChars.value}`);
         summaryTitle.textContent = groupId || '未填写群号';
         summaryMeta.textContent = [
           memoryPolicyModeLabel(policy, modeSelect.value),
           memoryPolicyOptionLabel(policy.scopeOptions, scopeSelect.value, scopeSelect.value),
-          extractCheck.checked ? '抽取' : '不抽取',
-          injectCheck.checked ? '注入' : '不注入',
+          extractInput && extractInput.checked ? '抽取' : '不抽取',
+          injectInput && injectInput.checked ? '注入' : '不注入',
           ...budget,
         ].join(' · ') + (row.invalid ? ' · 配置非法，实际降级 conversation' : '');
       }

@@ -107,6 +107,8 @@ class MemoryPolicyStaticContractTests(unittest.TestCase):
             "memory-policy-row-fields",
             "editButton.dataset.memoryPolicyEdit = ''",
             "removeButton.dataset.memoryPolicyDelete = ''",
+            "extractInput && extractInput.checked",
+            "injectInput && injectInput.checked",
             "setEditing(fields.hidden)",
             "fields.hidden = true",
         ):
