@@ -34,7 +34,12 @@ else
   rm -rf "$SRC" && mkdir -p "$SRC"
   tar -xzf "$TARBALL" -C "$SRC" --strip-components=1
   echo "==> applying $PATCH"
-  if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
+  # Only use git when $SRC is its own repository root: a workdir nested inside
+  # some other checkout would otherwise make git apply the patch to the wrong
+  # tree (or silently skip it).
+  SRC_REAL="$(cd "$SRC" && pwd -P)"
+  SRC_TOP="$(git -C "$SRC" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$SRC_TOP" && "$(cd "$SRC_TOP" && pwd -P)" == "$SRC_REAL" ]]; then
     git -C "$SRC" apply --check "$PATCH"
     git -C "$SRC" apply "$PATCH"
   else

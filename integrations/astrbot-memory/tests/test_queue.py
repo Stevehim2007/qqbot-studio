@@ -15,17 +15,17 @@ class QueueTests(AsyncMemoryTestCase):
         context = self.memory.build_context(private_event("1001"), None)
         self.assertTrue(service.enqueue_turn(context, "我最喜欢吃麻辣火锅", "好的，我记住了"))
         # Nothing is written synchronously: the reply path is never blocked.
-        self.assertEqual(service.export(), [])
+        self.assertEqual(service.export_all(), [])
         await service.drain()
         self.assertEqual(service.processed_turns, 1)
-        self.assertEqual([row["content"] for row in service.export()], ["用户喜欢：吃麻辣火锅"])
+        self.assertEqual([row["content"] for row in service.export_all()], ["用户喜欢：吃麻辣火锅"])
 
     async def test_recall_text_boosts_confidence(self):
         service = self.make_service()
         context = self.memory.build_context(private_event("1001"), None)
         service.enqueue_turn(context, "记住：我不吃香菜", "好的，我记住了")
         await service.drain()
-        note = next(row for row in service.export() if row["key"].startswith("记录."))
+        note = next(row for row in service.export_all() if row["key"].startswith("记录."))
         self.assertGreaterEqual(note["confidence"], 0.9)
 
     async def test_queue_is_bounded_and_drops_instead_of_blocking(self):
@@ -48,7 +48,7 @@ class QueueTests(AsyncMemoryTestCase):
             self.assertTrue(service.enqueue_turn(context, text))
         await service.drain()
         self.assertEqual(service.processed_turns, 3)
-        self.assertGreaterEqual(len(service.export()), 3)
+        self.assertGreaterEqual(len(service.export_all()), 3)
 
     async def test_llm_extractor_is_optional(self):
         service = self.make_service(llm_extract=True)
@@ -65,7 +65,7 @@ class QueueTests(AsyncMemoryTestCase):
         service.enqueue_turn(context, "随便聊聊烧烤")
         await service.drain()
         self.assertEqual(calls, ["随便聊聊烧烤"])
-        self.assertIn("偏好.烧烤", [row["key"] for row in service.export()])
+        self.assertIn("偏好.烧烤", [row["key"] for row in service.export_all()])
 
     async def test_llm_extractor_is_not_called_by_default(self):
         service = self.make_service()

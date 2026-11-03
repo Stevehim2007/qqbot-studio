@@ -30,7 +30,7 @@ class InjectionTests(MemoryTestCase):
         self.assertTrue(req.system_prompt.startswith("# Persona"))
         self.assertIn("<long_term_memory", req.system_prompt)
         self.assertIn("麻辣火锅", req.system_prompt)
-        self.assertEqual(self.memory.integration.last_injected_ids(event)[0], self.service.export()[0]["id"])
+        self.assertEqual(self.memory.integration.last_injected_ids(event)[0], self.service.export_all()[0]["id"])
 
     def test_injection_happens_once_per_turn(self):
         event = private_event("1001", "推荐一家火锅店")

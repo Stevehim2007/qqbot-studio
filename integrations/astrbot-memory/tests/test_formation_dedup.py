@@ -64,10 +64,10 @@ class FormationTests(MemoryTestCase):
         )
         self.addCleanup(service.close)
         service.add("user", "aiocqhttp:1001", "临时.排队号码", "用户当前排队号码是 A12", ttl_seconds=60)
-        self.assertEqual(len(service.export()), 1)
+        self.assertEqual(len(service.export_all()), 1)
         now[0] += 61
         self.assertEqual(service.purge_expired(), 1)
-        self.assertEqual(service.export(), [])
+        self.assertEqual(service.export_all(), [])
 
     def test_expired_rows_are_not_retrieved(self):
         self.service.add("user", "aiocqhttp:1001", "偏好.火锅", "用户喜欢麻辣火锅", ttl_seconds=1)

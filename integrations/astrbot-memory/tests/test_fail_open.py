@@ -101,7 +101,7 @@ class AsyncFailOpenTests(AsyncMemoryTestCase):
         self.assertTrue(service.enqueue_turn(context, "我喜欢麻辣火锅"))
         await service.drain()
         self.assertEqual(service.processed_turns, 1)
-        self.assertEqual(len(service.export()), 1)
+        self.assertEqual(len(service.export_all()), 1)
         self.assertTrue(service.enqueue_turn(context, "我住在杭州"))
         await service.drain()
         self.assertEqual(service.processed_turns, 2)

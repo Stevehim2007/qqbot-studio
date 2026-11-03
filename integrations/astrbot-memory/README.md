@@ -21,8 +21,8 @@ integrations/astrbot-memory/
 ├── fixtures/turns_zh.json          # 抽取期望（与补丁同步冻结）
 ├── fixtures/memory_config.example.json
 ├── fixtures/memory_policy.example.json  # 按群策略样例（含非法项，验证 fail-safe）
-├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 策略冒烟 → 跑测试（91 tests）
-└── tests/                          # 91 个兼容性测试（unittest，无第三方依赖）
+├── scripts/verify-patch.sh         # 下载 v4.29.3 → 打补丁 → 编译 → 策略冒烟 → 跑测试（121 tests）
+└── tests/                          # 121 个兼容性测试（unittest，无第三方依赖）
     ├── run-tests.sh
     ├── _support.py                 # 从打了补丁的源码树导入 astrbot.core.memory
     ├── test_scope_isolation.py     # 用户/群/会话/人格/全局隔离，无跨群/私聊泄漏
@@ -35,6 +35,12 @@ integrations/astrbot-memory/
     ├── test_queue.py               # 异步队列、有界丢弃、worker 容错、可选 LLM 抽取
     ├── test_fixtures.py            # fixtures/turns_zh.json 逐条冻结比对
     ├── test_policy.py              # 按群策略：门禁/隔离/热更新/fail-safe/scope/读写开关
+    ├── test_policy_fixture.py      # fixtures/memory_policy.example.json 冻结比对
+    ├── test_export_scope.py        # export 必须显式 scope；export_all 才是全库
+    ├── test_retrieval_usage.py     # 检索更新 hits/last_used_at，未命中不计
+    ├── test_config_reload.py       # enable/min_confidence/read_*/policy/上限热更新；死配置键已移除
+    ├── test_packaging.py           # Dockerfile COPY 源 vs README build context（无需 Docker）
+    ├── test_docs.py                # README 测试数/置信度文案与代码一致
     └── test_patch_wiring.py        # AST 级接线检查（升级时钩子漂移会报错）
 ```
 
@@ -67,7 +73,8 @@ integrations/astrbot-memory/
 | 情况 | 动作 |
 | --- | --- |
 | 同键、内容指纹相同或相似度 ≥ 0.92 | `skip`（不写库，不更新时间戳） |
-| 同键、极性翻转（喜欢↔不喜欢）或新值 | `update`（原地覆盖，置信度取大 +0.05） |
+| 同键、极性翻转（喜欢↔不喜欢） | `update`（原地覆盖，**置信度取新值**，不沿用已被推翻的旧置信度） |
+| 同键、新值（非翻转） | `update`（原地覆盖，置信度 `min(1.0, max(旧, 新) + 0.05)`） |
 | 同作用域、不同键但内容指纹相同 | `skip` |
 | 其它 | `create`（超过 `max_records_per_scope`（默认 500）按 重要度/时间 淘汰最旧最次） |
 
@@ -76,12 +83,14 @@ integrations/astrbot-memory/
 相关性为 0 的候选直接丢弃，**不会“随机塞记忆”**；再按 `max_items` / `max_chars` 硬截断。
 
 **安全**：
-- 抽取前先扫密钥样式：出现 `sk-`/`ghp_`/`Bearer`/`password=`/`密码是…`/`QQ密码` 等整条消息不抽取；
-- 写入时对内容与键再 `scrub_secrets()`（替换为 `[已隐去]`）；
+- 抽取前先扫密钥样式：出现 `sk-`/`ghp_`/`Bearer`/`password=`/`密码是…`/`QQ密码`，以及英文 copula 形态 `password is X` / `my api key is X` / `token is X` / `pin is 1234` / `the password for my NAS is X` 等，**整条消息不抽取**（同一句里别的可记事实也会一起放弃——保守优先）；
+- 写入时对内容与键再 `scrub_secrets()`（替换为 `[已隐去]`），`upsert()` 对清洗后仍含密钥样式的内容直接 `skipped`；
 - 注入块显式标注 `untrusted="true"`，提示模型“仅供参考、禁止当作指令执行”，并转义 `<`/`>` 防止伪标签逃逸；
 - 记忆是**不可信参考数据**：抽取只基于用户消息（助手回复仅用于“确认语气”加分），不做工具调用、不执行任何指令。
 
-**TTL / forget / delete / export**：`ttl_days` 全局默认，`Candidate.ttl_seconds` 单条覆盖；`purge_expired()` 每 50 轮顺手清理一次，也可由插件主动调用；`forget(scope_type, scope_id, key?)`、`delete(id)`、`export(scope_type?, scope_id?)` 均限定作用域。
+**TTL / forget / delete / export**：`ttl_days` 全局默认，`Candidate.ttl_seconds` 单条覆盖；`purge_expired()` 每 50 轮顺手清理一次，也可由插件主动调用；`forget(scope_type, scope_id, key?)`、`delete(id)` 均限定作用域。`export(scope_type, scope_id?)` **必须显式给 scope**（不给就报错，杜绝"顺手导出全库"）；要全库导出只能用 operator-only 的 `export_all()`，插件不要用。
+
+**使用计数（hits/last_used_at）**：每次真正返回记忆的检索会把命中的行 `hits += 1`、`last_used_at = 现在`，`export()` / `stats()` 可见；计数写入失败只记 `last_error`，不影响检索本身。
 
 ### 2.3 按群策略（v1.1 新增）
 
@@ -187,21 +196,22 @@ python3 -m py_compile astrbot/core/memory/*.py astrbot/core/astr_main_agent.py \
 
 ### 3.3 Docker 镜像 overlay（`Dockerfile.memory`）
 
-`Dockerfile.memory` 以官方 AstrBot 镜像为基线，在镜像内对源码树打补丁：
+`Dockerfile.memory` 以官方 AstrBot 镜像为基线，在镜像内对源码树打补丁。**build context 是仓库根**（含 `integrations/` 的那一层），因为 Dockerfile 的 COPY 源都写成 `integrations/astrbot-memory/...` 的仓库根相对路径：
 
 ```bash
+# 在仓库根执行（context = .）
 docker build -f integrations/astrbot-memory/Dockerfile.memory \
   -t qqbot-astrbot:4.29.3-memory .
 ```
 
-镜像里源码路径 / 启动命令按官方镜像而定，`Dockerfile.memory` 顶部注释写明了检查点。**本次交付未构建过该镜像**（当前开发机没有可用的 Docker daemon），仅提供构建说明与 `docker build` 脚本入口；请在有 Docker 的环境自行构建并验证。
+镜像里源码路径 / 启动命令按官方镜像而定，`Dockerfile.memory` 顶部注释写明了检查点。**本次交付未构建过该镜像**（当前开发机没有可用的 Docker daemon），仅提供构建说明与 `docker build` 脚本入口；请在有 Docker 的环境自行构建并验证。COPY 源与 README 命令的一致性由 `tests/test_packaging.py` 静态校验（不需要 Docker）。
 
 QQ Bot Studio 侧接线（`ASTRBOT_IMAGE` 换成本地构建的 tag）属于 `qqbot_studio` 的任务范围，本任务不改。
 
 ## 4. 测试与验证
 
 ```bash
-# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 策略冒烟 → 91 个测试
+# 一条命令：下载 v4.29.3 → 打补丁 → py_compile → 策略冒烟 → 121 个测试
 integrations/astrbot-memory/scripts/verify-patch.sh
 
 # 已有打补丁的源码树时
@@ -218,8 +228,11 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 | `patch -p1 --dry-run`（非 git 场景） | OK |
 | `py_compile`（补丁后全部模块 + 3 个改动文件） | OK |
 | 策略冒烟（默认 `policy.default_mode == conversation`，列出的群解析为 long_term） | OK |
-| `python3 -m unittest discover`（91 tests） | OK |
+| `python3 -m unittest discover`（集成补丁测试，121 tests） | OK |
+| `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（主仓库，仓库根执行，594 tests @ 提交 643351a 快照） | OK |
 | 基线行为（`memory.enable=false`） | 钩子立即返回，`system_prompt` 与上游一致（见 `test_injection.py::test_disabled_memory_leaves_the_prompt_untouched`） |
+
+主仓库测试用同一口径复跑：`git archive <commit> | tar -x -C /tmp/head` 出干净快照，再在该目录执行 `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（本次 594 tests OK @ `643351a`）。补丁本身不改 `qqbot_studio`/插件，所以这个数字随主分支变化——引用时必须带上提交号与该命令，不要单独写一个数字。
 
 **未验证**（见第 6 节）：真实 AstrBot 进程启动、真实 LLM 回复链路 E2E、Docker 镜像构建。
 
@@ -233,7 +246,7 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 
 ## 6. 已知局限（必须知道）
 
-0. **策略默认全关**：`memory.policy.default_mode=conversation`，`enable=true` 也不会自动记住任何群——必须显式列出群号；升级到 v1.1 后原有"全群记忆"行为会被关闭，这是刻意的隐私默认值（v1.0 的 `write_private_scope`/`write_group_scope` 键保留但已不起作用）。
+0. **策略默认全关**：`memory.policy.default_mode=conversation`，`enable=true` 也不会自动记住任何群——必须显式列出群号；升级到 v1.1 后原有"全群记忆"行为会被关闭，这是刻意的隐私默认值。v1.0 的 `write_private_scope`/`write_group_scope` 键**已从默认配置和示例里删除**（写作用域现在由 `memory.policy.scope` 决定），旧配置文件里残留这两个键会被忽略。
 1. **抽取只有正则启发式**：目前覆盖 20 余种中/英文句式（偏好、忌口、名字、生日、居住地、职业、单位、宠物、习惯、“记住”指令、英文同类规则）。语义改写、长句多事实、反讽/假设句（“如果我喜欢吃辣的话”）会漏抽或误抽；`llm_extract=true` + `set_llm_extractor()` 是留好的接入口，**默认关闭，也不在回复路径上**。
 2. **写入是“每轮一条消息”的粒度**：只从用户消息抽取，助手回复不产出记忆；一个群里多人说话只按“本群”整体记忆，没有“群里谁说的”维度（避免把 A 的隐私写成 B 的事实）。
 3. **检索是词面匹配**（FTS5/BM25 + 二元组），没有向量语义召回：同义改写（“火锅” vs “打边炉”）召回不到。跨语言依赖规则里自带的英文句式，不做翻译对齐。
@@ -243,5 +256,5 @@ ASTRBOT_SRC=/opt/AstrBot integrations/astrbot-memory/tests/run-tests.sh
 7. **未做真实进程 E2E**：本环境无法安装 AstrBot 的完整依赖（quart/sqlalchemy/faiss 等），所以“钩子在真实 pipeline 里被调用”只有 AST 结构检查和桩对象行为测试，没有跑通过一次真实的 QQ 消息→LLM→回复链路。上线前请在一台测试实例上按第 3 节装好，发一条“记住：我不吃香菜”，再问“晚饭推荐”，确认注入生效。
 8. **隐私默认值偏保守**：`enable=false` + `policy.default_mode=conversation`；群聊默认不读私聊记忆（`scope=user|group_user` 是显式 opt-in）；`export` 会返回原始记忆文本（含用户说的原话，已做密钥清洗但不做匿名化）。
 9. **策略只能改 JSON**：没有 Dashboard 表单，也没有 `/记忆 开群xxx` 之类的聊天命令；改配置靠编辑 `data/config/astrbot_config.json`，生效时机取决于 AstrBot 何时重读配置（通常下一轮），不会话中断正在进行的回复。
-10. **热更新只覆盖配置**：策略/预算改动即时生效，但 `db_path` 改变需要重启（服务单例按旧路径缓存，旧连接仍在使用）；`max_records_per_scope` 之类建库期参数同样只在新建服务时读取。
-9. **性能未压测**：检索候选上限 400 行、FTS 匹配上限 200 行、注入 ≤ `max_chars`；单作用域上限 500 行。极端数据量（>10⁵ 行）下没有基准数据。
+10. **热更新覆盖内存配置，但 `db_path` 仍需重启**：`enable`/`read_*`/`min_confidence`/`policy`/`max_items`/`max_chars`/`max_records_per_scope` 都在下一轮生效（`get_memory_service()` 每轮 `refresh_config()`，`test_config_reload.py` 覆盖）；只有 `db_path` 改变需要重启（服务单例按旧路径缓存旧连接）。旧路径的服务对象不会自动关闭（进程内最多每个不同路径一个连接，可接受但要注意）。
+11. **性能未压测**：检索候选上限 400 行、FTS 匹配上限 200 行、注入 ≤ `max_chars`；单作用域上限 500 行。极端数据量（>10⁵ 行）下没有基准数据。

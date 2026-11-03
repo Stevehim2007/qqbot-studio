@@ -180,13 +180,13 @@ class PolicyIsolationTests(MemoryTestCase):
     def test_group_b_never_reads_group_a_and_writes_nothing(self):
         service = self.make_service(policy=policy(**{"2001": LONG_TERM_GROUP}))
         service.add("group", "aiocqhttp:2001", "偏好.火锅", "本群喜欢：麻辣火锅", confidence=0.9)
-        before = len(service.export())
+        before = len(service.export_all())
 
         group_b = self.context(group_event("2002"))
         self.assertEqual(service.retrieve(group_b, "麻辣火锅"), ("", []))
         self.assertEqual(service.search(group_b, "麻辣火锅"), [])
         self.assertFalse(service.enqueue_turn(group_b, "我们群里最喜欢吃麻辣火锅"))
-        self.assertEqual(len(service.export()), before)  # conversation mode: no write
+        self.assertEqual(len(service.export_all()), before)  # conversation mode: no write
 
     def test_cross_group_and_private_leakage_blocked(self):
         service = self.make_service(
@@ -259,7 +259,7 @@ class PolicyIsolationTests(MemoryTestCase):
         )
         self.assertEqual(result["created"], 1)
         self.assertEqual(result["gated"], 1)
-        self.assertEqual([row["scope_type"] for row in service.export()], ["user"])
+        self.assertEqual([row["scope_type"] for row in service.export_all()], ["user"])
 
 
 class PolicyExtractionTests(AsyncMemoryTestCase):
@@ -287,17 +287,17 @@ class PolicyExtractionTests(AsyncMemoryTestCase):
         context = self.memory.build_context(group_event("2001", "1001"), None)
         self.assertTrue(write_only.enqueue_turn(context, "我们群里最喜欢吃麻辣火锅"))
         await write_only.drain()
-        self.assertEqual(len(write_only.export()), 1)  # extracted
+        self.assertEqual(len(write_only.export_all()), 1)  # extracted
         self.assertEqual(write_only.retrieve(context, "麻辣火锅"), ("", []))  # not injected
 
         read_only = self.make_service(
             policy=policy(**{"2001": {"mode": "long_term", "scope": "group", "extract": False, "inject": True}})
         )
         read_only.add("group", "aiocqhttp:2001", "偏好.火锅", "本群喜欢：麻辣火锅", confidence=0.9)
-        before = len(read_only.export())
+        before = len(read_only.export_all())
         self.assertFalse(read_only.enqueue_turn(context, "我们群里最喜欢吃毛肚火锅"))
         await read_only.drain()
-        self.assertEqual(len(read_only.export()), before)  # nothing new written
+        self.assertEqual(len(read_only.export_all()), before)  # nothing new written
         self.assertTrue(read_only.retrieve(context, "麻辣火锅")[0])  # still injected
 
     async def test_toggle_off_while_turn_queued_skips_write(self):
@@ -310,7 +310,7 @@ class PolicyExtractionTests(AsyncMemoryTestCase):
         config["memory"]["policy"] = {"default_mode": "conversation"}
         self.memory.get_memory_service(config)
         await service.drain()
-        self.assertEqual(service.export(), [])
+        self.assertEqual(service.export_all(), [])
         self.assertGreaterEqual(service.gated_turns, 1)
 
     async def test_group_b_conversation_mode_never_touches_the_store(self):
@@ -318,7 +318,7 @@ class PolicyExtractionTests(AsyncMemoryTestCase):
         context = self.memory.build_context(group_event("2002", "1001"), None)
         self.assertFalse(service.enqueue_turn(context, "我们群里最喜欢吃麻辣火锅"))
         await service.drain()
-        self.assertEqual(service.export(), [])
+        self.assertEqual(service.export_all(), [])
         self.assertEqual(service.retrieve(context, "麻辣火锅"), ("", []))
 
 

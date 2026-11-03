@@ -1,23 +1,23 @@
-From 9fd69a12ef63b5c24be16bd6b82c68248f188329 Mon Sep 17 00:00:00 2001
+From d5b4e4f7b2ae57736d4bdd836f65ead9b4ccc1ce Mon Sep 17 00:00:00 2001
 From: memory-patch <memory-patch@local>
-Date: Tue, 3 Nov 2026 12:10:46 +0800
+Date: Tue, 3 Nov 2026 12:14:40 +0800
 Subject: [PATCH] feat(memory): native long-term memory with per-group policy
  (AstrBot v4.29.3)
 
 ---
  astrbot/core/astr_main_agent.py               |   5 +
- astrbot/core/config/default.py                |  38 ++
+ astrbot/core/config/default.py                |  36 +
  astrbot/core/memory/__init__.py               |  67 ++
  astrbot/core/memory/extract.py                | 189 ++++++
  astrbot/core/memory/integration.py            | 140 ++++
  astrbot/core/memory/policy.py                 | 337 ++++++++++
  astrbot/core/memory/render.py                 |  59 ++
- astrbot/core/memory/service.py                | 617 ++++++++++++++++++
- astrbot/core/memory/store.py                  | 507 ++++++++++++++
- astrbot/core/memory/text.py                   | 121 ++++
+ astrbot/core/memory/service.py                | 628 ++++++++++++++++++
+ astrbot/core/memory/store.py                  | 548 +++++++++++++++
+ astrbot/core/memory/text.py                   | 136 ++++
  astrbot/core/memory/types.py                  | 169 +++++
  .../method/agent_sub_stages/internal.py       |  12 +
- 12 files changed, 2261 insertions(+)
+ 12 files changed, 2326 insertions(+)
  create mode 100644 astrbot/core/memory/__init__.py
  create mode 100644 astrbot/core/memory/extract.py
  create mode 100644 astrbot/core/memory/integration.py
@@ -52,10 +52,10 @@ index 59183b8..1534c2c 100644
      if tz is None:
          tz = plugin_context.get_config().get("timezone")
 diff --git a/astrbot/core/config/default.py b/astrbot/core/config/default.py
-index dd1b088..3bd679f 100644
+index dd1b088..520f480 100644
 --- a/astrbot/core/config/default.py
 +++ b/astrbot/core/config/default.py
-@@ -89,6 +89,44 @@ WEBHOOK_SUPPORTED_PLATFORMS = [
+@@ -89,6 +89,42 @@ WEBHOOK_SUPPORTED_PLATFORMS = [
  # 默认配置
  DEFAULT_CONFIG = {
      "config_version": 5,
@@ -69,8 +69,6 @@ index dd1b088..3bd679f 100644
 +        "max_items": 6,
 +        "min_confidence": 0.35,
 +        "ttl_days": 0,
-+        "write_private_scope": "user",
-+        "write_group_scope": "group",
 +        "read_user": True,
 +        "read_group": True,
 +        "read_conversation": True,
@@ -924,10 +922,10 @@ index 0000000..6a42704
 +    return HEADER + "\n" + "\n".join(lines) + "\n" + FOOTER, rendered
 diff --git a/astrbot/core/memory/service.py b/astrbot/core/memory/service.py
 new file mode 100644
-index 0000000..5d0e943
+index 0000000..d500476
 --- /dev/null
 +++ b/astrbot/core/memory/service.py
-@@ -0,0 +1,617 @@
+@@ -0,0 +1,628 @@
 +"""Memory service: configuration, bounded retrieval, queued extraction.
 +
 +Design rules (they are the contract of this service):
@@ -975,8 +973,8 @@ index 0000000..5d0e943
 +    "max_items": DEFAULT_MAX_ITEMS,
 +    "min_confidence": 0.35,
 +    "ttl_days": 0,
-+    "write_private_scope": "user",
-+    "write_group_scope": "group",
++    # NOTE: the old write_private_scope/write_group_scope keys are gone -- the
++    # per-chat policy (memory.policy) picks the write scope (see policy.py).
 +    "read_user": True,
 +    "read_group": True,
 +    "read_conversation": True,
@@ -1111,6 +1109,10 @@ index 0000000..5d0e943
 +        if merged == self.config:
 +            return False
 +        self.config = merged
++        try:
++            self._store.max_records_per_scope = int(merged["max_records_per_scope"])
++        except Exception:  # noqa: BLE001 - a stale cap must not block the reload
++            logger.warning("长期记忆 max_records_per_scope 热更新失败（继续用旧值）")
 +        self._policy_resolver.invalidate()
 +        logger.info("长期记忆配置已热更新（策略缓存已失效，无需重启）")
 +        return True
@@ -1436,8 +1438,15 @@ index 0000000..5d0e943
 +    def delete(self, memory_id: int) -> bool:
 +        return self._store.delete(memory_id)
 +
-+    def export(self, scope_type: str | None = None, scope_id: str | None = None) -> list[dict]:
++    def export(self, scope_type: str, scope_id: str | None = None) -> list[dict]:
++        """Export one scope (``scope_type`` is required -- no accidental full dump)."""
++
 +        return self._store.export(scope_type, scope_id)
++
++    def export_all(self) -> list[dict]:
++        """Export every scope. Operator/diagnostics only; plugins must not call it."""
++
++        return self._store.export_all()
 +
 +    def purge_expired(self) -> int:
 +        return self._store.purge_expired()
@@ -1547,10 +1556,10 @@ index 0000000..5d0e943
 +]
 diff --git a/astrbot/core/memory/store.py b/astrbot/core/memory/store.py
 new file mode 100644
-index 0000000..be0e27a
+index 0000000..77dd3b6
 --- /dev/null
 +++ b/astrbot/core/memory/store.py
-@@ -0,0 +1,507 @@
+@@ -0,0 +1,548 @@
 +"""SQLite sidecar storage for AstrBot's long-term memory.
 +
 +The store is deliberately independent from AstrBot's conversation database
@@ -1853,7 +1862,35 @@ index 0000000..be0e27a
 +                )
 +                ranked.append(replace(record, score=score))
 +        ranked.sort(key=lambda item: item.score, reverse=True)
-+        return ranked[: max(1, int(limit))]
++        used = ranked[: max(1, int(limit))]
++        if not used:
++            return []
++        return self._mark_used(used, now)
++
++    def _mark_used(self, records: list[MemoryRecord], now: float) -> list[MemoryRecord]:
++        """Bump ``hits``/``last_used_at`` for the rows a retrieval returned.
++
++        Best effort: a failed counter update must never fail the retrieval; the
++        returned records still carry the incremented values.
++        """
++
++        ids = [record.id for record in records]
++        if not ids:
++            return records
++        placeholders = ",".join("?" for _ in ids)
++        try:
++            with self._lock:
++                conn = self._connect()
++                conn.execute(
++                    "UPDATE astrbot_memory SET hits = hits + 1, last_used_at = ?"
++                    f" WHERE id IN ({placeholders})",
++                    (now, *ids),
++                )
++                conn.commit()
++        except sqlite3.Error as exc:  # pragma: no cover - counters are best effort
++            self.last_error = f"记忆使用计数更新失败：{exc}"
++            return records
++        return [replace(record, hits=record.hits + 1, last_used_at=now) for record in records]
 +
 +    def _load_candidates(
 +        self,
@@ -1978,7 +2015,20 @@ index 0000000..be0e27a
 +            conn.commit()
 +            return len(ids)
 +
-+    def export(self, scope_type: str | None = None, scope_id: str | None = None) -> list[dict]:
++    def export(self, scope_type: str, scope_id: str | None = None) -> list[dict]:
++        """Export **one** scope; a missing scope is an error, not a full dump."""
++
++        scope_type = str(scope_type or "").strip()
++        if not scope_type:
++            raise ValueError("export() 需要显式 scope_type（全库导出请用 export_all()）")
++        return self._export(scope_type, scope_id)
++
++    def export_all(self) -> list[dict]:
++        """Export every scope. Operator/diagnostics only -- plugins must not use it."""
++
++        return self._export(None, None)
++
++    def _export(self, scope_type: str | None, scope_id: str | None) -> list[dict]:
 +        with self._lock:
 +            conn = self._connect()
 +            sql = "SELECT * FROM astrbot_memory"
@@ -2060,10 +2110,10 @@ index 0000000..be0e27a
 +        )
 diff --git a/astrbot/core/memory/text.py b/astrbot/core/memory/text.py
 new file mode 100644
-index 0000000..b648472
+index 0000000..e177b41
 --- /dev/null
 +++ b/astrbot/core/memory/text.py
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,136 @@
 +"""Text helpers for the memory service: tokenising, similarity, secret scrubbing."""
 +
 +from __future__ import annotations
@@ -2088,6 +2138,14 @@ index 0000000..b648472
 +
 +# Never persist credentials, tokens or account secrets -- memory is injected
 +# back into prompts and must be safe to show.
++_EN_CREDENTIAL_NOUN = (
++    r"(?:password|passwd|pwd|passphrase|passcode"
++    r"|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|private[\s_-]?key"
++    r"|client[\s_-]?secret|auth[\s_-]?token|access[\s_-]?token"
++    r"|refresh[\s_-]?token|bearer[\s_-]?token|token|credentials?)"
++)
++_EN_COPULA = r"(?:is|are|was|were|will\s+be|has\s+been|have\s+been|=|:)"
++
 +SECRET_PATTERNS = (
 +    re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b"),
 +    re.compile(r"\b(?:ak|as|ghp|gho|xox[baprs])[-_][A-Za-z0-9_\-]{8,}\b"),
@@ -2096,6 +2154,13 @@ index 0000000..b648472
 +    re.compile(r"(?:密码|口令|密钥|令牌|token)\s*(?:是|为|:|：)\s*\S{1,60}"),
 +    re.compile(r"(?i)\b(?:qq|微信|wechat)\s*(?:密码|password)\s*(?:是|为|:|：)?\s*\S+"),
 +    re.compile(r"\bQQ[:：]?\s*\d{5,12}\s*[/,，]?\s*(?:密码|口令)\s*[:：]?\s*\S+"),
++    # English copula forms: "my password is X", "the api key is X", "token is X".
++    # The credential noun must be directly followed by a copula (or be the
++    # subject of "for <target> is"), so ordinary prose such as "the secret is
++    # the broth" or "a token of appreciation" is not redacted.
++    re.compile(rf"(?i)\b{_EN_CREDENTIAL_NOUN}\s*{_EN_COPULA}\s*\S{{1,60}}"),
++    re.compile(rf"(?i)\b{_EN_CREDENTIAL_NOUN}\s+for\s+[^\n]{{1,40}}?\s+{_EN_COPULA}\s*\S{{1,60}}"),
++    re.compile(r"(?i)\bpin\s*(?:is|=|:)\s*\d{4,12}\b"),
 +)
 +REDACTED = "[已隐去]"
 +MAX_CONTENT_CHARS = 200

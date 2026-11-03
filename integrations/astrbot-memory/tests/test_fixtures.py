@@ -51,13 +51,13 @@ class FixtureExtractionTests(MemoryTestCase):
                 continue
             service.store_candidates(heuristic_extract(turn["text"], self._context(turn)))
             expected_rows += len(turn["expect"])
-        self.assertEqual(len(service.export()), expected_rows)
+        self.assertEqual(len(service.export_all()), expected_rows)
 
         for turn in self.data["turns"]:
             if not turn["expect"]:
                 continue
             service.store_candidates(heuristic_extract(turn["text"], self._context(turn)))
-        self.assertEqual(len(service.export()), expected_rows)
+        self.assertEqual(len(service.export_all()), expected_rows)
 
 
 if __name__ == "__main__":

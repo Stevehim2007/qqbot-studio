@@ -137,6 +137,17 @@ class PatchWiringTests(unittest.TestCase):
                 for module in modules:
                     self.assertIn(module, allowed, f"{path.name} imports {module}")
 
+    def test_shipped_config_has_no_dead_write_scope_keys(self):
+        """v1.0's write_private_scope/write_group_scope were dead: removed in v1.2."""
+
+        path = astrbot_src() / "astrbot/core/config/default.py"
+        if not path.is_file():
+            self.skipTest("AstrBot 源码不可用")
+        text = path.read_text(encoding="utf-8-sig")
+        memory_block = text.split('"memory": {', 1)[1].split('"platform_settings"', 1)[0]
+        self.assertNotIn("write_private_scope", memory_block)
+        self.assertNotIn("write_group_scope", memory_block)
+
     def test_patch_file_matches_the_working_tree(self):
         repo_root = Path(__file__).resolve().parents[3]
         patch = repo_root / "integrations" / "astrbot-memory" / "patches" / "0001-native-memory.patch"

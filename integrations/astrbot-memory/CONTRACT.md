@@ -24,7 +24,8 @@ from astrbot.core.memory.integration import build_context
 | `service.retrieve(context, query)` | `-> (block: str, records)` | 与流水线注入同一套实现（含预算裁剪）；不需要时用 `search` |
 | `service.forget(scope_type, scope_id, key=None)` | `-> int` | 删除该作用域（可只删某键）的全部记忆 |
 | `service.delete(memory_id)` | `-> bool` | 按 id 删除 |
-| `service.export(scope_type=None, scope_id=None)` | `-> list[dict]` | 导出（含 `content`，已做密钥清洗；仍属用户数据，勿外泄） |
+| `service.export(scope_type, scope_id=None)` | `-> list[dict]` | **必须显式 scope**；只导出该作用域（`content` 已做密钥清洗，仍属用户数据，勿外泄） |
+| `service.export_all()` | `-> list[dict]` | 导出全部作用域；**operator/诊断专用**，插件不得调用（避免一次性把跨群/私聊记忆拼进 prompt） |
 | `service.purge_expired()` | `-> int` | 清理过期记忆 |
 | `service.stats()` | `-> dict` | `total`、`by_scope`、`expired`、`fts_enabled`、`enabled`、`processed_turns`、`dropped_turns`、`last_error` |
 | `service.store_candidates(candidates, *, allowed_scopes=None)` | `-> {"created","updated","skipped","gated"?}` | 同步成记忆；`allowed_scopes` 非空时**丢弃**落点不在白名单的候选（自动流水线用它做第二道闸），`None` = 显式写不设闸 |
@@ -123,7 +124,10 @@ block, _ = service.retrieve(context, "常点 火锅")
 - 改 `memory.policy` 后无需重启：`get_memory_service(config)` 每轮刷新已缓存服务，策略缓存按配置指纹失效（另有 5s TTL 兜底）。
 - 记忆库损坏/目录不可写：`retrieve()` 返回 `("", [])` 并写 `service.last_error`；**不会**向插件抛异常。
 - 写入幂等：同键同内容返回 `skipped`，不会产生两行；重复 `add()` 不会刷新时间戳。
-- 检索结果一定落在 `context` 的白名单作用域内；`group` 与 `user` 互不可见（群不读私聊、私聊不读群）。
+- 检索结果一定落在 `context` 的白名单作用域内；**默认**下 `group` 与 `user` 互不可见（群不读私聊、私聊不读群）。
+- 隔离的**唯一例外是显式 opt-in**：只有把某个群配成 `scope="user"`（读发送者个人 `user` 记忆）或 `scope="group_user"`（读本群 + 发送者个人 `user`）时，该群才会看到发送者的个人记忆；`scope="group"`（群条目默认）下群既不读也不写个人记忆，私聊在任何情况下都不读群记忆。换言之，"群/私聊隔离"由 `memory.policy` 逐群声明，默认行为永远是隔离的那一侧。
+- 每次真正返回记忆的检索会把该行 `hits += 1`、`last_used_at = 现在`（计数失败不影响检索；`export()` 可见）。
+- 密钥样式（中英文）在抽取前整条拦截、写入时清洗：`sk-…`、`ghp_…`、`Bearer …`、`password=`、`password is X`、`my api key is X`、`token is X`、`密码是…`、`QQ密码`；命中即不产出候选、`contains_secret()` 的内容不落库。
 - 每条注入 ≤ `max_chars`、条数 ≤ `max_items`；`export()` 原样返回该作用域记录（`content` 已清洗密钥）。
 
 ## 6. 版本与变更纪律
@@ -132,10 +136,11 @@ block, _ = service.retrieve(context, "常点 火锅")
 | --- | --- |
 | AstrBot | `v4.29.3`（`f61a7f4`） |
 | 补丁 | `patches/0001-native-memory.patch`（v1.1） |
-| 契约版本 | `2`（本文件） |
+| 契约版本 | `3`（本文件） |
 
 变更记录：
 
+- **契约 v3（补丁 v1.2）**：`export()` 改为**必须显式 scope**（破坏性变更，全库导出改用 operator-only 的 `export_all()`）；新增检索使用计数 `hits`/`last_used_at`；移除从未生效的 `write_private_scope`/`write_group_scope` 配置（写作用域由 `memory.policy.scope` 决定）；密钥拦截扩展到英文 copula 形态（`password is X` / `api key is X` / `token is X` / `pin is 1234`）。
 - **契约 v2（补丁 v1.1）**：新增 `memory.policy` 按群门禁；**行为变更**——`enable=true` 不再等于"全群记忆"，未列出的会话默认 `conversation`；`store_candidates()` 新增关键字参数 `allowed_scopes`（旧调用不受影响）；`MemoryService` 新增 `policy_for()` / `refresh_config()`。
 
 - 本契约只覆盖上表接口；`MemoryStore` 的表结构、FTS 表名、打分权重是**内部实现**，可随补丁变化；
