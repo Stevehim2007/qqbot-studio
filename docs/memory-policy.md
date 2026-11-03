@@ -54,6 +54,25 @@
 
 群号支持裸群号（`838796241`）或带平台前缀（`aiocqhttp:838796241`）；前缀键优先，与 AstrBot 一致。
 
+### 2.1 非法条目的显示方式（不自作主张改写）
+
+AstrBot 的 `parse_policy` 是**整条降级**：一个字段非法，这条策略整体变 `conversation`（不是只忽略坏字段）。
+因此 Studio 读取时：
+
+- **保留**配置里的原值（比如 private 写了 `scope=group`、某行写了 `max_items=999` 就照原样返回），
+  不做静默归一化；
+- 每条策略（含 `private`）额外返回 `invalid`、`errors[]`、`unknown_fields[]`、`effective_mode`、
+  `effective_scope`，其中 `effective_mode` 是 AstrBot **实际**会用的模式（非法时恒为 `conversation`，
+  群号重复无法判断时是 `null`=未知）；
+- 顶层 `warnings[]` 逐条列出「字段 + 原因 + 降级后果」，`invalid_rows` 给出非法条数，
+  `message` 明确写「不是 long_term 生效」；
+- 面板把非法行标红、列出原因并显示「实际生效：conversation（只用会话历史）」，私聊条目非法时同样提示，
+  重复群号显示「实际生效：未知」——**不会把非法条目显示成生效中的长期记忆**；
+- `private` 为空对象/缺省时 AstrBot 会当作"未配置"（私聊跟随 `default_mode`），面板也如实显示跟随关系。
+
+校验覆盖：`mode`/`scope` 枚举、`extract`/`inject` 布尔、`max_items 1..50`、`max_chars 80..8000`、
+私聊 `scope` 只能是 `user`、条目必须是对象、未知字段（会警告但 AstrBot 忽略）、以及 strip 后重复的群号。
+
 ## 3. 接口
 
 | 方法 | 路径 | 说明 |
@@ -114,11 +133,15 @@ POST 请求体：
    AstrBot 会忽略 `memory.policy`。面板用 `patch_hint` 标注"无法从配置确认"，不宣称已生效。
 4. 面板不写 `memory.enable` 等其它记忆总开关，保持与 AstrBot WebUI/JSON 的既有值一致。
 5. 删除群策略行 = 该群回到 `default_mode`；长期记忆里已经写入的历史记录不会被删除（清理由 AstrBot 侧 TTL/forget 负责）。
+6. 非法条目只能被**报告**，不能替用户猜意图：面板不会自动把 `scope=group` 改成 `user`、也不会把
+   `max_items=999` 裁到 50 —— 必须由用户改正后保存（保存接口本身仍会 400 拒绝这些值）。
 
 ## 7. 契约测试
 
 - `tests/test_memory_policy_studio.py`：默认回退、未部署=不支持（GET/409）、保存/读取往返、其它配置
   保留、群增删、私聊策略、脏配置告警、25 类非法输入、200 行上限、空预算省略、无跨实例污染、
-  无记忆库内容泄漏、无令牌=403、旧后端=501。
+  无记忆库内容泄漏、无令牌=403、旧后端=501；以及 t26 的行级告警：private `scope=group` 不被改写、
+  `max_items=999`/`max_chars=10` 越界、未知字段、非法 scope/类型、重复群号、生效模式不冒充
+  long_term、GET 不改写配置、HTTP 响应带全部 warnings。
 - `tests/test_memory_policy_ui_static.py`：面板/字段/标记静态契约、警告文案、不支持态不伪造、
   256 字段保存载荷完整性、"已修改"基线刷新与校验失败时的可见性计划（node）。
