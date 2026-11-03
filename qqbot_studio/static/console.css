@@ -1111,3 +1111,92 @@ body.console-modal-open { overflow: hidden; }
 .ai-tools-retry[hidden] { display: none !important; }
 .prompt-item.is-default { background: #f2fcf8; border-color: #a9e5d5; box-shadow: inset 3px 0 0 var(--mint-500); }
 .prompt-item-badge.is-default { color: #136a54; background: var(--mint-100); }
+
+
+/* ---- 版本管理：更新通道与回滚 ---- */
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(5, 19, 36, .68);
+  backdrop-filter: blur(5px);
+}
+.update-overlay[hidden],
+.update-pane[hidden],
+.update-warning[hidden],
+.update-error[hidden],
+.update-status[hidden],
+.update-confirm[hidden],
+.update-empty[hidden] { display: none !important; }
+.update-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(880px, calc(100dvh - 32px));
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(198, 217, 231, .9);
+  border-radius: 18px;
+  box-shadow: 0 30px 80px rgba(4, 24, 34, .35);
+}
+.update-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(135deg, rgba(67, 221, 178, .12), rgba(47, 114, 214, .06));
+}
+.update-heading { display: flex; gap: 12px; align-items: flex-start; }
+.update-icon { display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 38px; color: var(--mint-500); background: rgba(32, 201, 151, .14); border-radius: 11px; font-size: 18px; }
+.update-kicker { color: var(--ink-500); font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.update-heading h2 { margin: 2px 0 0; color: var(--ink-950); font-size: 19px; letter-spacing: -.02em; }
+.update-heading p { margin: 3px 0 0; color: var(--ink-500); font-size: 11.5px; }
+.update-close { flex: 0 0 auto; padding: 6px 12px; color: var(--ink-600); background: rgba(255, 255, 255, .7); border: 1px solid var(--line); border-radius: 8px; font-size: 11.5px; cursor: pointer; }
+.update-close:hover { color: var(--ink-950); border-color: var(--line-strong); }
+.update-body { min-height: 0; overflow-y: auto; padding: 18px 20px 20px; display: grid; gap: 14px; }
+.update-current { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 8px; padding: 12px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 12px; }
+.update-current-item { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.update-current-item span { color: var(--ink-500); font-size: 9.5px; letter-spacing: .04em; }
+.update-current-item strong { color: var(--ink-950); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.update-warning { margin: 0; padding: 10px 12px; color: #8a4b00; background: #fff6e6; border: 1px solid #f3d39a; border-radius: 10px; font-size: 11.5px; line-height: 1.6; }
+.update-tabs { display: flex; gap: 6px; padding: 4px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; }
+.update-tab { flex: 1 1 0; padding: 7px 10px; color: var(--ink-600); background: transparent; border: 0; border-radius: 7px; font-size: 12px; font-weight: 650; cursor: pointer; }
+.update-tab.is-active { color: var(--ink-950); background: #fff; box-shadow: 0 1px 4px rgba(16, 35, 59, .12); }
+.update-pane { display: grid; gap: 10px; }
+.update-hint { margin: 0; color: var(--ink-500); font-size: 11.5px; line-height: 1.65; }
+.update-pane-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.update-schema-toggle { display: inline-flex; align-items: flex-start; gap: 6px; color: var(--ink-500); font-size: 10.5px; line-height: 1.5; }
+.update-schema-toggle input { margin-top: 2px; }
+.update-list-title { margin: 2px 0 0; color: var(--ink-800); font-size: 12px; font-weight: 750; }
+.update-versions { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.update-version { display: flex; align-items: center; gap: 10px; padding: 9px 11px; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.update-version.is-current { border-color: rgba(32, 201, 151, .55); background: rgba(67, 221, 178, .07); }
+.update-version-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.update-version-name { color: var(--ink-950); font-family: var(--mono); font-size: 12.5px; font-weight: 700; }
+.update-version-meta { color: var(--ink-500); font-size: 10px; overflow-wrap: anywhere; }
+.update-version-note { color: var(--ink-400); font-size: 10px; }
+.update-version button { flex: 0 0 auto; }
+.update-empty { margin: 0; padding: 10px 0; color: var(--ink-500); font-size: 11.5px; }
+.update-history { display: grid; gap: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
+.update-history-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.update-history-item { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; background: var(--surface-soft); border-radius: 8px; font-size: 10.5px; }
+.update-history-main { color: var(--ink-700); overflow-wrap: anywhere; }
+.update-history-meta { flex: 0 0 auto; color: var(--ink-500); font-family: var(--mono); }
+.update-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; background: #fff6e6; border: 1px solid #f3d39a; border-radius: 10px; }
+.update-confirm-text { margin: 0; color: #7a4300; font-size: 11.5px; line-height: 1.6; }
+.update-confirm-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.update-error { margin: 0; padding: 9px 11px; color: #8f1f2e; background: #fff0f1; border: 1px solid #f2c2c8; border-radius: 9px; font-size: 11.5px; }
+.update-status { margin: 0; padding: 9px 11px; color: var(--ink-600); background: var(--surface-soft); border-radius: 9px; font-size: 11.5px; }
+@media (max-width: 560px) {
+  .update-header { padding: 14px; }
+  .update-body { padding: 14px; }
+  .update-current { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .update-version { flex-wrap: wrap; }
+  .update-confirm { flex-direction: column; align-items: stretch; }
+}

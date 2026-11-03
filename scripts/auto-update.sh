@@ -4,13 +4,16 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${1:-${QQBOT_STUDIO_DATA_DIR:-$HOME/.local/share/qqbot-studio}}"
+# pull   = fetch + fast-forward (legacy behaviour)
+# restart = code was already switched by the updater (rollback/test channel)
+MODE="${2:-pull}"
 LOG_FILE="$DATA_DIR/auto-update.log"
 mkdir -p "$DATA_DIR"
 chmod 700 "$DATA_DIR" 2>/dev/null || true
 exec >>"$LOG_FILE" 2>&1
 
 echo "=== QQ Bot Studio auto update $(date -Is) ==="
-echo "repo=$ROOT_DIR data=$DATA_DIR"
+echo "repo=$ROOT_DIR data=$DATA_DIR mode=$MODE"
 
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/true
@@ -19,7 +22,11 @@ export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKey
 # Let the HTTP response leave the old management server before replacing it.
 sleep 2
 cd "$ROOT_DIR"
-git pull --ff-only
+if [ "$MODE" = "pull" ]; then
+  git pull --ff-only
+else
+  echo "skip git pull; code already switched to $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+fi
 
 # Keep the bundled enhancer updated for existing v2 instances. AstrBot will
 # load the new files after its container is restarted.
