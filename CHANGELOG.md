@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.2.0-beta.1 — 测试版：长期记忆与按群策略
+
+- 测试分支：继承正式版 `4.2.0`，新增 AstrBot 原生长期记忆、按群 `conversation/long_term` 策略、Studio 记忆策略面板、参数分组面板和 stable/test 更新回退功能。
+- 测试版不等同于正式版；长期记忆/策略需真实 AstrBot/Docker E2E 后才可合并。
+- 主仓库测试：646 tests OK；AstrBot memory patch：125 tests OK（评审快照）。
+
 ## v4.2.0 — 更新通道（稳定/测试）与同大版本任意回滚
 
 - 控制台新增「更新与回滚」面板：当前版本/提交/大版本/工作区状态，稳定版与测试版分页。
