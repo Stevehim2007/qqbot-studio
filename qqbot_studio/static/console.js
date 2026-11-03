@@ -55,6 +55,11 @@
     updateArmed: false,
     updateCanApply: false,
     updateInfo: null,
+    updateOpen: false,
+    updateChannel: 'stable',
+    updateStatus: null,
+    updateVersions: null,
+    updatePending: null,
     optionalSupport: {
       plugins: null,
       memory: null,
@@ -329,13 +334,305 @@
     if (text) text.textContent = label;
   }
 
-  function resetUpdateArm() {
+  function updateChannelText(channel) {
+    return channel === 'test' ? '测试版' : '稳定版';
+  }
+
+  function setUpdatePanelVisible(visible) {
+    const overlay = $('update-overlay');
+    if (!overlay) return;
+    overlay.hidden = !visible;
+    state.updateOpen = visible;
+    if (visible) {
+      const modal = $('update-modal');
+      if (modal) modal.focus();
+    }
+  }
+
+  function showUpdateError(message) {
+    const element = $('update-error');
+    if (!element) return;
+    element.textContent = message || '';
+    element.hidden = !message;
+  }
+
+  function showUpdateStatus(message) {
+    const element = $('update-status');
+    if (!element) return;
+    element.textContent = message || '';
+    element.hidden = !message;
+  }
+
+  function setUpdateWarning(message) {
+    const element = $('update-warning');
+    if (!element) return;
+    element.textContent = message || '';
+    element.hidden = !message;
+  }
+
+  function clearUpdateConfirm() {
+    state.updatePending = null;
+    const box = $('update-confirm');
+    if (box) box.hidden = true;
+    const text = $('update-confirm-text');
+    if (text) text.textContent = '';
+  }
+
+  function armUpdateAction(label, warning, run) {
     if (state.updateBusy) return;
-    state.updateArmed = false;
-    if (state.updateCanApply && state.updateInfo) {
-      setUpdateLabel(`更新 ${state.updateInfo.behind || ''} 个提交`.trim());
-    } else {
-      setUpdateLabel('检查更新');
+    state.updatePending = { label, run };
+    const box = $('update-confirm');
+    const text = $('update-confirm-text');
+    const ok = $('update-confirm-ok');
+    if (text) text.textContent = warning;
+    if (ok) ok.textContent = label;
+    if (box) box.hidden = false;
+    window.setTimeout(() => {
+      if (state.updatePending && state.updatePending.label === label) clearUpdateConfirm();
+    }, 20000);
+  }
+
+  function updateBlockedReason() {
+    const status = state.updateStatus || {};
+    if (status.busy === true) return '已有更新/回滚任务正在运行，请等待它完成。';
+    if (status.dirty === true) return '代码目录有未提交的修改，更新与回滚已禁用；请先在服务器处理这些修改。';
+    return '';
+  }
+
+  function setUpdateBusyUi(busy) {
+    const stable = $('update-apply-stable');
+    if (stable) stable.disabled = busy || Boolean(updateBlockedReason());
+    const tabStable = $('update-tab-stable');
+    const tabTest = $('update-tab-test');
+    if (tabStable) tabStable.disabled = busy;
+    if (tabTest) tabTest.disabled = busy;
+    const ok = $('update-confirm-ok');
+    if (ok) ok.disabled = busy;
+  }
+
+  function renderUpdateStatus(status) {
+    const current = asRecord(status.current);
+    const tag = textValue(current.tag, '');
+    const version = textValue(current.version, '—');
+    setText('update-current-version', tag ? `${version} (${tag})` : version);
+    setText('update-current-commit', textValue(current.commit, '—'));
+    setText('update-current-major', `v${textValue(current.major, '?')}.x`);
+    setText('update-current-channel', updateChannelText(textValue(current.channel, 'stable')));
+    setText('update-current-dirty', status.dirty === true ? '有未提交修改' : '干净');
+    setUpdateWarning(updateBlockedReason());
+  }
+
+  function makeUpdateVersionItem(options) {
+    const item = makeElement('li', 'update-version');
+    if (options.current) item.classList.add('is-current');
+    const main = makeElement('div', 'update-version-main');
+    main.appendChild(makeElement('span', 'update-version-name', options.name));
+    main.appendChild(makeElement('span', 'update-version-meta', options.meta));
+    if (options.note) main.appendChild(makeElement('span', 'update-version-note', options.note));
+    item.appendChild(main);
+    const button = makeElement('button', 'btn btn-small btn-quiet', options.buttonLabel);
+    button.type = 'button';
+    button.disabled = Boolean(options.disabled);
+    if (!button.disabled && typeof options.onClick === 'function') {
+      button.addEventListener('click', options.onClick);
+    }
+    item.appendChild(button);
+    return item;
+  }
+
+  function renderUpdateVersions(data) {
+    const list = $('update-versions');
+    const empty = $('update-versions-empty');
+    if (!list) return;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    const versions = Array.isArray(data.versions) ? data.versions : [];
+    if (empty) empty.hidden = versions.length > 0;
+    const blocked = Boolean(updateBlockedReason());
+    const currentMajor = textValue(asRecord(data.current).major, '');
+    versions.forEach((raw) => {
+      const version = asRecord(raw);
+      const tag = textValue(version.tag, '');
+      const name = `v${textValue(version.version, tag)}`;
+      const meta = [textValue(version.date, ''), textValue(version.commit, ''), textValue(version.subject, '')]
+        .filter(Boolean)
+        .join(' · ');
+      const sameMajor = version.same_major === true;
+      const current = version.current === true;
+      let note = '';
+      if (current) note = '当前版本';
+      else if (!sameMajor) note = `跨大版本（当前 v${currentMajor}.x 不支持回滚）`;
+      let buttonLabel = '回滚';
+      if (current) buttonLabel = '当前版本';
+      else if (!sameMajor) buttonLabel = '不可回滚';
+      list.appendChild(
+        makeUpdateVersionItem({
+          name,
+          meta,
+          note,
+          current,
+          buttonLabel,
+          disabled: current || !sameMajor || blocked || !tag,
+          onClick: () => armUpdateAction(
+            `回滚到 ${tag}`,
+            `确认回滚到 ${tag}？会先备份代码、实例配置与密钥，再切换代码并重启管理服务；实例数据库和数据目录不会被覆盖。`,
+            () => runUpdateAction('/api/update/rollback', {
+              target: tag,
+              allow_schema_downgrade: Boolean($('update-allow-schema') && $('update-allow-schema').checked)
+            })
+          )
+        })
+      );
+    });
+  }
+
+  function renderUpdateTestRefs(data) {
+    const list = $('update-test-refs');
+    const empty = $('update-test-empty');
+    if (!list) return;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    const refs = Array.isArray(data.versions) ? data.versions : [];
+    if (empty) empty.hidden = refs.length > 0;
+    const blocked = Boolean(updateBlockedReason());
+    refs.forEach((raw) => {
+      const entry = asRecord(raw);
+      const refName = textValue(entry.ref, '').replace(/^origin\//, '');
+      const isTag = textValue(entry.kind, 'branch') === 'tag';
+      const target = isTag ? textValue(entry.tag, '') : refName;
+      const meta = [textValue(entry.date, ''), textValue(entry.commit, ''), textValue(entry.subject, '')]
+        .filter(Boolean)
+        .join(' · ');
+      list.appendChild(
+        makeUpdateVersionItem({
+          name: textValue(entry.version, target),
+          meta,
+          note: entry.current === true ? '当前版本' : '测试通道',
+          current: entry.current === true,
+          buttonLabel: entry.current === true ? '当前版本' : '切换到测试版',
+          disabled: entry.current === true || blocked || !target,
+          onClick: () => armUpdateAction(
+            `切换到 ${target}`,
+            `确认切换到测试版本 ${target}？会先备份代码、实例配置与密钥；测试版可能不稳定，实例数据不会被覆盖。`,
+            () => runUpdateAction('/api/update/apply', { channel: 'test', test_ref: target })
+          )
+        })
+      );
+    });
+  }
+
+  function formatHistoryTime(record) {
+    const at = textValue(record.at, '');
+    if (at) return at.replace('T', ' ').slice(0, 19);
+    const stamp = Number(record.time);
+    if (!stamp) return '';
+    try {
+      return new Date(stamp).toLocaleString('zh-CN', { hour12: false });
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function historyResultText(result) {
+    if (result === 'success') return '成功';
+    if (result === 'restored') return '失败（已恢复原版本）';
+    return '失败';
+  }
+
+  function renderUpdateHistory(records) {
+    const list = $('update-history-list');
+    const empty = $('update-history-empty');
+    if (!list) return;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    const items = Array.isArray(records) ? records : [];
+    if (empty) empty.hidden = items.length > 0;
+    items.slice(0, 10).forEach((raw) => {
+      const record = asRecord(raw);
+      const from = asRecord(record.from);
+      const to = asRecord(record.to);
+      const fromText = textValue(from.version, textValue(from.commit, '?'));
+      const toText = textValue(to.version, textValue(to.commit, '?'));
+      const channel = record.action === 'rollback' ? '回滚' : updateChannelText(textValue(record.channel, 'stable'));
+      const item = makeElement('li', 'update-history-item');
+      const main = makeElement(
+        'span',
+        'update-history-main',
+        `${channel}：${fromText} → ${toText} · ${historyResultText(textValue(record.result, ''))}`
+      );
+      const message = textValue(record.message, '');
+      if (message) main.title = message;
+      item.appendChild(main);
+      item.appendChild(makeElement('span', 'update-history-meta', formatHistoryTime(record)));
+      list.appendChild(item);
+    });
+  }
+
+  async function loadUpdateVersions(channel) {
+    const data = asRecord(await apiRequest(`/api/update/versions?channel=${encodeURIComponent(channel)}`));
+    state.updateVersions = data;
+    if (channel === 'test') renderUpdateTestRefs(data);
+    else renderUpdateVersions(data);
+    if (data.fetch_ok === false && data.message) {
+      showUpdateStatus(`无法刷新远端版本，列表可能不是最新：${textValue(data.message, '')}`);
+    }
+    return data;
+  }
+
+  async function loadUpdateHistory() {
+    const data = asRecord(await apiRequest('/api/update/history'));
+    renderUpdateHistory(data.history);
+  }
+
+  async function loadUpdatePanelData() {
+    const status = asRecord(await apiRequest('/api/update/status'));
+    state.updateStatus = status;
+    renderUpdateStatus(status);
+    setUpdateBusyUi(false);
+    await Promise.all([loadUpdateVersions(state.updateChannel), loadUpdateHistory(), checkForUpdate(true)]);
+  }
+
+  async function openUpdatePanel() {
+    setUpdatePanelVisible(true);
+    clearUpdateConfirm();
+    showUpdateError('');
+    showUpdateStatus('');
+    setUpdateBusyUi(false);
+    setText('update-subtitle', '正在读取版本信息…');
+    try {
+      await loadUpdatePanelData();
+      setText('update-subtitle', '稳定版跟随正式发布；测试版只允许已登记的分支或预发布标签。');
+    } catch (error) {
+      const message = formatError(error, '读取版本信息失败。');
+      showUpdateError(message);
+      setText('update-subtitle', '无法读取版本信息');
+      showToast(message, 'error', 6000);
+    }
+  }
+
+  function closeUpdatePanel() {
+    clearUpdateConfirm();
+    setUpdatePanelVisible(false);
+  }
+
+  async function runUpdateAction(path, body) {
+    if (state.updateBusy) return;
+    clearUpdateConfirm();
+    showUpdateError('');
+    state.updateBusy = true;
+    setUpdateBusyUi(true);
+    showUpdateStatus('正在切换版本；备份和校验可能需要几十秒，请勿关闭页面。');
+    try {
+      const data = asRecord(await apiRequest(path, { method: 'POST', body: body || {} }));
+      if (data.ok === false) throw new ApiError(textValue(data.message, '操作失败。'));
+      const message = textValue(data.message, '操作已完成，管理服务即将重启。');
+      showUpdateStatus(`${message} 页面将在约 12 秒后刷新。`);
+      showToast(message, 'success', 8000);
+      window.setTimeout(() => window.location.reload(), 12000);
+    } catch (error) {
+      const message = formatError(error, '操作失败。');
+      showUpdateError(message);
+      showUpdateStatus('');
+      showToast(message, 'error', 7000);
+      state.updateBusy = false;
+      setUpdateBusyUi(false);
     }
   }
 
@@ -358,46 +655,46 @@
           showToast(data.message || (data.ok === false ? '无法检查更新。' : '当前已经是最新版本。'), data.ok === false ? 'warning' : 'success', 5000);
         }
       }
+      return data;
     } catch (error) {
       const message = formatError(error, '检查更新失败。');
       setUpdateLabel('检查更新');
       if (!silent) showToast(message, 'error', 6000);
+      return null;
     } finally {
       state.updateBusy = false;
+      setUpdateBusyUi(false);
       const button = $('console-update');
       if (button) button.disabled = false;
     }
   }
 
   async function handleUpdateClick() {
-    if (state.updateBusy) return;
-    if (!state.updateCanApply) {
-      await checkForUpdate(false);
-      return;
+    await openUpdatePanel();
+  }
+
+  function switchUpdateTab(channel) {
+    const next = channel === 'test' ? 'test' : 'stable';
+    state.updateChannel = next;
+    const stableTab = $('update-tab-stable');
+    const testTab = $('update-tab-test');
+    const stablePane = $('update-stable-pane');
+    const testPane = $('update-test-pane');
+    if (stableTab) {
+      stableTab.classList.toggle('is-active', next === 'stable');
+      stableTab.setAttribute('aria-selected', next === 'stable' ? 'true' : 'false');
     }
-    if (!state.updateArmed) {
-      state.updateArmed = true;
-      setUpdateLabel('再次点击更新整个项目并重启');
-      window.setTimeout(() => {
-        if (!state.updateBusy) resetUpdateArm();
-      }, 6000);
-      return;
+    if (testTab) {
+      testTab.classList.toggle('is-active', next === 'test');
+      testTab.setAttribute('aria-selected', next === 'test' ? 'true' : 'false');
     }
-    state.updateArmed = false;
-    state.updateBusy = true;
-    setUpdateLabel('正在更新…', true);
-    try {
-      const data = asRecord(await apiRequest('/api/update/apply', { method: 'POST', body: {} }));
-      if (data.ok === false) throw new ApiError(textValue(data.message, '自动更新失败。'));
-      showToast(data.message || '更新任务已启动，管理服务即将重启。', 'success', 8000);
-      setUpdateLabel('等待服务重启…', true);
-      window.setTimeout(() => window.location.reload(), 12000);
-    } catch (error) {
-      const message = formatError(error, '自动更新失败。');
-      showToast(message, 'error', 7000);
-      setUpdateLabel('检查更新');
-      state.updateBusy = false;
-    }
+    if (stablePane) stablePane.hidden = next !== 'stable';
+    if (testPane) testPane.hidden = next !== 'test';
+    clearUpdateConfirm();
+    showUpdateError('');
+    loadUpdateVersions(next).catch((error) => {
+      showUpdateError(formatError(error, '读取版本列表失败。'));
+    });
   }
 
   function formatSyncTime(timestamp) {
@@ -3618,6 +3915,42 @@
     if (refresh) refresh.addEventListener('click', () => void manualRefresh());
     const updateButton = $('console-update');
     if (updateButton) updateButton.addEventListener('click', () => void handleUpdateClick());
+    const updateOverlay = $('update-overlay');
+    if (updateOverlay) {
+      updateOverlay.addEventListener('click', (event) => {
+        if (event.target === updateOverlay) closeUpdatePanel();
+      });
+    }
+    const updateClose = $('update-close');
+    if (updateClose) updateClose.addEventListener('click', () => closeUpdatePanel());
+    const updateTabStable = $('update-tab-stable');
+    if (updateTabStable) updateTabStable.addEventListener('click', () => switchUpdateTab('stable'));
+    const updateTabTest = $('update-tab-test');
+    if (updateTabTest) updateTabTest.addEventListener('click', () => switchUpdateTab('test'));
+    const updateApplyStable = $('update-apply-stable');
+    if (updateApplyStable) {
+      updateApplyStable.addEventListener('click', () => {
+        armUpdateAction(
+          '更新到最新稳定版',
+          '确认快进更新整个项目到最新稳定版？会先备份代码、实例配置与密钥，再重启管理服务；实例数据不会被覆盖。',
+          () => runUpdateAction('/api/update/apply', { channel: 'stable' })
+        );
+      });
+    }
+    const updateConfirmCancel = $('update-confirm-cancel');
+    if (updateConfirmCancel) updateConfirmCancel.addEventListener('click', () => clearUpdateConfirm());
+    const updateConfirmOk = $('update-confirm-ok');
+    if (updateConfirmOk) {
+      updateConfirmOk.addEventListener('click', () => {
+        const pending = state.updatePending;
+        if (!pending || typeof pending.run !== 'function') {
+          clearUpdateConfirm();
+          return;
+        }
+        clearUpdateConfirm();
+        void pending.run();
+      });
+    }
     const retry = $('console-error-retry');
     if (retry) retry.addEventListener('click', () => void loadConsole());
 

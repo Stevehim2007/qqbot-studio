@@ -31,7 +31,15 @@ from .deployer import PROMPT_PROFILES_MAX_REQUEST_BYTES, DeploymentError
 from .dockerctl import DockerError
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
-from .updater import UpdateError, check_update, start_update
+from .updater import (
+    UpdateError,
+    check_update,
+    list_versions,
+    load_history,
+    rollback,
+    start_update,
+    update_status,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost"}
@@ -417,6 +425,22 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/update/check":
                 self._json(HTTPStatus.OK, check_update())
+                return
+            if path == "/api/update/status":
+                self._json(HTTPStatus.OK, update_status(data_dir=ctx.studio.root))
+                return
+            if path == "/api/update/versions":
+                channel = (query.get("channel") or ["stable"])[0]
+                self._json(
+                    HTTPStatus.OK,
+                    list_versions(channel=channel, data_dir=ctx.studio.root),
+                )
+                return
+            if path == "/api/update/history":
+                self._json(
+                    HTTPStatus.OK,
+                    {"ok": True, "history": load_history(ctx.studio.root)},
+                )
                 return
             if path == "/api/settings":
                 settings = ctx.studio.load_settings()
@@ -829,7 +853,24 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/update/apply":
                 if ctx.studio.has_active_deployments():
                     raise ValueError("有部署任务正在运行，不能自动更新。请在部署完成后再试。")
-                result = start_update(data_dir=ctx.studio.root)
+                channel = str(payload.get("channel") or "stable").strip()
+                test_ref = str(payload.get("test_ref") or "").strip()
+                result = start_update(
+                    channel=channel,
+                    data_dir=ctx.studio.root,
+                    test_ref=test_ref,
+                )
+                self._json(HTTPStatus.OK, result)
+                return
+            if path == "/api/update/rollback":
+                if ctx.studio.has_active_deployments():
+                    raise ValueError("有部署任务正在运行，不能回滚。请在部署完成后再试。")
+                target = str(payload.get("target") or "").strip()
+                result = rollback(
+                    target,
+                    data_dir=ctx.studio.root,
+                    allow_schema_downgrade=bool(payload.get("allow_schema_downgrade")),
+                )
                 self._json(HTTPStatus.OK, result)
                 return
             if path in {"/api/assistant/install", "/api/assistant/update"}:

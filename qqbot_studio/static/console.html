@@ -302,6 +302,68 @@
     </section>
   </div>
 
+  <div id="update-overlay" class="update-overlay" hidden>
+    <section id="update-modal" class="update-modal" role="dialog" aria-modal="true" aria-labelledby="update-title" aria-describedby="update-subtitle" tabindex="-1">
+      <header class="update-header">
+        <div class="update-heading">
+          <span class="update-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-refresh"></use></svg></span>
+          <div>
+            <span class="update-kicker">版本管理</span>
+            <h2 id="update-title" tabindex="-1">更新与回滚</h2>
+            <p id="update-subtitle">正在读取版本信息…</p>
+          </div>
+        </div>
+        <button id="update-close" class="update-close" type="button">关闭</button>
+      </header>
+      <div class="update-body">
+        <section class="update-current" aria-label="当前版本">
+          <div class="update-current-item"><span>当前版本</span><strong id="update-current-version">—</strong></div>
+          <div class="update-current-item"><span>提交</span><strong id="update-current-commit">—</strong></div>
+          <div class="update-current-item"><span>大版本</span><strong id="update-current-major">—</strong></div>
+          <div class="update-current-item"><span>通道</span><strong id="update-current-channel">—</strong></div>
+          <div class="update-current-item"><span>工作区</span><strong id="update-current-dirty">—</strong></div>
+        </section>
+        <p id="update-warning" class="update-warning" role="alert" hidden></p>
+        <div class="update-tabs" role="tablist" aria-label="更新通道">
+          <button id="update-tab-stable" class="update-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="update-stable-pane">稳定版</button>
+          <button id="update-tab-test" class="update-tab" type="button" role="tab" aria-selected="false" aria-controls="update-test-pane">测试版</button>
+        </div>
+        <section id="update-stable-pane" class="update-pane" role="tabpanel" aria-labelledby="update-tab-stable">
+          <p class="update-hint">稳定版只跟随 GitHub 正式发布（main 快进）。可在当前大版本下选择任意正式小版本回滚；跨大版本回滚会被拒绝。</p>
+          <div class="update-pane-actions">
+            <label class="update-schema-toggle" for="update-allow-schema">
+              <input id="update-allow-schema" type="checkbox">
+              <span>允许 schema 降级（仅在你已备份并确认兼容时勾选）</span>
+            </label>
+            <button id="update-apply-stable" class="btn btn-small btn-primary" type="button">更新到最新稳定版</button>
+          </div>
+          <h3 class="update-list-title">可回滚的正式版本</h3>
+          <ul id="update-versions" class="update-versions" role="list"></ul>
+          <p id="update-versions-empty" class="update-empty" hidden>暂无正式版本标签。</p>
+        </section>
+        <section id="update-test-pane" class="update-pane" role="tabpanel" aria-labelledby="update-tab-test" hidden>
+          <p class="update-hint">测试版只允许项目登记的测试分支或预发布标签，不接受任意分支、提交号或链接。</p>
+          <ul id="update-test-refs" class="update-versions" role="list"></ul>
+          <p id="update-test-empty" class="update-empty" hidden>没有已登记的测试版本。</p>
+        </section>
+        <section class="update-history" aria-labelledby="update-history-title">
+          <h3 id="update-history-title" class="update-list-title">最近更新/回滚</h3>
+          <ul id="update-history-list" class="update-history-list" role="list"></ul>
+          <p id="update-history-empty" class="update-empty" hidden>还没有更新或回滚记录。</p>
+        </section>
+        <div id="update-confirm" class="update-confirm" hidden>
+          <p id="update-confirm-text" class="update-confirm-text"></p>
+          <div class="update-confirm-actions">
+            <button id="update-confirm-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
+            <button id="update-confirm-ok" class="btn btn-primary btn-small" type="button">确认</button>
+          </div>
+        </div>
+        <p id="update-error" class="update-error" role="alert" hidden></p>
+        <p id="update-status" class="update-status" role="status" hidden></p>
+      </div>
+    </section>
+  </div>
+
   <!-- 服务端会将 {{TOKEN}} 替换为本次本地会话的一次性访问令牌。 -->
   <script>window.QB_TOKEN = "{{TOKEN}}";</script>
   <script src="/services/api.js"></script>

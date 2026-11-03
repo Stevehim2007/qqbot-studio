@@ -1068,6 +1068,69 @@ class ServerTests(unittest.TestCase):
         start.assert_called_once()
 
 
+    def test_update_status_versions_history_and_rollback_routes(self):
+        with mock.patch(
+            "qqbot_studio.server.update_status",
+            return_value={"ok": True, "version": "4.1.1", "major": 4},
+        ) as status_mock:
+            status, body = self._get("/api/update/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["major"], 4)
+        status_mock.assert_called_once_with(data_dir=self.studio.root)
+
+        with mock.patch(
+            "qqbot_studio.server.list_versions",
+            return_value={"ok": True, "channel": "test", "versions": []},
+        ) as versions_mock:
+            status, body = self._get("/api/update/versions?channel=test")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["channel"], "test")
+        versions_mock.assert_called_once_with(channel="test", data_dir=self.studio.root)
+
+        with mock.patch(
+            "qqbot_studio.server.load_history",
+            return_value=[{"result": "success", "to": {"tag": "v4.0.4"}}],
+        ) as history_mock:
+            status, body = self._get("/api/update/history")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["history"][0]["result"], "success")
+        history_mock.assert_called_once_with(self.studio.root)
+
+        with mock.patch(
+            "qqbot_studio.server.rollback",
+            return_value={"ok": True, "action": "rollback", "restarting": True},
+        ) as rollback_mock:
+            status, body = self._post("/api/update/rollback", {"target": "v4.0.4"})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        rollback_mock.assert_called_once_with(
+            "v4.0.4", data_dir=self.studio.root, allow_schema_downgrade=False
+        )
+
+        with mock.patch(
+            "qqbot_studio.server.start_update",
+            return_value={"ok": True, "restarting": True},
+        ) as start_mock:
+            status, body = self._post(
+                "/api/update/apply", {"channel": "test", "test_ref": "feat/long-term-memory-test"}
+            )
+        self.assertEqual(status, 200)
+        start_mock.assert_called_once_with(
+            channel="test", data_dir=self.studio.root, test_ref="feat/long-term-memory-test"
+        )
+
+    def test_update_rollback_errors_are_user_facing_400(self):
+        from qqbot_studio.updater import UpdateError
+
+        with mock.patch(
+            "qqbot_studio.server.rollback",
+            side_effect=UpdateError("跨大版本回滚已拒绝：当前是 v4.x，目标 v3.12.0 属于 v3.x。"),
+        ):
+            status, body = self._post("/api/update/rollback", {"target": "v3.12.0"})
+        self.assertEqual(status, 400)
+        self.assertIn("跨大版本", json.loads(body)["message"])
+
+
     def test_state_failure_returns_diagnosable_200(self):
         self.studio.manager.status_raise = True
         status, body = self._get("/api/state?instance=bot-1")
