@@ -31,7 +31,8 @@
 6. 执行 `git checkout --detach <标签>`（稳定版更新为 `merge --ff-only`），并核对 HEAD 提交。
 7. 失败时自动切回原分支/提交；仍失败则保留现场并在错误中说明。
 8. 成功后启动 `scripts/auto-update.sh <data-dir> restart`：跳过 `git pull`，同步内置插件并重启管理服务。
-9. 写入 `~/.local/share/qqbot-studio/update-history.json`（最多 50 条，新的在前），错误信息用正则脱敏 token、password、API key、URL 凭据。
+9. 更新/回滚后按 [`post-update-verification.md`](post-update-verification.md) 做确认；自动测试通过后才会重启管理服务。
+10. 写入 `~/.local/share/qqbot-studio/update-history.json`（最多 50 条，新的在前），错误信息用正则脱敏 token、password、API key、URL 凭据。
 
 ## 历史记录格式
 

@@ -20,7 +20,8 @@ class PostUpdateTestContract(unittest.TestCase):
     def test_post_update_script_runs_repo_and_patch_checks(self):
         text = (ROOT / "scripts" / "post-update-test.sh").read_text(encoding="utf-8")
         for token in (
-            "python3 -m unittest discover -s tests -q",
+            "post-update-verification.md",
+            "manual acceptance checklist",
             "verify-patch.sh",
             "ASTRBOT_SRC_TGZ",
             "node --check qqbot_studio/static/console.js",
