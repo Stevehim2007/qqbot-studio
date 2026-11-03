@@ -17,11 +17,23 @@
 - 新增 `update-history.json`（from/to 版本、提交、通道、时间、结果，错误脱敏）及 `/api/update/status|versions|history|rollback`。
 - 新增真实 Git 仓库测试：同大版本任意选择、跨大版本拒绝、非法 ref/URL 拒绝、脏工作区拒绝、备份与失败恢复、数据不变、历史与通道。
 
+### 记忆策略面板（Studio）
 
-
-
-
-
+- 控制台实例设置新增「记忆策略」面板：默认模式（conversation/long_term）、私聊模式、
+  按群增删改行（群号、模式、scope=group/user/group_user、抽取/注入开关、最大条数/字符）。
+- 新增 `GET/POST /api/instances/<id>/memory-policy`（兼容 `/api/memory-policy?instance=`）：
+  读写 AstrBot 的 `memory.policy`，只替换该键，其它设置与 `memory.*` 其它键原样保留，原子写 0600。
+- 面板明确提示：长期记忆只对列出的群生效，未列出的群与私聊保持 conversation（只用会话历史）；
+  `memory.enable=false` 时提示策略不会生效；上游没有 `memory.policy` 在线接口，保存后需重启 AstrBot
+  （或重新加载配置）才生效，响应 `restart_required=true`。
+- 实例没有 AstrBot 配置时显示"不支持"（POST 409），不伪造已保存值；旧后端返回 501。
+- 后端校验：模式/scope 枚举、布尔开关、`max_items 1..50`/`max_chars 80..8000` 整数、群号
+  4-20 位数字或 `platform:群号`、重复行/未知字段/超过 200 行一律拒绝且不写文件；令牌校验不变。
+- 只读 JSON 配置，从不读取记忆数据库内容；日志/响应不含其它配置值或密钥。
+- 插件参数编辑器（T17 P2）：保存成功后刷新比较基线使「已修改」标记正确清除；校验失败时清除
+  搜索/分组/只看已修改过滤并滚动聚焦到出错字段；保存载荷仍包含全部 256 个字段。
+- 测试：`tests/test_memory_policy_studio.py`（23 项）、`tests/test_memory_policy_ui_static.py`（12 项，
+  含 node 契约与 256 字段回归）；文档见 `docs/memory-policy.md`。未做真实 AstrBot 进程 E2E。
 
 ## v4.1.1 — 网页智能阅读 + 饭店搜索/地址创建 + AstrBot 断连修复
 

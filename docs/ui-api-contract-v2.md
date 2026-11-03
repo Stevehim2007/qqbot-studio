@@ -683,6 +683,42 @@ body: {"mode": "direct"}  或  {"mode": "astrbot"}
   `memory_mode` 镜像，并返回明确 `error/warning`，不会把默认 `direct` 写回损坏文件。
   只有显式写操作才允许修复主配置。
 
+### 8.3.1 按群长期记忆策略（memory.policy）
+
+```text
+GET  /api/instances/<instance_id>/memory-policy
+POST /api/instances/<instance_id>/memory-policy
+GET  /api/memory-policy?instance=<instance_id>   # 兼容别名
+POST /api/memory-policy                           # 兼容别名
+```
+
+POST 请求体（`groups` 为数组，元素字段固定，未知字段直接 400）：
+
+```json
+{
+  "default_mode": "conversation",
+  "private": {"mode": "conversation", "scope": "user", "extract": true, "inject": true},
+  "groups": [
+    {"group_id": "838796241", "mode": "long_term", "scope": "group_user",
+     "extract": true, "inject": true, "max_items": 8, "max_chars": 1500}
+  ]
+}
+```
+
+- 写入位置：`data/astrbot/cmd_config.json` → `memory.policy`；只替换该键，其它设置与
+  `memory.*` 其它键原样保留（原子写，0600）。Studio 只读写 JSON 配置，**不读取记忆数据库**。
+- GET 返回 `ok/available/supported/default_mode/private/groups[]/warnings[]/mode_options[]/
+  scope_options[]/limits/memory_enabled/patch_hint/hot_reload/config_path/message/warning/error`。
+- 状态码：200 成功（保存时 `saved:true`，响应即磁盘最新值）；400 校验失败；403 令牌无效；
+  409 实例没有 AstrBot 配置（“不支持”，不写文件、不伪造值）；501 旧后端无该接口。
+- 校验：`mode ∈ {conversation,long_term}`；`scope ∈ {group,user,group_user}`（私聊只允许 `user`）；
+  `extract/inject` 必须布尔；`max_items 1..50`、`max_chars 80..8000` 整数（`null`=继承）；
+  群号 `4-20` 位数字或 `platform:群号`，含路径/URL 字符一律拒绝；单实例最多 200 行、重复群号拒绝。
+- 语义：只有列出的群启用长期记忆；未列出的群与私聊保持 `conversation`（只用会话历史）。
+  `memory.enable=false` 时策略可保存但不会生效，响应会明确提示。保存后下一轮消息生效
+  （AstrBot 策略缓存 ≤5s），无需重启。
+- 详见 [`memory-policy.md`](memory-policy.md)。
+
 ### 8.4 资源统计
 
 ```text

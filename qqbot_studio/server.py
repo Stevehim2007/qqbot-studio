@@ -27,7 +27,11 @@ from .assistant_ext import (
     ASSISTANT_REPO_URL,
 )
 from .astrbot_api import AstrBotAPIError
-from .deployer import PROMPT_PROFILES_MAX_REQUEST_BYTES, DeploymentError
+from .deployer import (
+    PROMPT_PROFILES_MAX_REQUEST_BYTES,
+    DeploymentError,
+    MemoryPolicyUnsupportedError,
+)
 from .dockerctl import DockerError
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
@@ -345,6 +349,67 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         }
 
     # ------------------------------------------------------------------
+    # Per-group long-term memory policy
+    # ------------------------------------------------------------------
+    def _memory_policy_unavailable(self, detail: str) -> dict[str, Any]:
+        """Explicit unsupported state; never a fabricated saved-policy value."""
+
+        return {
+            "ok": False,
+            "available": False,
+            "supported": False,
+            "saved": False,
+            "default_mode": "",
+            "private": {},
+            "groups": [],
+            "warnings": [],
+            "config_path": "",
+            "policy_path": "memory.policy",
+            "mode_options": [],
+            "scope_options": [],
+            "limits": {},
+            "memory_enabled": None,
+            "patch_hint": "unknown",
+            "restart_required": False,
+            "hot_reload": False,
+            "warning": "长期记忆只对已列出的群生效；未列出的群保持 conversation（只用会话历史）。",
+            "message": "当前实例不支持保存记忆策略。",
+            "error": detail,
+        }
+
+    def _serve_memory_policy(
+        self,
+        manager: Any,
+        *,
+        payload: dict[str, Any] | None = None,
+        read_only: bool = False,
+    ) -> None:
+        method = "get_memory_policy" if read_only else "set_memory_policy"
+        handler = getattr(manager, method, None)
+        if not callable(handler):
+            self._json(
+                HTTPStatus.NOT_IMPLEMENTED,
+                self._memory_policy_unavailable("当前后端未提供记忆策略接口。"),
+            )
+            return
+        try:
+            result = handler() if read_only else handler(payload)
+        except DeploymentError:
+            # Validation failures (400) and unsupported instances (409) are
+            # reported by the outer handlers, not swallowed as "ok: false".
+            raise
+        except Exception as exc:  # noqa: BLE001 - optional panel isolation
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.OK,
+                self._memory_policy_unavailable(f"读取记忆策略失败：{exc}"),
+            )
+            return
+        if not isinstance(result, dict):
+            result = self._memory_policy_unavailable("记忆策略接口返回格式异常。")
+        self._json(HTTPStatus.OK, result)
+
+    # ------------------------------------------------------------------
     # HTML/static routes
     # ------------------------------------------------------------------
     def _serve_html(self, html: str) -> None:
@@ -639,6 +704,9 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._json(HTTPStatus.OK, getter())
                     return
+                if subroute == "memory-policy":
+                    self._serve_memory_policy(manager, read_only=True)
+                    return
                 if subroute == "memory":
                     getter = getattr(manager, "get_memory_mode", None)
                     if not callable(getter):
@@ -654,6 +722,11 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.OK, getter(instance_id))
                     return
                 self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+                return
+            if path == "/api/memory-policy":
+                instance_id = ctx.instance_id(query)
+                manager = ctx.studio.get_manager(instance_id)
+                self._serve_memory_policy(manager, read_only=True)
                 return
             if path == "/api/memory":
                 instance_id = ctx.instance_id(query)
@@ -766,6 +839,11 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "logs": manager.get_logs(service, lines)})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+        except MemoryPolicyUnsupportedError as exc:
+            self._json(
+                HTTPStatus.CONFLICT,
+                {"ok": False, "available": False, "supported": False, "message": str(exc)},
+            )
         except (DeploymentError, ValueError, UpdateError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except DockerError as exc:
@@ -970,6 +1048,9 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "memory-policy":
+                    self._serve_memory_policy(manager, payload=payload)
+                    return
                 if subroute == "prompts":
                     updater = getattr(manager, "update_prompt_profiles", None)
                     if not callable(updater):
@@ -1096,6 +1177,11 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     )
                 self._json(HTTPStatus.OK, result)
                 return
+            if path == "/api/memory-policy":
+                instance_id = ctx.instance_id(query, payload)
+                manager = ctx.studio.get_manager(instance_id)
+                self._serve_memory_policy(manager, payload=payload)
+                return
             if path == "/api/memory":
                 mode = str(payload.get("mode") or payload.get("memory_mode") or "").strip()
                 setter = getattr(manager, "set_memory_mode", None)
@@ -1142,6 +1228,11 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "message": message})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+        except MemoryPolicyUnsupportedError as exc:
+            self._json(
+                HTTPStatus.CONFLICT,
+                {"ok": False, "available": False, "supported": False, "message": str(exc)},
+            )
         except (DeploymentError, ValueError, UpdateError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except DockerError as exc:

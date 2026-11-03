@@ -573,9 +573,14 @@ class ControlAssistantStaticTests(unittest.TestCase):
         self.assertNotIn("document.createElement('details')", self.console_js)
         for forbidden in ("localStorage", "sessionStorage", "innerHTML"):
             self.assertNotIn(forbidden, self.console_js)
-        # Save contract stays unchanged: every rendered entry is collected.
-        self.assertIn("for (const entry of config.entries)", self.console_js)
-        self.assertIn("values[entry.key] = result.value;", self.console_js)
+        # Save contract: every rendered entry is collected.  The payload is
+        # built by the plugin-config service (T17 P2) so it can be node-tested.
+        self.assertIn(
+            "pluginConfigService.pluginConfigSavePayload(config.entries)", self.console_js
+        )
+        self.assertIn("const values = plan.values;", self.console_js)
+        service_js = (STATIC / "services" / "plugin-config.js").read_text(encoding="utf-8")
+        self.assertIn("values[key] = result.value;", service_js)
 
 
 if __name__ == "__main__":
