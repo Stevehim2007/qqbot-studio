@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="layout">
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h3>位置筛选</h3>
+        </div>
+        <input type="text" id="sidebarLocSearch" class="sidebar-loc-search" placeholder="搜索位置（如：南关区）...">
+        <ul class="sidebar-search-results" id="sidebarLocResults" style="display:none"></ul>
+        <div class="location-tree" id="locationTree">
+            <div class="tree-loading">加载中...</div>
+        </div>
+    </aside>
+    <main class="content" id="mainContent">
+        <div class="welcome-screen" id="welcomeScreen">
+            <div class="welcome-content">
+                <h1>FoodListen</h1>
+                <p class="welcome-subtitle">饭店测评 · 真实评价</p>
+                <p class="welcome-desc">请从左侧选择一个位置区域来浏览饭店评测</p>
+                <div class="welcome-stats" id="welcomeStats"></div>
+            </div>
+        </div>
+        <div class="restaurant-view" id="restaurantView" style="display:none">
+            <div class="content-header">
+                <h2 id="currentLocation"></h2>
+                <div class="content-header-right">
+                    <input type="text" id="searchInput" class="sort-select" placeholder="搜索当前区域..." style="width:140px">
+                    <select id="searchType" class="sort-select" style="width:80px">
+                        <option value="name">店名</option>
+                        <option value="review">评价</option>
+                        <option value="location">位置</option>
+                    </select>
+                    <button class="btn-sm" id="tagFilterBtn">标签匹配</button>
+                    <select id="sortSelect" class="sort-select">
+                        <option value="default">默认排序</option>
+                        <option value="name">按名称</option>
+                        <option value="score-desc">评分高→低</option>
+                        <option value="score-asc">评分低→高</option>
+                    </select>
+                    <span class="count" id="restaurantCount"></span>
+                </div>
+            </div>
+            <div class="restaurant-grid" id="restaurantGrid"></div>
+        </div>
+    </main>
+    <div class="modal-overlay" id="tagFilterOverlay" style="display:none">
+        <div class="modal-box">
+            <h3>选择标签（多选）</h3>
+            <div class="tag-filter-selected" id="tagFilterSelected" style="display:none"></div>
+            <input type="text" id="tagSearchInput" placeholder="搜索标签..." style="width:100%;margin-bottom:10px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+            <div class="tag-filter-grid" id="tagFilterList" style="max-height:260px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:6px"></div>
+            <div class="modal-actions">
+                <span id="tagFilterCount" style="font-size:12px;color:#999"></span>
+                <button class="btn-cancel" id="tagFilterClearAll" style="display:none">清除全部</button>
+                <button class="btn-cancel" id="tagFilterCancel">取消</button>
+                <button class="btn-save" id="tagFilterApply">确认筛选</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='js/markdown.js') }}"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% endblock %}

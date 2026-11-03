@@ -20,11 +20,15 @@ POST https://food.dlsz.top/api/upload     Content-Type: application/json
 | `API_AI_REVIEW.md` | 正式契约：端点、字段、成功/错误语义、AI 提交流程、部署步骤、已知限制 |
 | `food-ai-review-v1.1.patch` | **可选**加性补丁：错误加稳定 `code`、响应加 `review_id`/`restaurant_created`/`location_path`、`tags` 容错、`FOOD_DB_URI` 环境变量 |
 | `test_ai_review_api.py` | 16 个契约测试（Flask test-client + 临时 SQLite） |
-| `run-tests.sh` | 从只读源临时重建 v1 / v1.1 / v1.2 三个变体并各跑一遍 |
+| `run-tests.sh` | 从只读源临时重建 v1 / v1.1 / v1.2 / v1.3 四个变体并各跑一遍（v1.3 会打 v1.3 补丁） |
 | `FOOD_SITE_FIXES.md` | v1.2 站点修复说明：位置搜索下拉点击 bug 根因 + 后台删除饭店（含验收清单） |
 | `food-site-v1.2-fixes.patch` | v1.2 补丁：`app.py` 新增 `DELETE /api/admin/restaurants/<id>`、`static/js/main.js` 下拉修复、`static/js/admin.js` 删除按钮 |
 | `test_site_fixes.py` | v1.2 的 11 个用例（admin 删除鉴权/404/级联 + 下拉修复静态断言） |
 | `DEPLOYMENT_NOTICE.md` | **给项目所有者的部署通知**：只读挂载证据、成品文件 SHA、备份/应用/重启/回滚、验收清单 |
+| `FOOD_SITE_V13.md` | **v1.3 说明（未部署）**：评价 Markdown 渲染（XSS 安全模型）、全地址位置搜索、`/api/upload` 复用已存在位置、上传页直接选已有行政区划、部署/验收/回滚 |
+| `food-site-v1.3.patch` | v1.3 补丁：`app.py` + 新增 `markdown.js`/`location-path.js` + `main.js`/`admin.js`/`upload.js` + 模板；无 schema 迁移 |
+| `test_site_v13.py` | v1.3 的 32 个用例（Markdown XSS / 全路径搜索 / 位置复用 / 上传页已存在位置选择 / 补丁 dry-run / 库隔离） |
+| `deploy/v1.3/` | v1.3 可直接覆盖的成品文件（含 `MANIFEST.sha256`）；`v1.3.tar.gz` 为打包版 |
 | `deploy/v1.2/` `deploy/v1.2-with-review-codes/` | 可直接覆盖的成品文件（各含 `MANIFEST.sha256`）；同名 `.tar.gz` 为打包版 |
 
 不随仓库放 `app.py` 副本：站点源码随时可能变，`run-tests.sh` 现场从 `FOOD_SRC`
@@ -62,5 +66,9 @@ pip install flask==2.0.3 werkzeug==2.0.3 flask-sqlalchemy==2.5.1 \
 ./run-tests.sh
 ```
 
-期望：`v1` 13 passed / 3 skipped；`v1.1` 16 passed；`v1.2` 11 passed（站点修复）。
+期望：`v1` 13 passed / 3 skipped；`v1.1` 16 passed；`v1.2` 11 passed（站点修复）；
+`v1.3` 32 passed（Markdown/全路径搜索/位置复用/上传页选择；node 缺失时其中 2 个渲染器用例 skip）。
+
+`run-tests.sh` 按当前源码状态构造基线：v1 = 当前源码反向回退 v1.1 补丁，v1.1/v1.2 = 当前
+源码（两项补丁已部署），v1.3 = 当前源码 + `food-site-v1.3.patch`。
 测试全程用临时 SQLite（`FOOD_DB_URI` / 临时目录），不会打开或写入生产 `instance/foodlisten.db`。
