@@ -44,3 +44,5 @@ if [ "$status" -ne 0 ]; then
   exit 1
 fi
 echo "=== post-update tests PASS ==="
+echo "manual acceptance checklist: docs/post-update-verification.md"
+echo "required: containers healthy, memory import, policy, DB, /记忆, real QQ message, food site smoke"
