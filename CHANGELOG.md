@@ -7,7 +7,7 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
-## v4.2.1-beta.1 — 测试版：长期记忆、美食智能与按群策略
+## v4.2.2-beta.1 — 测试版：长期记忆、美食智能与按群策略
 
 - 记忆策略增加 `data/astrbot/memory_policy.json` 持久化 sidecar；AstrBot 重启重写 `cmd_config.json` 后策略不再丢失，面板读取 sidecar 优先。
 
