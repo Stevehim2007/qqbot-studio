@@ -1,4 +1,4 @@
-From d5b4e4f7b2ae57736d4bdd836f65ead9b4ccc1ce Mon Sep 17 00:00:00 2001
+From fe25ec4ba191921341f4d2a648fc203c0c36d531 Mon Sep 17 00:00:00 2001
 From: memory-patch <memory-patch@local>
 Date: Tue, 3 Nov 2026 12:14:40 +0800
 Subject: [PATCH] feat(memory): native long-term memory with per-group policy
@@ -7,21 +7,27 @@ Subject: [PATCH] feat(memory): native long-term memory with per-group policy
 ---
  astrbot/core/astr_main_agent.py               |   5 +
  astrbot/core/config/default.py                |  36 +
- astrbot/core/memory/__init__.py               |  67 ++
- astrbot/core/memory/extract.py                | 189 ++++++
- astrbot/core/memory/integration.py            | 140 ++++
- astrbot/core/memory/policy.py                 | 337 ++++++++++
- astrbot/core/memory/render.py                 |  59 ++
- astrbot/core/memory/service.py                | 628 ++++++++++++++++++
- astrbot/core/memory/store.py                  | 548 +++++++++++++++
- astrbot/core/memory/text.py                   | 136 ++++
- astrbot/core/memory/types.py                  | 169 +++++
+ astrbot/core/memory/__init__.py               |  93 ++
+ astrbot/core/memory/embed.py                  | 276 +++++
+ astrbot/core/memory/extract.py                | 194 ++++
+ astrbot/core/memory/integration.py            | 140 +++
+ astrbot/core/memory/llm_extract.py            | 351 +++++++
+ astrbot/core/memory/policy.py                 | 346 +++++++
+ astrbot/core/memory/reflect.py                | 309 ++++++
+ astrbot/core/memory/render.py                 |  60 ++
+ astrbot/core/memory/service.py                | 973 ++++++++++++++++++
+ astrbot/core/memory/store.py                  | 850 +++++++++++++++
+ astrbot/core/memory/text.py                   | 136 +++
+ astrbot/core/memory/types.py                  | 191 ++++
  .../method/agent_sub_stages/internal.py       |  12 +
- 12 files changed, 2326 insertions(+)
+ 15 files changed, 3972 insertions(+)
  create mode 100644 astrbot/core/memory/__init__.py
+ create mode 100644 astrbot/core/memory/embed.py
  create mode 100644 astrbot/core/memory/extract.py
  create mode 100644 astrbot/core/memory/integration.py
+ create mode 100644 astrbot/core/memory/llm_extract.py
  create mode 100644 astrbot/core/memory/policy.py
+ create mode 100644 astrbot/core/memory/reflect.py
  create mode 100644 astrbot/core/memory/render.py
  create mode 100644 astrbot/core/memory/service.py
  create mode 100644 astrbot/core/memory/store.py
@@ -100,10 +106,10 @@ index dd1b088..520f480 100644
          "rate_limit": {
 diff --git a/astrbot/core/memory/__init__.py b/astrbot/core/memory/__init__.py
 new file mode 100644
-index 0000000..68f017b
+index 0000000..67238c8
 --- /dev/null
 +++ b/astrbot/core/memory/__init__.py
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,93 @@
 +"""AstrBot native long-term memory (SQLite sidecar, fail-open).
 +
 +Public API:
@@ -116,13 +122,27 @@ index 0000000..68f017b
 +* :mod:`astrbot.core.memory.policy` -- per-chat policy: only listed groups
 +  (``mode="long_term"``) read/write long-term memory, everyone else stays
 +  conversation-only, invalid config fails safe
++* :mod:`astrbot.core.memory.reflect` -- deterministic reflection
++  (dry-run/apply, duplicate merge, contradiction report, backup)
++* :mod:`astrbot.core.memory.llm_extract` -- optional LLM extractor
++  (disabled by default, background only, budgeted, fail-open)
++* :mod:`astrbot.core.memory.embed` -- optional semantic retrieval
++  (embedding provider, BLOB vectors, cosine fusion, BM25 fallback)
 +
 +The package only depends on the standard library, so importing it can never
 +add a startup requirement to AstrBot. Retrieval is read-only and bounded;
 +extraction is queued and heuristic by default (no extra model call).
 +"""
 +
++from .embed import (
++    EmbeddingSettings,
++    HttpEmbeddingProvider,
++    LocalHashEmbeddingProvider,
++    build_embedding_provider,
++    cosine,
++)
 +from .integration import build_context, enqueue_extraction, inject_memory
++from .llm_extract import LLMExtractionClient, LLMSettings, build_llm_extractor
 +from .policy import (
 +    MODE_CONVERSATION,
 +    MODE_LONG_TERM,
@@ -140,6 +160,7 @@ index 0000000..68f017b
 +    resolve_db_path,
 +    scope_ids,
 +)
++from .reflect import ReflectSettings, apply_plan, build_plan
 +from .store import MemoryStore
 +from .types import (
 +    SCOPE_TYPES,
@@ -150,6 +171,17 @@ index 0000000..68f017b
 +
 +__all__ = [
 +    "Candidate",
++    "EmbeddingSettings",
++    "HttpEmbeddingProvider",
++    "LLMExtractionClient",
++    "LLMSettings",
++    "LocalHashEmbeddingProvider",
++    "ReflectSettings",
++    "apply_plan",
++    "build_embedding_provider",
++    "build_llm_extractor",
++    "build_plan",
++    "cosine",
 +    "DEFAULT_MEMORY_CONFIG",
 +    "MemoryContext",
 +    "MemoryPolicy",
@@ -171,12 +203,294 @@ index 0000000..68f017b
 +    "resolve_db_path",
 +    "scope_ids",
 +]
+diff --git a/astrbot/core/memory/embed.py b/astrbot/core/memory/embed.py
+new file mode 100644
+index 0000000..ed46f6e
+--- /dev/null
++++ b/astrbot/core/memory/embed.py
+@@ -0,0 +1,276 @@
++"""Optional semantic layer: embedding providers + cosine fusion.
++
++BM25/FTS5 stays the baseline.  When an operator enables this module:
++
++* an :class:`EmbeddingProvider` turns text into vectors -- either a pure
++  standard-library local hashing provider (default, zero cost, zero network)
++  or an OpenAI-compatible HTTP endpoint (operator supplied);
++* vectors are stored as float32 BLOBs in the sidecar DB (``astrbot_memory_embeddings``);
++* retrieval fuses the lexical score with the cosine similarity
++  (``semantic.weight``), *after* the scope filter, so a vector hit can never
++  cross a scope;
++* every failure (missing vector, provider error, dimension mismatch) degrades
++  to plain BM25; semantic retrieval is off by default.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import logging
++import math
++import re
++import urllib.error
++import urllib.request
++from collections.abc import Callable, Mapping
++from dataclasses import dataclass
++
++from .text import tokenize
++
++logger = logging.getLogger("astrbot.memory")
++
++DEFAULT_LOCAL_DIM = 64
++DEFAULT_TIMEOUT_S = 5.0
++DEFAULT_MAX_INPUT_CHARS = 400
++DEFAULT_MIN_COSINE = 0.2
++DEFAULT_WEIGHT = 0.3
++MAX_DIM = 1024
++
++
++@dataclass(frozen=True)
++class EmbeddingSettings:
++    """Operator knobs for the optional semantic layer."""
++
++    enable: bool = False
++    provider: str = "local"
++    endpoint: str = ""
++    model: str = ""
++    api_key_env: str = "ASTRBOT_MEMORY_EMBEDDING_API_KEY"
++    timeout_s: float = DEFAULT_TIMEOUT_S
++    max_input_chars: int = DEFAULT_MAX_INPUT_CHARS
++    dim: int = DEFAULT_LOCAL_DIM
++    min_cosine: float = DEFAULT_MIN_COSINE
++    weight: float = DEFAULT_WEIGHT
++    auto_backfill: bool = False
++    batch: int = 16
++
++    @classmethod
++    def from_mapping(cls, mapping) -> tuple["EmbeddingSettings", list[str]]:
++        raw = mapping if isinstance(mapping, Mapping) else {}
++        errors: list[str] = []
++
++        def _bool(name: str, default: bool) -> bool:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if not isinstance(value, bool):
++                errors.append(f"semantic.{name} 必须是 true/false")
++                return default
++            return value
++
++        def _num(name: str, default: float, low: float, high: float) -> float:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if isinstance(value, bool) or not isinstance(value, (int, float)):
++                errors.append(f"semantic.{name} 必须是数字")
++                return default
++            return min(high, max(low, float(value)))
++
++        def _int(name: str, default: int, low: int, high: int) -> int:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if isinstance(value, bool) or not isinstance(value, int):
++                errors.append(f"semantic.{name} 必须是整数")
++                return default
++            return min(high, max(low, value))
++
++        def _text(name: str, default: str) -> str:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if not isinstance(value, str):
++                errors.append(f"semantic.{name} 必须是字符串")
++                return default
++            return value.strip()
++
++        provider = _text("provider", "local").lower()
++        if provider not in ("local", "http"):
++            errors.append(f"semantic.provider 必须是 local/http，收到 {provider!r}")
++            provider = "local"
++        endpoint = _text("endpoint", "")
++        if provider == "http" and endpoint and not re.match(r"^https?://", endpoint, re.I):
++            errors.append("semantic.endpoint 必须以 http(s):// 开头")
++            endpoint = ""
++        return (
++            cls(
++                enable=_bool("enable", False),
++                provider=provider,
++                endpoint=endpoint,
++                model=_text("model", ""),
++                api_key_env=_text("api_key_env", "ASTRBOT_MEMORY_EMBEDDING_API_KEY")
++                or "ASTRBOT_MEMORY_EMBEDDING_API_KEY",
++                timeout_s=_num("timeout_s", DEFAULT_TIMEOUT_S, 1.0, 30.0),
++                max_input_chars=_int("max_input_chars", DEFAULT_MAX_INPUT_CHARS, 40, 2000),
++                dim=_int("dim", DEFAULT_LOCAL_DIM, 8, MAX_DIM),
++                min_cosine=_num("min_cosine", DEFAULT_MIN_COSINE, 0.0, 1.0),
++                weight=_num("weight", DEFAULT_WEIGHT, 0.0, 1.0),
++                auto_backfill=_bool("auto_backfill", False),
++                batch=_int("batch", 16, 1, 128),
++            ),
++            errors,
++        )
++
++    def as_dict(self) -> dict:
++        return {
++            "enable": self.enable,
++            "provider": self.provider,
++            "endpoint": self.endpoint,
++            "model": self.model,
++            "api_key_env": self.api_key_env,
++            "timeout_s": self.timeout_s,
++            "max_input_chars": self.max_input_chars,
++            "dim": self.dim,
++            "min_cosine": self.min_cosine,
++            "weight": self.weight,
++            "auto_backfill": self.auto_backfill,
++            "batch": self.batch,
++        }
++
++
++EmbedTransport = Callable[[str, dict, bytes, float], tuple[int, bytes]]
++
++
++def _urllib_embed_transport(url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
++    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
++    try:
++        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator endpoint
++            return int(response.status), response.read()
++    except urllib.error.HTTPError as exc:
++        return int(exc.code), exc.read() if hasattr(exc, "read") else b""
++
++
++class LocalHashEmbeddingProvider:
++    """Deterministic bag-of-tokens hashing embedding (stdlib only, no network).
++
++    It is not a semantic model: it gives partial credit for shared tokens and
++    handles CJK bigrams through :func:`tokenize`, so it is a cheap way to make
++    fuzzy phrasing match.  Operators who need real semantics configure the
++    HTTP provider instead.
++    """
++
++    def __init__(self, dim: int = DEFAULT_LOCAL_DIM) -> None:
++        self.dim = max(8, min(MAX_DIM, int(dim)))
++        self.model = f"local-hash-{self.dim}"
++
++    def embed(self, texts: list[str]) -> list[list[float]]:
++        return [self._vector(text) for text in texts]
++
++    def _vector(self, text: str) -> list[float]:
++        vector = [0.0] * self.dim
++        tokens = tokenize(str(text or ""), limit=48)
++        for token in tokens:
++            digest = hashlib.sha1(token.encode("utf-8", "replace")).digest()
++            index = int.from_bytes(digest[:4], "little") % self.dim
++            sign = 1.0 if digest[4] % 2 == 0 else -1.0
++            vector[index] += sign
++        norm = math.sqrt(sum(value * value for value in vector))
++        if norm <= 0.0:
++            return vector
++        return [value / norm for value in vector]
++
++
++class HttpEmbeddingProvider:
++    """OpenAI-compatible ``POST {endpoint}`` with ``{"model","input"}``.
++
++    The endpoint is operator-supplied; the API key comes from an environment
++    variable (never from the config file, never logged).
++    """
++
++    def __init__(
++        self,
++        settings: EmbeddingSettings,
++        *,
++        transport: EmbedTransport | None = None,
++    ) -> None:
++        if not settings.endpoint:
++            raise ValueError("semantic.endpoint 未配置")
++        self.settings = settings
++        self.endpoint = settings.endpoint
++        self.model = settings.model or "text-embedding"
++        self.dim = int(settings.dim)
++        self._transport = transport or _urllib_embed_transport
++
++    def embed(self, texts: list[str]) -> list[list[float]]:
++        payload = {
++            "model": self.model,
++            "input": [str(text or "")[: self.settings.max_input_chars] for text in texts],
++        }
++        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
++        headers = {"Content-Type": "application/json"}
++        import os  # local import: the provider is only built when enabled
++
++        api_key = os.environ.get(self.settings.api_key_env, "").strip()
++        if api_key:
++            headers["Authorization"] = f"Bearer {api_key}"
++        status, raw = self._transport(
++            self.endpoint, headers, body, float(self.settings.timeout_s)
++        )
++        if int(status) != 200:
++            raise RuntimeError(f"embedding endpoint HTTP {int(status)}")
++        document = json.loads(raw.decode("utf-8", "replace"))
++        data = document.get("data") if isinstance(document, Mapping) else None
++        if not isinstance(data, list) or len(data) != len(texts):
++            raise RuntimeError("embedding 返回结构不符")
++        vectors: list[list[float]] = []
++        for item in data:
++            vector = item.get("embedding") if isinstance(item, Mapping) else None
++            if not isinstance(vector, list) or not vector:
++                raise RuntimeError("embedding 返回空向量")
++            vectors.append([float(value) for value in vector])
++        first = len(vectors[0])
++        if any(len(vector) != first for vector in vectors):
++            raise RuntimeError("embedding 维度不一致")
++        if first != self.dim:
++            # Trust the endpoint's dimension once, then keep it stable.
++            self.dim = first
++        return vectors
++
++
++Provider = LocalHashEmbeddingProvider | HttpEmbeddingProvider
++
++
++def build_embedding_provider(
++    mapping,
++    *,
++    transport: EmbedTransport | None = None,
++) -> tuple[Provider | None, EmbeddingSettings, list[str]]:
++    """Build the configured provider; ``(None, settings, errors)`` when off."""
++
++    settings, errors = EmbeddingSettings.from_mapping(mapping)
++    if not settings.enable:
++        return None, settings, errors
++    if settings.provider == "http":
++        if not settings.endpoint:
++            errors.append("semantic.endpoint 未配置（语义检索保持关闭）")
++            return None, settings, errors
++        return HttpEmbeddingProvider(settings, transport=transport), settings, errors
++    if settings.model:
++        # Local provider owns its model name; keep the operator string in the
++        # settings for stats, but the vectors stay keyed by the local model.
++        errors.append("semantic.model 对 local provider 无效（已忽略）")
++    return LocalHashEmbeddingProvider(settings.dim), settings, errors
++
++
++def cosine(left: list[float], right: list[float]) -> float:
++    """Cosine similarity in [0, 1] (0 for empty/ill-sized vectors)."""
++
++    if not left or not right or len(left) != len(right):
++        return 0.0
++    norm_left = math.sqrt(sum(value * value for value in left))
++    norm_right = math.sqrt(sum(value * value for value in right))
++    if norm_left <= 0.0 or norm_right <= 0.0:
++        return 0.0
++    dot = sum(a * b for a, b in zip(left, right))
++    return max(0.0, min(1.0, dot / (norm_left * norm_right)))
 diff --git a/astrbot/core/memory/extract.py b/astrbot/core/memory/extract.py
 new file mode 100644
-index 0000000..5375d77
+index 0000000..630564a
 --- /dev/null
 +++ b/astrbot/core/memory/extract.py
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,194 @@
 +"""Memory extraction: heuristics first, optional LLM extractor second.
 +
 +Heuristic extraction is free (regex + tokenising, no model call), so it can run
@@ -298,7 +612,11 @@ index 0000000..5375d77
 +    if not write_scopes:
 +        return []
 +    scope_type, scope_id = write_scopes[0]
-+    subject = "本群" if scope_type == "group" else "用户"
++    subject = "用户"
++    if scope_type == "group":
++        subject = "本群"
++    elif scope_type == "group_member":
++        subject = "本群发言人"
 +    candidates: list[Candidate] = []
 +    seen_keys: set[str] = set()
 +    for pattern, kind, importance, confidence, content_tpl, key_tpl in _RULES:
@@ -325,6 +643,7 @@ index 0000000..5375d77
 +                    scope_type=scope_type,
 +                    scope_id=scope_id,
 +                    source="heuristic",
++                    sender_id=str(context.user_id or ""),
 +                )
 +            )
 +            if len(candidates) >= limit:
@@ -512,12 +831,369 @@ index 0000000..32ed401
 +
 +    value = _safe(lambda: event.get_extra(INJECTED_EXTRA_KEY), []) or []
 +    return [int(item) for item in value if isinstance(item, int)]
+diff --git a/astrbot/core/memory/llm_extract.py b/astrbot/core/memory/llm_extract.py
+new file mode 100644
+index 0000000..df974e9
+--- /dev/null
++++ b/astrbot/core/memory/llm_extract.py
+@@ -0,0 +1,351 @@
++"""Optional LLM-assisted extraction -- off by default, fail-open, bounded.
++
++The heuristic extractor stays the default.  When an operator enables this
++client, it only ever runs **inside the background extraction worker** (after
++the reply was sent), never on the reply path, and every failure degrades to
++"use the heuristic result only":
++
++* hard input cap (``max_input_chars``) and a lifetime call budget
++  (``max_calls``) so a busy group cannot spend unbounded money;
++* ``timeout_s`` wraps the blocking HTTP call; the caller awaits an async
++  function, which the service runs in its own worker task;
++* messages that look like they contain credentials are never sent;
++* model output is validated and scrubbed: secrets are dropped, content is
++  truncated, scopes are stamped by the service (never trusted from the model);
++* logs contain counts and error *types*, never message content.
++
++Transport is injectable: tests use a stub, so no real (paid) request is made.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import logging
++import os
++import re
++import urllib.error
++import urllib.request
++from collections.abc import Callable, Mapping
++from dataclasses import dataclass
++
++from .text import MAX_CONTENT_CHARS, contains_secret, fingerprint, scrub_secrets
++from .types import Candidate, MemoryContext
++
++logger = logging.getLogger("astrbot.memory")
++
++DEFAULT_ENDPOINT_PATH = "/v1/chat/completions"
++DEFAULT_TIMEOUT_S = 8.0
++DEFAULT_MAX_INPUT_CHARS = 800
++DEFAULT_MAX_CANDIDATES = 5
++DEFAULT_MAX_CALLS = 50
++MAX_ERROR_CHARS = 160
++
++_SYSTEM_PROMPT = (
++    "You extract long-term facts a chat bot should remember about the speaker "
++    "or their group. Reply with JSON only: "
++    '{"facts":[{"key":"short stable key","content":"one short sentence",'
++    '"kind":"fact|preference|identity|profile|habit|note",'
++    '"importance":0.0-1.0,"confidence":0.0-1.0}]}. '
++    "Never include passwords, keys, tokens or account credentials. "
++    "If nothing is worth remembering, reply {\"facts\":[]}."
++)
++
++_JSON_BLOCK = re.compile(r"\{.*\}", re.S)
++_FENCE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
++_KINDS = frozenset({"fact", "preference", "identity", "profile", "habit", "note"})
++
++
++@dataclass(frozen=True)
++class LLMSettings:
++    """Connection + budget knobs for the optional LLM extractor."""
++
++    enable: bool = False
++    endpoint: str = ""
++    model: str = ""
++    api_key_env: str = "ASTRBOT_MEMORY_LLM_API_KEY"
++    timeout_s: float = DEFAULT_TIMEOUT_S
++    max_input_chars: int = DEFAULT_MAX_INPUT_CHARS
++    max_candidates: int = DEFAULT_MAX_CANDIDATES
++    max_calls: int = DEFAULT_MAX_CALLS
++
++    @classmethod
++    def from_mapping(cls, mapping) -> tuple["LLMSettings", list[str]]:
++        raw = mapping if isinstance(mapping, Mapping) else {}
++        errors: list[str] = []
++
++        def _bool(name: str, default: bool) -> bool:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if not isinstance(value, bool):
++                errors.append(f"llm.{name} 必须是 true/false")
++                return default
++            return value
++
++        def _float(name: str, default: float, low: float, high: float) -> float:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if isinstance(value, bool) or not isinstance(value, (int, float)):
++                errors.append(f"llm.{name} 必须是数字")
++                return default
++            return min(high, max(low, float(value)))
++
++        def _int(name: str, default: int, low: int, high: int) -> int:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if isinstance(value, bool) or not isinstance(value, int):
++                errors.append(f"llm.{name} 必须是整数")
++                return default
++            return min(high, max(low, value))
++
++        def _text(name: str, default: str) -> str:
++            value = raw.get(name)
++            if value is None:
++                return default
++            if not isinstance(value, str):
++                errors.append(f"llm.{name} 必须是字符串")
++                return default
++            return value.strip()
++
++        endpoint = _text("endpoint", "")
++        if endpoint and not re.match(r"^https?://", endpoint, re.I):
++            errors.append("llm.endpoint 必须以 http(s):// 开头")
++            endpoint = ""
++        return (
++            cls(
++                enable=_bool("enable", False),
++                endpoint=endpoint,
++                model=_text("model", ""),
++                api_key_env=_text("api_key_env", "ASTRBOT_MEMORY_LLM_API_KEY")
++                or "ASTRBOT_MEMORY_LLM_API_KEY",
++                timeout_s=_float("timeout_s", DEFAULT_TIMEOUT_S, 1.0, 60.0),
++                max_input_chars=_int("max_input_chars", DEFAULT_MAX_INPUT_CHARS, 80, 4000),
++                max_candidates=_int("max_candidates", DEFAULT_MAX_CANDIDATES, 1, 20),
++                max_calls=_int("max_calls", DEFAULT_MAX_CALLS, 0, 100_000),
++            ),
++            errors,
++        )
++
++    def as_dict(self) -> dict:
++        return {
++            "enable": self.enable,
++            "endpoint": self.endpoint,
++            "model": self.model,
++            "api_key_env": self.api_key_env,
++            "timeout_s": self.timeout_s,
++            "max_input_chars": self.max_input_chars,
++            "max_candidates": self.max_candidates,
++            "max_calls": self.max_calls,
++        }
++
++
++Transport = Callable[[str, dict, bytes, float], tuple[int, bytes]]
++"""``(url, headers, body, timeout) -> (status, body)``; injectable for tests."""
++
++
++def _urllib_transport(url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
++    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
++    try:
++        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator endpoint
++            return int(response.status), response.read()
++    except urllib.error.HTTPError as exc:  # body carries the API error message
++        return int(exc.code), exc.read() if hasattr(exc, "read") else b""
++
++
++class LLMExtractionClient:
++    """Async, budgeted, fail-open extractor compatible with ``set_llm_extractor``."""
++
++    def __init__(
++        self,
++        settings: LLMSettings,
++        *,
++        transport: Transport | None = None,
++        clock: Callable[[], float] = lambda: 0.0,
++    ) -> None:
++        self.settings = settings
++        self._transport = transport or _urllib_transport
++        self.clock = clock
++        self.calls = 0
++        self.skipped = 0
++        self.last_error = ""
++
++    # -- public API -----------------------------------------------------
++    def stats(self) -> dict:
++        return {
++            "enabled": self.settings.enable,
++            "model": self.settings.model,
++            "calls": self.calls,
++            "skipped": self.skipped,
++            "budget": self.settings.max_calls,
++            "budget_exhausted": self.budget_exhausted,
++            "last_error": self.last_error,
++        }
++
++    @property
++    def budget_exhausted(self) -> bool:
++        return bool(self.settings.max_calls) and self.calls >= int(self.settings.max_calls)
++
++    async def __call__(self, text: str, context: MemoryContext) -> list[Candidate]:
++        """Return extra candidates; always resolves (never raises)."""
++
++        try:
++            return await self._extract(text, context)
++        except asyncio.CancelledError:  # pragma: no cover - shutdown
++            raise
++        except Exception as exc:  # noqa: BLE001 - optional feature must fail open
++            self.last_error = f"LLM 抽取失败（已回退 heuristic）：{type(exc).__name__}"
++            logger.warning(self.last_error)
++            return []
++
++    # -- internals ------------------------------------------------------
++    async def _extract(self, text: str, context: MemoryContext) -> list[Candidate]:
++        if not self.settings.enable or not self.settings.endpoint:
++            self.skipped += 1
++            return []
++        content = str(text or "")
++        if not content.strip():
++            self.skipped += 1
++            return []
++        # Credentials are never shipped to a third-party endpoint; the whole
++        # turn is skipped and the heuristic extractor already ignored it.
++        if contains_secret(content):
++            self.skipped += 1
++            return []
++        if self.budget_exhausted:
++            self.skipped += 1
++            return []
++        payload = self._payload(content[: int(self.settings.max_input_chars)])
++        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
++        headers = {"Content-Type": "application/json"}
++        api_key = os.environ.get(self.settings.api_key_env, "").strip()
++        if api_key:
++            headers["Authorization"] = f"Bearer {api_key}"
++        self.calls += 1
++        status, raw = await asyncio.wait_for(
++            asyncio.to_thread(
++                self._transport, self.settings.endpoint, headers, body, self.settings.timeout_s
++            ),
++            timeout=self.settings.timeout_s + 1.0,
++        )
++        if int(status) != 200:
++            self.last_error = f"LLM 抽取返回 HTTP {int(status)}（已回退）"
++            logger.warning(self.last_error)
++            return []
++        return self._parse(raw, context)
++
++    def _payload(self, text: str) -> dict:
++        model = self.settings.model or "default"
++        return {
++            "model": model,
++            "temperature": 0,
++            "max_tokens": 400,
++            "messages": [
++                {"role": "system", "content": _SYSTEM_PROMPT},
++                {"role": "user", "content": text},
++            ],
++        }
++
++    def _parse(self, raw: bytes, context: MemoryContext) -> list[Candidate]:
++        try:
++            document = json.loads(raw.decode("utf-8", "replace"))
++        except Exception:  # noqa: BLE001 - malformed body degrades to heuristic
++            self.last_error = "LLM 抽取返回非 JSON（已回退）"
++            logger.warning(self.last_error)
++            return []
++        text = self._assistant_text(document)
++        facts = self._facts(text)
++        if facts is None:
++            self.last_error = "LLM 抽取返回非 JSON（已回退）"
++            logger.warning(self.last_error)
++            return []
++        candidates: list[Candidate] = []
++        for item in facts:
++            candidate = self._candidate(item)
++            if candidate is not None:
++                candidates.append(candidate)
++            if len(candidates) >= int(self.settings.max_candidates):
++                break
++        return candidates
++
++    @staticmethod
++    def _assistant_text(document) -> str:
++        if isinstance(document, str):
++            return document
++        if isinstance(document, Mapping):
++            choices = document.get("choices")
++            if isinstance(choices, list) and choices:
++                message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
++                if isinstance(message, Mapping):
++                    return str(message.get("content") or "")
++        return json.dumps(document, ensure_ascii=False) if isinstance(document, (dict, list)) else ""
++
++    @staticmethod
++    def _facts(text: str) -> list | None:
++        """Facts from the model text; ``None`` means "no JSON at all"."""
++
++        cleaned = _FENCE.sub("", str(text or "")).strip()
++        match = _JSON_BLOCK.search(cleaned)
++        if not match:
++            return None
++        try:
++            document = json.loads(match.group(0))
++        except Exception:  # noqa: BLE001 - model prose is not JSON
++            return None
++        if isinstance(document, Mapping):
++            facts = document.get("facts")
++            return list(facts) if isinstance(facts, list) else []
++        return list(document) if isinstance(document, list) else []
++
++    @staticmethod
++    def _candidate(item) -> Candidate | None:
++        if not isinstance(item, Mapping):
++            return None
++        content = str(item.get("content") or "").strip()
++        if not content or contains_secret(content):
++            return None
++        content = scrub_secrets(content)[:MAX_CONTENT_CHARS]
++        key = str(item.get("key") or "").strip() or fingerprint(content)
++
++        def _score(name: str, default: float) -> float:
++            value = item.get(name)
++            if isinstance(value, bool) or not isinstance(value, (int, float)):
++                return default
++            return min(1.0, max(0.0, float(value)))
++
++        kind = str(item.get("kind") or "fact").strip().lower()
++        return Candidate(
++            key=key[:48],
++            content=content,
++            kind=kind if kind in _KINDS else "fact",
++            importance=_score("importance", 0.6),
++            confidence=_score("confidence", 0.6),
++            scope_type="",  # stamped by the service with the policy write scope
++            scope_id="",
++            source="llm",
++        )
++
++
++def build_llm_extractor(
++    section,
++    *,
++    transport: Transport | None = None,
++    enabled: bool = False,
++) -> tuple[LLMExtractionClient | None, list[str]]:
++    """Build the client from ``memory.llm`` (+ the ``llm_extract`` alias).
++
++    Returns ``(None, errors)`` when the feature is off or the endpoint is not
++    configured -- the heuristic extractor then stays the only path.
++    """
++
++    settings, errors = LLMSettings.from_mapping(section)
++    if enabled and not settings.enable:
++        settings = LLMSettings(**{**settings.as_dict(), "enable": True})
++    if not settings.enable:
++        return None, errors
++    if not settings.endpoint:
++        errors.append("llm.endpoint 未配置（LLM 抽取保持关闭）")
++        return None, errors
++    return LLMExtractionClient(settings, transport=transport), errors
 diff --git a/astrbot/core/memory/policy.py b/astrbot/core/memory/policy.py
 new file mode 100644
-index 0000000..bc303f8
+index 0000000..70ac101
 --- /dev/null
 +++ b/astrbot/core/memory/policy.py
-@@ -0,0 +1,337 @@
+@@ -0,0 +1,346 @@
 +"""Per-group long-term memory policy (which chats are allowed to remember).
 +
 +Config contract (``memory.policy``, see CONTRACT.md §5)::
@@ -578,7 +1254,15 @@ index 0000000..bc303f8
 +SCOPE_GROUP = "group"
 +SCOPE_USER = "user"
 +SCOPE_GROUP_USER = "group_user"
-+ALLOWED_SCOPES = (SCOPE_GROUP, SCOPE_USER, SCOPE_GROUP_USER)
++SCOPE_GROUP_MEMBER = "group_member"
++"""Speaker rows inside one group; stores the sender id next to the fact.
++
++It is a separate scope on purpose: ``group_user`` keeps its documented
++single-write semantics (read group+sender, write the group), while
++``group_member`` reads *and* writes only that speaker's rows in that group.
++"""
++
++ALLOWED_SCOPES = (SCOPE_GROUP, SCOPE_USER, SCOPE_GROUP_USER, SCOPE_GROUP_MEMBER)
 +
 +DEFAULT_MAX_ITEMS_MIN, DEFAULT_MAX_ITEMS_MAX = 1, 50
 +DEFAULT_MAX_CHARS_MIN, DEFAULT_MAX_CHARS_MAX = 80, 8000
@@ -794,7 +1478,7 @@ index 0000000..bc303f8
 +        if scope not in ALLOWED_SCOPES:
 +            raise _Invalid(f"scope 必须是 {ALLOWED_SCOPES} 之一，收到 {raw_scope!r}")
 +    if is_private and scope != SCOPE_USER:
-+        raise _Invalid("私聊只支持 scope=user")
++        raise _Invalid("私聊只支持 scope=user（group_member/group_user 只在群里可用）")
 +
 +    return MemoryPolicy(
 +        mode=mode,
@@ -849,18 +1533,334 @@ index 0000000..bc303f8
 +    "PolicyResolver",
 +    "PolicyTable",
 +    "SCOPE_GROUP",
++    "SCOPE_GROUP_MEMBER",
 +    "SCOPE_GROUP_USER",
 +    "SCOPE_USER",
 +    "group_policy_key",
 +    "parse_policy",
 +    "section_fingerprint",
 +]
+diff --git a/astrbot/core/memory/reflect.py b/astrbot/core/memory/reflect.py
+new file mode 100644
+index 0000000..41647ec
+--- /dev/null
++++ b/astrbot/core/memory/reflect.py
+@@ -0,0 +1,309 @@
++"""Deterministic memory reflection: preview first, apply only what is safe.
++
++Reflection is a maintenance pass over **one explicit scope at a time**:
++
++* near-duplicates (token Jaccard >= ``similarity``) are reported with the row
++  that would be kept, and merged only on ``apply``;
++* contradictions (polarity flip + high similarity) are *reported only* -- a
++  negative preference is not silently deleted because two rows disagree;
++* low-value rows (importance/hits below the preview thresholds) are listed,
++  never deleted automatically;
++* expired rows are listed and purged on ``apply`` (they are already dead);
++* ``apply`` copies the SQLite file first, so every change can be rolled back
++  by restoring the backup.
++
++No model call, no network, no LLM: the pass is explainable and repeatable.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Iterable, Mapping
++from dataclasses import dataclass
++from pathlib import Path
++
++from .text import is_contradiction, similarity
++from .types import SCOPE_TYPES, MemoryRecord
++
++DEFAULT_SIMILARITY = 0.86
++"""Token Jaccard at/above which two rows in one scope are near-duplicates."""
++
++DEFAULT_CONTRADICTION_SIMILARITY = 0.6
++"""Two rows must overlap this much before a polarity flip is a contradiction."""
++
++DEFAULT_LOW_VALUE_IMPORTANCE = 0.35
++DEFAULT_LOW_VALUE_HITS = 0
++MAX_SCAN_PER_SCOPE = 500
++MAX_CONTRADICTION_PAIRS = 100
++
++
++@dataclass(frozen=True)
++class ReflectSettings:
++    """Operator knobs for one reflection pass (all local, all explainable)."""
++
++    similarity: float = DEFAULT_SIMILARITY
++    contradiction_similarity: float = DEFAULT_CONTRADICTION_SIMILARITY
++    low_value_importance: float = DEFAULT_LOW_VALUE_IMPORTANCE
++    low_value_hits: int = DEFAULT_LOW_VALUE_HITS
++    backup: bool = True
++    max_scan: int = MAX_SCAN_PER_SCOPE
++
++    @classmethod
++    def from_mapping(cls, mapping) -> "ReflectSettings":
++        raw = mapping if isinstance(mapping, Mapping) else {}
++
++        def _float(name: str, default: float, low: float, high: float) -> float:
++            value = raw.get(name)
++            if isinstance(value, bool) or not isinstance(value, (int, float)):
++                return default
++            return min(high, max(low, float(value)))
++
++        def _int(name: str, default: int, low: int, high: int) -> int:
++            value = raw.get(name)
++            if isinstance(value, bool) or not isinstance(value, int):
++                return default
++            return min(high, max(low, value))
++
++        backup = raw.get("backup")
++        return cls(
++            similarity=_float("similarity", DEFAULT_SIMILARITY, 0.5, 1.0),
++            contradiction_similarity=_float(
++                "contradiction_similarity", DEFAULT_CONTRADICTION_SIMILARITY, 0.3, 1.0
++            ),
++            low_value_importance=_float(
++                "low_value_importance", DEFAULT_LOW_VALUE_IMPORTANCE, 0.0, 1.0
++            ),
++            low_value_hits=_int("low_value_hits", DEFAULT_LOW_VALUE_HITS, 0, 1_000_000),
++            backup=backup if isinstance(backup, bool) else True,
++            max_scan=_int("max_scan", MAX_SCAN_PER_SCOPE, 20, 5_000),
++        )
++
++    def as_dict(self) -> dict:
++        return {
++            "similarity": self.similarity,
++            "contradiction_similarity": self.contradiction_similarity,
++            "low_value_importance": self.low_value_importance,
++            "low_value_hits": self.low_value_hits,
++            "backup": self.backup,
++            "max_scan": self.max_scan,
++        }
++
++
++def normalise_scopes(scopes: Iterable[tuple[str, str]] | None) -> list[tuple[str, str]]:
++    """Validate an explicit scope allow-list (never a wildcard)."""
++
++    ordered: list[tuple[str, str]] = []
++    for scope in scopes or ():
++        scope_type, scope_id = (str(scope[0] or ""), str(scope[1] or ""))
++        if scope_type not in SCOPE_TYPES or not scope_id:
++            raise ValueError(f"反射需要显式合法作用域，收到 {scope!r}")
++        if (scope_type, scope_id) not in ordered:
++            ordered.append((scope_type, scope_id))
++    if not ordered:
++        raise ValueError("反射需要至少一个显式作用域")
++    return ordered
++
++
++def _quality(record: MemoryRecord) -> tuple:
++    # Highest importance/confidence/hits, then newest, then lowest id wins:
++    # stable across repeated runs (no dependence on dict/SQL order).
++    return (-record.importance, -record.confidence, -record.hits, -record.updated_at, record.id)
++
++
++def _row(record: MemoryRecord) -> dict:
++    return {
++        "id": record.id,
++        "key": record.key,
++        "content": record.content,
++        "importance": record.importance,
++        "confidence": record.confidence,
++        "hits": record.hits,
++        "sender_id": record.sender_id,
++        "updated_at": record.updated_at,
++        "expires_at": record.expires_at,
++    }
++
++
++def build_plan(
++    store,
++    scopes: Iterable[tuple[str, str]],
++    *,
++    settings: ReflectSettings | None = None,
++    now: float | None = None,
++) -> dict:
++    """Build the dry-run report for ``scopes`` (read-only, deterministic)."""
++
++    settings = settings or ReflectSettings()
++    current = float(now if now is not None else store.clock())
++    scope_list = normalise_scopes(scopes)
++    plan: dict = {
++        "ok": True,
++        "dry_run": True,
++        "generated_at": current,
++        "settings": settings.as_dict(),
++        "scopes": [{"scope_type": scope_type, "scope_id": scope_id} for scope_type, scope_id in scope_list],
++        "duplicates": [],
++        "contradictions": [],
++        "low_value": [],
++        "expired": [],
++        "counts": {
++            "scopes": len(scope_list),
++            "records": 0,
++            "duplicate_groups": 0,
++            "duplicate_rows": 0,
++            "contradictions": 0,
++            "low_value": 0,
++            "expired": 0,
++        },
++        "applied": False,
++        "merged": 0,
++        "purged": 0,
++        "backup_path": "",
++        "errors": [],
++    }
++
++    for scope_type, scope_id in scope_list:
++        records = store.list_scope(scope_type, scope_id, limit=settings.max_scan)
++        plan["counts"]["records"] += len(records)
++        ordered = sorted(records, key=_quality)
++        assigned: set[int] = set()
++        for index, keeper in enumerate(ordered):
++            if keeper.id in assigned:
++                continue
++            group = [
++                other
++                for other in ordered[index + 1 :]
++                if other.id not in assigned
++                and similarity(keeper.content, other.content) >= settings.similarity
++            ]
++            if not group:
++                continue
++            for other in group:
++                assigned.add(other.id)
++            group_scores = [similarity(keeper.content, other.content) for other in group]
++            plan["duplicates"].append(
++                {
++                    "scope_type": scope_type,
++                    "scope_id": scope_id,
++                    "keep": _row(keeper),
++                    "merge": [_row(other) for other in group],
++                    "similarity": round(min(group_scores), 4),
++                }
++            )
++
++        merged_ids = {
++            int(row["id"]) for item in plan["duplicates"] for row in item["merge"]
++        }
++        # Contradictions: same topic (high overlap) but opposite polarity.
++        # Only surviving rows are paired: a duplicate that is merged away next
++        # would otherwise report the same conflict twice.
++        survivors = [record for record in ordered if record.id not in merged_ids]
++        # ponytail: O(n^2) inside one scope (<= max_scan rows, operator-only
++        # path); swap for an inverted index if scopes ever hold >5k rows.
++        reported = 0
++        for left_index, left in enumerate(survivors):
++            if reported >= MAX_CONTRADICTION_PAIRS:
++                break
++            for right in survivors[left_index + 1 :]:
++                if reported >= MAX_CONTRADICTION_PAIRS:
++                    break
++                if similarity(left.content, right.content) < settings.contradiction_similarity:
++                    continue
++                if not is_contradiction(left.content, right.content):
++                    continue
++                plan["contradictions"].append(
++                    {
++                        "scope_type": scope_type,
++                        "scope_id": scope_id,
++                        "a": _row(left),
++                        "b": _row(right),
++                        "reason": "polarity",
++                        "action": "report-only",
++                    }
++                )
++                reported += 1
++
++        for record in records:
++            if record.id in merged_ids:
++                # Already handled by the merge above; don't double-report it.
++                continue
++            if record.expires_at is not None and record.expires_at <= current:
++                plan["expired"].append(
++                    {"scope_type": scope_type, "scope_id": scope_id, "record": _row(record)}
++                )
++                continue
++            if (
++                record.importance < settings.low_value_importance
++                and record.hits <= settings.low_value_hits
++            ):
++                plan["low_value"].append(
++                    {"scope_type": scope_type, "scope_id": scope_id, "record": _row(record)}
++                )
++
++    plan["counts"].update(
++        {
++            "duplicate_groups": len(plan["duplicates"]),
++            "duplicate_rows": sum(len(item["merge"]) for item in plan["duplicates"]),
++            "contradictions": len(plan["contradictions"]),
++            "low_value": len(plan["low_value"]),
++            "expired": len(plan["expired"]),
++        }
++    )
++    return plan
++
++
++def apply_plan(
++    store,
++    plan: dict,
++    *,
++    settings: ReflectSettings | None = None,
++    backup_dir: str | Path | None = None,
++    now: float | None = None,
++) -> dict:
++    """Apply a plan: backup first, then merge duplicates and purge expired rows.
++
++    Contradictions and low-value rows are *reported only* -- they stay in the
++    DB because only a human (or a later explicit delete) may drop them.
++    """
++
++    settings = settings or ReflectSettings()
++    if not plan.get("ok"):
++        return plan
++    current = float(now if now is not None else plan.get("generated_at") or store.clock())
++    result = dict(plan)
++    result["dry_run"] = False
++    result["errors"] = list(plan.get("errors") or [])
++
++    if settings.backup:
++        try:
++            destination = None
++            if backup_dir:
++                destination = Path(backup_dir) / f"astrbot_memory.reflect.{int(current)}.db"
++            result["backup_path"] = store.backup(destination)
++        except Exception as exc:  # noqa: BLE001 - no backup, no apply
++            result["ok"] = False
++            result["applied"] = False
++            result["errors"].append(f"备份失败，已放弃写入：{type(exc).__name__}")
++            return result
++
++    merged = 0
++    for item in plan.get("duplicates") or ():
++        keep_id = int(item["keep"]["id"])
++        drop_ids = [int(row["id"]) for row in item.get("merge") or ()]
++        try:
++            if store.merge_records(keep_id, drop_ids) is not None:
++                merged += len(drop_ids)
++        except Exception as exc:  # noqa: BLE001 - one failed merge must not stop the pass
++            result["errors"].append(f"合并 {keep_id} 失败：{type(exc).__name__}")
++    purged = 0
++    for item in plan.get("expired") or ():
++        memory_id = int(item["record"]["id"])
++        try:
++            if store.delete(memory_id):
++                purged += 1
++        except Exception as exc:  # noqa: BLE001 - keep going
++            result["errors"].append(f"删除过期 {memory_id} 失败：{type(exc).__name__}")
++
++    result["applied"] = True
++    result["merged"] = merged
++    result["purged"] = purged
++    return result
 diff --git a/astrbot/core/memory/render.py b/astrbot/core/memory/render.py
 new file mode 100644
-index 0000000..6a42704
+index 0000000..b1181aa
 --- /dev/null
 +++ b/astrbot/core/memory/render.py
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,60 @@
 +"""Render retrieved memories as a bounded, clearly-untrusted prompt block."""
 +
 +from __future__ import annotations
@@ -872,6 +1872,7 @@ index 0000000..6a42704
 +
 +SCOPE_LABELS = {
 +    "user": "用户",
++    "group_member": "本群发言人",
 +    "group": "本群",
 +    "conversation": "本次会话",
 +    "persona": "人格",
@@ -922,10 +1923,10 @@ index 0000000..6a42704
 +    return HEADER + "\n" + "\n".join(lines) + "\n" + FOOTER, rendered
 diff --git a/astrbot/core/memory/service.py b/astrbot/core/memory/service.py
 new file mode 100644
-index 0000000..d500476
+index 0000000..bfdaca4
 --- /dev/null
 +++ b/astrbot/core/memory/service.py
-@@ -0,0 +1,628 @@
+@@ -0,0 +1,973 @@
 +"""Memory service: configuration, bounded retrieval, queued extraction.
 +
 +Design rules (they are the contract of this service):
@@ -949,17 +1950,22 @@ index 0000000..d500476
 +import threading
 +import time
 +from collections.abc import Callable, Iterable, Mapping
++from dataclasses import replace
 +from pathlib import Path
 +
++from .embed import EmbeddingSettings, build_embedding_provider
 +from .extract import LLMExtractor, confirmed_extract
++from .llm_extract import LLMExtractionClient, build_llm_extractor
 +from .policy import (
 +    MODE_CONVERSATION,
 +    SCOPE_GROUP,
++    SCOPE_GROUP_MEMBER,
 +    SCOPE_GROUP_USER,
 +    SCOPE_USER,
 +    MemoryPolicy,
 +    PolicyResolver,
 +)
++from .reflect import ReflectSettings, apply_plan, build_plan, normalise_scopes
 +from .render import DEFAULT_MAX_CHARS, DEFAULT_MAX_ITEMS, render_memory_block
 +from .store import MemoryStore
 +from .text import normalise_value
@@ -988,6 +1994,40 @@ index 0000000..d500476
 +    # Per-chat gate: nothing is remembered unless a chat is listed with
 +    # mode="long_term" (privacy default; see policy.py / CONTRACT.md §5).
 +    "policy": {"default_mode": MODE_CONVERSATION},
++    # Optional LLM extraction: never on the reply path, disabled by default.
++    "llm": {
++        "enable": False,
++        "endpoint": "",
++        "model": "",
++        "api_key_env": "ASTRBOT_MEMORY_LLM_API_KEY",
++        "timeout_s": 8.0,
++        "max_input_chars": 800,
++        "max_candidates": 5,
++        "max_calls": 50,
++    },
++    # Optional semantic retrieval: BM25 stays the baseline, disabled by default.
++    "semantic": {
++        "enable": False,
++        "provider": "local",
++        "endpoint": "",
++        "model": "",
++        "timeout_s": 5.0,
++        "max_input_chars": 400,
++        "dim": 64,
++        "min_cosine": 0.2,
++        "weight": 0.3,
++        "auto_backfill": False,
++        "batch": 16,
++    },
++    # Deterministic reflection (report/merge/purge), always on demand only.
++    "reflect": {
++        "similarity": 0.86,
++        "contradiction_similarity": 0.6,
++        "low_value_importance": 0.35,
++        "low_value_hits": 0,
++        "backup": True,
++        "max_scan": 500,
++    },
 +}
 +
 +_PURGE_EVERY_TURNS = 50
@@ -1043,6 +2083,11 @@ index 0000000..d500476
 +        else (section.get("policy", DEFAULT_MEMORY_CONFIG["policy"]) if section else DEFAULT_MEMORY_CONFIG["policy"])
 +    )
 +    merged["policy"] = copy.deepcopy(raw_policy) if raw_policy is not None else {"default_mode": MODE_CONVERSATION}
++    # Optional sections are validated by their own modules (fail-open to the
++    # documented defaults); copy them so services never share state.
++    for optional in ("llm", "semantic", "reflect"):
++        value = section.get(optional, DEFAULT_MEMORY_CONFIG[optional]) if section else DEFAULT_MEMORY_CONFIG[optional]
++        merged[optional] = copy.deepcopy(value) if isinstance(value, Mapping) else {}
 +    return merged
 +
 +
@@ -1090,6 +2135,12 @@ index 0000000..d500476
 +            max_records_per_scope=self.config["max_records_per_scope"],
 +        )
 +        self._llm_extractor: LLMExtractor | None = None
++        self._explicit_extractor = False
++        self._llm_client: LLMExtractionClient | None = None
++        self._semantic_provider = None
++        self._semantic_settings = EmbeddingSettings()
++        self._optional_errors: list[str] = []
++        self._configure_optional()
 +        self._queue: asyncio.Queue | None = None
 +        self._worker: asyncio.Task | None = None
 +        self._worker_loop: asyncio.AbstractEventLoop | None = None
@@ -1114,9 +2165,54 @@ index 0000000..d500476
 +        return bool(self._store.fts_enabled)
 +
 +    def set_llm_extractor(self, extractor: LLMExtractor | None) -> None:
-+        """Register an optional async ``(text, context) -> list[Candidate]``."""
++        """Register an optional async ``(text, context) -> list[Candidate]``.
++
++        An explicit extractor wins over the config-built one: ``refresh_config``
++        never replaces it (plugins that manage their own model keep control).
++        """
 +
 +        self._llm_extractor = extractor
++        self._explicit_extractor = extractor is not None
++
++    def _configure_optional(self) -> None:
++        """(Re)build the optional LLM extractor and embedding provider.
++
++        Both are opt-in; any configuration error disables only that feature
++        (recorded in ``optional_errors``) and leaves the heuristic / BM25 path
++        untouched.
++        """
++
++        errors: list[str] = []
++        llm_section = self.config.get("llm") if isinstance(self.config.get("llm"), Mapping) else {}
++        self._llm_enabled = bool(self.config.get("llm_extract")) or bool(
++            llm_section.get("enable")
++        )
++        try:
++            client, llm_errors = build_llm_extractor(
++                self.config.get("llm"), enabled=bool(self.config.get("llm_extract"))
++            )
++            self._llm_client = client
++            errors.extend(llm_errors)
++            if not self._explicit_extractor:
++                self._llm_extractor = client
++        except Exception as exc:  # noqa: BLE001 - optional feature
++            self._llm_client = None
++            if not self._explicit_extractor:
++                self._llm_extractor = None
++            errors.append(f"LLM 抽取配置无效（保持关闭）：{type(exc).__name__}")
++        try:
++            provider, settings, embed_errors = build_embedding_provider(
++                self.config.get("semantic")
++            )
++            self._semantic_provider = provider
++            self._semantic_settings = settings
++            errors.extend(embed_errors)
++        except Exception as exc:  # noqa: BLE001 - optional feature
++            self._semantic_provider = None
++            errors.append(f"语义检索配置无效（保持关闭）：{type(exc).__name__}")
++        self._optional_errors = errors
++        if errors:
++            logger.info("长期记忆可选能力配置提示：%s", "; ".join(errors))
 +
 +    def close(self) -> None:
 +        if self._worker is not None:
@@ -1140,6 +2236,7 @@ index 0000000..d500476
 +        except Exception:  # noqa: BLE001 - a stale cap must not block the reload
 +            logger.warning("长期记忆 max_records_per_scope 热更新失败（继续用旧值）")
 +        self._policy_resolver.invalidate()
++        self._configure_optional()
 +        logger.info("长期记忆配置已热更新（策略缓存已失效，无需重启）")
 +        return True
 +
@@ -1174,6 +2271,11 @@ index 0000000..d500476
 +        if policy.scope in (SCOPE_GROUP, SCOPE_GROUP_USER) and self.config["read_group"]:
 +            if context.group_scope:
 +                scopes.append(context.group_scope)
++        if policy.scope == SCOPE_GROUP_MEMBER and self.config["read_group"]:
++            # Speaker rows: only this group's rows about this sender, never
++            # another member's and never another group's.
++            if context.group_member_scope:
++                scopes.append(context.group_member_scope)
 +        return scopes
 +
 +    def _write_scope(self, context: MemoryContext, policy: MemoryPolicy) -> tuple[str, str] | None:
@@ -1183,6 +2285,8 @@ index 0000000..d500476
 +            return None
 +        if context.is_private or not context.group_id:
 +            return context.user_scope if policy.scope == SCOPE_USER else None
++        if policy.scope == SCOPE_GROUP_MEMBER:
++            return context.group_member_scope
 +        if policy.scope == SCOPE_USER:
 +            # Explicit opt-in: this group's turns feed the sender's own memory.
 +            return context.user_scope
@@ -1231,11 +2335,14 @@ index 0000000..d500476
 +        max_items = int(policy.max_items or self.config["max_items"])
 +        max_chars = int(policy.max_chars or self.config["max_chars"])
 +        try:
++            self._maybe_auto_backfill(scopes)
 +            records = self._store.search(
 +                scopes,
 +                query,
 +                limit=max(1, max_items * 3),
 +                min_confidence=float(self.config["min_confidence"]),
++                query_vector=self._query_vector(query),
++                **_semantic_kwargs(self._semantic_provider, self._semantic_settings),
 +            )
 +            block, used = render_memory_block(
 +                records,
@@ -1330,18 +2437,47 @@ index 0000000..d500476
 +        if self.config.get("heuristic_extract", True):
 +            candidates.extend(confirmed_extract(user_text, assistant_text, context, scopes=[write_scope]))
 +        extractor = self._llm_extractor
-+        if extractor is not None and self.config.get("llm_extract"):
++        if extractor is not None and getattr(self, "_llm_enabled", False):
 +            try:
 +                candidates.extend(await extractor(user_text, context))
 +            except Exception as exc:  # noqa: BLE001 - optional extractor is fail-open
 +                logger.warning("长期记忆 LLM 抽取失败（已忽略）：%s", exc)
 +        if candidates:
-+            await asyncio.to_thread(self.store_candidates, candidates, allowed_scopes=[write_scope])
++            bound = [self._bind_candidate(candidate, write_scope, context) for candidate in candidates]
++            await asyncio.to_thread(self.store_candidates, bound, allowed_scopes=[write_scope])
 +        self.processed_turns += 1
 +        self._turns_since_purge += 1
 +        if self._turns_since_purge >= _PURGE_EVERY_TURNS:
 +            self._turns_since_purge = 0
 +            await asyncio.to_thread(self._safe_purge_expired)
++
++    @staticmethod
++    def _bind_candidate(
++        candidate: Candidate,
++        write_scope: tuple[str, str],
++        context: MemoryContext,
++    ) -> Candidate:
++        """Stamp the policy write scope and the speaker on a candidate.
++
++        Extractors (heuristic or LLM) never choose a scope: an empty scope is
++        replaced by the policy scope for this turn, while an explicit scope is
++        left untouched and later dropped by ``allowed_scopes`` if it is not
++        allowed.  ``sender_id`` records who taught the fact.
++        """
++
++        scope_type, scope_id = candidate.scope_type, candidate.scope_id
++        if not scope_id:
++            scope_type, scope_id = write_scope
++        sender_id = candidate.sender_id or str(context.user_id or "")
++        if (scope_type, scope_id, sender_id) == (
++            candidate.scope_type,
++            candidate.scope_id,
++            candidate.sender_id,
++        ):
++            return candidate
++        return replace(
++            candidate, scope_type=scope_type, scope_id=scope_id, sender_id=sender_id
++        )
 +
 +    def store_candidates(
 +        self,
@@ -1359,6 +2495,7 @@ index 0000000..d500476
 +        """
 +
 +        results = {"created": 0, "updated": 0, "skipped": 0}
++        written: list[MemoryRecord] = []
 +        allowed = {(str(t), str(i)) for t, i in allowed_scopes} if allowed_scopes is not None else None
 +        for candidate in candidates:
 +            if allowed is not None and (candidate.scope_type, candidate.scope_id) not in allowed:
@@ -1368,7 +2505,7 @@ index 0000000..d500476
 +                ttl = candidate.ttl_seconds
 +                if ttl is None and self.config["ttl_days"]:
 +                    ttl = int(self.config["ttl_days"]) * 86400
-+                action, _record = self._store.upsert(
++                action, record = self._store.upsert(
 +                    Candidate(
 +                        key=candidate.key,
 +                        content=candidate.content,
@@ -1379,13 +2516,70 @@ index 0000000..d500476
 +                        scope_id=candidate.scope_id,
 +                        ttl_seconds=ttl,
 +                        source=candidate.source,
++                        sender_id=candidate.sender_id,
 +                    )
 +                )
 +                results[action] = results.get(action, 0) + 1
++                if action in ("created", "updated") and record is not None:
++                    written.append(record)
 +            except Exception as exc:  # noqa: BLE001 - fail open per candidate
 +                self.last_error = f"长期记忆写入失败：{exc}"
 +                logger.warning(self.last_error)
++        if written:
++            self._embed_written(written)
 +        return results
++
++    def _embed_written(self, records: list[MemoryRecord]) -> None:
++        """Keep vectors in sync for new/updated rows (only when enabled)."""
++
++        provider = self._semantic_provider
++        if provider is None or not records:
++            return
++        texts = [
++            f"{record.key} {record.content}"[: int(self._semantic_settings.max_input_chars)]
++            for record in records
++        ]
++        try:
++            vectors = provider.embed(texts)
++        except Exception as exc:  # noqa: BLE001 - BM25 stays the baseline
++            self.last_error = f"语义向量写入失败（已跳过）：{type(exc).__name__}"
++            return
++        if len(vectors) != len(records):
++            self.last_error = "语义向量写入失败（返回数量不符）"
++            return
++        model = str(getattr(provider, "model", "") or "")
++        for record, vector in zip(records, vectors):
++            self._store.put_embedding(record.id, model, vector)
++
++    def _query_vector(self, query: str) -> list[float] | None:
++        provider = self._semantic_provider
++        if provider is None or not str(query or "").strip():
++            return None
++        try:
++            vectors = provider.embed(
++                [str(query)[: int(self._semantic_settings.max_input_chars)]]
++            )
++        except Exception as exc:  # noqa: BLE001 - fail open to BM25
++            self.last_error = f"语义检索失败（已回退 BM25）：{type(exc).__name__}"
++            return None
++        return vectors[0] if vectors else None
++
++    def _maybe_auto_backfill(self, scopes: list[tuple[str, str]]) -> None:
++        """Bounded, opt-in backfill before scoring (default off)."""
++
++        if not self._semantic_settings.auto_backfill or self._semantic_provider is None:
++            return
++        provider = self._semantic_provider
++        try:
++            pending = self._store.records_missing_embeddings(
++                scopes,
++                model=str(getattr(provider, "model", "") or ""),
++                limit=max(1, int(self._semantic_settings.batch)),
++            )
++        except Exception:  # noqa: BLE001 - optional
++            return
++        if pending:
++            self._embed_written(pending)
 +
 +    async def drain(self, timeout: float = 5.0) -> None:
 +        """Wait until the queued extraction work is finished (tests/ops)."""
@@ -1419,7 +2613,7 @@ index 0000000..d500476
 +    ) -> tuple[str, MemoryRecord | None]:
 +        """Create/update/skip one memory explicitly (plugin-facing helper)."""
 +
-+        return self._store.upsert(
++        action, record = self._store.upsert(
 +            Candidate(
 +                key=key,
 +                content=content,
@@ -1432,6 +2626,9 @@ index 0000000..d500476
 +                source=source,
 +            )
 +        )
++        if action in ("created", "updated") and record is not None:
++            self._embed_written([record])
++        return action, record
 +
 +    def search(
 +        self,
@@ -1448,11 +2645,14 @@ index 0000000..d500476
 +        if not scopes:
 +            return []
 +        try:
++            self._maybe_auto_backfill(scopes)
 +            return self._store.search(
 +                scopes,
 +                query,
 +                limit=min(int(limit), int(policy.max_items or limit)),
 +                min_confidence=float(self.config["min_confidence"]),
++                query_vector=self._query_vector(query),
++                **_semantic_kwargs(self._semantic_provider, self._semantic_settings),
 +            )
 +        except Exception as exc:  # noqa: BLE001 - fail open
 +            self.last_error = f"长期记忆检索失败：{exc}"
@@ -1484,6 +2684,112 @@ index 0000000..d500476
 +            self.last_error = f"长期记忆过期清理失败：{exc}"
 +            return 0
 +
++    # ------------------------------------------------------------------
++    # optional capabilities (Studio/operator API; plugins do not need these)
++    # ------------------------------------------------------------------
++    def semantic_stats(self) -> dict:
++        provider = self._semantic_provider
++        payload = {
++            "enabled": provider is not None,
++            "provider": self._semantic_settings.provider,
++            "model": str(getattr(provider, "model", "") or ""),
++            "weight": self._semantic_settings.weight,
++            "min_cosine": self._semantic_settings.min_cosine,
++            "auto_backfill": self._semantic_settings.auto_backfill,
++            "errors": list(self._optional_errors),
++        }
++        try:
++            payload.update(self._store.embedding_stats())
++        except Exception as exc:  # noqa: BLE001 - stats must never raise
++            payload["error"] = type(exc).__name__
++        return payload
++
++    def llm_stats(self) -> dict:
++        client = self._llm_client
++        if client is None:
++            return {"enabled": False, "errors": list(self._optional_errors)}
++        payload = client.stats()
++        payload["errors"] = list(self._optional_errors)
++        return payload
++
++    def reflect(
++        self,
++        scopes: Iterable[tuple[str, str]],
++        *,
++        apply: bool = False,
++    ) -> dict:
++        """Deterministic reflection for explicit scopes (no LLM, no network).
++
++        ``apply=False`` is a pure read (dry-run); ``apply=True`` backs the DB
++        up first, then merges duplicates / purges expired rows only.
++        """
++
++        if not self.enabled:
++            return {"ok": False, "error": "长期记忆未启用"}
++        settings = ReflectSettings.from_mapping(self.config.get("reflect"))
++        backup_dir = ""
++        section = self.config.get("reflect")
++        if isinstance(section, Mapping):
++            raw_dir = section.get("backup_dir")
++            backup_dir = str(raw_dir).strip() if isinstance(raw_dir, str) else ""
++        try:
++            plan = build_plan(self._store, scopes, settings=settings, now=self.clock())
++        except Exception as exc:  # noqa: BLE001 - reflection is operator-only
++            self.last_error = f"记忆整理失败：{exc}"
++            logger.warning(self.last_error)
++            return {"ok": False, "error": self.last_error}
++        if not apply:
++            return plan
++        try:
++            return apply_plan(
++                self._store, plan, settings=settings, backup_dir=backup_dir or None
++            )
++        except Exception as exc:  # noqa: BLE001 - never corrupt on a failed pass
++            self.last_error = f"记忆整理写入失败：{exc}"
++            return {"ok": False, "error": self.last_error}
++
++    def reflect_for(self, context: MemoryContext, *, apply: bool = False) -> dict:
++        """Reflect only the scopes this chat's policy allows (opt-in)."""
++
++        policy = self.policy_for(context)
++        if not (self.enabled and policy.long_term):
++            self.gated_turns += 1
++            return {"ok": False, "error": "该会话未启用长期记忆"}
++        scopes = self._policy_scopes(context, policy)
++        if not scopes:
++            self.gated_turns += 1
++            return {"ok": False, "error": "该会话没有可整理的作用域"}
++        return self.reflect(scopes, apply=apply)
++
++    def backfill_semantic(
++        self,
++        scopes: Iterable[tuple[str, str]] | None = None,
++        *,
++        limit: int | None = None,
++    ) -> dict:
++        """Embed rows that have no vector yet (operator/Studio action)."""
++
++        provider = self._semantic_provider
++        if provider is None or not self.enabled:
++            return {"ok": False, "error": "语义检索未启用"}
++        scope_list = normalise_scopes(scopes) if scopes is not None else self._store.scope_ids()
++        if not scope_list:
++            return {"ok": True, "scanned": 0, "embedded": 0, "failed": 0, "error": ""}
++        cap = int(limit or max(1, int(self._semantic_settings.batch)) * 8)
++        try:
++            result = self._store.backfill_embeddings(
++                provider,
++                scopes=scope_list,
++                batch=int(self._semantic_settings.batch),
++                limit=cap,
++                now=self.clock(),
++            )
++        except Exception as exc:  # noqa: BLE001 - optional feature
++            self.last_error = f"语义回填失败：{type(exc).__name__}"
++            return {"ok": False, "error": self.last_error}
++        result["ok"] = not result.get("error")
++        return result
++
 +    def stats(self) -> dict:
 +        try:
 +            payload = self._store.stats()
@@ -1496,6 +2802,8 @@ index 0000000..d500476
 +                "dropped_turns": self.dropped_turns,
 +                "gated_turns": self.gated_turns,
 +                "policy": self._policy_summary(),
++                "llm": self.llm_stats(),
++                "semantic": self.semantic_stats(),
 +                "last_error": self.last_error or self._store.last_error,
 +            }
 +        )
@@ -1513,6 +2821,18 @@ index 0000000..d500476
 +            }
 +        except Exception:  # noqa: BLE001 - stats must never raise
 +            return {"default_mode": MODE_CONVERSATION, "groups": 0, "private": False}
++
++
++def _semantic_kwargs(provider, settings) -> dict:
++    """Search kwargs for the optional semantic layer (empty when disabled)."""
++
++    if provider is None:
++        return {}
++    return {
++        "semantic_model": str(getattr(provider, "model", "") or ""),
++        "semantic_weight": float(settings.weight),
++        "semantic_min_cosine": float(settings.min_cosine),
++    }
 +
 +
 +_SERVICES: dict[str, MemoryService] = {}
@@ -1582,10 +2902,10 @@ index 0000000..d500476
 +]
 diff --git a/astrbot/core/memory/store.py b/astrbot/core/memory/store.py
 new file mode 100644
-index 0000000..77dd3b6
+index 0000000..60d8b23
 --- /dev/null
 +++ b/astrbot/core/memory/store.py
-@@ -0,0 +1,548 @@
+@@ -0,0 +1,850 @@
 +"""SQLite sidecar storage for AstrBot's long-term memory.
 +
 +The store is deliberately independent from AstrBot's conversation database
@@ -1602,6 +2922,7 @@ index 0000000..77dd3b6
 +
 +import math
 +import sqlite3
++import struct
 +import threading
 +import time
 +from collections.abc import Iterable
@@ -1632,6 +2953,7 @@ index 0000000..77dd3b6
 +    confidence REAL NOT NULL DEFAULT 0.5,
 +    hits INTEGER NOT NULL DEFAULT 0,
 +    source TEXT NOT NULL DEFAULT 'heuristic',
++    sender_id TEXT NOT NULL DEFAULT '',
 +    fingerprint TEXT NOT NULL,
 +    created_at REAL NOT NULL,
 +    updated_at REAL NOT NULL,
@@ -1646,6 +2968,18 @@ index 0000000..77dd3b6
 +FTS_SCHEMA = """
 +CREATE VIRTUAL TABLE IF NOT EXISTS astrbot_memory_fts
 +    USING fts5(mem_key, content, tokens, tokenize='unicode61');
++"""
++
++EMBED_SCHEMA = """
++CREATE TABLE IF NOT EXISTS astrbot_memory_embeddings (
++    memory_id INTEGER PRIMARY KEY,
++    model TEXT NOT NULL,
++    dim INTEGER NOT NULL,
++    vector BLOB NOT NULL,
++    updated_at REAL NOT NULL
++);
++CREATE INDEX IF NOT EXISTS idx_astrbot_memory_embeddings_model
++    ON astrbot_memory_embeddings (model);
 +"""
 +
 +DUPLICATE_SIMILARITY = 0.92
@@ -1685,6 +3019,11 @@ index 0000000..77dd3b6
 +        conn.execute("PRAGMA synchronous=NORMAL")
 +        conn.execute("PRAGMA busy_timeout=3000")
 +        conn.executescript(SCHEMA)
++        self._migrate(conn)
++        try:
++            conn.executescript(EMBED_SCHEMA)
++        except sqlite3.Error as exc:  # pragma: no cover - defensive
++            self.last_error = f"向量表创建失败（语义检索不可用）：{exc}"
 +        if self._fts_declared:
 +            try:
 +                conn.executescript(FTS_SCHEMA)
@@ -1704,6 +3043,40 @@ index 0000000..77dd3b6
 +                    self._conn.close()
 +                finally:
 +                    self._conn = None
++
++    def _migrate(self, conn: sqlite3.Connection) -> None:
++        """Additive migrations for DBs created by an older patch version.
++
++        The sidecar file is the durable part of memory: a new column or table
++        must never require deleting it.  ``CREATE TABLE IF NOT EXISTS`` takes
++        care of new tables; a pre-existing table only gains columns here.
++        """
++
++        try:
++            columns = {row["name"] for row in conn.execute("PRAGMA table_info(astrbot_memory)")}
++            if "sender_id" not in columns:
++                conn.execute(
++                    "ALTER TABLE astrbot_memory ADD COLUMN sender_id TEXT NOT NULL DEFAULT ''"
++                )
++        except sqlite3.Error as exc:  # pragma: no cover - defensive
++            self.last_error = f"记忆表迁移失败（sender_id 缺失）：{exc}"
++
++    def backup(self, destination: str | Path | None = None) -> str:
++        """Consistent copy of the sidecar DB (SQLite backup API, WAL-safe)."""
++
++        target = Path(destination) if destination else self.db_path.with_suffix(
++            f".{int(self.clock())}.bak"
++        )
++        target.parent.mkdir(parents=True, exist_ok=True)
++        with self._lock:
++            conn = self._connect()
++            copy = sqlite3.connect(str(target))
++            try:
++                conn.backup(copy)
++                copy.commit()
++            finally:
++                copy.close()
++        return str(target)
 +
 +    # ------------------------------------------------------------------
 +    # write path: formation (create / update / skip)
@@ -1750,7 +3123,8 @@ index 0000000..77dd3b6
 +                    )
 +                conn.execute(
 +                    "UPDATE astrbot_memory SET content=?, kind=?, importance=?, confidence=?,"
-+                    " source=?, fingerprint=?, updated_at=?, expires_at=? WHERE id=?",
++                    " source=?, fingerprint=?, updated_at=?, expires_at=?,"
++                    " sender_id=CASE WHEN ?='' THEN sender_id ELSE ? END WHERE id=?",
 +                    (
 +                        merged_content,
 +                        candidate.kind or row["kind"],
@@ -1760,6 +3134,8 @@ index 0000000..77dd3b6
 +                        fingerprint(merged_content),
 +                        now,
 +                        expires_at if expires_at is not None else row["expires_at"],
++                        str(candidate.sender_id or ""),
++                        str(candidate.sender_id or ""),
 +                        row["id"],
 +                    ),
 +                )
@@ -1781,8 +3157,8 @@ index 0000000..77dd3b6
 +
 +            cursor = conn.execute(
 +                "INSERT INTO astrbot_memory (scope_type, scope_id, mem_key, content, kind,"
-+                " importance, confidence, hits, source, fingerprint, created_at, updated_at,"
-+                " expires_at) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)",
++                " importance, confidence, hits, source, sender_id, fingerprint, created_at,"
++                " updated_at, expires_at) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?)",
 +                (
 +                    scope_type,
 +                    scope_id,
@@ -1792,6 +3168,7 @@ index 0000000..77dd3b6
 +                    float(candidate.importance),
 +                    float(candidate.confidence),
 +                    candidate.source or "heuristic",
++                    str(candidate.sender_id or ""),
 +                    fp,
 +                    now,
 +                    now,
@@ -1858,8 +3235,18 @@ index 0000000..77dd3b6
 +        *,
 +        limit: int = 8,
 +        min_confidence: float = 0.35,
++        query_vector: list[float] | None = None,
++        semantic_model: str = "",
++        semantic_weight: float = 0.0,
++        semantic_min_cosine: float = 0.2,
 +    ) -> list[MemoryRecord]:
-+        """Return memories relevant to ``query`` inside ``scopes`` only."""
++        """Return memories relevant to ``query`` inside ``scopes`` only.
++
++        Scope filtering happens in SQL (``_load_candidates``) *before* any
++        score is computed, so an embedding hit can never pull a row from
++        another scope into the result.  ``query_vector`` enables the optional
++        semantic fusion; without it the lexical score is used unchanged.
++        """
 +
 +        scope_list = [scope for scope in scopes if scope and scope[1]]
 +        if not scope_list:
@@ -1872,11 +3259,23 @@ index 0000000..77dd3b6
 +            if not rows:
 +                return []
 +            relevance = self._relevance_scores(conn, rows, tokens) if tokens else {}
++            semantic_active = query_vector is not None and semantic_weight > 0.0
++            semantic_scores: dict[int, float] = {}
++            max_rel = 0.0
++            if semantic_active:
++                semantic_scores = self._semantic_scores(conn, rows, query_vector, semantic_model)
++                max_rel = max(relevance.values(), default=0.0) or 0.0
 +            ranked: list[MemoryRecord] = []
 +            for row in rows:
 +                record = self._to_record(row)
 +                rel = float(relevance.get(record.id, 0.0))
-+                if not rel:
++                if semantic_active:
++                    cosine = float(semantic_scores.get(record.id, 0.0))
++                    if rel <= 0.0 and cosine < semantic_min_cosine:
++                        continue
++                    lexical = (rel / max_rel) if max_rel else 0.0
++                    rel = (1.0 - semantic_weight) * lexical + semantic_weight * cosine
++                elif not rel:
 +                    continue
 +                age_days = max(0.0, (now - record.updated_at) / 86400.0)
 +                recency = 1.0 / (1.0 + age_days / 30.0)
@@ -1999,6 +3398,217 @@ index 0000000..77dd3b6
 +        return scores
 +
 +    # ------------------------------------------------------------------
++    # optional semantic layer (embedding BLOBs, cosine, fail-open)
++    # ------------------------------------------------------------------
++    def put_embedding(
++        self,
++        memory_id: int,
++        model: str,
++        vector: list[float],
++        now: float | None = None,
++    ) -> bool:
++        """Store one embedding vector (packed little-endian float32 BLOB)."""
++
++        values = [float(value) for value in vector]
++        if not values:
++            return False
++        payload = struct.pack(f"<{len(values)}f", *values)
++        current = float(self.clock() if now is None else now)
++        try:
++            with self._lock:
++                conn = self._connect()
++                conn.execute(
++                    "INSERT OR REPLACE INTO astrbot_memory_embeddings"
++                    " (memory_id, model, dim, vector, updated_at) VALUES (?,?,?,?,?)",
++                    (int(memory_id), str(model or "local"), len(values), payload, current),
++                )
++                conn.commit()
++            return True
++        except sqlite3.Error as exc:  # pragma: no cover - embeddings are best effort
++            self.last_error = f"向量写入失败（语义检索降级）：{exc}"
++            return False
++
++    def _load_embeddings(
++        self,
++        conn: sqlite3.Connection,
++        ids: list[int],
++        model: str,
++    ) -> dict[int, list[float]]:
++        if not ids:
++            return {}
++        placeholders = ",".join("?" for _ in ids)
++        sql = (
++            "SELECT memory_id, dim, vector FROM astrbot_memory_embeddings"
++            f" WHERE memory_id IN ({placeholders})"
++        )
++        params: list[object] = list(ids)
++        if model:
++            sql += " AND model=?"
++            params.append(model)
++        vectors: dict[int, list[float]] = {}
++        for row in conn.execute(sql, params).fetchall():
++            dim = int(row["dim"])
++            blob = row["vector"]
++            if dim <= 0 or not isinstance(blob, (bytes, bytearray)) or len(blob) != dim * 4:
++                continue
++            vectors[int(row["memory_id"])] = list(struct.unpack(f"<{dim}f", blob))
++        return vectors
++
++    def _semantic_scores(
++        self,
++        conn: sqlite3.Connection,
++        rows: list[sqlite3.Row],
++        query_vector: list[float],
++        model: str,
++    ) -> dict[int, float]:
++        allowed = [int(row["id"]) for row in rows]
++        vectors = self._load_embeddings(conn, allowed, model)
++        query_norm = math.sqrt(sum(value * value for value in query_vector)) or 0.0
++        if query_norm <= 0.0:
++            return {}
++        scores: dict[int, float] = {}
++        for memory_id, vector in vectors.items():
++            if len(vector) != len(query_vector):
++                continue
++            norm = math.sqrt(sum(value * value for value in vector)) or 0.0
++            if norm <= 0.0:
++                continue
++            dot = sum(left * right for left, right in zip(query_vector, vector))
++            scores[memory_id] = max(0.0, min(1.0, dot / (query_norm * norm)))
++        return scores
++
++    def embedding_stats(self) -> dict:
++        with self._lock:
++            conn = self._connect()
++            rows = conn.execute(
++                "SELECT model, COUNT(*) AS n FROM astrbot_memory_embeddings GROUP BY model"
++            ).fetchall()
++            rows_total = conn.execute("SELECT COUNT(*) AS n FROM astrbot_memory").fetchone()["n"]
++        embedded = sum(int(row["n"]) for row in rows)
++        return {
++            "embedded": embedded,
++            "records": int(rows_total),
++            "by_model": {row["model"]: int(row["n"]) for row in rows},
++        }
++
++    def records_missing_embeddings(
++        self,
++        scopes: Iterable[tuple[str, str]],
++        *,
++        model: str = "",
++        limit: int = 200,
++    ) -> list[MemoryRecord]:
++        """Rows in ``scopes`` that still need an embedding (backfill input)."""
++
++        scope_list = [scope for scope in scopes if scope and scope[1]]
++        if not scope_list:
++            return []
++        placeholders = ",".join(["(?,?)"] * len(scope_list))
++        params: list[object] = []
++        for scope_type, scope_id in scope_list:
++            params.extend((scope_type, scope_id))
++        params.append(int(limit))
++        sql = (
++            "SELECT m.* FROM astrbot_memory m LEFT JOIN astrbot_memory_embeddings e"
++            " ON e.memory_id = m.id"
++            + (" AND e.model=?" if model else "")
++            + f" WHERE (m.scope_type, m.scope_id) IN ({placeholders}) AND e.memory_id IS NULL"
++            " ORDER BY m.id LIMIT ?"
++        )
++        if model:
++            params.insert(0, model)
++        with self._lock:
++            conn = self._connect()
++            try:
++                rows = conn.execute(sql, params).fetchall()
++            except sqlite3.Error as exc:  # pragma: no cover - defensive
++                self.last_error = f"向量回填查询失败：{exc}"
++                return []
++        return [self._to_record(row) for row in rows]
++
++    def backfill_embeddings(
++        self,
++        provider,
++        *,
++        scopes: Iterable[tuple[str, str]],
++        batch: int = 16,
++        limit: int = 200,
++        now: float | None = None,
++    ) -> dict:
++        """Embed rows that have no vector yet. Fail-open: returns an error string."""
++
++        model = str(getattr(provider, "model", "") or "")
++        result = {"scanned": 0, "embedded": 0, "failed": 0, "error": ""}
++        pending = self.records_missing_embeddings(scopes, model=model, limit=limit)
++        result["scanned"] = len(pending)
++        if not pending:
++            return result
++        size = max(1, int(batch))
++        for start in range(0, len(pending), size):
++            chunk = pending[start : start + size]
++            texts = [f"{record.key} {record.content}"[:400] for record in chunk]
++            try:
++                vectors = provider.embed(texts)
++            except Exception as exc:  # noqa: BLE001 - provider is optional
++                result["error"] = f"向量回填失败（已跳过）：{type(exc).__name__}"
++                result["failed"] = len(chunk)
++                break
++            if len(vectors) != len(chunk):
++                result["error"] = "向量回填失败（返回数量不符）"
++                result["failed"] = len(chunk)
++                break
++            for record, vector in zip(chunk, vectors):
++                if self.put_embedding(record.id, model, vector, now=now):
++                    result["embedded"] += 1
++                else:
++                    result["failed"] += 1
++        return result
++
++    def merge_records(self, keep_id: int, drop_ids: Iterable[int]) -> MemoryRecord | None:
++        """Merge duplicates into ``keep_id``: sum hits, keep the best scores.
++
++        Used only by reflection's explicit apply step; contradictions and
++        low-value rows are never passed here (reflection reports them).
++        """
++
++        drops = [int(memory_id) for memory_id in drop_ids if int(memory_id) != int(keep_id)]
++        with self._lock:
++            conn = self._connect()
++            keeper = conn.execute(
++                "SELECT * FROM astrbot_memory WHERE id=?", (int(keep_id),)
++            ).fetchone()
++            if keeper is None:
++                return None
++            if not drops:
++                return self._to_record(keeper)
++            placeholders = ",".join("?" for _ in drops)
++            stats = conn.execute(
++                "SELECT COALESCE(SUM(hits),0) AS hits, MAX(importance) AS importance,"
++                f" MAX(confidence) AS confidence FROM astrbot_memory WHERE id IN ({placeholders})",
++                drops,
++            ).fetchone()
++            conn.execute(
++                "UPDATE astrbot_memory SET hits=hits+?, importance=MAX(importance, ?),"
++                " confidence=MAX(confidence, ?), updated_at=? WHERE id=?",
++                (
++                    int(stats["hits"] or 0),
++                    float(stats["importance"] or 0.0),
++                    float(stats["confidence"] or 0.0),
++                    float(self.clock()),
++                    int(keep_id),
++                ),
++            )
++            for memory_id in drops:
++                conn.execute("DELETE FROM astrbot_memory WHERE id=?", (memory_id,))
++                conn.execute(
++                    "DELETE FROM astrbot_memory_embeddings WHERE memory_id=?", (memory_id,)
++                )
++                self._fts_delete(conn, memory_id)
++            conn.commit()
++            row = conn.execute("SELECT * FROM astrbot_memory WHERE id=?", (int(keep_id),)).fetchone()
++        return self._to_record(row) if row is not None else None
++
++    # ------------------------------------------------------------------
 +    # primitives: forget / delete / export / TTL
 +    # ------------------------------------------------------------------
 +    def delete(self, memory_id: int) -> bool:
@@ -2092,6 +3702,17 @@ index 0000000..77dd3b6
 +            "db_path": str(self.db_path),
 +        }
 +
++    def scope_ids(self) -> list[tuple[str, str]]:
++        """Every distinct ``(scope_type, scope_id)`` pair currently stored."""
++
++        with self._lock:
++            conn = self._connect()
++            rows = conn.execute(
++                "SELECT DISTINCT scope_type, scope_id FROM astrbot_memory"
++                " ORDER BY scope_type, scope_id"
++            ).fetchall()
++        return [(str(row["scope_type"]), str(row["scope_id"])) for row in rows]
++
 +    def get(self, memory_id: int) -> MemoryRecord | None:
 +        with self._lock:
 +            conn = self._connect()
@@ -2129,6 +3750,7 @@ index 0000000..77dd3b6
 +            confidence=float(row["confidence"]),
 +            hits=int(row["hits"]),
 +            source=row["source"],
++            sender_id=str(row["sender_id"] or "") if "sender_id" in row.keys() else "",
 +            created_at=float(row["created_at"]),
 +            updated_at=float(row["updated_at"]),
 +            last_used_at=float(row["last_used_at"]) if row["last_used_at"] is not None else None,
@@ -2278,10 +3900,10 @@ index 0000000..e177b41
 +    return old_negative != new_negative
 diff --git a/astrbot/core/memory/types.py b/astrbot/core/memory/types.py
 new file mode 100644
-index 0000000..e037ae8
+index 0000000..78b7eb8
 --- /dev/null
 +++ b/astrbot/core/memory/types.py
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,191 @@
 +"""Data types for AstrBot's native long-term memory.
 +
 +Everything here is stdlib-only on purpose: the memory service must stay usable
@@ -2293,10 +3915,12 @@ index 0000000..e037ae8
 +
 +from dataclasses import dataclass, field
 +
-+SCOPE_TYPES = ("user", "group", "conversation", "persona", "global")
++SCOPE_TYPES = ("user", "group_member", "group", "conversation", "persona", "global")
 +"""Memory scopes, narrowest first.
 +
 +* ``user``         -- one person on one platform (private + their own group turns)
++* ``group_member`` -- one speaker inside one group (group + sender id); opt-in
++  only, never written by ``group_user`` (see policy.py and CONTRACT.md)
 +* ``group``        -- one group chat on one platform
 +* ``conversation`` -- one AstrBot conversation (``conversation_id``)
 +* ``persona``      -- memories shared by every chat using one persona
@@ -2322,6 +3946,7 @@ index 0000000..e037ae8
 +    scope_id: str = ""
 +    ttl_seconds: int | None = None
 +    source: str = "heuristic"
++    sender_id: str = ""
 +
 +
 +@dataclass(frozen=True)
@@ -2338,6 +3963,7 @@ index 0000000..e037ae8
 +    confidence: float = DEFAULT_CONFIDENCE
 +    hits: int = 0
 +    source: str = "heuristic"
++    sender_id: str = ""
 +    created_at: float = 0.0
 +    updated_at: float = 0.0
 +    last_used_at: float | None = None
@@ -2356,6 +3982,7 @@ index 0000000..e037ae8
 +            "confidence": self.confidence,
 +            "hits": self.hits,
 +            "source": self.source,
++            "sender_id": self.sender_id,
 +            "created_at": self.created_at,
 +            "updated_at": self.updated_at,
 +            "last_used_at": self.last_used_at,
@@ -2391,6 +4018,18 @@ index 0000000..e037ae8
 +        return ("group", _join_id(self.platform, self.group_id))
 +
 +    @property
++    def group_member_scope(self) -> tuple[str, str] | None:
++        """Speaker identity inside one group (opt-in scope ``group_member``).
++
++        The id embeds both the group and the sender, so two speakers in the
++        same group can never read each other's rows through this scope.
++        """
++
++        if not self.group_id or not self.user_id or self.is_private:
++            return None
++        return ("group_member", _join_id(self.platform, f"{self.group_id}:{self.user_id}"))
++
++    @property
 +    def conversation_scope(self) -> tuple[str, str] | None:
 +        if not self.conversation_id:
 +            return None
@@ -2419,6 +4058,7 @@ index 0000000..e037ae8
 +        *,
 +        users: bool = True,
 +        groups: bool = True,
++        group_members: bool = False,
 +        conversation: bool = True,
 +        persona: bool = True,
 +        global_scope: bool = True,
@@ -2430,6 +4070,10 @@ index 0000000..e037ae8
 +            scopes.append(self.user_scope)
 +        if groups and self.group_scope:
 +            scopes.append(self.group_scope)
++        # Speaker rows are opt-in only: a group must explicitly ask for them
++        # (policy scope="group_member"), so the default stays group-isolated.
++        if group_members and self.group_member_scope:
++            scopes.append(self.group_member_scope)
 +        if conversation and self.conversation_scope:
 +            scopes.append(self.conversation_scope)
 +        if persona and self.persona_scope:

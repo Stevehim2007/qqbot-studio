@@ -112,7 +112,11 @@ class PatchWiringTests(unittest.TestCase):
             self.skipTest("AstrBot 源码不可用")
         allowed = {
             "asyncio", "collections", "copy", "dataclasses", "hashlib", "json", "logging",
-            "__future__", "math", "os", "pathlib", "re", "sqlite3", "threading", "time", "typing",
+            "__future__", "math", "os", "pathlib", "re", "sqlite3", "struct", "threading", "time",
+            "typing",
+            # Optional features (LLM extraction, embeddings) talk HTTP with the
+            # standard library only -- no SDK, no third-party client.
+            "urllib",
         }
         for path in package.glob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -160,10 +164,62 @@ class PatchWiringTests(unittest.TestCase):
             "astrbot/core/memory/store.py",
             "astrbot/core/memory/integration.py",
             "astrbot/core/memory/policy.py",
+            "astrbot/core/memory/reflect.py",
+            "astrbot/core/memory/llm_extract.py",
+            "astrbot/core/memory/embed.py",
             "astrbot/core/astr_main_agent.py",
             "astrbot/core/config/default.py",
         ):
             self.assertIn(path, text)
+
+    def test_patch_hunk_headers_match_their_body(self):
+        """A regenerated patch must be parseable: declared counts == body lines.
+
+        A stale ``@@ -0,0 +1,628 @@`` header once truncated ``service.py`` on
+        apply (silently dropping the last lines), so the header/body agreement
+        is pinned here for every file in the patch.
+        """
+
+        import re
+
+        repo_root = Path(__file__).resolve().parents[3]
+        patch = repo_root / "integrations" / "astrbot-memory" / "patches" / "0001-native-memory.patch"
+        if not patch.is_file():
+            self.skipTest("补丁文件尚未生成")
+        lines = patch.read_text(encoding="utf-8").splitlines()
+        index = 0
+        while index < len(lines):
+            header = re.match(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", lines[index])
+            if not header:
+                index += 1
+                continue
+            old_expected = int(header.group(2) if header.group(2) is not None else 1)
+            new_expected = int(header.group(4) if header.group(4) is not None else 1)
+            old_actual = new_actual = 0
+            cursor = index + 1
+            while cursor < len(lines):
+                line = lines[cursor]
+                if line.startswith("diff --git") or line.startswith("@@"):
+                    break
+                if line == "-- ":
+                    # git format-patch signature trailer: not part of a hunk.
+                    break
+                if line.startswith("+"):
+                    new_actual += 1
+                elif line.startswith("-"):
+                    old_actual += 1
+                elif line.startswith(" ") or line == "":
+                    old_actual += 1
+                    new_actual += 1
+                else:
+                    break
+                cursor += 1
+            self.assertEqual(
+                (old_actual, new_actual),
+                (old_expected, new_expected),
+                f"补丁 hunk 头与正文不符（第 {index + 1} 行起）",
+            )
+            index = cursor
 
 
 if __name__ == "__main__":

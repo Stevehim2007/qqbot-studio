@@ -1,5 +1,5 @@
 {
-  "_comment": "按群长期记忆策略样例（memory.policy）。最后一项刻意写错，用于验证非法条目 fail-safe 到 conversation 且不影响其它群。",
+  "_comment": "按群长期记忆策略样例（memory.policy）。777777 用 group_member（说话人维度），最后一项刻意写错，用于验证非法条目 fail-safe 到 conversation 且不影响其它群。",
   "default_mode": "conversation",
   "private": {
     "mode": "long_term",
@@ -34,6 +34,14 @@
       "mode": "always",
       "scope": "group",
       "extract": true
+    },
+    "777777": {
+      "mode": "long_term",
+      "scope": "group_member",
+      "extract": true,
+      "inject": true,
+      "max_items": 5,
+      "max_chars": 600
     }
   }
 }

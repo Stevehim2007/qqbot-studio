@@ -42,6 +42,11 @@ class PolicyFixtureTests(MemoryTestCase):
         self.assertEqual((policy.scope, policy.extract, policy.inject), ("user", False, True))
         self.assertEqual((policy.max_items, policy.max_chars), (3, 400))
 
+    def test_group_member_entry(self):
+        speaker = self.policy_for_group("777777")
+        self.assertEqual((speaker.mode, speaker.scope), ("long_term", "group_member"))
+        self.assertEqual((speaker.max_items, speaker.max_chars), (5, 600))
+
     def test_unlisted_group_and_invalid_entry_fail_safe(self):
         self.assertEqual(self.policy_for_group("2001").mode, "conversation")
         broken = self.policy_for_group("2002")
