@@ -329,10 +329,11 @@ ASTRBOT_SRC=/opt/AstrBot python3 -m unittest test_speaker_scope test_reflection 
 | `py_compile`（补丁后全部模块 + 3 个改动文件） | OK |
 | 策略冒烟（默认 `policy.default_mode == conversation`，列出的群解析为 long_term） | OK |
 | `python3 -m unittest discover`（集成补丁测试，194 tests） | OK |
-| `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（主仓库，仓库根执行，594 tests @ 提交 643351a 快照） | OK |
+| `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（主仓库，仓库根执行，760 tests @ 提交 5d50d68 快照） | OK |
 | 基线行为（`memory.enable=false`） | 钩子立即返回，`system_prompt` 与上游一致（见 `test_injection.py::test_disabled_memory_leaves_the_prompt_untouched`） |
+| v1.2 新能力专项 | `test_speaker_scope` / `test_reflection` / `test_llm_extract` / `test_semantic` / `test_optional_config` 全部 OK（LLM 用 stub，无真实调用） |
 
-主仓库测试用同一口径复跑：`git archive <commit> | tar -x -C /tmp/head` 出干净快照，再在该目录执行 `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（本次 594 tests OK @ `643351a`）。补丁本身不改 `qqbot_studio`/插件，所以这个数字随主分支变化——引用时必须带上提交号与该命令，不要单独写一个数字。
+主仓库测试用同一口径复跑：`git archive <commit> | tar -x -C /tmp/head` 出干净快照，再在该目录执行 `PYTHONPATH=. python3 -m unittest discover -s tests -t tests`（本次 760 tests OK @ `5d50d68`）。补丁本身不改 `qqbot_studio`/插件，所以这个数字随主分支变化——引用时必须带上提交号与该命令，不要单独写一个数字。
 
 **未验证**（见第 6 节）：真实 AstrBot 进程启动、真实 LLM 回复链路 E2E、Docker 镜像构建。
 
