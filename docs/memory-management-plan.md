@@ -128,7 +128,7 @@ cd integrations/astrbot-memory && ASTRBOT_SRC_TGZ=<astrbot-v4.29.3.tar.gz> bash 
 
 ## 代码优化
 
-当前环境未发现可直接调用的 `polytail` / `superpower` 插件/工具；不假装调用。按相同目标执行：
+已确认安装 `superpowers-dsh@0.4.0`（提供 TDD、系统化调试、计划、子 agent 开发、完成前验证等技能）；已有 `ponytail-optimizer` teammate 可做全项目优化审计。按这些方法论执行：
 - 先契约/测试，后实现；
 - 消除重复状态与手写解析器（已用 marked/DOMPurify 替换手写 Markdown）；
 - 模块拆分为 manager/store/policy/render；
