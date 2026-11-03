@@ -72,6 +72,11 @@ class MemoryPolicyBackendTests(unittest.TestCase):
         self.tmp.cleanup()
 
     # -- default fallback / unsupported state --------------------------
+    def test_patch_hint_detects_existing_memory_section(self) -> None:
+        _write_config(self.store, {"memory": {"enable": True}})
+        state = self.manager.get_memory_policy()
+        self.assertEqual(state["patch_hint"], "detected")
+
     def test_undeployed_instance_is_explicitly_unsupported(self) -> None:
         state = self.manager.get_memory_policy()
         self.assertTrue(state["ok"])

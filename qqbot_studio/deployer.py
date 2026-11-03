@@ -2514,7 +2514,11 @@ class DeployManager:
         )
         enable = memory.get("enable")
         payload["memory_enabled"] = enable if isinstance(enable, bool) else None
-        payload["patch_hint"] = "detected" if "memory" in memory else "unknown"
+        payload["patch_hint"] = (
+            "detected"
+            if isinstance(data.get("memory"), dict)
+            else "unknown"
+        )
         warnings: list[str] = []
         section = memory.get("policy")
         if section is None:
