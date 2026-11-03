@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.2.2（正式版）— 更新后自动验证
+
+- 更新/回退切换代码后，重启管理服务前自动运行仓库测试、Python/JS 语法检查。
+- 设置 `ASTRBOT_SRC_TGZ` 时同时运行 AstrBot memory patch 验证。
+- 测试失败时保留旧管理服务运行，不自动重启坏版本；可用 `QQBOT_STUDIO_AUTO_TEST=0` 显式关闭。
+
 ## v4.2.1（正式版）— 美食智能与站点 v1.3
 
 - qqbot_enhancer 2.8.0：按群默认地点 `food_group_locations`（JSON）+ 群名安全推断城市（只认显式省/市/州后缀）；已知长春群将「长春火锅」补为长春市，不再追问区县；未知群仍追问。
