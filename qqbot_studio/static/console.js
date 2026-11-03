@@ -72,7 +72,12 @@
       restartRequired: false,
       apiAvailable: true,
       requestSeq: 0,
-      entries: []
+      entries: [],
+      groups: [],
+      groupsById: new Map(),
+      groupSections: new Map(),
+      groupButtons: new Map(),
+      ui: { byPlugin: {} }
     },
     promptManager: {
       open: false,
@@ -951,30 +956,225 @@
 
   let pluginConfigReturnFocus = null;
 
+  function pluginConfigUiKey() {
+    const config = state.pluginConfig;
+    return `${config.instanceId}|${config.pluginId}`;
+  }
+
+  function pluginConfigUiState() {
+    const config = state.pluginConfig;
+    const key = pluginConfigUiKey();
+    if (!config.ui.byPlugin[key]) {
+      config.ui.byPlugin[key] = {
+        activeGroup: 'all',
+        modifiedOnly: false,
+        collapsedGroups: {},
+        scrollTops: {}
+      };
+    }
+    return config.ui.byPlugin[key];
+  }
+
+  function pluginSectionExpanded(group, ui) {
+    const state = group || { id: 'advanced', advanced: false };
+    if (Object.prototype.hasOwnProperty.call(ui.collapsedGroups, state.id)) {
+      return ui.collapsedGroups[state.id] !== true;
+    }
+    return state.advanced !== true;
+  }
+
+  function setPluginGroupExpanded(groupId, expanded, persist = true) {
+    const section = state.pluginConfig.groupSections.get(groupId);
+    if (!section) return;
+    section.dataset.collapsed = expanded ? 'false' : 'true';
+    const toggle = section.querySelector('.plugin-config-group-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    if (persist) {
+      const ui = pluginConfigUiState();
+      ui.collapsedGroups[groupId] = !expanded;
+    }
+  }
+
+  function savePluginConfigScroll(ui, groupId) {
+    const body = $('plugin-config-body');
+    if (body) ui.scrollTops[groupId || 'all'] = body.scrollTop;
+  }
+
+  function refreshPluginConfigModifiedEntry(entry) {
+    if (!entry || !entry.element || typeof entry.readValue !== 'function') return;
+    const result = entry.readValue();
+    entry.modified = pluginConfigService.pluginFieldValueChanged(
+      entry.field,
+      result && result.ok ? result.value : undefined,
+      entry.originalValue
+    );
+    entry.element.classList.toggle('is-modified', entry.modified);
+    if (entry.modifiedBadge) entry.modifiedBadge.hidden = !entry.modified;
+  }
+
+  function refreshAllPluginConfigModifiedEntries() {
+    for (const entry of state.pluginConfig.entries || []) refreshPluginConfigModifiedEntry(entry);
+  }
+
+  function applyPluginConfigActiveGroup() {
+    const config = state.pluginConfig;
+    const ui = pluginConfigUiState();
+    const active = config.groupButtons.has(ui.activeGroup) ? ui.activeGroup : 'all';
+    ui.activeGroup = active;
+    for (const [id, button] of config.groupButtons) {
+      const isActive = id === active;
+      button.setAttribute('aria-current', isActive ? 'true' : 'false');
+      button.classList.toggle('is-active', isActive);
+    }
+  }
+
+  function selectPluginConfigGroup(groupId) {
+    const config = state.pluginConfig;
+    if (!config.open) return;
+    const ui = pluginConfigUiState();
+    savePluginConfigScroll(ui, ui.activeGroup);
+    ui.activeGroup = config.groupButtons.has(groupId) ? groupId : 'all';
+    const search = $('plugin-config-search');
+    if (search && search.value) search.value = '';
+    applyPluginConfigActiveGroup();
+    updatePluginConfigFilter();
+    const body = $('plugin-config-body');
+    if (body) body.scrollTop = ui.scrollTops[ui.activeGroup] || 0;
+    const button = config.groupButtons.get(ui.activeGroup);
+    if (button) button.focus({ preventScroll: true });
+  }
+
+  function makePluginGroupSection(group, entries) {
+    const section = makeElement('section', 'plugin-config-group-section');
+    section.dataset.groupId = group.id;
+    section.id = `plugin-config-group-${group.id}`;
+    const head = makeElement('div', 'plugin-config-group-head');
+    const toggle = makeElement('button', 'plugin-config-group-toggle');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-controls', section.id);
+    toggle.appendChild(
+      makeElement('span', 'plugin-config-group-btn-label', group.title)
+    );
+    toggle.appendChild(
+      makeElement(
+        'span',
+        'plugin-config-group-section-count',
+        String(entries.length)
+      )
+    );
+    toggle.addEventListener('click', () => {
+      const expanded = section.dataset.collapsed !== 'true';
+      setPluginGroupExpanded(group.id, !expanded);
+    });
+    head.appendChild(toggle);
+    section.appendChild(head);
+    const body = makeElement('div', 'plugin-config-group-fields');
+    for (const entry of entries) body.appendChild(entry.element);
+    section.appendChild(body);
+    const expanded = pluginSectionExpanded(group, pluginConfigUiState());
+    section.dataset.collapsed = expanded ? 'false' : 'true';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    return section;
+  }
+
+  function renderPluginConfigGroupNav(groups) {
+    const nav = $('plugin-config-groups');
+    const config = state.pluginConfig;
+    config.groups = groups;
+    config.groupButtons = new Map();
+    if (!nav) return;
+    nav.replaceChildren();
+    const addButton = (id, title, count) => {
+      const button = makeElement('button', 'plugin-config-group-btn');
+      button.type = 'button';
+      button.dataset.groupId = id;
+      button.setAttribute('aria-current', 'false');
+      button.appendChild(
+        makeElement('span', 'plugin-config-group-btn-label', title)
+      );
+      button.appendChild(
+        makeElement('span', 'plugin-config-group-count', String(count))
+      );
+      button.addEventListener('click', () => selectPluginConfigGroup(id));
+      config.groupButtons.set(id, button);
+      nav.appendChild(button);
+    };
+    const total = groups.reduce((sum, group) => sum + group.count, 0);
+    const ui = pluginConfigUiState();
+    if (ui.activeGroup !== 'all' && !groups.some((group) => group.id === ui.activeGroup)) {
+      ui.activeGroup = 'all';
+    }
+    addButton('all', '全部参数', total);
+    for (const group of groups) addButton(group.id, group.title, group.count);
+    applyPluginConfigActiveGroup();
+  }
+
   function updatePluginConfigFilter() {
+    const config = state.pluginConfig;
     const search = $('plugin-config-search');
     const query = search ? search.value.trim().toLowerCase() : '';
-    const entries = state.pluginConfig.entries || [];
+    const modifiedToggle = $('plugin-config-modified-only');
+    const modifiedOnly = Boolean(modifiedToggle && modifiedToggle.checked);
+    const ui = pluginConfigUiState();
+    ui.modifiedOnly = modifiedOnly;
+    refreshAllPluginConfigModifiedEntries();
+    const entries = config.entries || [];
+    const visibleByGroup = new Map();
     let visible = 0;
     for (const entry of entries) {
-      const matches = !query || entry.element.dataset.searchText.includes(query);
-      entry.element.hidden = !matches;
-      if (matches) visible += 1;
+      if (entry.legacyHidden) {
+        entry.element.hidden = true;
+        continue;
+      }
+      const matchesQuery = !query
+        || entry.element.dataset.searchText.includes(query);
+      const matchesModified = !modifiedOnly || entry.modified === true;
+      const matchesGroup = Boolean(query)
+        || ui.activeGroup === 'all'
+        || entry.groupId === ui.activeGroup;
+      const show = matchesQuery && matchesModified && matchesGroup;
+      entry.element.hidden = !show;
+      if (show) {
+        visible += 1;
+        const groupId = entry.groupId || 'advanced';
+        visibleByGroup.set(groupId, (visibleByGroup.get(groupId) || 0) + 1);
+      }
+    }
+    for (const [groupId, section] of config.groupSections) {
+      const count = visibleByGroup.get(groupId) || 0;
+      section.hidden = count === 0;
+      if (query) {
+        setPluginGroupExpanded(groupId, true, false);
+      } else if (count > 0) {
+        setPluginGroupExpanded(
+          groupId,
+          pluginSectionExpanded(
+            config.groupsById.get(groupId) || { id: groupId, advanced: false },
+            ui
+          ),
+          false
+        );
+      }
     }
     const count = $('plugin-config-filter-count');
-    if (count) count.textContent = entries.length ? `显示 ${visible}/${entries.length} 个参数` : '';
+    if (count) {
+      count.textContent = entries.length
+        ? `显示 ${visible}/${entries.length} 个参数${modifiedOnly ? ' · 只看已修改' : ''}`
+        : '';
+    }
     const empty = $('plugin-config-empty');
     if (empty) {
       if (entries.length === 0) {
         empty.textContent = '没有可编辑的参数。';
         empty.hidden = false;
       } else if (visible === 0) {
-        empty.textContent = '没有匹配的参数。';
+        empty.textContent = modifiedOnly ? '没有已修改的参数。' : '没有匹配的参数。';
         empty.hidden = false;
       } else {
         empty.hidden = true;
       }
     }
+    applyPluginConfigActiveGroup();
   }
 
   function clearPluginConfigFieldError(entry) {
@@ -1039,13 +1239,24 @@
   function makePluginFieldEntry(field, value) {
     const isReplyProbability = field.key === 'reply_probability';
     const fieldElement = makeElement('div', `plugin-config-field${isReplyProbability ? ' is-highlight' : ''}`);
+    const labelText = isReplyProbability ? '群聊非 @ 消息的回复概率' : field.label;
+    const groupTitle = textValue(field.groupTitle, '').trim() || '高级/其他';
+    const breadcrumb = makeElement('p', 'plugin-field-breadcrumb');
+    breadcrumb.appendChild(makeElement('span', '', groupTitle));
+    const breadcrumbSeparator = makeElement('span', 'plugin-field-breadcrumb-sep', '›');
+    breadcrumbSeparator.setAttribute('aria-hidden', 'true');
+    breadcrumb.appendChild(breadcrumbSeparator);
+    breadcrumb.appendChild(makeElement('span', '', labelText));
+    fieldElement.appendChild(breadcrumb);
     const head = makeElement('div', 'plugin-field-head');
     const titleWrap = makeElement('div', '');
-    const labelText = isReplyProbability ? '群聊非 @ 消息的回复概率' : field.label;
     titleWrap.appendChild(makeElement('span', 'plugin-field-title', labelText));
     titleWrap.appendChild(makeElement('span', 'plugin-field-key', field.key));
     head.appendChild(titleWrap);
     if (field.hasDefault) head.appendChild(makeElement('span', 'plugin-field-default', `默认：${pluginDefaultText(field.default)}`));
+    const modifiedBadge = makeElement('span', 'plugin-field-modified', '已修改');
+    modifiedBadge.hidden = true;
+    head.appendChild(modifiedBadge);
     fieldElement.appendChild(head);
     if (field.description) fieldElement.appendChild(makeElement('p', 'plugin-field-description', field.description));
     const control = makeElement('div', 'plugin-field-control');
@@ -1149,15 +1360,40 @@
       readValue = () => ({ ok: true, value: input.value });
     }
 
-    input.addEventListener('input', () => clearPluginConfigFieldError({ input, errorElement }));
-    if (input.tagName === 'SELECT') input.addEventListener('change', () => clearPluginConfigFieldError({ input, errorElement }));
     fieldElement.appendChild(control);
     if (field.hint) fieldElement.appendChild(makeElement('p', 'plugin-field-hint', field.hint));
     fieldElement.appendChild(errorElement);
-    const entry = { key: field.key, type: field.type, element: fieldElement, input, errorElement, readValue };
+    const entry = {
+      key: field.key,
+      type: field.type,
+      field,
+      element: fieldElement,
+      input,
+      errorElement,
+      readValue,
+      originalValue: value,
+      groupId: textValue(field.groupId, '').trim() || 'advanced',
+      groupTitle,
+      modifiedBadge,
+      modified: false
+    };
     fieldElement.dataset.fieldKey = field.key;
-    fieldElement.dataset.searchText = `${field.key} ${field.label} ${field.description || ''} ${field.hint || ''} ${field.type}`.toLowerCase();
+    fieldElement.dataset.groupId = entry.groupId;
+    fieldElement.dataset.searchText = pluginConfigService.pluginFieldSearchText(field);
     if (isReplyProbability) fieldElement.dataset.replyProbability = 'true';
+    input.addEventListener('input', () => {
+      clearPluginConfigFieldError({ input, errorElement });
+      refreshPluginConfigModifiedEntry(entry);
+      updatePluginConfigFilter();
+    });
+    if (input.tagName === 'SELECT') {
+      input.addEventListener('change', () => {
+        clearPluginConfigFieldError({ input, errorElement });
+        refreshPluginConfigModifiedEntry(entry);
+        updatePluginConfigFilter();
+      });
+    }
+    refreshPluginConfigModifiedEntry(entry);
     return entry;
   }
 
@@ -1165,18 +1401,57 @@
     const fields = $('plugin-config-fields');
     if (!fields) return;
     fields.replaceChildren();
-    state.pluginConfig.entries = [];
     const config = state.pluginConfig;
-    const snapshot = config.snapshot || { schema: [], values: {} };
+    config.entries = [];
+    config.groups = [];
+    config.groupsById = new Map();
+    config.groupSections = new Map();
+    const snapshot = config.snapshot || { schema: [], values: {}, groups: [] };
+    const groups = Array.isArray(snapshot.groups) && snapshot.groups.length
+      ? snapshot.groups
+      : pluginConfigService.groupPluginFields(snapshot.schema, snapshot.uiGroups);
+    const entriesByGroup = new Map();
     for (const field of snapshot.schema) {
-      const entry = makePluginFieldEntry(field, pluginValueLookup(snapshot.values, field));
-      state.pluginConfig.entries.push(entry);
-      fields.appendChild(entry.element);
+      const entry = makePluginFieldEntry(
+        field,
+        pluginValueLookup(snapshot.values, field)
+      );
+      config.entries.push(entry);
+      const groupId = entry.groupId || 'advanced';
+      if (!entriesByGroup.has(groupId)) entriesByGroup.set(groupId, []);
+      entriesByGroup.get(groupId).push(entry);
+    }
+    config.groups = groups;
+    config.groupsById = new Map(groups.map((group) => [group.id, group]));
+    for (const group of groups) {
+      const groupEntries = entriesByGroup.get(group.id) || [];
+      entriesByGroup.delete(group.id);
+      if (!groupEntries.length) continue;
+      const section = makePluginGroupSection(group, groupEntries);
+      config.groupSections.set(group.id, section);
+      fields.appendChild(section);
+    }
+    // Safety net: a field with no matching group must still be rendered.
+    for (const [groupId, orphanEntries] of entriesByGroup) {
+      const group = { id: groupId, title: '高级/其他', advanced: true };
+      config.groups.push({ ...group, count: orphanEntries.length, fields: [] });
+      config.groupsById.set(groupId, group);
+      const section = makePluginGroupSection(group, orphanEntries);
+      config.groupSections.set(groupId, section);
+      fields.appendChild(section);
+    }
+    renderPluginConfigGroupNav(config.groups);
+    const modifiedToggle = $('plugin-config-modified-only');
+    if (modifiedToggle) {
+      modifiedToggle.checked = pluginConfigUiState().modifiedOnly === true;
     }
     const loading = $('plugin-config-loading');
     if (loading) loading.hidden = true;
     syncPluginConfigSaveState();
     updatePluginConfigFilter();
+    const ui = pluginConfigUiState();
+    const body = $('plugin-config-body');
+    if (body) body.scrollTop = ui.scrollTops[ui.activeGroup] || 0;
   }
 
   function resetPluginConfigPanel() {
@@ -1186,6 +1461,14 @@
     state.pluginConfig.saving = false;
     state.pluginConfig.entries = [];
     state.pluginConfig.snapshot = null;
+    state.pluginConfig.groups = [];
+    state.pluginConfig.groupsById = new Map();
+    state.pluginConfig.groupSections = new Map();
+    state.pluginConfig.groupButtons = new Map();
+    const groupNav = $('plugin-config-groups');
+    if (groupNav) groupNav.replaceChildren();
+    const modifiedToggle = $('plugin-config-modified-only');
+    if (modifiedToggle) modifiedToggle.checked = false;
     const overlay = $('plugin-config-overlay');
     if (overlay) overlay.hidden = true;
     syncConsoleModalLock();
@@ -1213,6 +1496,10 @@
   function closePluginConfigPanel(options = {}) {
     if (state.pluginConfig.saving && options.force !== true) return false;
     const wasOpen = state.pluginConfig.open;
+    if (wasOpen) {
+      const ui = pluginConfigUiState();
+      savePluginConfigScroll(ui, ui.activeGroup);
+    }
     resetPluginConfigPanel();
     if (options.restoreFocus !== false && wasOpen && pluginConfigReturnFocus && pluginConfigReturnFocus.isConnected) {
       pluginConfigReturnFocus.focus({ preventScroll: true });
@@ -2005,7 +2292,8 @@
     for (const field of schema) {
       if (Object.prototype.hasOwnProperty.call(snapshot.values || {}, field.key)) values[field.key] = snapshot.values[field.key];
     }
-    return { ...snapshot, schema, values };
+    const groups = pluginConfigService.groupPluginFields(schema, snapshot.uiGroups);
+    return { ...snapshot, schema, groups, values };
   }
 
   function hideLegacyPromptFieldsInOpenEditor(instanceId) {
@@ -3347,6 +3635,25 @@
     if (pluginConfigSave) pluginConfigSave.addEventListener('click', () => void savePluginConfig());
     const pluginConfigSearch = $('plugin-config-search');
     if (pluginConfigSearch) pluginConfigSearch.addEventListener('input', updatePluginConfigFilter);
+    const pluginConfigModifiedOnly = $('plugin-config-modified-only');
+    if (pluginConfigModifiedOnly) pluginConfigModifiedOnly.addEventListener('change', updatePluginConfigFilter);
+    const pluginConfigGroups = $('plugin-config-groups');
+    if (pluginConfigGroups) {
+      pluginConfigGroups.addEventListener('keydown', (event) => {
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const buttons = Array.from(pluginConfigGroups.querySelectorAll('.plugin-config-group-btn'));
+        if (!buttons.length) return;
+        const index = buttons.indexOf(document.activeElement);
+        if (index < 0) return;
+        event.preventDefault();
+        let next = index;
+        if (event.key === 'ArrowDown') next = (index + 1) % buttons.length;
+        else if (event.key === 'ArrowUp') next = (index - 1 + buttons.length) % buttons.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = buttons.length - 1;
+        buttons[next].focus();
+      });
+    }
 
     const promptManagerOverlay = $('prompt-manager-overlay');
     if (promptManagerOverlay) {

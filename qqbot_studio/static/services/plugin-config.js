@@ -74,6 +74,8 @@
     try { return JSON.parse(trimmed); } catch (error) { return raw; }
   }
 
+  const PLUGIN_SCHEMA_METADATA_KEYS = ['_ui_groups', 'ui_groups', 'uiGroups', '$schema'];
+
   function extractPluginSchemaDefinitions(rawSchema) {
     const parsed = parsePluginSchemaValue(rawSchema);
     const schema = asRecord(parsed);
@@ -95,7 +97,9 @@
     } else if (schema.schema) {
       return extractPluginSchemaDefinitions(schema.schema);
     } else if (parsed && typeof parsed === 'object') {
-      candidates = Object.entries(schema).map(([key, definition]) => ({ key, definition: asRecord(definition) }));
+      candidates = Object.entries(schema)
+        .filter(([key]) => !PLUGIN_SCHEMA_METADATA_KEYS.includes(key))
+        .map(([key, definition]) => ({ key, definition: asRecord(definition) }));
     }
 
     return candidates.map(({ key, definition }) => {
@@ -122,9 +126,288 @@
         step,
         options,
         slider,
+        uiGroup: sanitisePluginText(def.ui_group || def.uiGroup || def.group || def.category),
         sensitive: false
       };
     }).filter(Boolean);
+  }
+
+  const PLUGIN_UI_GROUPS = [
+    {
+      id: 'common',
+      title: '常用回复',
+      advanced: false,
+      order: 10,
+      keys: [
+        'reply_probability', 'system_prompt', 'llm_timeout_seconds', 'llm_error_reply',
+        'empty_reply_fallback', 'max_input_chars', 'max_reply_chars', 'min_message_chars',
+        'group_cooldown_seconds', 'user_cooldown_seconds', 'ignore_pure_image',
+        'ignore_pure_face', 'ignore_command_prefixes', 'inherit_astrbot_wake_prefix',
+        'block_default_llm_for_group_non_at'
+      ],
+      prefixes: ['reply_', 'group_cooldown_', 'user_cooldown_', 'llm_', 'ignore_']
+    },
+    {
+      id: 'image',
+      title: '识图/搜索',
+      advanced: false,
+      order: 20,
+      keys: [
+        'max_images_per_message', 'max_caption_chars', 'image_caption_prompt',
+        'image_unavailable_reply', 'auto_use_astrbot_caption_provider',
+        'native_vision_first'
+      ],
+      prefixes: ['image_search_', 'image_', 'vision_', 'native_vision_']
+    },
+    {
+      id: 'sticker',
+      title: '表情包',
+      advanced: false,
+      order: 30,
+      keys: ['pending_sticker_ttl_seconds'],
+      prefixes: ['sticker_', 'collected_sticker_', 'auto_collect_', 'user_sticker_']
+    },
+    {
+      id: 'song',
+      title: '本地点歌',
+      advanced: false,
+      order: 40,
+      keys: [],
+      prefixes: ['song_']
+    },
+    {
+      id: 'conversation',
+      title: '会话/人格',
+      advanced: false,
+      order: 50,
+      keys: ['prompt_profiles', 'group_personas'],
+      prefixes: ['conversation_', 'persona_', 'group_persona', 'prompt_profile_']
+    },
+    {
+      id: 'memory',
+      title: '记忆',
+      advanced: false,
+      order: 60,
+      keys: ['memory_mode'],
+      prefixes: ['memory_', 'ambient_', 'group_identity_']
+    },
+    {
+      id: 'food',
+      title: 'Food',
+      advanced: false,
+      order: 70,
+      keys: [],
+      prefixes: ['food_']
+    },
+    {
+      id: 'web',
+      title: '网页访问',
+      advanced: false,
+      order: 80,
+      keys: [],
+      prefixes: ['web_fetch_', 'web_auto_fetch_']
+    },
+    {
+      id: 'safe_tools',
+      title: '安全工具',
+      advanced: false,
+      order: 90,
+      keys: ['ai_unified_tool_protocol_enabled'],
+      prefixes: ['safe_tools_']
+    },
+    {
+      id: 'advanced',
+      title: '高级/其他',
+      advanced: true,
+      order: 900,
+      keys: [],
+      prefixes: ['advanced_', 'debug_', 'experimental_', 'option_']
+    }
+  ];
+
+  function pluginGroupSlug(value) {
+    return textValue(value, '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  }
+
+  function pluginGroupDefinitions() {
+    return PLUGIN_UI_GROUPS.map((group, index) => ({
+      id: group.id,
+      title: group.title,
+      advanced: group.advanced === true,
+      order: Number.isFinite(group.order) ? group.order : 100 + index,
+      keys: (group.keys || []).map((key) => textValue(key, '').trim().toLowerCase()),
+      prefixes: (group.prefixes || []).map((prefix) => textValue(prefix, '').trim().toLowerCase()),
+      fields: []
+    }));
+  }
+
+  function normalisePluginUiGroups(rawUiGroups) {
+    const parsed = parsePluginSchemaValue(rawUiGroups);
+    const root = asRecord(parsed);
+    const byKey = new Map();
+    const groups = [];
+    const groupsRaw = Array.isArray(root.groups)
+      ? root.groups
+      : (Array.isArray(parsed) ? parsed : []);
+    groupsRaw.forEach((item, index) => {
+      const record = asRecord(item);
+      const title = sanitisePluginText(record.title || record.label || record.name || record.id).trim();
+      if (!title) return;
+      const keysRaw = Array.isArray(record.keys)
+        ? record.keys
+        : (Array.isArray(record.fields) ? record.fields : []);
+      const group = {
+        id: pluginGroupSlug(record.id || record.key || title) || `custom_${index + 1}`,
+        title,
+        advanced: boolOrUndefined(record.advanced) === true,
+        order: 500 + index,
+        keys: keysRaw.map((key) => textValue(key, '').trim().toLowerCase()).filter(Boolean)
+      };
+      groups.push(group);
+      for (const key of group.keys) byKey.set(key, group);
+    });
+    const fieldMap = asRecord(
+      root.fields !== undefined
+        ? root.fields
+        : (root.keys !== undefined ? root.keys : (root.properties !== undefined ? root.properties : {}))
+    );
+    const explicitFieldMap = Object.keys(fieldMap).length > 0;
+    const assignKey = (rawKey, rawValue) => {
+      const key = textValue(rawKey, '').trim().toLowerCase();
+      if (!key || key === 'groups') return;
+      const record = asRecord(rawValue);
+      const title = sanitisePluginText(
+        record.title || record.label || record.group || (typeof rawValue === 'string' ? rawValue : '')
+      ).trim();
+      if (!title) return;
+      byKey.set(key, {
+        id: pluginGroupSlug(record.id || record.group || title),
+        title,
+        advanced: boolOrUndefined(record.advanced) === true
+      });
+    };
+    if (explicitFieldMap) {
+      for (const [key, value] of Object.entries(fieldMap)) assignKey(key, value);
+    } else {
+      for (const [key, value] of Object.entries(root)) assignKey(key, value);
+    }
+    return { groups, byKey };
+  }
+
+  function groupPluginFields(schema, rawUiGroups) {
+    const fields = Array.isArray(schema) ? schema : [];
+    const overrides = normalisePluginUiGroups(rawUiGroups);
+    const groups = pluginGroupDefinitions();
+    const byId = new Map(groups.map((group) => [group.id, group]));
+    const byTitle = new Map(groups.map((group) => [group.title.toLowerCase(), group]));
+    const remember = (group) => {
+      const created = { ...group, fields: [] };
+      groups.push(created);
+      byId.set(created.id, created);
+      byTitle.set(created.title.toLowerCase(), created);
+      return created;
+    };
+    for (const [index, custom] of overrides.groups.entries()) {
+      const existing = byId.get(custom.id) || byTitle.get(custom.title.toLowerCase());
+      if (existing) continue;
+      remember({ ...custom, order: 500 + index, prefixes: [] });
+    }
+    const getGroup = (reference) => {
+      const id = textValue(asRecord(reference).id, '').trim();
+      const title = sanitisePluginText(asRecord(reference).title).trim();
+      const existing = (id && byId.get(id)) || (title && byTitle.get(title.toLowerCase()));
+      if (existing) return existing;
+      return remember({
+        id: id || pluginGroupSlug(title) || `custom_${groups.length + 1}`,
+        title: title || id || '自定义分组',
+        advanced: boolOrUndefined(asRecord(reference).advanced) === true,
+        order: 500 + groups.length,
+        keys: [],
+        prefixes: []
+      });
+    };
+    for (const group of groups) group.fields = [];
+    for (const field of fields) {
+      const record = asRecord(field);
+      const key = textValue(record.key, '').trim().toLowerCase();
+      let group = null;
+      const explicit = textValue(record.uiGroup, '').trim();
+      if (explicit) group = getGroup({ title: explicit });
+      if (!group && overrides.byKey.has(key)) group = getGroup(overrides.byKey.get(key));
+      if (!group) {
+        group = groups.find((candidate) => (
+          candidate.keys.includes(key)
+          || candidate.prefixes.some((prefix) => prefix && key.startsWith(prefix))
+        )) || null;
+      }
+      if (!group) group = byId.get('advanced') || groups[groups.length - 1];
+      group.fields.push({
+        ...record,
+        groupId: group.id,
+        groupTitle: group.title,
+        groupAdvanced: group.advanced === true,
+        groupOrder: group.order
+      });
+    }
+    return groups
+      .filter((group) => group.fields.length > 0)
+      .sort((left, right) => left.order - right.order)
+      .map((group) => ({
+        id: group.id,
+        title: group.title,
+        advanced: group.advanced === true,
+        order: group.order,
+        count: group.fields.length,
+        fields: group.fields
+      }));
+  }
+
+  function pluginFieldSearchText(field) {
+    const record = asRecord(field);
+    return [
+      record.key,
+      record.label,
+      record.description,
+      record.hint,
+      record.groupTitle,
+      record.type
+    ].map((value) => textValue(value, '')).join(' ').toLowerCase();
+  }
+
+  function pluginFilterSchemaFields(schema, query) {
+    const fields = Array.isArray(schema) ? schema : [];
+    const needle = textValue(query, '').trim().toLowerCase();
+    if (!needle) return fields.slice();
+    return fields.filter((field) => pluginFieldSearchText(field).includes(needle));
+  }
+
+  function pluginComparableValue(value, type) {
+    const kind = textValue(type, '').trim().toLowerCase();
+    if (kind === 'list') {
+      if (Array.isArray(value)) return value.map((item) => textValue(item, ''));
+      return textValue(value, '') === '' ? [] : [textValue(value, '')];
+    }
+    if (kind === 'bool') {
+      const parsed = boolOrUndefined(value);
+      return parsed === undefined ? Boolean(value) : parsed;
+    }
+    if (kind === 'int' || kind === 'float') {
+      if (value === null || value === undefined || value === '') return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'object') {
+      try { return JSON.stringify(value); } catch (error) { return ''; }
+    }
+    return textValue(value, '');
+  }
+
+  function pluginFieldValueChanged(field, currentValue, originalValue) {
+    const type = textValue(asRecord(field).type, 'string');
+    return JSON.stringify(pluginComparableValue(currentValue, type))
+      !== JSON.stringify(pluginComparableValue(originalValue, type));
   }
 
   function pluginSchemaSnapshot(data) {
@@ -132,7 +415,19 @@
     const source = asRecord(root.config);
     const schemaRaw = root.schema !== undefined ? root.schema : (source.schema !== undefined ? source.schema : root.fields);
     const valuesRaw = root.values !== undefined ? root.values : (source.values !== undefined ? source.values : (source.config !== undefined ? source.config : {}));
-    const schema = extractPluginSchemaDefinitions(schemaRaw);
+    const uiGroupsRaw = root.ui_groups !== undefined
+      ? root.ui_groups
+      : (root.uiGroups !== undefined
+        ? root.uiGroups
+        : (source.ui_groups !== undefined
+          ? source.ui_groups
+          : (source.uiGroups !== undefined
+            ? source.uiGroups
+            : (schemaRaw && typeof schemaRaw === 'object' && !Array.isArray(schemaRaw)
+              ? (schemaRaw.ui_groups !== undefined ? schemaRaw.ui_groups : schemaRaw._ui_groups)
+              : undefined))));
+    const groups = groupPluginFields(extractPluginSchemaDefinitions(schemaRaw), uiGroupsRaw);
+    const schema = groups.reduce((all, group) => all.concat(group.fields), []);
     const allValues = asRecord(valuesRaw);
     const values = {};
     for (const field of schema) {
@@ -140,6 +435,8 @@
     }
     return {
       schema,
+      groups,
+      uiGroups: uiGroupsRaw,
       values,
       source: sanitisePluginText(root.source || source.source),
       apiAvailable: boolOrUndefined(root.api_available) !== false,
@@ -215,6 +512,12 @@
       load,
       save,
       pluginSchemaSnapshot,
+      groupPluginFields,
+      normalisePluginUiGroups,
+      pluginFilterSchemaFields,
+      pluginFieldSearchText,
+      pluginFieldValueChanged,
+      PLUGIN_UI_GROUPS,
       extractPluginSchemaDefinitions,
       isSensitivePluginField,
       pluginConfigUnsupportedMessage,
