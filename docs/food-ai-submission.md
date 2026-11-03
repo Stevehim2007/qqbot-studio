@@ -19,6 +19,12 @@ Bot ：已提交到 food.dlsz.top：老王火锅（南关区），口味 4.5 / �
 
 用户：帮我把老王火锅添加到 food，口味 4.5
 Bot ：还差这些信息：位置、性价比分（0.1-5）、评价内容。补全后我再提交到 food.dlsz.top。
+
+# 群已配置默认城市（food_group_locations 或群名含“长春市”）：位置可省略
+用户：帮我把长春火锅添加到 food，口味 4.5，性价比 3，汤底香
+Bot ：已提交到 food.dlsz.top：长春火锅（吉林省/长春市），口味 4.5 / 性价比 3。
+用户：南关区店那家也加一下，口碑 4 分、性价比 3 分、汤底厚
+Bot ：已提交到 food.dlsz.top：…（吉林省/长春市/南关区）…   # 区县自动合并到群城市
 ```
 
 **只收集、不提交**的字段：日期由站点按当天生成（插件不发 `review_date`，也不向用户索要）；
@@ -138,6 +144,8 @@ Content-Type: application/json; charset=utf-8
 | `food_submit_draft_ttl_seconds` | 600 | 缺字段草稿有效期 |
 | `food_submit_name/location/comment/tag_max_chars` | 100/60/500/20 | 字段长度 |
 | `food_submit_location_max_parts` / `_part_max_chars` | 6 / 30 | 地址层级数/单层长度 |
+| `food_group_locations` | `"{}"` | 按群默认地点 JSON：`{"20002": "吉林省/长春市"}`；群内 `/food` 与提交自动带城市，用户写的区县合并到城市下；无效 JSON 忽略 |
+| `food_group_location_infer_from_name` | true | 允许从群名安全推断城市（仅显式 `省/市/州` 后缀，如「长春市火锅交流群」；不读消息文本） |
 | `food_submit_tags_max_count` | 5 | 标签数 |
 | `food_submit_username_max_chars` / `_fallback` | 32 / 群友 | 用户名 |
 | `food_nl_enabled` | true | 群聊美食话题参与 |
@@ -148,6 +156,28 @@ Content-Type: application/json; charset=utf-8
 
 `/option` 会显示「AI 美食提交：已启用（仅 POST …；缺字段会追问；密钥默认发送者 QQ，
 不显示不记录）」与「美食话题参与：开启；概率 …；冷却 …；最短 … 字；美食图 …」。
+
+## 5.5 群城市上下文与已有位置复用（t28）
+
+**群默认地点**（`food_group_locations`，JSON 文本）：群号 → 地点路径。优先级高于群名推断；
+私聊不使用。解析失败/非法群号/URL 值会被忽略，不会让别的群的美食功能报错。
+
+**群名推断**（`food_group_location_infer_from_name`）：只从 AstrBot 群元数据（`message_obj.group`
+的 `group_name`）读取，不读消息文本，且只接受显式 `省/市/州` 后缀的片段：
+「长春市火锅交流群」→ 长春市；「吉林省长春市吃货群」→ 吉林省/长春市；
+「长春火锅群」无行政区后缀，不猜，请在 `food_group_locations` 里配置。
+
+**合并规则**（提交与 `/food` 搜索共用）：
+- 用户没写位置 → 直接用群上下文，不再追问区县（城市级也能提交）。
+- 用户写区县（如「南关区」）→ 合并为「吉林省/长春市/南关区」。
+- 用户已写完整路径/其它城市（`中国…`、`北京市…`）→ 原样保留，不强行套群城市。
+- 只有合并后仍歧义（同名地点多个）或确实缺位置时才追问。
+
+**已有位置复用**：
+- 站点 `/api/locations/search` 已返回完整路径时直接取该 `location_id` 提交，不创建、不报“已存在/重复”。
+- 部分存在时取最深已存在父级 + 缺失尾段（`new_location_name` + `new_location_parent_id`）。
+- 站点返回 `位置已存在` / `LOCATION_EXISTS`（查询与写入之间被人抢先创建）时，只重新解析一次精确位置并带
+  `location_id` 重试一次；仍失败则回中文“已存在”提示，不再重复写入，也不会产生半截写入。
 
 ## 6. 两种记忆模式
 
@@ -173,7 +203,9 @@ cd "/home/stevehim/QQ Ai bot"
 python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmit -q   # 35 tests
 python3 -m unittest tests.test_enhancer_plugin.TestFoodSubmitDraftIsolation -q  # 6 tests
 python3 -m unittest tests.test_enhancer_plugin.TestFoodSearch -q               # 17 tests
-python3 -m unittest discover -s tests -q                           # 527 tests OK
+python3 -m unittest tests.test_enhancer_plugin.TestFoodLocationPath -q         # 14 tests
+python3 -m unittest tests.test_enhancer_plugin.TestFoodGroupContext -q         # 9 tests
+python3 -m unittest discover -s tests -q                           # 671 tests OK
 ```
 
 本机只读探针（不写数据，2026-11 实测）：
@@ -193,6 +225,10 @@ GET https://food.dlsz.top/api/upload -> 405   # POST 端点存在且拒绝 GET
 文字且不 POST（含 memory 模式）、双用户交错草稿隔离/各自确认只提交自己的数据/不同群隔离/
 换店重置旧草稿/TTL 过期清理/空发送者 ID fail safe（不建草稿不提交）、
 非美食图沉默、美食概率未命中不回退 ambient、纯函数（分数/标签/意图/错误码）。
+`TestFoodLocationPath`/`TestFoodGroupContext` 补充：完整路径取 `location_id`、部分存在取最深父级、
+`位置已存在` 文本与 v1.1 `LOCATION_EXISTS` code 均只重试一次、无重复写入；
+已配置长春群 + 「长春火锅」补全城市不再追问、区县合并成嵌套路径复用已有 `location_id`、
+群名推断（可关闭）、未知群仍追问、`/food 长春火锅` 拆成「火锅 + 长春市」。
 
 ## 8. 部署
 

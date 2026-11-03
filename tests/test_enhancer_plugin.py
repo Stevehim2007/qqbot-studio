@@ -249,6 +249,7 @@ class FakeEvent:
         message_str="",
         private=False,
         group_id="group-1",
+        group_name=None,
         session_id="session-1",
         self_id="10001",
         sender_id="20002",
@@ -261,6 +262,12 @@ class FakeEvent:
             group_id="" if private else group_id,
             sender=SimpleNamespace(user_id=sender_id, nickname=sender_name),
         )
+        if group_name is not None:
+            # AstrBot adapters expose group metadata on message_obj.group.
+            self.message_obj.group = SimpleNamespace(
+                group_id="" if private else group_id,
+                group_name=group_name,
+            )
         self.message_str = message_str
         self.private = private
         self.session_id = session_id
@@ -10154,6 +10161,79 @@ class TestFoodLocationPath(unittest.IsolatedAsyncioTestCase):
             "长春市/南关区",
         )
 
+    def test_group_location_config_parse_infer_and_merge_helpers(self):
+        food = importlib.import_module("food")
+        self.assertEqual(
+            food.parse_food_group_locations(
+                '{"20002": "吉林省/长春市", "bad": "http://evil/x"}'
+            ),
+            {"20002": ["吉林省", "长春市"]},
+        )
+        self.assertEqual(
+            food.parse_food_group_locations({"20002": "长春市"}),
+            {"20002": ["长春市"]},
+        )
+        self.assertEqual(food.parse_food_group_locations("not json"), {})
+        self.assertEqual(food.parse_food_group_locations([]), {})
+        self.assertEqual(
+            food.infer_food_group_location_parts("长春市火锅交流群"),
+            ["长春市"],
+        )
+        self.assertEqual(
+            food.infer_food_group_location_parts("吉林省长春市吃货群"),
+            ["吉林省", "长春市"],
+        )
+        self.assertEqual(
+            food.infer_food_group_location_parts("长春火锅群"), []
+        )
+        self.assertEqual(
+            food.infer_food_group_location_parts("美食交流群"), []
+        )
+        self.assertEqual(
+            food.infer_food_group_location_parts("http://evil/长春市"), []
+        )
+        self.assertEqual(
+            food.merge_food_location_with_context(
+                ["南关区"], ["吉林省", "长春市"]
+            ),
+            ["吉林省", "长春市", "南关区"],
+        )
+        self.assertEqual(
+            food.merge_food_location_with_context(
+                ["长春市", "南关区"], ["吉林省", "长春市"]
+            ),
+            ["长春市", "南关区"],
+        )
+        self.assertEqual(
+            food.merge_food_location_with_context(
+                ["中国", "吉林省", "长春市", "南关区"],
+                ["吉林省", "长春市"],
+            ),
+            ["中国", "吉林省", "长春市", "南关区"],
+        )
+        self.assertEqual(
+            food.merge_food_location_with_context(
+                ["北京市", "朝阳区"], ["吉林省", "长春市"]
+            ),
+            ["北京市", "朝阳区"],
+        )
+        self.assertEqual(
+            food.merge_food_location_with_context(
+                [], ["吉林省", "长春市"]
+            ),
+            ["吉林省", "长春市"],
+        )
+        self.assertEqual(
+            food.strip_food_group_city_prefix(
+                "长春火锅", ["吉林省", "长春市"]
+            ),
+            ("火锅", True),
+        )
+        self.assertEqual(
+            food.strip_food_group_city_prefix("火锅", ["长春市"]),
+            ("火锅", False),
+        )
+
     # -- resolution flows ----------------------------------------------
     async def test_china_plus_new_city_creates_under_china(self):
         self.location_map["中国"] = [
@@ -10305,6 +10385,36 @@ class TestFoodLocationPath(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.posts[1]["password"], "20002")
         self.assertIn("已提交到 food.dlsz.top", results[0].text)
 
+    async def test_location_exists_code_retries_with_resolved_id(self):
+        self.location_map["中国"] = [
+            {"id": 1, "name": "中国", "path": "中国"}
+        ]
+
+        def first_fails(payload):
+            self.posts.append(payload)
+            if len(self.posts) == 1:
+                self.location_map["中国/牛逼市"] = [
+                    {"id": 5, "name": "牛逼市", "path": "中国/牛逼市"}
+                ]
+                self.post_results = [
+                    (400, {"code": "LOCATION_EXISTS"}),
+                    (200, {"success": True, "restaurant_id": 9}),
+                ]
+            return self.post_results[
+                min(len(self.posts) - 1, len(self.post_results) - 1)
+            ]
+
+        self.plugin._post_food_submit_sync = first_fails
+        results = await self._submit(
+            "帮我把牛逼火锅添加到 food：中国牛逼市，口味4，性价比3，汤底香"
+        )
+        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(self.posts[0]["new_location_name"], "牛逼市")
+        self.assertEqual(self.posts[0]["new_location_parent_id"], 1)
+        self.assertEqual(self.posts[1]["location_id"], 5)
+        self.assertNotIn("new_location_name", self.posts[1])
+        self.assertIn("已提交到 food.dlsz.top", results[0].text)
+
     async def test_location_exists_reports_after_single_retry(self):
         self.location_map["中国"] = [
             {"id": 1, "name": "中国", "path": "中国"}
@@ -10329,6 +10439,254 @@ class TestFoodLocationPath(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "完整地址", memory._food_submit_tool_catalog_instruction()
         )
+
+
+class TestFoodGroupContext(unittest.IsolatedAsyncioTestCase):
+    """Per-group city context fills/merges the food location (no extra ask)."""
+
+    GROUP_ID = "20002"
+    GROUP_MAP = '{"20002": "吉林省/长春市"}'
+    GROUP_NAME = "长春市火锅交流群"
+
+    def setUp(self):
+        self.marker = (
+            '[[tool:submit_food_review restaurant="长春火锅" '
+            'taste="4" value="3" comment="汤底香"]]'
+        )
+        self.queries = []
+        self.posts = []
+        self.restaurant_params = []
+        self.location_map = {
+            "吉林省/长春市": [
+                {"id": 55, "name": "长春市", "path": "中国/吉林省/长春市"}
+            ],
+            "长春市": [
+                {"id": 55, "name": "长春市", "path": "中国/吉林省/长春市"}
+            ],
+        }
+        self.restaurants = [
+            {
+                "id": 1,
+                "name": "长春老火锅",
+                "location_name": "长春市",
+                "location_id": 55,
+                "tags": ["火锅"],
+                "total_avg": 4.5,
+                "taste_avg": 4.2,
+                "value_avg": 4.4,
+                "review_count": 7,
+                "latest_review_date": "2026-05-01",
+            }
+        ]
+        self.post_results = [(200, {"success": True, "restaurant_id": 9})]
+        self.logger_patch = mock.patch.object(
+            MODULE, "logger", mock.MagicMock()
+        )
+        self.logger_patch.start()
+        self.addCleanup(self.logger_patch.stop)
+        self.plugin = self._make_plugin()
+
+    async def _fake_locations(self, query):
+        self.queries.append(query)
+        return [dict(item) for item in self.location_map.get(query, [])]
+
+    def _fake_post(self, payload):
+        self.posts.append(dict(payload))
+        index = min(len(self.posts) - 1, len(self.post_results) - 1)
+        return self.post_results[index]
+
+    async def _fake_fetch(self, url):
+        parsed = urllib.parse.urlsplit(url)
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        if parsed.path == "/api/locations/search":
+            return await self._fake_locations(params.get("q", ""))
+        if parsed.path == "/api/restaurants":
+            self.restaurant_params.append(params)
+            return [dict(item) for item in self.restaurants]
+        raise AssertionError(f"unexpected food URL: {url}")
+
+    def _make_plugin(self, marker=None, **overrides):
+        context = FakeContext(responder=lambda kwargs: marker or self.marker)
+        config = {
+            "safe_tools_enabled": True,
+            "safe_tools_marker_enabled": True,
+            "safe_tools_allow_submit_food_review": True,
+            "safe_tools_allow_search_food_restaurants": True,
+            "food_submit_enabled": True,
+            "food_search_enabled": True,
+            "food_submit_cooldown_seconds": 0,
+            "food_cooldown_seconds": 0,
+            "food_nl_enabled": True,
+            "food_nl_probability": 1.0,
+            "food_nl_cooldown_seconds": 0,
+            "group_cooldown_seconds": 0,
+            "user_cooldown_seconds": 0,
+            "reply_probability": 1.0,
+            "food_group_locations": self.GROUP_MAP,
+        }
+        config.update(overrides)
+        plugin = make_plugin(context, **config)
+        plugin._search_food_locations = self._fake_locations
+        plugin._fetch_food_json = self._fake_fetch
+        plugin._post_food_submit_sync = self._fake_post
+        return plugin
+
+    @staticmethod
+    def _group_event(
+        text,
+        *,
+        group_id="20002",
+        group_name=None,
+        session_id="group-session",
+    ):
+        return FakeEvent(
+            [Plain(text)],
+            message_str=text,
+            private=False,
+            group_id=group_id,
+            group_name=group_name,
+            session_id=session_id,
+        )
+
+    def _marker_for(self, location):
+        return (
+            '[[tool:submit_food_review restaurant="长春火锅" '
+            f'location="{location}" taste="4" value="3" '
+            'comment="汤底香"]]'
+        )
+
+    async def test_known_group_fills_missing_location_without_asking(self):
+        results = await run_handler(
+            self.plugin,
+            self._group_event(
+                "帮我把长春火锅添加到 food，口味4，性价比3，汤底香"
+            ),
+        )
+        self.assertEqual(len(self.posts), 1)
+        payload = self.posts[0]
+        self.assertEqual(payload["location_id"], 55)
+        self.assertNotIn("new_location_name", payload)
+        self.assertEqual(payload["password"], "20002")
+        self.assertEqual(self.queries, ["吉林省/长春市"])
+        self.assertIn("已提交到 food.dlsz.top", results[0].text)
+        self.assertNotIn("还差这些信息", results[0].text)
+
+    async def test_known_group_merges_district_with_nested_site_path(self):
+        self.location_map["吉林省/长春市/南关区"] = [
+            {
+                "id": 7632,
+                "name": "南关区",
+                "path": "中国/吉林省/长春市/南关区",
+            }
+        ]
+        self.plugin = self._make_plugin(
+            marker=self._marker_for("南关区")
+        )
+        results = await run_handler(
+            self.plugin,
+            self._group_event(
+                "帮我把长春火锅添加到 food：南关区，口味4，性价比3，汤底香"
+            ),
+        )
+        self.assertEqual(len(self.posts), 1)
+        payload = self.posts[0]
+        self.assertEqual(payload["location_id"], 7632)
+        self.assertNotIn("new_location_name", payload)
+        self.assertEqual(self.queries[0], "吉林省/长春市/南关区")
+        self.assertIn("已提交到 food.dlsz.top", results[0].text)
+        self.assertNotIn("已存在", results[0].text)
+
+    async def test_existing_group_city_path_reused_not_recreated(self):
+        self.plugin = self._make_plugin(
+            marker=self._marker_for("吉林省/长春市")
+        )
+        results = await run_handler(
+            self.plugin,
+            self._group_event(
+                "帮我把长春火锅添加到 food：吉林省/长春市，"
+                "口味4，性价比3，汤底香"
+            ),
+        )
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.posts[0]["location_id"], 55)
+        self.assertNotIn("new_location_name", self.posts[0])
+        self.assertNotIn("已存在", results[0].text)
+
+    async def test_unknown_group_still_asks_for_location(self):
+        self.plugin = self._make_plugin(food_group_locations="{}")
+        results = await run_handler(
+            self.plugin,
+            self._group_event(
+                "帮我把长春火锅添加到 food，口味4，性价比3，汤底香",
+                group_id="999",
+            ),
+        )
+        self.assertEqual(self.posts, [])
+        self.assertIn("还差这些信息", results[0].text)
+        self.assertIn("位置", results[0].text)
+
+    async def test_group_name_inference_fills_city_without_config(self):
+        self.plugin = self._make_plugin(food_group_locations="{}")
+        results = await run_handler(
+            self.plugin,
+            self._group_event(
+                "帮我把长春火锅添加到 food，口味4，性价比3，汤底香",
+                group_name=self.GROUP_NAME,
+            ),
+        )
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.posts[0]["location_id"], 55)
+        self.assertEqual(self.queries, ["长春市"])
+        self.assertNotIn("还差这些信息", results[0].text)
+
+    async def test_group_name_inference_disabled_still_asks(self):
+        self.plugin = self._make_plugin(
+            food_group_locations="{}",
+            food_group_location_infer_from_name=False,
+        )
+        results = await run_handler(
+            self.plugin,
+            self._group_event(
+                "帮我把长春火锅添加到 food，口味4，性价比3，汤底香",
+                group_name=self.GROUP_NAME,
+            ),
+        )
+        self.assertEqual(self.posts, [])
+        self.assertIn("还差这些信息", results[0].text)
+
+    async def test_food_command_uses_group_city_for_changchun_hotpot(self):
+        results = await run_food_command(
+            self.plugin,
+            self._group_event("/food 长春火锅"),
+        )
+        self.assertEqual(len(self.restaurant_params), 1)
+        params = self.restaurant_params[0]
+        self.assertEqual(params.get("q"), "火锅")
+        self.assertEqual(params.get("location_id"), "55")
+        self.assertIn("长春老火锅", results[0].text)
+        self.assertIn("（地点：长春市）", results[0].text)
+
+    async def test_food_command_applies_group_default_location(self):
+        await run_food_command(
+            self.plugin,
+            self._group_event("/food 火锅"),
+        )
+        self.assertEqual(len(self.restaurant_params), 1)
+        params = self.restaurant_params[0]
+        self.assertEqual(params.get("q"), "火锅")
+        self.assertEqual(params.get("location_id"), "55")
+
+    async def test_food_command_unknown_group_keeps_city_keyword(self):
+        self.plugin = self._make_plugin(food_group_locations="{}")
+        await run_food_command(
+            self.plugin,
+            self._group_event("/food 长春火锅", group_id="999"),
+        )
+        self.assertEqual(self.queries, [])
+        self.assertEqual(len(self.restaurant_params), 1)
+        params = self.restaurant_params[0]
+        self.assertEqual(params.get("q"), "长春火锅")
+        self.assertNotIn("location_id", params)
 
 
 class TestWebAutoFetch(unittest.IsolatedAsyncioTestCase):

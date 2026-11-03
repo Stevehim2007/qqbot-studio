@@ -7,6 +7,13 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.2.1（正式版）— 美食智能与站点 v1.3
+
+- qqbot_enhancer 2.8.0：按群默认地点 `food_group_locations`（JSON）+ 群名安全推断城市（只认显式省/市/州后缀）；已知长春群将「长春火锅」补为长春市，不再追问区县；未知群仍追问。
+- 已有完整位置路径直接复用 `location_id`；`位置已存在`/`LOCATION_EXISTS` 只重解析并重试一次，不重复创建。
+- food.dlsz.top v1.3 站点补丁：Markdown 评价（escape-first/XSS 安全）、全地址搜索、按位置筛饭店、上传页已存在位置直接选择（不发 new_location_name）。
+- 全地址搜索用递归 CTE 现算路径，不新增 schema；支持长春市朝阳区/中国吉林省长春市朝阳区/分段乱序。
+
 ## v4.2.0（正式版）— 更新通道（稳定/测试）与同大版本任意回滚
 
 - 控制台新增「更新与回滚」面板：当前版本/提交/大版本/工作区状态，稳定版与测试版分页。

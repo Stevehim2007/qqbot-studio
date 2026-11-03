@@ -1026,6 +1026,7 @@ class QQBotEnhancerPlugin(Star):
     async def _resolve_food_args(
         self,
         raw_args: str,
+        event: AstrMessageEvent | None = None,
     ) -> dict[str, Any]:
         tokens = food_engine.split_food_args(raw_args)
         keyword_max = max(
@@ -1044,7 +1045,25 @@ class QQBotEnhancerPlugin(Star):
             return {"error": "invalid"}
         tokens = [str(token) for token in sanitized]
         if len(tokens) == 1:
-            return {"keyword": tokens[0], "location": None}
+            keyword = tokens[0]
+            context = self._food_group_location_parts(event)
+            if context:
+                location = await self._resolve_food_context_location(
+                    context
+                )
+                stripped, matched = (
+                    food_engine.strip_food_group_city_prefix(
+                        keyword, context
+                    )
+                )
+                if location is not None:
+                    return {
+                        "keyword": stripped if matched else keyword,
+                        "location": location,
+                    }
+                if matched:
+                    return {"keyword": stripped, "location": None}
+            return {"keyword": keyword, "location": None}
 
         candidate_indexes = []
         for index in (0, len(tokens) - 1):
@@ -1087,7 +1106,7 @@ class QQBotEnhancerPlugin(Star):
         raw_args: str,
     ):
         try:
-            resolved = await self._resolve_food_args(raw_args)
+            resolved = await self._resolve_food_args(raw_args, event)
             if resolved.get("error") == "invalid":
                 return event.plain_result(
                     self._cfg_str("food_invalid_query_reply")
@@ -1144,6 +1163,154 @@ class QQBotEnhancerPlugin(Star):
             return event.plain_result(
                 self._cfg_str("food_error_reply")
             )
+
+    # ------------------------------------------------------------------
+    # Per-group food location context (explicit map + safe group-name hint)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _food_context_group_id(event: AstrMessageEvent) -> str:
+        try:
+            raw = str(event.get_group_id() or "").strip()
+        except Exception:
+            return ""
+        return food_engine.sanitize_food_submit_text(raw, max_chars=40)
+
+    @staticmethod
+    def _food_group_name(event: AstrMessageEvent) -> str:
+        """Read an AstrBot group name when the adapter exposes one.
+
+        Only group metadata is inspected; message text is never used to guess
+        a city.
+        """
+
+        try:
+            message_obj = getattr(event, "message_obj", None)
+        except Exception:
+            return ""
+        holders = [message_obj]
+        group = (
+            getattr(message_obj, "group", None)
+            if message_obj is not None
+            else None
+        )
+        if group is not None:
+            holders.append(group)
+        for holder in holders:
+            for attr in ("group_name", "name"):
+                try:
+                    value = getattr(holder, attr, None)
+                except Exception:
+                    continue
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return ""
+
+    def _food_group_location_parts(
+        self,
+        event: AstrMessageEvent | None,
+    ) -> list[str]:
+        if event is None:
+            return []
+        try:
+            if event.is_private_chat():
+                return []
+        except Exception:
+            return []
+        max_parts = max(
+            1, self._cfg_int("food_submit_location_max_parts", 1)
+        )
+        max_part_chars = max(
+            1, self._cfg_int("food_submit_location_part_max_chars", 1)
+        )
+        mapping = food_engine.parse_food_group_locations(
+            self._config_value("food_group_locations"),
+            max_parts=max_parts,
+            max_part_chars=max_part_chars,
+        )
+        group_id = self._food_context_group_id(event)
+        if group_id and group_id in mapping:
+            return mapping[group_id]
+        if not self._cfg_bool("food_group_location_infer_from_name"):
+            return []
+        return food_engine.infer_food_group_location_parts(
+            self._food_group_name(event),
+            max_parts=max_parts,
+            max_part_chars=max_part_chars,
+        )
+
+    async def _resolve_food_context_location(
+        self,
+        context: list[str],
+    ) -> dict[str, Any] | None:
+        if not context:
+            return None
+        leaf = str(context[-1]).strip()
+        if not leaf:
+            return None
+        try:
+            items = await self._search_food_locations(leaf)
+        except Exception:
+            # A group default must never turn a read-only look into an error.
+            return None
+        match = food_engine.match_food_location(context, items)
+        if (
+            match.get("kind") in {"full", "prefix"}
+            and match.get("id") is not None
+        ):
+            return {
+                "id": match.get("id"),
+                "name": str(match.get("name") or leaf),
+            }
+        item = food_engine.select_food_location(items, leaf)
+        if item and item.get("id") is not None:
+            return {
+                "id": item.get("id"),
+                "name": str(item.get("name") or leaf),
+            }
+        return None
+
+    def _apply_food_group_location(
+        self,
+        event: AstrMessageEvent | None,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge the group's default city into a review's location field."""
+
+        context = self._food_group_location_parts(event)
+        if not context:
+            return fields
+        location_max = max(
+            1, self._cfg_int("food_submit_location_max_chars", 1)
+        )
+        raw = str(fields.get("location", "") or "").strip()
+        if raw:
+            parts = food_engine.split_food_location_path(
+                raw,
+                max_parts=max(
+                    1,
+                    self._cfg_int("food_submit_location_max_parts", 1),
+                ),
+                max_part_chars=max(
+                    1,
+                    self._cfg_int(
+                        "food_submit_location_part_max_chars", 1
+                    ),
+                ),
+            )
+            if not parts:
+                # Unsafe input stays unsafe; the resolver rejects it.
+                return fields
+            merged = food_engine.merge_food_location_with_context(
+                parts, context
+            )
+        else:
+            merged = context
+        text = food_engine.format_food_location_path(merged)
+        if not text or len(text) > location_max:
+            return fields
+        updated = dict(fields)
+        updated["location"] = text
+        return updated
 
     # ------------------------------------------------------------------
     # Natural-language food review submission (fixed POST endpoint)
@@ -1672,6 +1839,7 @@ class QQBotEnhancerPlugin(Star):
         fields = self._merge_food_submit_fields(
             event, validation["fields"]
         )
+        fields = self._apply_food_group_location(event, fields)
         # Only an explicit "add/record/upload" request may write production
         # data. A pending draft also counts so a bare confirmation can finish
         # the submission we asked about.
@@ -1721,7 +1889,9 @@ class QQBotEnhancerPlugin(Star):
         draft = self._food_submit_draft(event)
         if not draft:
             return None
-        fields = dict(draft.get("fields", {}))
+        fields = self._apply_food_group_location(
+            event, dict(draft.get("fields", {}))
+        )
         if self._food_submit_missing(fields):
             return event.plain_result(
                 self._food_submit_missing_message(fields)
@@ -1926,6 +2096,17 @@ class QQBotEnhancerPlugin(Star):
 
         location_id: Any = None
         location_name = ""
+        if not location:
+            context = self._food_group_location_parts(event)
+            if context:
+                group_location = await self._resolve_food_context_location(
+                    context
+                )
+                if group_location is not None:
+                    location_id = group_location.get("id")
+                    location_name = str(
+                        group_location.get("name") or ""
+                    )
         if location:
             try:
                 location_items = await self._search_food_locations(location)
@@ -2021,7 +2202,8 @@ class QQBotEnhancerPlugin(Star):
                 "一次（插件会追问缺少项），不要编造分数；"
                 "location 可以直接写完整地址（如 中国/吉林省/长春市/南关区 或 "
                 "中国长春市南关区），插件会自动拆分并创建缺失的位置层级，"
-                "用户不用手动拆；不要传密码/QQ/日期，"
+                "用户不用手动拆；群聊已配置默认城市时 location 只写区县即可，"
+                "插件会合并城市；不要传密码/QQ/日期，"
                 "密钥由插件用发送者 QQ 自动注入且不显示。"
                 "普通美食聊天不要调用，最多一次，不要解释标记。"
             )

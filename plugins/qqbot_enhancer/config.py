@@ -52,6 +52,8 @@ DEFAULTS: dict[str, Any] = {
     "food_cooldown_seconds": 30,
     "food_keyword_max_chars": 50,
     "food_location_max_chars": 30,
+    "food_group_locations": "{}",
+    "food_group_location_infer_from_name": True,
     "food_usage_reply": "用法：/food 火锅 或 /food 南关区 火锅",
     "food_disabled_reply": "餐厅查询功能当前未启用。",
     "food_empty_reply": "没有找到相关餐厅，换个关键词或地点试试吧。",

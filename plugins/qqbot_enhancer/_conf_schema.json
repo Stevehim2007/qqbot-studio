@@ -337,6 +337,19 @@
       "step": 1
     }
   },
+  "food_group_locations": {
+    "description": "按群默认地点 JSON（群号 -> 地点路径）",
+    "type": "text",
+    "default": "{}",
+    "hint": "JSON 对象字符串，例如 {\"123456789\": \"吉林省/长春市\"}；群内查询/提交美食时自动带上该地点，用户另写区县时合并到该城市下。无效 JSON 会被忽略。",
+    "max_length": 20000
+  },
+  "food_group_location_infer_from_name": {
+    "description": "允许从群名安全推断城市（仅显式 省/市/州 后缀）",
+    "type": "bool",
+    "default": true,
+    "hint": "例如群名「长春市火锅交流群」推断为长春市；「长春火锅群」不含行政区后缀，不猜测，请用 food_group_locations。只读群名，不读消息文本。"
+  },
   "food_usage_reply": {
     "description": "/food 用法提示",
     "type": "text",
