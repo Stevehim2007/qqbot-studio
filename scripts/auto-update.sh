@@ -28,6 +28,17 @@ else
   echo "skip git pull; code already switched to $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 fi
 
+# Automatic post-update verification.  Keep the old management process alive
+# when tests fail; a broken build must not be restarted silently.
+if [ "${QQBOT_STUDIO_AUTO_TEST:-1}" != "0" ]; then
+  if ! bash "$ROOT_DIR/scripts/post-update-test.sh"; then
+    echo "=== auto update aborted: post-update tests failed; old server left running ==="
+    exit 1
+  fi
+else
+  echo "=== post-update tests disabled by QQBOT_STUDIO_AUTO_TEST=0 ==="
+fi
+
 # Keep the bundled enhancer updated for existing v2 instances. AstrBot will
 # load the new files after its container is restarted.
 if [ -d "$DATA_DIR/instances" ]; then
