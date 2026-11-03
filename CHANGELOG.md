@@ -11,6 +11,21 @@
 
 - 记忆策略增加 `data/astrbot/memory_policy.json` 持久化 sidecar；AstrBot 重启重写 `cmd_config.json` 后策略不再丢失，面板读取 sidecar 优先。
 
+### 记忆内容管理（Studio，t33）
+
+- 实例设置新增「记忆内容」面板：scope 选择（group/user/conversation/persona/global）、关键词搜索、
+  分页、单条详情/编辑、单条删除、按 scope 忘记、导出 JSON、导入预览（冲突/非法/上限汇总）、
+  整理 dry-run/apply；不可用时明确显示原因并禁用写操作，不显示伪造的已保存值。
+- 新后端模块 `qqbot_studio/memory_admin.py` + 路由：
+  `GET memory/stats|records[/<id>]`、`POST memory/records`、`PATCH/DELETE memory/records/<id>`、
+  `POST memory/forget|export|import|reflect`。每个操作显式 scope，无跨 scope 列表；删除/忘记/导入/整理
+  必须带 `confirm`（单条=记录 id，scope 级=scope_id）。
+- 安全：密钥/密码样式写入即拒绝、读取与导出再脱敏；响应不暴露数据库路径；读用 SQLite 只读 URI，
+  写为单事务（失败回滚）+ `busy_timeout` 8s；导入/整理 apply 前写 0700 目录 + 0600 原子备份。
+- Docker 权限降级：宿主无权限时改用 `docker exec` 在容器内执行同一批参数化语句（固定 argv、无 shell）。
+- 契约：[`docs/memory-admin-api.md`](docs/memory-admin-api.md)；测试 `tests/test_memory_admin.py` 40 个用例；
+  全仓 760 tests OK。
+
 ### 长期记忆聊天命令（qqbot_enhancer 2.9.0，默认关闭）
 
 - 新增 `/记忆 状态|搜索 <关键词>|删除 <id>|忘记 本群|我的|整理`：默认
@@ -21,7 +36,7 @@
   `本群|我的`；未装记忆补丁、服务关闭、id 不在当前作用域、服务未确认删除/忘记时
   明确失败，不伪造成功；输出先脱敏密钥再截断，条数与总长度均可配置。
 - `整理` 为纯本地 dry-run 预览（完全重复/近似重复/低价值/过期），不调用 LLM、不写库。
-- 测试：`tests/test_memory_commands.py` 36 + 插件 handler 8；全仓 720 tests OK。
+- 测试：`tests/test_memory_commands.py` 36 + 插件 handler 8；全仓 720 tests OK（记忆内容管理合入后 760 tests OK）。
 
 - 测试分支：继承正式版 `4.2.0`，新增 AstrBot 原生长期记忆、按群 `conversation/long_term` 策略、Studio 记忆策略面板、参数分组面板和 stable/test 更新回退功能。
 - 测试版不等同于正式版；长期记忆/策略需真实 AstrBot/Docker E2E 后才可合并。

@@ -719,6 +719,29 @@ POST 请求体（`groups` 为数组，元素字段固定，未知字段直接 40
   （AstrBot 策略缓存 ≤5s），无需重启。
 - 详见 [`memory-policy.md`](memory-policy.md)。
 
+### 8.3.2 记忆内容管理（memory records）
+
+```text
+GET    /api/instances/<instance_id>/memory/stats?scope_type=&scope_id=
+GET    /api/instances/<instance_id>/memory/records?scope_type=&scope_id=&q=&limit=&offset=
+GET    /api/instances/<instance_id>/memory/records/<record_id>?scope_type=&scope_id=
+POST   /api/instances/<instance_id>/memory/records
+PATCH  /api/instances/<instance_id>/memory/records/<record_id>
+DELETE /api/instances/<instance_id>/memory/records/<record_id>
+POST   /api/instances/<instance_id>/memory/forget
+POST   /api/instances/<instance_id>/memory/export
+POST   /api/instances/<instance_id>/memory/import
+POST   /api/instances/<instance_id>/memory/reflect
+```
+
+- 每个请求都必须显式带 `scope_type`（`user/group/conversation/persona/global`）与 `scope_id`；
+  没有跨 scope 列表/汇总接口，响应只包含该 scope 的记录。
+- 删除单条要求 `confirm=<record_id>`；忘记 scope、导入 apply、整理 apply 要求 `confirm=<scope_id>`。
+- 读走 SQLite 只读 URI；写为单事务 + 0600 备份；内容疑似密钥直接 400，读取/导出再脱敏。
+- 状态码：200 成功；400 校验失败/缺确认；403 令牌；404 实例或记录不存在；405 方法不支持；
+  409 键冲突/超 scope 上限；503 数据库缺失、损坏或不可读（`available:false` + 修复步骤）。
+- 完整字段、导入/导出格式、reflect 语义与限制见 [`memory-admin-api.md`](memory-admin-api.md)。
+
 ### 8.4 资源统计
 
 ```text

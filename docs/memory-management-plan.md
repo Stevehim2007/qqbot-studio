@@ -5,31 +5,35 @@
 
 ## 1. 记忆内容管理（Studio）
 
-- [ ] 实例设置新增「记忆内容」面板；
-- [ ] 按 scope（group/user/group_user/speaker）筛选；
-- [ ] 关键词搜索、分页；
-- [ ] 查看单条详情；
-- [ ] 编辑正文/重要度/置信度/TTL；
-- [ ] 单条删除；
-- [ ] 按 scope 全部忘记；
-- [ ] 导出当前 scope；
-- [ ] 导入/恢复（预览、去重、失败不写半份）；
-- [ ] 显示 hits/last_used、来源和时间；
-- [ ] 删除/忘记二次确认；
-- [ ] 不展示 API Key、密码、跨 scope 内容。
+> 实现：v4.2.1-beta.1（t33）。面板「记忆内容」由 `qqbot_studio/static/console.js` 的 `buildMemoryContentSection` 渲染，后端 `qqbot_studio/memory_admin.py`；契约见 [`memory-admin-api.md`](memory-admin-api.md)。
+
+- [x] 实例设置新增「记忆内容」面板；
+- [x] 按 scope 筛选（真实存储 scope：group/user/conversation/persona/global；group_user/speaker 是策略名而不是库内 scope，见契约 §1）；
+- [x] 关键词搜索、分页；
+- [x] 查看单条详情；
+- [x] 编辑正文/重要度/置信度/TTL；
+- [x] 单条删除；
+- [x] 按 scope 全部忘记；
+- [x] 导出当前 scope；
+- [x] 导入/恢复（预览、去重、失败不写半份）；
+- [x] 显示 hits/last_used、来源和时间；
+- [x] 删除/忘记二次确认；
+- [x] 不展示 API Key、密码、跨 scope 内容。
 
 ## 2. 记忆管理 HTTP API
 
-- [ ] `GET /api/instances/<id>/memory/stats`
-- [ ] `GET /api/instances/<id>/memory/records?scope_type=&scope_id=&q=&limit=&offset=`
-- [ ] `GET /api/instances/<id>/memory/records/<id>`
-- [ ] `PATCH /api/instances/<id>/memory/records/<id>`
-- [ ] `DELETE /api/instances/<id>/memory/records/<id>`
-- [ ] `POST /api/instances/<id>/memory/forget`
-- [ ] `POST /api/instances/<id>/memory/export`
-- [ ] `POST /api/instances/<id>/memory/import`
-- [ ] `POST /api/instances/<id>/memory/reflect`（dry-run/apply）
-- [ ] 所有接口显式 scope 校验；无 scope 不返回跨 scope 数据；令牌/权限与现有 Studio 一致。
+> 实现：v4.2.1-beta.1（t33），`/api/instances/<id>/memory/{stats,records,forget,export,import,reflect}`，全部显式 scope + 令牌校验；见 [`memory-admin-api.md`](memory-admin-api.md)。
+
+- [x] `GET /api/instances/<id>/memory/stats`
+- [x] `GET /api/instances/<id>/memory/records?scope_type=&scope_id=&q=&limit=&offset=`
+- [x] `GET /api/instances/<id>/memory/records/<id>`
+- [x] `PATCH /api/instances/<id>/memory/records/<id>`
+- [x] `DELETE /api/instances/<id>/memory/records/<id>`
+- [x] `POST /api/instances/<id>/memory/forget`
+- [x] `POST /api/instances/<id>/memory/export`
+- [x] `POST /api/instances/<id>/memory/import`
+- [x] `POST /api/instances/<id>/memory/reflect`（dry-run/apply）
+- [x] 所有接口显式 scope 校验；无 scope 不返回跨 scope 数据；令牌/权限与现有 Studio 一致。
 
 ## 3. 聊天命令
 
@@ -49,18 +53,22 @@
 
 ## 4. 手动新增/编辑
 
-- [ ] Studio 手动 add；
-- [ ] 编辑内容/kind/importance/confidence/TTL；
-- [ ] 校验 scope、长度、密钥清洗；
-- [ ] 写入幂等/去重。
+> 实现：v4.2.1-beta.1（t33）。`POST/PATCH memory/records`，校验 scope/长度/kind/0-1 概率/密钥，同键/同内容去重；见 [`memory-admin-api.md`](memory-admin-api.md) §3。
+
+- [x] Studio 手动 add；
+- [x] 编辑内容/kind/importance/confidence/TTL；
+- [x] 校验 scope、长度、密钥清洗；
+- [x] 写入幂等/去重。
 
 ## 5. 导入/恢复
 
-- [ ] JSON schema 校验；
-- [ ] scope 冲突预览；
-- [ ] 去重策略；
-- [ ] 原子事务；失败回滚；
-- [ ] 不覆盖其他 scope。
+> 实现：v4.2.1-beta.1（t33）。预览/冲突汇总/去重策略/单事务回滚/0600 备份/不覆盖其他 scope；见 [`memory-admin-api.md`](memory-admin-api.md) §4。
+
+- [x] JSON schema 校验；
+- [x] scope 冲突预览；
+- [x] 去重策略；
+- [x] 原子事务；失败回滚；
+- [x] 不覆盖其他 scope。
 
 ## 6. Reflection / 记忆整理
 
