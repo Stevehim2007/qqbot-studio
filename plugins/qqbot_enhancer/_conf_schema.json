@@ -13,6 +13,54 @@
     "default": "direct",
     "hint": "direct 只发送当前消息和系统提示，token 更省；astrbot 会使用 AstrBot 会话历史、人格和 Agent 能力，历史越长 token 越多。修改后建议重启 AstrBot。"
   },
+  "memory_commands_enabled": {
+    "description": "启用 /记忆 聊天管理命令",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭。启用后仅 AstrBot 管理员、QQ 群主或 memory_commands_allow_user_ids 允许名单可用；只读写当前群/当前私聊自己的作用域，不读取其他群或私聊记忆；需要 AstrBot 已安装长期记忆补丁。"
+  },
+  "memory_commands_destructive_enabled": {
+    "description": "允许 /记忆 删除 与 /记忆 忘记",
+    "type": "bool",
+    "default": false,
+    "hint": "删除/忘记是破坏性操作，需在 memory_commands_enabled 之外单独开启；忘记必须显式指定 本群 或 我的，不会静默清空。"
+  },
+  "memory_commands_allow_user_ids": {
+    "description": "记忆管理命令允许的发送者 ID",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔的发送者 ID（通常是 QQ 号）；留空则只允许 AstrBot 管理员和 QQ 群主。"
+  },
+  "memory_commands_max_results": {
+    "description": "/记忆 搜索 最多显示条数",
+    "type": "int",
+    "default": 5,
+    "slider": {
+      "min": 1,
+      "max": 10,
+      "step": 1
+    }
+  },
+  "memory_commands_content_chars": {
+    "description": "/记忆 回复中单条记忆最大字符数",
+    "type": "int",
+    "default": 80,
+    "slider": {
+      "min": 20,
+      "max": 200,
+      "step": 10
+    }
+  },
+  "memory_commands_max_reply_chars": {
+    "description": "/记忆 回复总长度上限",
+    "type": "int",
+    "default": 900,
+    "slider": {
+      "min": 200,
+      "max": 2000,
+      "step": 100
+    }
+  },
   "image_search_enabled": {
     "description": "启用 /找图 和 /搜图 网络图片搜索",
     "type": "bool",

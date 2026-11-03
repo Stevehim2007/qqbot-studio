@@ -11,6 +11,18 @@
 
 - 记忆策略增加 `data/astrbot/memory_policy.json` 持久化 sidecar；AstrBot 重启重写 `cmd_config.json` 后策略不再丢失，面板读取 sidecar 优先。
 
+### 长期记忆聊天命令（qqbot_enhancer 2.9.0，默认关闭）
+
+- 新增 `/记忆 状态|搜索 <关键词>|删除 <id>|忘记 本群|我的|整理`：默认
+  `memory_commands_enabled=false`；仅 AstrBot 管理员、QQ 群主/管理员或
+  `memory_commands_allow_user_ids` 允许名单可用；群聊只管理本群 `group` 作用域，
+  私聊只管理自己的 `user` 作用域，从不 `export_all()`。
+- `删除/忘记` 另需 `memory_commands_destructive_enabled=true`；`忘记` 必须显式
+  `本群|我的`；未装记忆补丁、服务关闭、id 不在当前作用域、服务未确认删除/忘记时
+  明确失败，不伪造成功；输出先脱敏密钥再截断，条数与总长度均可配置。
+- `整理` 为纯本地 dry-run 预览（完全重复/近似重复/低价值/过期），不调用 LLM、不写库。
+- 测试：`tests/test_memory_commands.py` 36 + 插件 handler 8；全仓 720 tests OK。
+
 - 测试分支：继承正式版 `4.2.0`，新增 AstrBot 原生长期记忆、按群 `conversation/long_term` 策略、Studio 记忆策略面板、参数分组面板和 stable/test 更新回退功能。
 - 测试版不等同于正式版；长期记忆/策略需真实 AstrBot/Docker E2E 后才可合并。
 - 主仓库测试：671 tests OK；AstrBot memory patch：125 tests OK（评审快照）。

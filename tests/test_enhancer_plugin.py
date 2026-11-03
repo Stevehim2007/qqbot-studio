@@ -11088,3 +11088,193 @@ class TestWebAutoFetch(unittest.IsolatedAsyncioTestCase):
             "网页智能阅读：未启用",
             disabled._build_option_text(),
         )
+
+
+# ---------------------------------------------------------------------------
+# /记忆 chat memory commands (2.9.0): handler wiring + permission/scope gates
+# ---------------------------------------------------------------------------
+async def run_memory_command(plugin, event):
+    results = []
+    async for result in plugin.memory_command(event):
+        results.append(result)
+    return results
+
+
+class _MemoryServiceStub:
+    def __init__(self, records=None, *, enabled=True, delete_result=True, forget_result=1):
+        self.records = [dict(record) for record in (records or [])]
+        self.enabled = enabled
+        self.fts_enabled = True
+        self.delete_result = delete_result
+        self.forget_result = forget_result
+        self.export_calls = []
+        self.deleted = []
+        self.forgotten = []
+
+    def export(self, scope_type, scope_id):
+        self.export_calls.append((scope_type, scope_id))
+        return [
+            dict(record)
+            for record in self.records
+            if record.get("scope_type") == scope_type
+            and record.get("scope_id") == scope_id
+        ]
+
+    def delete(self, memory_id):
+        self.deleted.append(memory_id)
+        return self.delete_result
+
+    def forget(self, scope_type, scope_id):
+        self.forgotten.append((scope_type, scope_id))
+        return self.forget_result
+
+    def policy_for(self, memory_context):
+        return SimpleNamespace(mode="long_term", scope="group", inject=True, extract=True)
+
+
+class _MemoryCoreStub:
+    def __init__(self, service):
+        self.service = service
+
+    def get_memory_service(self, config):
+        return self.service
+
+    def build_context(self, event):
+        private = bool(event.is_private_chat())
+        group_id = str(event.get_group_id() or "")
+        return SimpleNamespace(
+            is_private=private,
+            group_id=group_id,
+            user_scope=("user", f"aiocqhttp:{event.get_sender_id()}"),
+            group_scope=None
+            if private or not group_id
+            else ("group", f"aiocqhttp:{group_id}"),
+        )
+
+
+def _memory_record(memory_id, content, *, scope_type="group", scope_id="aiocqhttp:group-1"):
+    return {
+        "id": memory_id,
+        "scope_type": scope_type,
+        "scope_id": scope_id,
+        "key": f"k{memory_id}",
+        "content": content,
+        "kind": "fact",
+        "importance": 0.6,
+        "confidence": 0.8,
+        "hits": 0,
+        "source": "heuristic",
+        "created_at": 1000.0,
+        "updated_at": 1000.0,
+        "last_used_at": None,
+        "expires_at": None,
+    }
+
+
+class TestMemoryChatCommands(unittest.IsolatedAsyncioTestCase):
+    def _event(self, message_str, *, private=False, role=None):
+        event = FakeEvent(
+            [Plain(message_str)],
+            message_str=message_str,
+            private=private,
+        )
+        event.role = role
+        return event
+
+    async def _run_with_core(self, plugin, event, core):
+        engine = MODULE.memory_commands_engine
+        original = engine.load_core_memory
+        engine.load_core_memory = lambda: core
+        try:
+            return await run_memory_command(plugin, event)
+        finally:
+            engine.load_core_memory = original
+
+    async def test_disabled_by_default_and_blocks_default_llm(self):
+        plugin = make_plugin(FakeContext())
+        event = self._event("/记忆 状态")
+        results = await run_memory_command(plugin, event)
+        self.assertEqual(len(results), 1)
+        self.assertIn("未启用", results[0].text)
+        self.assertTrue(event.call_llm)
+        self.assertTrue(event.stopped)
+
+    async def test_admin_status_uses_current_group_scope_only(self):
+        service = _MemoryServiceStub(
+            records=[
+                _memory_record(1, "本群火锅"),
+                _memory_record(2, "另一个群", scope_id="aiocqhttp:group-2"),
+            ]
+        )
+        plugin = make_plugin(FakeContext(), memory_commands_enabled=True)
+        event = self._event("/记忆 状态", role="admin")
+        results = await self._run_with_core(plugin, event, _MemoryCoreStub(service))
+        text = results[0].text
+        self.assertIn("长期记忆管理", text)
+        self.assertIn("本群 · 1 条记忆", text)
+        self.assertEqual(service.export_calls, [("group", "aiocqhttp:group-1")])
+        self.assertTrue(event.stopped)
+
+    async def test_enabled_but_member_is_denied_before_reading(self):
+        service = _MemoryServiceStub(records=[_memory_record(1, "本群火锅")])
+        plugin = make_plugin(FakeContext(), memory_commands_enabled=True)
+        event = self._event("/记忆 搜索 火锅")
+        results = await self._run_with_core(plugin, event, _MemoryCoreStub(service))
+        self.assertIn("只有群主/管理员", results[0].text)
+        self.assertEqual(service.export_calls, [])
+
+    async def test_allowlist_grants_private_access(self):
+        service = _MemoryServiceStub(
+            records=[
+                _memory_record(
+                    1,
+                    "我的火锅",
+                    scope_type="user",
+                    scope_id="aiocqhttp:20002",
+                )
+            ]
+        )
+        plugin = make_plugin(
+            FakeContext(),
+            memory_commands_enabled=True,
+            memory_commands_allow_user_ids="20002",
+        )
+        event = self._event("/记忆 搜索 火锅", private=True)
+        results = await self._run_with_core(plugin, event, _MemoryCoreStub(service))
+        self.assertIn("我的火锅", results[0].text)
+        self.assertEqual(
+            service.export_calls,
+            [("user", "aiocqhttp:20002")],
+        )
+
+    async def test_unpatched_astrbot_reports_unavailable(self):
+        plugin = make_plugin(FakeContext(), memory_commands_enabled=True)
+        event = self._event("/记忆 状态", role="admin")
+        results = await self._run_with_core(plugin, event, None)
+        self.assertIn("没有长期记忆服务", results[0].text)
+
+    async def test_destructive_verbs_need_explicit_switch(self):
+        service = _MemoryServiceStub(records=[_memory_record(5, "本群火锅")])
+        plugin = make_plugin(FakeContext(), memory_commands_enabled=True)
+        event = self._event("/记忆 删除 5", role="owner")
+        results = await self._run_with_core(plugin, event, _MemoryCoreStub(service))
+        self.assertIn("删除/忘记未启用", results[0].text)
+        self.assertEqual(service.deleted, [])
+
+    async def test_delete_confirmed_by_service(self):
+        service = _MemoryServiceStub(records=[_memory_record(5, "本群火锅")])
+        plugin = make_plugin(
+            FakeContext(),
+            memory_commands_enabled=True,
+            memory_commands_destructive_enabled=True,
+        )
+        event = self._event("/记忆 删除 5", role="admin")
+        results = await self._run_with_core(plugin, event, _MemoryCoreStub(service))
+        self.assertIn("已删除记忆 id=5", results[0].text)
+        self.assertEqual(service.deleted, [5])
+
+    async def test_option_text_lists_memory_command(self):
+        plugin = make_plugin(FakeContext())
+        option = plugin._build_option_text()
+        self.assertIn("/记忆 状态|搜索|删除|忘记|整理", option)
+        self.assertIn("记忆管理命令：未启用", option)

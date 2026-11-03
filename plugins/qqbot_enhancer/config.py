@@ -8,6 +8,12 @@ COLLECTED_CATEGORY_MAX_CHARS = 32
 
 DEFAULTS: dict[str, Any] = {
     "memory_mode": "direct",
+    "memory_commands_enabled": False,
+    "memory_commands_destructive_enabled": False,
+    "memory_commands_allow_user_ids": "",
+    "memory_commands_max_results": 5,
+    "memory_commands_content_chars": 80,
+    "memory_commands_max_reply_chars": 900,
     "image_search_enabled": True,
     "image_search_natural_language_enabled": True,
     "image_search_timeout_seconds": 12,

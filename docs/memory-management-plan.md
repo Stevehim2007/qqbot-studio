@@ -33,12 +33,19 @@
 
 ## 3. 聊天命令
 
-- [ ] `/记忆 状态`
-- [ ] `/记忆 搜索 <关键词>`
-- [ ] `/记忆 忘记`（仅允许的策略/权限）
-- [ ] `/记忆 删除 <id>`
-- [ ] `/记忆 整理`（dry-run 预览）
-- [ ] 默认关闭，需显式开启；群管理员/私聊管理员限定；不把其他群内容拼进回复。
+- [x] `/记忆 状态`
+- [x] `/记忆 搜索 <关键词>`
+- [x] `/记忆 忘记`（仅允许的策略/权限）
+- [x] `/记忆 删除 <id>`
+- [x] `/记忆 整理`（dry-run 预览）
+- [x] 默认关闭，需显式开启；群管理员/私聊管理员限定；不把其他群内容拼进回复。
+
+> 实现（qqbot_enhancer 2.9.0）：`plugins/qqbot_enhancer/memory_commands.py`。
+> `memory_commands_enabled=false` 默认关闭，`删除/忘记` 另需
+> `memory_commands_destructive_enabled=true`；群聊只管理本群 `group` 作用域，
+> 私聊只管理自己的 `user` 作用域，从不调用 `export_all()`；未打补丁或
+> `memory.enable=false` 时明确不可用。测试：`tests/test_memory_commands.py`
+> （36）+ `tests/test_enhancer_plugin.py::TestMemoryChatCommands`（8）。
 
 ## 4. 手动新增/编辑
 
