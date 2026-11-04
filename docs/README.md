@@ -59,3 +59,7 @@
 - [CHANGELOG.md](../CHANGELOG.md)：完整版本更新日志
 
 - [`plugin-modularization.md`](plugin-modularization.md)：插件独立化与插件市场可行性评估。
+
+- [`workbuddy-architect-workflow.md`](workbuddy-architect-workflow.md)：WorkBuddy/插件模块化相关文档。
+
+- [`ARCHITECT_BRIEF.md`](ARCHITECT_BRIEF.md)：WorkBuddy/插件模块化相关文档。
