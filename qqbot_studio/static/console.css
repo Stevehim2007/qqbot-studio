@@ -1613,3 +1613,11 @@ body.console-modal-open { overflow: hidden; }
   .memory-content-record-actions .btn { flex: 1 1 100px; }
   .memory-content-toolbar .btn { flex: 1 1 120px; }
 }
+
+/* Keep update/rollback confirmation reachable near the top of the modal */
+.update-confirm {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  box-shadow: 0 5px 16px rgba(72, 52, 10, .12);
+}

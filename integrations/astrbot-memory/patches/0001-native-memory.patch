@@ -238,7 +238,9 @@ index 0000000..ed46f6e
 +
 +from .text import tokenize
 +
-+logger = logging.getLogger("astrbot.memory")
++logger = logging.LoggerAdapter(
++    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++)
 +
 +DEFAULT_LOCAL_DIM = 64
 +DEFAULT_TIMEOUT_S = 5.0
@@ -707,7 +709,9 @@ index 0000000..32ed401
 +from .service import MemoryService, get_memory_service
 +from .types import MemoryContext
 +
-+logger = logging.getLogger("astrbot.memory")
++logger = logging.LoggerAdapter(
++    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++)
 +
 +INJECTED_EXTRA_KEY = "_memory_injected_ids"
 +BLOCK_CHARS_EXTRA_KEY = "_memory_block_chars"
@@ -871,7 +875,9 @@ index 0000000..d4fd5de
 +from .text import MAX_CONTENT_CHARS, contains_secret, fingerprint, scrub_secrets
 +from .types import Candidate, MemoryContext
 +
-+logger = logging.getLogger("astrbot.memory")
++logger = logging.LoggerAdapter(
++    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++)
 +
 +DEFAULT_ENDPOINT_PATH = "/v1/chat/completions"
 +DEFAULT_TIMEOUT_S = 8.0
@@ -1247,7 +1253,9 @@ index 0000000..70ac101
 +from collections.abc import Mapping
 +from dataclasses import dataclass
 +
-+logger = logging.getLogger("astrbot.memory")
++logger = logging.LoggerAdapter(
++    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++)
 +
 +MODE_CONVERSATION = "conversation"
 +MODE_LONG_TERM = "long_term"
@@ -1973,7 +1981,9 @@ index 0000000..bfdaca4
 +from .text import normalise_value
 +from .types import Candidate, MemoryContext, MemoryRecord
 +
-+logger = logging.getLogger("astrbot.memory")
++logger = logging.LoggerAdapter(
++    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++)
 +
 +DEFAULT_MEMORY_CONFIG: dict = {
 +    "enable": False,
