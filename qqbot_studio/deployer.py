@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import copy
+import errno
 import glob
 import hashlib
 import json
@@ -69,6 +71,41 @@ PLUGIN_CONFIG_MAX_LIST_ITEMS = 256
 
 class DeploymentError(RuntimeError):
     """User-facing deployment error."""
+
+
+# ----------------------------------------------------------------------
+# Per-group long-term memory policy (AstrBot ``memory.policy``)
+# ----------------------------------------------------------------------
+# The contract lives in integrations/astrbot-memory/patches (astrbot/core/
+# memory/policy.py).  Studio validates the same enums/bounds so a save never
+# writes a section that AstrBot would silently degrade to conversation.
+MEMORY_POLICY_MODES = ("conversation", "long_term")
+MEMORY_POLICY_DEFAULT_MODE = "conversation"
+MEMORY_POLICY_SCOPES = ("group", "user", "group_user")
+MEMORY_POLICY_SCOPE_GROUP = "group"
+MEMORY_POLICY_SCOPE_USER = "user"
+MEMORY_POLICY_MAX_ITEMS = (1, 50)
+MEMORY_POLICY_MAX_CHARS = (80, 8000)
+MEMORY_POLICY_MAX_GROUPS = 200
+# Bare QQ group number, or a platform-prefixed key (``aiocqhttp:838796241``).
+# No paths/slashes/URLs can pass: the id is only ever a config object key.
+MEMORY_POLICY_GROUP_ID_RE = re.compile(r"^(?:[a-z][a-z0-9_.-]{0,31}:)?[0-9]{4,20}$")
+
+
+class MemoryPolicyUnsupportedError(DeploymentError):
+    """The instance cannot persist a memory policy (no AstrBot config yet)."""
+
+
+class MemoryPolicyWriteUnavailableError(DeploymentError):
+    """The config exists but neither the host nor the container channel can write.
+
+    This is *not* an "unsupported instance": the panel stays usable, the write
+    is refused and the caller gets actionable repair steps.
+    """
+
+    def __init__(self, message: str, *, actions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.actions = list(actions or [])
 
 
 @dataclass
@@ -1111,7 +1148,7 @@ class DeployManager:
         last_reason = ""
         for attempt in range(attempts):
             try:
-                text = path.read_text(encoding="utf-8")
+                text = path.read_text(encoding="utf-8-sig")
             except FileNotFoundError:
                 return {}, ""
             except (OSError, UnicodeError) as exc:
@@ -1875,6 +1912,776 @@ class DeployManager:
             "api_error": api_error,
             "error": "",
         }
+
+    # ------------------------------------------------------------------
+    # Per-group long-term memory policy (AstrBot ``memory.policy``)
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # AstrBot config IO: host file first, container fallback on EPERM
+    # ------------------------------------------------------------------
+    # ``cmd_config.json`` is owned by the AstrBot container (root, 0600), so the
+    # Studio user often cannot read or write it directly.  When the host file
+    # denies access the same JSON is read/written through ``docker exec`` with a
+    # fixed argv (no shell), an atomic temp-file + rename and mode 0600.
+    ASTRBOT_CONFIG_CONTAINER_PATH = "/AstrBot/data/cmd_config.json"
+    ASTRBOT_MEMORY_POLICY_CONTAINER_PATH = "/AstrBot/data/memory_policy.json"
+    _CONTAINER_CONFIG_MAX_PAYLOAD = 96_000  # base64 chars in argv
+
+    _CONTAINER_WRITE_SCRIPT = (
+        "import base64,json,os,sys\n"
+        "path=sys.argv[1]\n"
+        "payload=base64.b64decode(sys.argv[2])\n"
+        "if not path.startswith('/AstrBot/data/') or '..' in path:\n"
+        "    raise SystemExit('bad path')\n"
+        "json.loads(payload)\n"
+        "tmp=path+'.studio.tmp'\n"
+        "fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)\n"
+        "with os.fdopen(fd,'wb') as handle:\n"
+        "    handle.write(payload)\n"
+        "    handle.flush()\n"
+        "    os.fsync(handle.fileno())\n"
+        "os.chmod(tmp,0o600)\n"
+        "os.replace(tmp,path)\n"
+        "os.chmod(path,0o600)\n"
+        "print('ok')\n"
+    )
+
+    def _astrbot_container_available(self) -> tuple[bool, str]:
+        """Return whether the AstrBot container can be used for config IO."""
+
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        if not name:
+            return False, "未配置 AstrBot 容器名。"
+        if not DockerController.valid_container_name(name):
+            # A poisoned instance config must never reach docker exec.
+            return False, "实例配置中的 AstrBot 容器名非法。"
+        running = getattr(self.docker, "is_container_running", None)
+        if not callable(running):
+            # Older/duck-typed docker clients: probe with a harmless exec.
+            probe = getattr(self.docker, "exec_in_container", None)
+            if not callable(probe):
+                return False, "当前 Docker 客户端不支持容器内读写。"
+            result = probe(name, ["true"], timeout=8)
+            return (result.returncode == 0, "" if result.returncode == 0 else "容器不可执行。")
+        try:
+            ok = bool(running(name))
+        except Exception as exc:  # noqa: BLE001 - optional probe, fail closed
+            return False, self.redact_sensitive_text(str(exc)) or "容器状态读取失败。"
+        return ok, "" if ok else "AstrBot 容器未运行。"
+
+    def _read_astrbot_config(self) -> tuple[dict[str, Any] | None, str, str]:
+        """Read ``cmd_config.json`` from the host, falling back to the container.
+
+        Returns ``(data, error, channel)`` where channel is ``"host"``,
+        ``"container"`` or ``""``.  Only a permission error on the host file
+        triggers the container path; parse errors and missing files stay host
+        errors so a broken config is never masked by a different source.
+        """
+
+        path = self.astrbot_cmd_config_path
+        try:
+            path.read_text(encoding="utf-8-sig")
+        except FileNotFoundError:
+            return None, f"实例尚未部署 AstrBot：缺少 {path}", ""
+        except PermissionError as exc:
+            return self._read_astrbot_config_from_container(exc)
+        except OSError as exc:
+            if isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM):
+                return self._read_astrbot_config_from_container(exc)
+            return None, f"无法读取 AstrBot 配置：{self.redact_sensitive_text(str(exc))}", ""
+        data, read_error = self._read_json_object_with_error(path)
+        if read_error:
+            return None, f"无法读取 AstrBot 配置：{read_error}", ""
+        if data is None:
+            return None, f"无法读取 AstrBot 配置：{path}", ""
+        return data, "", "host"
+
+    def _read_astrbot_config_from_container(
+        self, host_error: BaseException | None = None
+    ) -> tuple[dict[str, Any] | None, str, str]:
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        available, unavailable_reason = self._astrbot_container_available()
+        if not available or not callable(runner):
+            detail = self.redact_sensitive_text(str(host_error)) if host_error else ""
+            return (
+                None,
+                f"本机读取 AstrBot 配置文件被拒绝（{detail or 'Permission denied'}），且{unavailable_reason or '容器内读写不可用'}",
+                "",
+            )
+        result = runner(name, ["cat", self.ASTRBOT_CONFIG_CONTAINER_PATH], timeout=20)
+        if result.returncode != 0:
+            detail = self.redact_sensitive_text((result.stderr or result.stdout or "").strip())
+            return (
+                None,
+                f"本机读取被拒绝，容器内读取也失败：{detail[:400] or f'退出码 {result.returncode}'}",
+                "",
+            )
+        try:
+            data = json.loads((result.stdout or "").lstrip("\ufeff"))
+        except ValueError as exc:
+            return None, f"容器内 {self.ASTRBOT_CONFIG_CONTAINER_PATH} 不是合法 JSON：{exc}", ""
+        if not isinstance(data, dict):
+            return None, f"容器内 {self.ASTRBOT_CONFIG_CONTAINER_PATH} 顶层不是 object。", ""
+        return data, "", "container"
+
+    def _memory_policy_sidecar_path(self) -> Path:
+        return self.astrbot_data_dir / "memory_policy.json"
+
+    def _read_memory_policy_sidecar(self) -> tuple[dict[str, Any] | None, str]:
+        """Read the durable policy sidecar (host first, container on EACCES).
+
+        AstrBot rewrites cmd_config.json on restart; external writes to
+        memory.policy can therefore be lost.  The sidecar is the canonical
+        Studio copy and the memory patch reads it as an override.
+        """
+        path = self._memory_policy_sidecar_path()
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except FileNotFoundError:
+            return None, ""
+        except PermissionError as host_error:
+            name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+            runner = getattr(self.docker, "exec_in_container", None)
+            available, _reason = self._astrbot_container_available()
+            if not available or not callable(runner):
+                return None, f"无法读取记忆策略 sidecar（{host_error}），且容器不可用。"
+            result = runner(
+                name,
+                ["cat", self.ASTRBOT_MEMORY_POLICY_CONTAINER_PATH],
+                timeout=20,
+            )
+            if result.returncode != 0:
+                return None, f"无法读取记忆策略 sidecar：{(result.stderr or result.stdout or '').strip()[:300]}"
+            text = result.stdout or ""
+        except OSError as exc:
+            return None, f"无法读取记忆策略 sidecar：{self.redact_sensitive_text(str(exc))}"
+        try:
+            data = json.loads(text.lstrip("\ufeff"))
+        except ValueError as exc:
+            return None, f"记忆策略 sidecar 不是合法 JSON：{exc}"
+        if not isinstance(data, dict):
+            return None, "记忆策略 sidecar 顶层不是 object。"
+        return data, ""
+
+    def _write_memory_policy_sidecar(self, policy: dict[str, Any]) -> tuple[str, str]:
+        path = self._memory_policy_sidecar_path()
+        payload = {"policy": policy}
+        try:
+            self._write_private_json(path, payload)
+            return "host", ""
+        except OSError as exc:
+            if not (isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM)):
+                return "", f"无法写入记忆策略 sidecar：{self.redact_sensitive_text(str(exc))}"
+            host_error = self.redact_sensitive_text(str(exc))
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        available, unavailable_reason = self._astrbot_container_available()
+        if not available or not callable(runner):
+            return "", f"本机写入记忆策略 sidecar 被拒绝（{host_error}），且{unavailable_reason or '容器不可用'}"
+        raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        encoded = base64.b64encode(raw).decode("ascii")
+        result = runner(
+            name,
+            ["python3", "-c", self._CONTAINER_WRITE_SCRIPT, self.ASTRBOT_MEMORY_POLICY_CONTAINER_PATH, encoded],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            detail = self.redact_sensitive_text((result.stderr or result.stdout or "").strip())
+            return "", f"容器内写入记忆策略 sidecar 失败：{detail[:300] or result.returncode}"
+        return "container", ""
+
+    def _write_astrbot_config(self, data: dict[str, Any]) -> tuple[str, str]:
+        """Persist ``cmd_config.json`` host-first, container-atomic on EPERM."""
+
+        path = self.astrbot_cmd_config_path
+        try:
+            self._write_private_json(path, data)
+            return "host", ""
+        except OSError as exc:
+            if not (isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM)):
+                return "", f"无法写入 AstrBot 配置：{self.redact_sensitive_text(str(exc))}"
+            host_error = self.redact_sensitive_text(str(exc))
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        available, unavailable_reason = self._astrbot_container_available()
+        if not available or not callable(runner):
+            return "", (
+                f"本机写入 AstrBot 配置被拒绝（{host_error}），且{unavailable_reason or '容器内读写不可用'}"
+            )
+        try:
+            payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        except (TypeError, ValueError) as exc:
+            return "", f"无法序列化 AstrBot 配置：{self.redact_sensitive_text(str(exc))}"
+        encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+        if len(encoded) > self._CONTAINER_CONFIG_MAX_PAYLOAD:
+            return "", (
+                f"AstrBot 配置过大（{len(payload)} 字节），无法通过容器内命令安全写入；"
+                "请修复本机权限后重试（sudo chown/chmod 该文件）。"
+            )
+        result = runner(
+            name,
+            ["python3", "-c", self._CONTAINER_WRITE_SCRIPT, self.ASTRBOT_CONFIG_CONTAINER_PATH, encoded],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            detail = self.redact_sensitive_text((result.stderr or result.stdout or "").strip())
+            return "", f"本机写入被拒绝，容器内写入也失败：{detail[:400] or f'退出码 {result.returncode}'}"
+        return "container", ""
+
+    def _config_permission_actions(self, *, container_available: bool) -> list[str]:
+        """Actionable, secret-free next steps for a permission problem."""
+
+        path = self.astrbot_cmd_config_path
+        if container_available:
+            return [
+                "已自动改用 AstrBot 容器内读写（docker exec，原子写入 0600），无需手工改权限。",
+                f"如需恢复本机直读写，请以 AstrBot 运行用户身份修复权限：sudo chown root:root {path} "
+                "且让 Studio 用户可读（sudo chmod 640），或继续使用容器通道。",
+            ]
+        return [
+            "先启动该实例的 AstrBot 容器（控制台“启动”或 docker compose up -d astrbot），"
+            "启动后 Studio 会自动改用容器内读写。",
+            f"或者以 root 修复本机权限：sudo chown $(id -u):$(id -g) {path} && sudo chmod 600 {path}。",
+        ]
+
+    def _astrbot_memory_config(self) -> tuple[dict[str, Any] | None, str]:
+        """Return AstrBot's ``memory`` config section (never the memory database).
+
+        The long-term-memory sidecar database (``data/astrbot_memory.db``) is
+        never opened here: this panel only reads/writes JSON configuration.
+        """
+
+        data, read_error, _channel = self._read_astrbot_config()
+        if data is None:
+            return None, read_error
+        section = data.get("memory")
+        return (section if isinstance(section, dict) else {}), ""
+
+    @staticmethod
+    def _policy_mode(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        mode = value.strip().lower()
+        return mode if mode in MEMORY_POLICY_MODES else None
+
+    @staticmethod
+    def _policy_bool(raw: dict[str, Any], name: str, where: str) -> bool:
+        if name not in raw or raw[name] is None:
+            return True
+        value = raw[name]
+        if not isinstance(value, bool):
+            raise DeploymentError(f"{where} 的 {name} 必须是 true/false。")
+        return value
+
+    @staticmethod
+    def _policy_int(raw: dict[str, Any], name: str, where: str, bounds: tuple[int, int]) -> int | None:
+        if name not in raw or raw[name] is None:
+            return None
+        value = raw[name]
+        low, high = bounds
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise DeploymentError(f"{where} 的 {name} 必须是整数。")
+        if not low <= value <= high:
+            raise DeploymentError(f"{where} 的 {name} 必须在 {low}..{high} 之间。")
+        return value
+
+    @staticmethod
+    def _policy_group_id(value: Any, where: str) -> str:
+        if isinstance(value, bool):
+            raise DeploymentError(f"{where} 的群号必须是数字或 platform:群号。")
+        if isinstance(value, int):
+            text = str(value)
+        elif isinstance(value, str):
+            text = value.strip()
+        else:
+            raise DeploymentError(f"{where} 的群号必须是数字或 platform:群号。")
+        if not MEMORY_POLICY_GROUP_ID_RE.match(text):
+            raise DeploymentError(
+                f"{where} 的群号不合法：{text[:40]!r}；只允许 4-20 位数字或 platform:群号（如 aiocqhttp:838796241）。"
+            )
+        return text
+
+    @classmethod
+    def _policy_entry(cls, raw: Any, *, is_private: bool, where: str) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            raise DeploymentError(f"{where} 的条目必须是对象。")
+        unknown = sorted(set(raw) - {"mode", "scope", "extract", "inject", "max_items", "max_chars"})
+        if unknown:
+            raise DeploymentError(f"{where} 包含不支持的字段：{', '.join(unknown)}")
+        mode = cls._policy_mode(raw.get("mode"))
+        if mode is None:
+            raise DeploymentError(f"{where} 的 mode 只能是 conversation 或 long_term。")
+        raw_scope = raw.get("scope")
+        if raw_scope is None:
+            scope = MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP
+        else:
+            scope = raw_scope.strip().lower() if isinstance(raw_scope, str) else ""
+            if scope not in MEMORY_POLICY_SCOPES:
+                raise DeploymentError(f"{where} 的 scope 只能是 group、user 或 group_user。")
+        if is_private and scope != MEMORY_POLICY_SCOPE_USER:
+            raise DeploymentError(f"{where} 是私聊策略，scope 只能是 user。")
+        entry: dict[str, Any] = {
+            "mode": mode,
+            "scope": scope,
+            "extract": cls._policy_bool(raw, "extract", where),
+            "inject": cls._policy_bool(raw, "inject", where),
+        }
+        for name, bounds in (
+            ("max_items", MEMORY_POLICY_MAX_ITEMS),
+            ("max_chars", MEMORY_POLICY_MAX_CHARS),
+        ):
+            value = cls._policy_int(raw, name, where, bounds)
+            if value is not None:
+                entry[name] = value
+        return entry
+
+    @classmethod
+    def validate_memory_policy(cls, payload: Any) -> dict[str, Any]:
+        """Validate a Studio payload into an AstrBot ``memory.policy`` section.
+
+        Mirrors ``astrbot/core/memory/policy.py``: bad modes/scopes, non-boolean
+        toggles, out-of-range budgets, unsafe group ids and duplicate rows are
+        rejected here instead of being written and silently degraded by AstrBot.
+        Only these JSON scalars are accepted -- no paths, URLs or free-form keys
+        can reach ``cmd_config.json`` through this endpoint.
+        """
+
+        if not isinstance(payload, dict):
+            raise DeploymentError("记忆策略请求体必须是 JSON 对象。")
+        unknown = sorted(set(payload) - {"default_mode", "private", "groups"})
+        if unknown:
+            raise DeploymentError(f"记忆策略不支持这些字段：{', '.join(unknown)}")
+
+        default_mode = cls._policy_mode(payload.get("default_mode"))
+        if default_mode is None:
+            raise DeploymentError("default_mode 只能是 conversation 或 long_term。")
+
+        section: dict[str, Any] = {"default_mode": default_mode}
+
+        raw_private = payload.get("private")
+        if raw_private is not None:
+            section["private"] = cls._policy_entry(raw_private, is_private=True, where="private")
+
+        raw_groups = payload.get("groups", [])
+        if raw_groups is None:
+            raw_groups = []
+        if not isinstance(raw_groups, list):
+            raise DeploymentError("groups 必须是数组。")
+        if len(raw_groups) > MEMORY_POLICY_MAX_GROUPS:
+            raise DeploymentError(f"最多配置 {MEMORY_POLICY_MAX_GROUPS} 个群。")
+        groups: dict[str, Any] = {}
+        for index, row in enumerate(raw_groups):
+            where = f"第 {index + 1} 行群策略"
+            if not isinstance(row, dict):
+                raise DeploymentError(f"{where} 必须是对象。")
+            group_id = cls._policy_group_id(row.get("group_id"), where)
+            if group_id in groups:
+                raise DeploymentError(f"群 {group_id} 重复配置。")
+            groups[group_id] = cls._policy_entry(
+                {key: value for key, value in row.items() if key != "group_id"},
+                is_private=False,
+                where=f"群 {group_id}",
+            )
+        section["groups"] = groups
+        return section
+
+    @staticmethod
+    def _policy_row(
+        group_id: str,
+        raw: Any,
+        warnings: list[str],
+        *,
+        is_private: bool = False,
+        where: str | None = None,
+    ) -> dict[str, Any]:
+        """Tolerant read of one stored entry -- report, never rewrite.
+
+        Mirrors ``astrbot/core/memory/policy.py`` fail-safe semantics: the whole
+        entry is degraded to ``conversation`` as soon as one field fails
+        validation, so ``effective_mode`` describes what AstrBot will really do
+        while ``mode``/``scope`` keep the stored (possibly invalid) values.  The
+        UI must not present an invalid entry as an effective ``long_term`` one.
+        """
+
+        label = where or f"memory.policy.groups.{group_id}"
+        row: dict[str, Any] = {
+            "group_id": group_id,
+            "mode": MEMORY_POLICY_DEFAULT_MODE,
+            "scope": MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP,
+            "extract": True,
+            "inject": True,
+            "max_items": None,
+            "max_chars": None,
+            "unknown_fields": [],
+            "errors": [],
+            "invalid": False,
+            "effective_mode": MEMORY_POLICY_DEFAULT_MODE,
+            "effective_scope": MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP,
+        }
+
+        def fail(field_name: str, problem: str) -> None:
+            row["invalid"] = True
+            row["errors"].append(problem)
+            prefix = f"{label}.{field_name}" if field_name else label
+            warnings.append(f"{prefix}：{problem}")
+
+        if not isinstance(raw, dict):
+            fail("", "条目不是对象")
+            warnings.append(f"{label}：该行配置非法，AstrBot 会把整条降级为 conversation。")
+            return row
+
+        allowed = {"mode", "scope", "extract", "inject", "max_items", "max_chars"}
+        unknown = sorted(str(key) for key in raw if key not in allowed)
+        if unknown:
+            row["unknown_fields"] = unknown
+            warnings.append(
+                f"{label}：未知字段 {', '.join(unknown)} 会被 AstrBot 忽略（可能是拼写错误）。"
+            )
+
+        mode = DeployManager._policy_mode(raw.get("mode"))
+        if mode is None:
+            fail("mode", f"非法值 {raw.get('mode')!r}（只允许 conversation / long_term）")
+        else:
+            row["mode"] = mode
+
+        raw_scope = raw.get("scope")
+        if raw_scope is None:
+            row["scope"] = MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP
+        elif isinstance(raw_scope, str) and raw_scope.strip().lower() in MEMORY_POLICY_SCOPES:
+            row["scope"] = raw_scope.strip().lower()
+            if is_private and row["scope"] != MEMORY_POLICY_SCOPE_USER:
+                fail("scope", f"私聊只允许 scope=user，收到 {row['scope']!r}")
+        else:
+            fail("scope", f"非法值 {raw_scope!r}（只允许 group / user / group_user）")
+
+        for name in ("extract", "inject"):
+            if name in raw and raw[name] is not None:
+                if isinstance(raw[name], bool):
+                    row[name] = raw[name]
+                else:
+                    fail(name, f"必须是 true/false，收到 {raw[name]!r}")
+
+        for name, bounds in (
+            ("max_items", MEMORY_POLICY_MAX_ITEMS),
+            ("max_chars", MEMORY_POLICY_MAX_CHARS),
+        ):
+            value = raw.get(name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                fail(name, f"必须是整数，收到 {value!r}")
+            elif not bounds[0] <= value <= bounds[1]:
+                fail(name, f"必须在 {bounds[0]}..{bounds[1]} 之间，收到 {value}")
+            else:
+                row[name] = value
+
+        if row["invalid"]:
+            row["effective_mode"] = MEMORY_POLICY_DEFAULT_MODE
+            row["effective_scope"] = (
+                MEMORY_POLICY_SCOPE_USER if is_private else MEMORY_POLICY_SCOPE_GROUP
+            )
+            warnings.append(f"{label}：该行配置非法，AstrBot 会把整条降级为 conversation。")
+        else:
+            row["effective_mode"] = row["mode"]
+            row["effective_scope"] = row["scope"]
+        return row
+
+    def get_memory_policy(self) -> dict[str, Any]:
+        """Return the stored per-group long-term memory policy (config only)."""
+
+        path = self.astrbot_cmd_config_path
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": False,
+            "supported": False,
+            "saved": False,
+            "config_path": str(path),
+            "policy_path": "memory.policy",
+            "mode_options": [
+                {"value": "conversation", "label": "会话记忆"},
+                {"value": "long_term", "label": "长期记忆"},
+            ],
+            "scope_options": [
+                {"value": "group", "label": "群记忆（读写本群）"},
+                {"value": "user", "label": "个人记忆（读写发送者本人）"},
+                {"value": "group_user", "label": "群 + 个人（写本群，读两者）"},
+            ],
+            "limits": {
+                "max_items": list(MEMORY_POLICY_MAX_ITEMS),
+                "max_chars": list(MEMORY_POLICY_MAX_CHARS),
+                "max_groups": MEMORY_POLICY_MAX_GROUPS,
+            },
+            "default_mode": MEMORY_POLICY_DEFAULT_MODE,
+            "private": {
+                "mode": MEMORY_POLICY_DEFAULT_MODE,
+                "scope": MEMORY_POLICY_SCOPE_USER,
+                "extract": True,
+                "inject": True,
+                "max_items": None,
+                "max_chars": None,
+                "configured": False,
+                "invalid": False,
+                "errors": [],
+                "unknown_fields": [],
+                "effective_mode": MEMORY_POLICY_DEFAULT_MODE,
+                "effective_scope": MEMORY_POLICY_SCOPE_USER,
+            },
+            "groups": [],
+            "warnings": [],
+            "invalid_rows": 0,
+            "memory_enabled": None,
+            "read_channel": "",
+            "write_channel": "",
+            "readable": False,
+            "writable": False,
+            "container_running": False,
+            "permission_denied": False,
+            "actions": [],
+            "patch_hint": "unknown",
+            "restart_required": True,
+            "hot_reload": False,
+            "warning": (
+                "长期记忆只对下面列出的群生效；未列出的群和私聊保持 conversation（只用会话历史），"
+                "不写入也不读取长期记忆。"
+            ),
+            "message": "",
+            "error": "",
+        }
+        data, read_error, read_channel = self._read_astrbot_config()
+        container_ready, _container_reason = self._astrbot_container_available()
+        if data is None:
+            permission_denied = "拒绝" in read_error or "Permission" in read_error
+            payload["error"] = read_error
+            payload["read_channel"] = ""
+            payload["write_channel"] = ""
+            payload["readable"] = False
+            payload["writable"] = False
+            payload["container_running"] = container_ready
+            payload["permission_denied"] = permission_denied
+            if permission_denied:
+                # A permission problem is not an unsupported instance: keep
+                # ``supported`` true and hand out repair steps instead.
+                payload["supported"] = True
+                payload["actions"] = self._config_permission_actions(
+                    container_available=container_ready
+                )
+                payload["message"] = (
+                    "本机无法访问 AstrBot 配置文件（权限问题），"
+                    + (
+                        "Studio 已改用容器内读写；请刷新后重试。"
+                        if container_ready
+                        else "且 AstrBot 容器当前不可用；请先启动实例，或按建议修复文件权限。"
+                    )
+                )
+            else:
+                payload["actions"] = self._config_permission_actions(
+                    container_available=container_ready
+                )
+                payload["message"] = (
+                    f"{read_error}。记忆策略需要 AstrBot 的 cmd_config.json，"
+                    "因此当前实例显示为不支持；Studio 不会伪造已保存的值。"
+                )
+            return payload
+
+        sidecar, sidecar_error = self._read_memory_policy_sidecar()
+        if sidecar is not None:
+            sidecar_policy = sidecar.get("policy", sidecar)
+            if isinstance(sidecar_policy, dict):
+                memory = data.get("memory")
+                memory = memory if isinstance(memory, dict) else {}
+                memory = dict(memory)
+                memory["policy"] = sidecar_policy
+                data = dict(data)
+                data["memory"] = memory
+        memory = data.get("memory")
+        memory = memory if isinstance(memory, dict) else {}
+        payload.update(available=True, supported=True)
+        payload["read_channel"] = read_channel
+        payload["write_channel"] = "host" if read_channel == "host" else "container"
+        payload["readable"] = True
+        # Host readability does not imply host writability (the container often
+        # owns the file as root 0600), so probe W_OK instead of guessing.
+        try:
+            host_writable = os.access(self.astrbot_cmd_config_path, os.W_OK)
+        except OSError:
+            host_writable = False
+        payload["writable"] = bool(host_writable or container_ready)
+        payload["container_running"] = container_ready
+        payload["permission_denied"] = False
+        payload["actions"] = (
+            [] if payload["writable"] else self._config_permission_actions(container_available=False)
+        )
+        enable = memory.get("enable")
+        payload["memory_enabled"] = enable if isinstance(enable, bool) else None
+        payload["patch_hint"] = (
+            "detected"
+            if isinstance(data.get("memory"), dict)
+            else "unknown"
+        )
+        warnings: list[str] = []
+        section = memory.get("policy")
+        if section is None:
+            section = {}
+        if not isinstance(section, dict):
+            warnings.append("memory.policy 不是对象，AstrBot 会把所有群按 conversation 处理。")
+            section = {}
+
+        raw_default = section.get("default_mode", MEMORY_POLICY_DEFAULT_MODE)
+        default_mode = self._policy_mode(raw_default)
+        if default_mode is None:
+            warnings.append(f"memory.policy.default_mode 非法：{raw_default!r}；AstrBot 按 conversation 处理。")
+            default_mode = MEMORY_POLICY_DEFAULT_MODE
+        payload["default_mode"] = default_mode
+
+        raw_private = section.get("private")
+        private_row = dict(payload["private"])
+        if isinstance(raw_private, dict) and raw_private:
+            private_row = self._policy_row(
+                "private", raw_private, warnings, is_private=True, where="memory.policy.private"
+            )
+            private_row.pop("group_id", None)
+            private_row["configured"] = True
+        elif not raw_private:
+            # AstrBot ignores a falsy private entry, so private chats follow
+            # default_mode.  Show that instead of inventing conversation.
+            private_row.update(
+                {
+                    "configured": False,
+                    "mode": default_mode,
+                    "scope": MEMORY_POLICY_SCOPE_USER,
+                    "effective_mode": default_mode,
+                    "effective_scope": MEMORY_POLICY_SCOPE_USER,
+                    "invalid": False,
+                    "errors": [],
+                    "unknown_fields": [],
+                }
+            )
+        else:
+            warnings.append(
+                "memory.policy.private 不是对象，AstrBot 会把私聊策略降级为 conversation。"
+            )
+            private_row.update(
+                {
+                    "configured": True,
+                    "invalid": True,
+                    "errors": ["配置不是对象"],
+                    "effective_mode": MEMORY_POLICY_DEFAULT_MODE,
+                }
+            )
+        payload["private"] = private_row
+
+        raw_groups = section.get("groups")
+        if raw_groups is not None and not isinstance(raw_groups, dict):
+            warnings.append("memory.policy.groups 不是对象，AstrBot 会忽略所有按群策略。")
+        elif isinstance(raw_groups, dict):
+            rows = []
+            seen_keys: dict[str, list[str]] = {}
+            for key in sorted(raw_groups, key=lambda item: str(item)):
+                if not isinstance(key, str) or not key.strip():
+                    warnings.append(f"memory.policy.groups 的键非法：{key!r}；AstrBot 会忽略它。")
+                    continue
+                name = key.strip()
+                seen_keys.setdefault(name, []).append(str(key))
+                rows.append(self._policy_row(name, raw_groups[key], warnings))
+            for name, raw_keys in seen_keys.items():
+                if len(raw_keys) < 2:
+                    continue
+                # AstrBot strips keys, so these entries collapse into one
+                # policy whose winner depends on JSON order: report "unknown"
+                # instead of guessing which one wins.
+                warnings.append(
+                    f"memory.policy.groups 中群号 {name} 重复（{', '.join(raw_keys)}）："
+                    "AstrBot 只保留其中一个，无法确定哪一个生效；请删除多余条目。"
+                )
+                for row in rows:
+                    if row["group_id"] != name:
+                        continue
+                    row["invalid"] = True
+                    row["errors"].append("群号重复：AstrBot 只保留其中一个，无法确定哪一个生效")
+                    row["effective_mode"] = None
+            payload["groups"] = rows
+        invalid_rows = sum(1 for row in payload["groups"] if row["invalid"])
+        if payload["private"].get("invalid"):
+            invalid_rows += 1
+        payload["invalid_rows"] = invalid_rows
+        payload["warnings"] = warnings
+        notes = [payload["warning"]]
+        if payload["invalid_rows"]:
+            notes.append(
+                f"发现 {payload['invalid_rows']} 条非法策略：AstrBot 会把它们按 conversation 处理"
+                "（不是 long_term 生效）；请按 warnings 逐条修正后重新保存。"
+            )
+        if payload["memory_enabled"] is False:
+            notes.append("AstrBot 的 memory.enable 当前为 false：长期记忆总开关关闭，按群策略保存后也不会生效，需要先打开记忆总开关。")
+        if payload["memory_enabled"] is None:
+            notes.append("无法确认 AstrBot 的 memory.enable；若未启用长期记忆，策略保存后不会生效。")
+        if payload["patch_hint"] != "detected":
+            notes.append(
+                "无法从配置确认当前 AstrBot 镜像是否已应用 integrations/astrbot-memory 补丁；"
+                "未打补丁的 AstrBot 会忽略 memory.policy。"
+            )
+        notes.append(
+            "本面板直接编辑 AstrBot 配置文件：上游没有 memory.policy 的在线接口，"
+            "保存后需要 AstrBot 重启或重新加载配置才生效。"
+        )
+        payload["message"] = " ".join(notes)
+        return payload
+
+    def set_memory_policy(self, payload: Any) -> dict[str, Any]:
+        """Persist a validated policy into ``cmd_config.json`` → ``memory.policy``.
+
+        Only that one nested key is replaced; every other AstrBot setting (and
+        every other ``memory.*`` key) is preserved byte-for-byte at JSON level.
+        """
+
+        section = self.validate_memory_policy(payload)
+        data, read_error, _read_channel = self._read_astrbot_config()
+        if data is None:
+            container_ready, _reason = self._astrbot_container_available()
+            if "拒绝" in read_error or "Permission" in read_error:
+                raise MemoryPolicyWriteUnavailableError(
+                    f"{read_error}。无法保存记忆策略；Studio 不会伪造已保存的值。",
+                    actions=self._config_permission_actions(container_available=container_ready),
+                )
+            raise MemoryPolicyUnsupportedError(
+                f"{read_error}。无法保存记忆策略；Studio 不会伪造已保存的值。"
+            )
+        memory = data.get("memory")
+        memory = dict(memory) if isinstance(memory, dict) else {}
+        previous = memory.get("policy")
+        memory["policy"] = section
+        updated = dict(data)
+        updated["memory"] = memory
+        sidecar_channel, sidecar_error = self._write_memory_policy_sidecar(section)
+        if not sidecar_channel:
+            container_ready, _reason = self._astrbot_container_available()
+            raise MemoryPolicyWriteUnavailableError(
+                f"{sidecar_error}。策略未保存；Studio 不会伪造已保存的值。",
+                actions=self._config_permission_actions(container_available=container_ready),
+            )
+        write_channel, write_error = self._write_astrbot_config(updated)
+        if not write_channel:
+            # The durable sidecar is authoritative for the patched memory
+            # service; keep it and report a non-fatal compatibility warning.
+            payload = self.get_memory_policy()
+            payload["saved"] = True
+            payload["write_channel"] = sidecar_channel
+            payload["warning"] = f"sidecar 已保存，但 cmd_config.json 兼容副本未写入：{write_error}"
+            return payload
+        result = self.get_memory_policy()
+        result["write_channel"] = write_channel
+        result["saved"] = True
+        result["changed"] = previous != section
+        notes = ["记忆策略已保存到 AstrBot 的 memory.policy。"]
+        if result.get("memory_enabled") is False:
+            notes.append("注意：AstrBot 的 memory.enable 为 false，需要先在 AstrBot 侧打开长期记忆，策略才会生效。")
+        notes.append(
+            "未列出的群和私聊仍按 conversation 处理。上游没有 memory.policy 的在线接口，"
+            "所以需要 AstrBot 重启或重新加载配置后才生效（面板不调用热重载）。"
+        )
+        result["message"] = "".join(notes)
+        return result
 
     @staticmethod
     def _parse_metadata_yaml(text: str) -> dict[str, str]:

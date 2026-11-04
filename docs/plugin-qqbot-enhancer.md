@@ -13,6 +13,7 @@
 - @/私聊支持保守的自然语言找图意图，例如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，避免误伤普通聊天。
 - `/唱歌`、`/点歌 [关键词]` 从 `songs/` 读取用户自己的本地授权音频，用 `Comp.Record.fromFileSystem` 发送；不调用 LLM/TTS/音乐生成，不消耗 token。
 - `/option`（别名 `/插件用法`、`/用法`）显示本插件命令、当前模式和配置入口；通过公开 `Context.get_all_stars()` 列出可可靠读取的已加载插件元数据，不暴露配置值/API Key，不枚举不稳定的内部 handler 命令。
+- 可选 `/记忆 状态|搜索|删除|忘记|整理` 聊天管理 AstrBot 原生长期记忆：默认关闭，仅管理员/群主/允许名单可用，只读写当前会话作用域；未打补丁/服务关闭/未确认删除时明确失败，不伪造成功（2.9.0）。
 - 从插件的 `stickers/` 目录发送本地表情包；支持关键词、情绪和随机选择，并带会话冷却、防连续重复、文件缺失降级。
 - @/私聊收到无文字纯图片/表情包或 `Comp.Face` 时，优先用自然短句反应，不调用 LLM；可按概率附加内置/收藏表情。
 - 支持 `/收藏表情 [分类]`、`/表情状态`、`/表情分类`、`/表情列表 [分类]`、`/发表情 [分类]`，收藏表情持久化到 AstrBot 插件数据目录并参与正常回复；`/表情状态` 只读诊断保存失败原因。
@@ -130,6 +131,12 @@ AstrBot v4.29 的实际加载规则（不是本文档发明）：
 | 配置 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `memory_mode` | string | `direct` | `direct`=省 Token 直连；`astrbot`=使用 AstrBot 默认 Agent 的会话历史 |
+| `memory_commands_enabled` | bool | `false` | 启用 `/记忆` 管理命令（需管理员/群主/允许名单） |
+| `memory_commands_destructive_enabled` | bool | `false` | 允许 `/记忆 删除` 与 `/记忆 忘记`（破坏性，默认关） |
+| `memory_commands_allow_user_ids` | string | `""` | 逗号分隔的允许发送者 ID（通常是 QQ 号） |
+| `memory_commands_max_results` | int | `5` | `/记忆 搜索` 最多显示条数（1-10） |
+| `memory_commands_content_chars` | int | `80` | 回复中单条记忆最大字符数（20-200） |
+| `memory_commands_max_reply_chars` | int | `900` | `/记忆` 回复总长度上限（200-2000） |
 | `image_search_enabled` | bool | `true` | 启用 `/找图`、`/搜图` 及自然语言找图 |
 | `image_search_natural_language_enabled` | bool | `true` | 允许 @/私聊自然语言找图；非 @ 群消息不触发 |
 | `image_search_timeout_seconds` | int | `12` | Bing HTML / 百度 JSON 搜索页单次 HTTP 超时 |
@@ -1052,6 +1059,29 @@ provider（direct）或 Agent（astrbot memory）前自动读取该公开网页�
 - 限制：只读取静态 HTTP 文本；登录页、验证码、纯 JS 渲染页面或反爬站点可能读取失败；
   真实 CSDN 链接仅做过 stdlib GET 探针，AstrBot / DeepSeek / QQ E2E 未验证。
 
+### 4.30 长期记忆聊天管理 `/记忆`（2.9.0，默认关闭）
+
+- 依赖 AstrBot 原生长期记忆补丁：插件**可选** `import astrbot.core.memory`，用
+  `get_memory_service(config)` + `build_context(event)` 取服务与作用域；未打补丁、
+  服务异常或 `memory.enable=false` 时返回固定中文提示，不读取/不修改任何数据。
+- 权限：AstrBot 管理员（`event.is_admin()`/`role=="admin"`）、QQ 群主/管理员
+  （`sender.role in {owner, admin}`）或 `memory_commands_allow_user_ids` 允许名单。
+  其他人固定拒绝；权限检查在所有读写之前。
+- 作用域：群聊只允许 `group` 作用域（本群），私聊只允许 `user` 作用域（自己）。
+  只调用 `service.export(scope_type, scope_id)`，从不调用 `export_all()`；不存在把
+  其他群/私聊记忆拼进回复的路径。`/记忆 删除 <id>` 先确认 id 在当前作用域内再
+  `service.delete(id)`；`/记忆 忘记` 必须显式写 `本群` 或 `我的`，禁止静默清空。
+- 安全：单条内容先按中英文密码/Token/API Key/Bearer/Authorization 模式脱敏，再按
+  `memory_commands_content_chars` 截断；搜索条数受 `memory_commands_max_results`
+  限制，回复总长度受 `memory_commands_max_reply_chars` 限制。`/记忆 整理` 是纯本地
+  dry-run（完全重复、近似重复、低价值/低置信、已过期），不调用 LLM、不写库、不删除。
+- 失败语义：未打补丁、服务不可用、记忆关闭、id 不在当前作用域、`delete()` 返回
+  `False`、`forget()` 返回 0 或抛异常时都明确说明失败/未修改，不出现“已删除/已忘记”
+  的假成功。
+- 限制：AstrBot v4.29 + 补丁的真实 QQ 端到端未验证；私聊管理员身份取决于适配器是否
+  提供 `role`，提供不了时需用允许名单；`/记忆` 只管理当前作用域，不能替代 Studio 的
+  跨作用域导出/导入。
+
 ## 5. 与 AstrBot 默认 LLM 管线避免重复
 
 插件自己调用 provider，属于“显式调用 LLM”路线，不把同一条消息再交给默认 Agent 管线。实际流程是：
@@ -1233,6 +1263,11 @@ yield event.chain_result(chain)
 20. **收藏表情数据目录/权限/index 损坏未做真实部署验证。** 使用公开 `StarTools.get_data_dir()` 和原子写入，但磁盘写满、权限变化、手工破坏 index、跨容器读取等仍可能导致收藏不可用；插件会降级提示，不会主动删除用户文件。没有实现破坏性删除命令。
 21. **收藏表情不会自动收集所有用户图片。** 只有显式执行 `/收藏表情` 才会保存；不会保存朋友圈/聊天原文、用户 ID 或敏感路径。收藏文件跨 QQ/协议端可读性仍取决于部署与文件服务。
 
+42. **`/记忆` 聊天管理依赖 AstrBot 记忆补丁且默认关闭。** 未打补丁时命令只返回固定提示；
+    管理员/群主角色来自适配器 `role`/`is_admin()`，适配器不提供时需配置
+    `memory_commands_allow_user_ids`；管理范围固定为当前群或当前私聊自己的作用域，
+    不做跨作用域导出；真实 AstrBot/QQ E2E 与多适配器角色字段未验证。
+
 ## 9. 校验记录
 
 已执行：
@@ -1243,7 +1278,7 @@ python3 -m json.tool plugins/qqbot_enhancer/_conf_schema.json >/dev/null
 python3 -m unittest tests.test_enhancer_plugin -v
 ```
 
-当前增强插件测试为 **297 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析（含 title/desc 元数据）、百度 JSON 解析、相关性中/日/英文规范化/阈值过滤/无相关候选不发图/百度第二源默认不调用、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用、AI 自动收藏默认关闭、任意群成员图片视觉判定收藏、AI 失败本地启发式降级、AI 非表情/大图/纯 Face 不收藏、每小时限频、provider overrides、恶意分类安全回退、无 tool/电脑控制、模块导入/package 相对导入/ConfigReader 旧配置/旧 index/媒体/歌曲/相关性/store/llm helper、安全工具白名单/参数 schema/路径/URL/命令拒绝、search_images/send_sticker/collect_sticker/list_sticker_categories mock、权限关闭回退、多 marker 拒绝、memory 模式工具链替换、无 eval/exec/subprocess、收藏目录 0755/文件 0644、已有树迁移、符号链接跳过、越界不 chmod、root 创建权限失败降级、旧 index/收藏读写回归、自然语言嘲讽/开心/收藏分类/通用表情/无匹配/非 @ 不触发/冷却/禁用降级、一次一张且不调用 LLM、最近收藏重分类本地/AI/缓存/无媒体/普通聊天/不完整指令、移动成功 0755/0644、store move/index 原子回滚/同分类/符号链接拒绝、AI 不可用保留旧分类、命令/marker 不误触发、tags/meaning/tone index 持久化与旧 index 缺省兼容、AI 语义分类、按 tags 触发自然语言/AI marker/safe_tools send_sticker、全局收藏跨会话查询/发送、多分类文件去重单份、多分类命令/计数/列表/发送、追加/移出/只放到分类、旧 index categories 迁移、store 分类原子更新/权限、统一 AI 协议单 prompt、双 marker 只执行一个附件、无 marker 不随机补发、legacy sticker marker 兼容、memory 语义 only/单附件、非法 tool marker 纯文本回退、/food 关键词/地点双顺序/location_id/无结果/地点无匹配/超时/接口错误/非 JSON/最多结果/冷却/URL/host 安全/命令别名/不调用 LLM、group_personas JSON 解析/长度数量限制、两个群 prompt 隔离、私聊/未知群 default fallback、非法映射旧配置回退、memory 模式安全降级且不泄漏 prompt、群聊身份上下文同群两昵称/QQ 区分、私聊/无昵称 fallback、历史条数限制、回复身份脱敏、关闭旧 prompt 兼容、memory on_llm_request 当前发送者身份注入/私聊/无昵称/无 provider 变更/异常安全降级/重复注入去重、option 不泄漏身份、群聊会话列表/新建/切换/同名拒绝/自动新建/跨群隔离/API 缺失与异常降级/群 persona 绑定、ambient 默认关闭/低频缓存不触发/概率参与/官方 At/昵称文本降级/冷却/TTL/跨群隔离/@ 必回/隐私、memory on_llm_request 全群缓存注入/UMO 隔离/长度限制/异常降级、round_interval>cache_limit、min_message_chars/ignore_pure_image/ignore_pure_face 过滤、命名会话目标 persona 一致才 switch/None 或不同拒绝且 current 不变/无隐藏新会话/新会话不二次创建、ambient 私聊不注入 group 文案、会话级提示词模板 pinned 默认/显式模板创建立即切换/`/会话` 只切换不新建/会话列表提示词名称一致/active 变化不自动新建、表情状态诊断与保存失败原因、会话上限下未满不删/满额删最老非 current/current 最老跳过/删除失败中止/auto prune 关闭、/删除会话 标题/短 ID/同名/current/最后一条/跨群隔离、列表 x/上限和 /option 命令限制文案、提示词模板配置 mtime+size 热读取/缓存命中/改名立即生效/坏 JSON/缺文件/符号链接/超大回退/新标题创建/旧名ID兼容/诊断不泄露路径、memory sticker/tool catalog 注入/幂等/direct 跳过/safe_tools 关闭/无素材静默/重复 marker 去重/表情状态注入显示/memory send_sticker marker 实际一张图、ambient/generic 概率互斥/ambient 未命中不 fallback/reply_probability 唯一/关键词独立/旧 ambient 概率忽略、精确 category/tag/meaning 匹配/“可爱的猫猫”模糊唯一匹配/多候选拒绝/无素材失败诊断/最近工具失败/on_decorating_result extra 缺失仍处理 marker/成功一张图/失败不残留 marker。单测本身**不访问真实网络**。
+当前增强插件测试为 **332 tests**，覆盖：@/AtAll 判定、私聊必回、概率与冷却、@ 绕过冷却、`memory_mode=direct/astrbot` 回归、非回复分支正确设置 `call_llm=True` 阻断默认 LLM、yield 先于 stop_event、纯图片/表情过滤、指令跳过、原生视觉调用、视觉失败后的 caption 回退、AstrBot 全局 caption provider、无视觉兜底、base64 图片引用、关键词/情绪表情包、冷却、防重复、图片缺失降级、图片搜索关键词/URL 编码、Bing HTML 解析（含 title/desc 元数据）、百度 JSON 解析、相关性中/日/英文规范化/阈值过滤/无相关候选不发图/百度第二源默认不调用、非 HTTP(S)/内网 URL 过滤、下载 magic/Content-Type/大小校验、下载失败重试下一个候选、远程 URL 兜底、第二搜索源、搜索结果数、搜索冷却、自然语言意图与关键词提取（大树/千早爱音）、@ 群聊和私聊自然语言发送、数量词覆盖结果数、非 @ 不触发、普通聊天不误伤、自然语言搜索冷却、本地点歌成功/关键词/冷却/空目录/超大文件/路径穿越且不调用 LLM、`/option` 本插件命令/配置入口/已加载插件元数据/输出截断/别名注册/不暴露 Key/registry 不可用降级、@/私聊 Comp.Image/Face 自动短句反应/附加本地表情/非 @ 不触发、收藏分类/去重/非法分类/超大小/数量上限/无图片/纯 Face/分类列表/列表不泄露路径/发表情/收藏表情参与正常回复/冷启动 index 加载/旧内置 8 张贴纸兼容、引用图片优先、最近媒体缓存取图、缓存最多 3 张/TTL 过期、默认不自动收藏、显式开启小图自动收藏、大图跳过、自动收藏冷却、direct 模式 marker 注入/合法标签/非法/多标签删除/无标记纯文本/无标记不随机补发、收藏分类标签、memory 模式本地语义匹配/概率/收藏分类匹配、无 LLM tool/电脑控制调用、AI 自动收藏默认关闭、任意群成员图片视觉判定收藏、AI 失败本地启发式降级、AI 非表情/大图/纯 Face 不收藏、每小时限频、provider overrides、恶意分类安全回退、无 tool/电脑控制、模块导入/package 相对导入/ConfigReader 旧配置/旧 index/媒体/歌曲/相关性/store/llm helper、安全工具白名单/参数 schema/路径/URL/命令拒绝、search_images/send_sticker/collect_sticker/list_sticker_categories mock、权限关闭回退、多 marker 拒绝、memory 模式工具链替换、无 eval/exec/subprocess、收藏目录 0755/文件 0644、已有树迁移、符号链接跳过、越界不 chmod、root 创建权限失败降级、旧 index/收藏读写回归、自然语言嘲讽/开心/收藏分类/通用表情/无匹配/非 @ 不触发/冷却/禁用降级、一次一张且不调用 LLM、最近收藏重分类本地/AI/缓存/无媒体/普通聊天/不完整指令、移动成功 0755/0644、store move/index 原子回滚/同分类/符号链接拒绝、AI 不可用保留旧分类、命令/marker 不误触发、tags/meaning/tone index 持久化与旧 index 缺省兼容、AI 语义分类、按 tags 触发自然语言/AI marker/safe_tools send_sticker、全局收藏跨会话查询/发送、多分类文件去重单份、多分类命令/计数/列表/发送、追加/移出/只放到分类、旧 index categories 迁移、store 分类原子更新/权限、统一 AI 协议单 prompt、双 marker 只执行一个附件、无 marker 不随机补发、legacy sticker marker 兼容、memory 语义 only/单附件、非法 tool marker 纯文本回退、/food 关键词/地点双顺序/location_id/无结果/地点无匹配/超时/接口错误/非 JSON/最多结果/冷却/URL/host 安全/命令别名/不调用 LLM、group_personas JSON 解析/长度数量限制、两个群 prompt 隔离、私聊/未知群 default fallback、非法映射旧配置回退、memory 模式安全降级且不泄漏 prompt、群聊身份上下文同群两昵称/QQ 区分、私聊/无昵称 fallback、历史条数限制、回复身份脱敏、关闭旧 prompt 兼容、memory on_llm_request 当前发送者身份注入/私聊/无昵称/无 provider 变更/异常安全降级/重复注入去重、option 不泄漏身份、群聊会话列表/新建/切换/同名拒绝/自动新建/跨群隔离/API 缺失与异常降级/群 persona 绑定、ambient 默认关闭/低频缓存不触发/概率参与/官方 At/昵称文本降级/冷却/TTL/跨群隔离/@ 必回/隐私、memory on_llm_request 全群缓存注入/UMO 隔离/长度限制/异常降级、round_interval>cache_limit、min_message_chars/ignore_pure_image/ignore_pure_face 过滤、命名会话目标 persona 一致才 switch/None 或不同拒绝且 current 不变/无隐藏新会话/新会话不二次创建、ambient 私聊不注入 group 文案、会话级提示词模板 pinned 默认/显式模板创建立即切换/`/会话` 只切换不新建/会话列表提示词名称一致/active 变化不自动新建、表情状态诊断与保存失败原因、会话上限下未满不删/满额删最老非 current/current 最老跳过/删除失败中止/auto prune 关闭、/删除会话 标题/短 ID/同名/current/最后一条/跨群隔离、列表 x/上限和 /option 命令限制文案、提示词模板配置 mtime+size 热读取/缓存命中/改名立即生效/坏 JSON/缺文件/符号链接/超大回退/新标题创建/旧名ID兼容/诊断不泄露路径、memory sticker/tool catalog 注入/幂等/direct 跳过/safe_tools 关闭/无素材静默/重复 marker 去重/表情状态注入显示/memory send_sticker marker 实际一张图、ambient/generic 概率互斥/ambient 未命中不 fallback/reply_probability 唯一/关键词独立/旧 ambient 概率忽略、精确 category/tag/meaning 匹配/“可爱的猫猫”模糊唯一匹配/多候选拒绝/无素材失败诊断/最近工具失败/on_decorating_result extra 缺失仍处理 marker/成功一张图/失败不残留 marker、`/记忆` 命令解析/管理员/群主/允许名单权限/群与私聊作用域隔离/未打补丁与未启用降级/密钥脱敏与输出限长/删除与忘记不伪造成功/整理 dry-run 不写库、schema 默认关闭且版本一致。单测本身**不访问真实网络**。
 
 非单测在线冒烟（不代表 AstrBot/QQ 端到端）：
 
@@ -1257,4 +1292,4 @@ python3 -m unittest tests.test_enhancer_plugin -v
 
 第三方页面/接口结构和网络策略随时可能变化，因此上述在线结果不构成长期保证。
 
-本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **552 tests OK**；其中本插件 297 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。
+本次执行全仓回归：`python3 -m unittest discover -s tests -q`，当前 **720 tests OK**；其中本插件 332 tests、`tests/test_memory_commands.py` 36 tests 全部通过。全仓数量会随其他模块开发变化，以实际运行结果为准。

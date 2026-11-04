@@ -5,6 +5,7 @@ AstrBot v4.29 自动加载插件，提供：
 - QQ 群聊中 @ 机器人必回（`AtAll` / `qq="all"` 不算），私聊必回；
 - 非 @ 群消息按概率回复，并带每群/每用户冷却、最小长度与纯图片/纯表情过滤；
 - `memory_mode` 可在“省 Token 直连模式”和“AstrBot 默认 Agent 长期记忆模式”之间切换；
+- `/记忆 状态|搜索|删除|忘记|整理` 可选聊天管理 AstrBot 原生长期记忆：默认关闭，仅管理员/群主/允许名单可用，只管理当前群或当前私聊自己的作用域，未打补丁时明确不可用（2.9.0）；
 - 图片消息优先走当前会话 provider 的原生视觉调用，失败后回退到可配置图片转述 provider；
 - `/找图 关键词`（别名 `/搜图`）默认只用纯标准库 + 免 API Key 的 Bing Images HTML 搜索，并做中/日/英文标题描述相关性过滤；下载校验图片后发本地文件，失败保留远程 URL 兜底。百度旧第二源默认关闭，只有显式开启才可选；
 - @/私聊支持保守自然语言找图，如“你去找几张大树的图”“帮我搜两张千早爱音图片”；非 @ 群消息不触发，命中后复用同一搜索下载流程并阻断默认 LLM；
@@ -35,6 +36,7 @@ qqbot_enhancer/
 ├── main.py
 ├── metadata.yaml          # AstrBot 要求的插件元数据
 ├── _conf_schema.json      # WebUI 配置 Schema
+├── memory_commands.py     # /记忆 命令解析、权限与作用域隔离（可选长期记忆）
 ├── README.md
 ├── songs/                  # 用户自行放置授权音频；仓库不附带版权歌曲
 │   └── README.md
@@ -193,6 +195,33 @@ Bing/Baidu 页面/JSON 结构变化、网络限制或反爬都可能导致无结
 AstrBot v4.29 没有稳定的公开 API 把 handler 映射回用户命令，因此 `/option` **不会伪称枚举其他插件命令**，也不会访问内部 `star_handlers_registry`。输出不读取/不展示插件配置值或 API Key。
 
 可配置 `option_include_other_plugins`、`option_max_plugins`、`option_max_chars` 控制插件列表和输出长度。
+
+## 长期记忆聊天管理 `/记忆`（2.9.0，默认关闭）
+
+仅当 AstrBot 已安装原生长期记忆补丁时可用。插件通过可选 `import astrbot.core.memory`
+调用官方 `MemoryService`；未打补丁、服务异常或 `memory.enable=false` 时明确提示不可用，
+不会伪造成功。`memory_commands_enabled` 默认 `false`；`删除`/`忘记` 还需要
+`memory_commands_destructive_enabled=true`。
+
+```text
+/记忆 状态
+/记忆 搜索 <关键词>
+/记忆 整理             # dry-run 预览，不写入
+/记忆 删除 <id>        # 需破坏性开关
+/记忆 忘记 本群|我的    # 必须显式指定作用域，需破坏性开关
+```
+
+- 权限：AstrBot 管理员 / QQ 群主·管理员 / `memory_commands_allow_user_ids`
+  允许名单；其他发送者固定拒绝。
+- 作用域：群聊只管理本群 `group` 作用域，私聊只管理自己的 `user` 作用域；只调用
+  `service.export(scope_type, scope_id)`（从不 `export_all()`），不会把其他群或私聊
+  记忆拼进回复；删除前先校验 id 在当前作用域内。
+- 输出：每条记忆先脱敏（密码/Token/API Key 等）再截断，单条长度受
+  `memory_commands_content_chars` 限制，搜索条数受 `memory_commands_max_results`
+  限制，整条回复受 `memory_commands_max_reply_chars` 限制。
+- 不伪造成功：未打补丁、服务不可用、记忆关闭、id 不在当前作用域、`delete()`/
+  `forget()` 未确认时都明确说明失败或未修改；`整理` 只本地预览重复/近似重复/
+  低价值/过期，不调用 LLM、不写库。
 
 ## 用户表情反应与收藏
 

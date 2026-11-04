@@ -54,6 +54,7 @@ try:  # Loaded as a package by AstrBot.
     from . import conversations as conversation_engine
     from . import food as food_engine
     from . import web_fetch as web_fetch_engine
+    from . import memory_commands as memory_commands_engine
     from . import personas as persona_engine
     from . import persona_bridge as persona_bridge_engine
     from . import safe_tools as safe_tools_engine
@@ -92,6 +93,7 @@ except ImportError:  # Loaded directly by a test harness.
     import conversations as conversation_engine
     import food as food_engine
     import web_fetch as web_fetch_engine
+    import memory_commands as memory_commands_engine
     import personas as persona_engine
     import persona_bridge as persona_bridge_engine
     import safe_tools as safe_tools_engine
@@ -117,7 +119,7 @@ STICKER_RULES_PATH = STICKER_DIR / "sticker_rules.json"
 STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SONG_DIR = PLUGIN_DIR / "songs"
 PLUGIN_DISPLAY_NAME = "QQ Bot 增强回复"
-PLUGIN_FALLBACK_VERSION = "2.8.0"
+PLUGIN_FALLBACK_VERSION = "2.9.0"
 DEFAULT_COLLECTED_CATEGORY = "未分类"
 PENDING_USER_MEDIA_MAX_COUNT = 3
 PROMPT_PROFILE_MAX_PROMPT_CHARS = 12_000
@@ -2992,6 +2994,53 @@ class QQBotEnhancerPlugin(Star):
         | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
         priority=110,
     )
+    @filter.command("记忆", priority=110)
+    async def memory_command(self, event: AstrMessageEvent):
+        """只读/显式清理当前会话作用域的长期记忆（默认关闭，权限门禁）。"""
+
+        event.should_call_llm(True)
+        try:
+            options = memory_commands_engine.Options(
+                enabled=self._cfg_bool("memory_commands_enabled"),
+                destructive_enabled=self._cfg_bool(
+                    "memory_commands_destructive_enabled"
+                ),
+                allow_user_ids=tuple(
+                    self._cfg_list("memory_commands_allow_user_ids")
+                ),
+                max_results=min(
+                    10,
+                    max(1, self._cfg_int("memory_commands_max_results", 1)),
+                ),
+                content_chars=min(
+                    200,
+                    max(20, self._cfg_int("memory_commands_content_chars", 20)),
+                ),
+                max_reply_chars=min(
+                    2000,
+                    max(200, self._cfg_int("memory_commands_max_reply_chars", 200)),
+                ),
+            )
+            reply = memory_commands_engine.handle_text(
+                text=str(getattr(event, "message_str", "") or ""),
+                prefixes=tuple(self._command_prefixes(event)),
+                event=event,
+                context=self.context,
+                options=options,
+            )
+            yield event.plain_result(reply)
+        except Exception:
+            logger.info("qqbot_enhancer /记忆 命令失败")
+            yield event.plain_result("记忆管理命令执行失败，请稍后再试。")
+        finally:
+            event.stop_event()
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.AIOCQHTTP
+        | filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK,
+        priority=110,
+    )
     @filter.command("收藏表情", priority=110)
     async def collect_sticker_command(self, event: AstrMessageEvent):
         """把当前消息中的 Comp.Image 收藏到插件数据目录。"""
@@ -3668,6 +3717,7 @@ class QQBotEnhancerPlugin(Star):
             "/表情列表 [分类]",
             "/发表情 [分类]",
             "/option（别名 /插件用法、/用法）",
+            "/记忆 状态|搜索|删除|忘记|整理（默认关闭；仅管理员/群主/名单）",
             "",
             (
                 f"当前行为：memory_mode={mode}；群 @ 必回；私聊必回；"
@@ -3700,6 +3750,11 @@ class QQBotEnhancerPlugin(Star):
             food_submit_option_line,
             food_search_option_line,
             food_nl_option_line,
+            (
+                f"记忆管理命令：{'已启用' if self._cfg_bool('memory_commands_enabled') else '未启用'}；"
+                f"破坏性操作{'已允许' if self._cfg_bool('memory_commands_destructive_enabled') else '未允许'}；"
+                "仅管理员/群主/名单；只读写当前会话作用域"
+            ),
             (
                 "限制：一个 AstrBot conversation 独立 persona/提示词/记忆；"
                 "工具仅白名单且不控制电脑；一次最多一条文字+一个附件；"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from .store import PROJECT_NAME
+
+_CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
 
 CommandRunner = Callable[
     [Sequence[str], Path, int, Mapping[str, str] | None],
@@ -138,6 +141,35 @@ class DockerController:
         stdout = proc.stdout if isinstance(proc.stdout, str) else (proc.stdout or b"").decode("utf-8", "replace")
         stderr = proc.stderr if isinstance(proc.stderr, str) else (proc.stderr or b"").decode("utf-8", "replace")
         return CommandResult(tuple(command), int(proc.returncode), stdout or "", stderr or "")
+
+    @staticmethod
+    def valid_container_name(name: str) -> bool:
+        """Docker container names only: no separators, spaces or shell chars."""
+
+        return bool(_CONTAINER_NAME_RE.match(str(name or "")))
+
+    def exec_in_container(
+        self,
+        container: str,
+        argv: Sequence[str],
+        *,
+        timeout: int = 60,
+    ) -> CommandResult:
+        """Run ``argv`` inside a container with no shell involved.
+
+        ``docker exec`` gets a plain argument vector, so a config path or
+        payload can never be interpreted by a shell.  The container name is
+        validated first so a poisoned instance config cannot redirect the exec
+        at another container or inject docker flags.
+        """
+
+        name = str(container or "").strip()
+        if not self.valid_container_name(name):
+            return CommandResult((), 125, "", f"非法容器名：{name[:64]!r}")
+        command = [str(item) for item in argv]
+        if not command:
+            return CommandResult((), 125, "", "缺少要在容器内执行的命令。")
+        return self._docker(["exec", name, *command], timeout=timeout)
 
     def _docker(self, args: Sequence[str], *, timeout: int = 60, extra_env: Mapping[str, str] | None = None) -> CommandResult:
         return self._exec([*self._prefix, "docker", *args], timeout=timeout, extra_env=extra_env)
@@ -468,6 +500,14 @@ class DockerController:
         if result.ok:
             return result.stdout.strip() or None
         return None
+
+    def is_container_running(self, container_name: str) -> bool:
+        """Cheap probe for one container (never raises on a missing container)."""
+
+        name = str(container_name or "").strip()
+        if not self.valid_container_name(name):
+            return False
+        return self.container_status(name) == "running"
 
     def is_running(self) -> bool:
         return self.container_status(self.ASTRBOT_CONTAINER) == "running" and (

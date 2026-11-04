@@ -1,0 +1,79 @@
+{
+  "description": "Heuristic-extraction fixtures for the AstrBot v4.29.3 native memory patch. Expectations are pinned to the extractor shipped in patches/0001-native-memory.patch; update them together with the patch.",
+  "pinned_astrbot": "v4.29.3 (f61a7f4)",
+  "turns": [
+    {
+      "id": "preference-positive",
+      "text": "我最喜欢吃麻辣火锅",
+      "expect": [
+        {"key": "偏好.吃麻辣火锅", "content": "用户喜欢：吃麻辣火锅", "scope_type": "user", "min_confidence": 0.6}
+      ]
+    },
+    {
+      "id": "preference-negative",
+      "text": "我不吃香菜",
+      "expect": [
+        {"key": "偏好.香菜", "content": "用户不喜欢/忌口：香菜", "scope_type": "user", "min_confidence": 0.7}
+      ]
+    },
+    {
+      "id": "residence",
+      "text": "我住在杭州",
+      "expect": [
+        {"key": "居住地", "content": "用户居住地：杭州", "scope_type": "user", "min_confidence": 0.6}
+      ]
+    },
+    {
+      "id": "name",
+      "text": "我叫小明",
+      "expect": [
+        {"key": "名字", "content": "用户的名字是：小明", "scope_type": "user", "min_confidence": 0.7}
+      ]
+    },
+    {
+      "id": "group-preference",
+      "text": "我们群里最喜欢点麻辣烫外卖",
+      "private": false,
+      "group_id": "2001",
+      "expect": [
+        {"key": "偏好.点麻辣烫外卖", "content": "本群喜欢：点麻辣烫外卖", "scope_type": "group", "min_confidence": 0.6}
+      ]
+    },
+    {
+      "id": "explicit-recall",
+      "text": "记住：每周三晚上我要去打球",
+      "expect": [
+        {"key": "记录.每周三晚上我要去打球", "content": "用户要求记住：每周三晚上我要去打球", "scope_type": "user", "min_confidence": 0.9}
+      ]
+    },
+    {
+      "id": "english-residence",
+      "text": "I live in Hangzhou",
+      "expect": [
+        {"key": "residence", "content": "用户居住地：Hangzhou", "scope_type": "user", "min_confidence": 0.6}
+      ]
+    },
+    {
+      "id": "habit",
+      "text": "我习惯每周去一次菜市场",
+      "expect": [
+        {"key": "习惯.每周去一次菜市场", "content": "用户的习惯：每周去一次菜市场", "scope_type": "user", "min_confidence": 0.5}
+      ]
+    },
+    {
+      "id": "secret-api-key",
+      "text": "记住：我的 API key 是 sk-abcdef1234567890",
+      "expect": []
+    },
+    {
+      "id": "secret-password",
+      "text": "我的密码是 hunter2，帮我记一下",
+      "expect": []
+    },
+    {
+      "id": "irrelevant-chatter",
+      "text": "今天天气不错",
+      "expect": []
+    }
+  ]
+}

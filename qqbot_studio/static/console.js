@@ -63,6 +63,7 @@
     optionalSupport: {
       plugins: null,
       memory: null,
+      memoryPolicy: null,
       stats: null
     },
     pluginConfig: {
@@ -126,6 +127,8 @@
       buildAiToolsSection(instance),
       buildPromptManagerSection(instance),
       buildMemorySection(instance),
+      buildMemoryPolicySection(instance),
+      buildMemoryContentSection(instance),
       buildStatsSection(instance)
     ],
     subtitleText: (instance) => `实例 ${instance.name || instance.id} · ID ${instance.id || '缺失'} · ${v3SummaryText(instance)}`,
@@ -260,6 +263,7 @@
       v3: {
         plugins: emptyPluginState(),
         memory: emptyMemoryState(instance.memory_mode || asRecord(instance.memory).mode),
+        memoryPolicy: emptyMemoryPolicyState(),
         stats: emptyStatsState()
       }
     };
@@ -908,6 +912,219 @@
     };
   }
 
+  // ------------------------------------------------------------------
+  // Per-group long-term memory policy (AstrBot memory.policy)
+  // ------------------------------------------------------------------
+  const MEMORY_POLICY_WARNING = '长期记忆只对下面列出的群生效；未列出的群和私聊保持 conversation（只用会话历史），既不写入也不读取长期记忆。';
+
+  function emptyMemoryPolicyState() {
+    return {
+      status: 'idle',
+      available: false,
+      supported: false,
+      saved: false,
+      defaultMode: 'conversation',
+      privateMode: 'conversation',
+      privateExtract: true,
+      privateInject: true,
+      privateMaxItems: '',
+      privateMaxChars: '',
+      privateConfigured: true,
+      privateInvalid: false,
+      privateErrors: [],
+      privateEffectiveMode: 'conversation',
+      rows: [],
+      invalidRows: 0,
+      modeOptions: [
+        { value: 'conversation', label: '会话记忆' },
+        { value: 'long_term', label: '长期记忆' }
+      ],
+      scopeOptions: [
+        { value: 'group', label: '群记忆（读写本群）' },
+        { value: 'user', label: '个人记忆（读写发送者本人）' },
+        { value: 'group_user', label: '群 + 个人（写本群，读两者）' }
+      ],
+      limits: { maxItems: [1, 50], maxChars: [80, 8000], maxGroups: 200 },
+      warnings: [],
+      message: '',
+      error: '',
+      configPath: '',
+      memoryEnabled: null,
+      hotReload: false,
+      actions: [],
+      permissionDenied: false,
+      readChannel: '',
+      writeChannel: '',
+      readable: false,
+      writable: false,
+      containerRunning: false,
+      dirty: false
+    };
+  }
+
+  function normaliseMemoryPolicyMode(value) {
+    const mode = textValue(value, '').trim().toLowerCase();
+    return mode === 'long_term' ? 'long_term' : 'conversation';
+  }
+
+  function normaliseMemoryPolicyScope(value) {
+    const scope = textValue(value, '').trim().toLowerCase();
+    return ['group', 'user', 'group_user'].includes(scope) ? scope : 'group';
+  }
+
+  function memoryPolicyStringList(raw) {
+    return (Array.isArray(raw) ? raw : [])
+      .map((item) => textValue(item, '').trim())
+      .filter(Boolean);
+  }
+
+  function memoryPolicyEffectiveMode(value) {
+    // null/absent means "unknown" (e.g. duplicate group ids), which must not
+    // be rendered as if the row were effectively long_term.
+    if (value === null || value === undefined || value === '') return '';
+    return normaliseMemoryPolicyMode(value);
+  }
+
+  function memoryPolicyBudgetText(value) {
+    if (value === null || value === undefined || value === '') return '';
+    const number = Number(value);
+    return Number.isFinite(number) ? String(number) : '';
+  }
+
+  function memoryPolicyOptions(raw, fallback) {
+    const options = [];
+    for (const item of Array.isArray(raw) ? raw : []) {
+      const record = asRecord(item);
+      const value = textValue(record.value, '').trim();
+      if (!value) continue;
+      options.push({ value, label: textValue(record.label, '') || value });
+    }
+    return options.length ? options : fallback;
+  }
+
+  function memoryPolicyLimits(raw, fallback) {
+    const record = asRecord(raw);
+    const range = (value, base) => (Array.isArray(value) && value.length === 2
+      ? [Number(value[0]), Number(value[1])]
+      : base);
+    return {
+      maxItems: range(record.max_items, fallback.maxItems),
+      maxChars: range(record.max_chars, fallback.maxChars),
+      maxGroups: Number.isFinite(Number(record.max_groups)) ? Number(record.max_groups) : fallback.maxGroups
+    };
+  }
+
+  function normaliseMemoryPolicyPayload(raw) {
+    const base = emptyMemoryPolicyState();
+    const root = asRecord(raw);
+    const configPath = textValue(root.config_path, '');
+    if (root.ok === false) {
+      const permissionDenied = root.permission_denied === true
+        || (root.supported === true && root.available === false);
+      return {
+        ...base,
+        status: permissionDenied ? 'error' : 'unsupported',
+        supported: permissionDenied ? true : root.supported === true,
+        permissionDenied,
+        configPath,
+        actions: memoryPolicyStringList(root.actions),
+        message: textValue(root.message, ''),
+        error: textValue(root.error || root.message, '当前实例不支持保存记忆策略。')
+      };
+    }
+    const privateRecord = asRecord(root.private);
+    const rows = [];
+    for (const item of Array.isArray(root.groups) ? root.groups : []) {
+      const record = asRecord(item);
+      const groupId = textValue(record.group_id || record.groupId, '').trim();
+      if (!groupId) continue;
+      rows.push({
+        groupId,
+        mode: normaliseMemoryPolicyMode(record.mode),
+        scope: normaliseMemoryPolicyScope(record.scope),
+        extract: record.extract !== false,
+        inject: record.inject !== false,
+        maxItems: memoryPolicyBudgetText(record.max_items),
+        maxChars: memoryPolicyBudgetText(record.max_chars),
+        // AstrBot degrades the whole entry to conversation on any invalid
+        // field, so `effectiveMode` (not `mode`) is what is really in force.
+        invalid: record.invalid === true,
+        errors: memoryPolicyStringList(record.errors),
+        unknownFields: memoryPolicyStringList(record.unknown_fields),
+        effectiveMode: memoryPolicyEffectiveMode(record.effective_mode)
+      });
+    }
+    return {
+      ...base,
+      status: root.available === false
+        ? (root.supported === false ? 'unsupported' : 'error')
+        : 'ok',
+      available: root.available !== false,
+      supported: root.supported !== false,
+      actions: memoryPolicyStringList(root.actions),
+      permissionDenied: root.permission_denied === true,
+      readChannel: textValue(root.read_channel, ''),
+      writeChannel: textValue(root.write_channel, ''),
+      readable: root.readable === true,
+      writable: root.writable !== false,
+      containerRunning: root.container_running === true,
+      saved: root.saved === true,
+      defaultMode: normaliseMemoryPolicyMode(root.default_mode),
+      privateMode: normaliseMemoryPolicyMode(privateRecord.mode),
+      privateExtract: privateRecord.extract !== false,
+      privateInject: privateRecord.inject !== false,
+      privateMaxItems: memoryPolicyBudgetText(privateRecord.max_items),
+      privateMaxChars: memoryPolicyBudgetText(privateRecord.max_chars),
+      privateConfigured: privateRecord.configured !== false,
+      privateInvalid: privateRecord.invalid === true,
+      privateErrors: memoryPolicyStringList(privateRecord.errors),
+      privateEffectiveMode: memoryPolicyEffectiveMode(privateRecord.effective_mode),
+      invalidRows: Number(root.invalid_rows) > 0 ? Number(root.invalid_rows) : 0,
+      rows,
+      modeOptions: memoryPolicyOptions(root.mode_options, base.modeOptions),
+      scopeOptions: memoryPolicyOptions(root.scope_options, base.scopeOptions),
+      limits: memoryPolicyLimits(root.limits, base.limits),
+      warnings: (Array.isArray(root.warnings) ? root.warnings : []).map((item) => textValue(item, '')).filter(Boolean),
+      message: textValue(root.message, ''),
+      error: textValue(root.error, ''),
+      configPath,
+      memoryEnabled: typeof root.memory_enabled === 'boolean' ? root.memory_enabled : null,
+      hotReload: root.hot_reload === true
+    };
+  }
+
+  async function loadMemoryPolicyForInstance(instance) {
+    if (state.optionalSupport.memoryPolicy === false) {
+      return {
+        ...emptyMemoryPolicyState(),
+        status: 'unsupported',
+        error: '当前后端未提供记忆策略接口，无法保存按群长期记忆策略。'
+      };
+    }
+    try {
+      const data = await requestWithFallback([
+        `/api/instances/${encodeURIComponent(instance.id)}/memory-policy`,
+        instancePath('/api/memory-policy', instance.id)
+      ]);
+      state.optionalSupport.memoryPolicy = true;
+      return normaliseMemoryPolicyPayload(data);
+    } catch (error) {
+      if (isMissingEndpointError(error)) {
+        state.optionalSupport.memoryPolicy = false;
+        return {
+          ...emptyMemoryPolicyState(),
+          status: 'unsupported',
+          error: '当前后端未提供记忆策略接口，无法保存按群长期记忆策略。'
+        };
+      }
+      return {
+        ...emptyMemoryPolicyState(),
+        status: 'error',
+        error: formatError(error, '记忆策略读取失败。')
+      };
+    }
+  }
+
   function emptyStatsState() {
     return {
       status: 'idle',
@@ -1199,12 +1416,13 @@
   }
 
   async function loadV3ForInstance(instance) {
-    const [plugins, memory, stats] = await Promise.all([
+    const [plugins, memory, memoryPolicy, stats] = await Promise.all([
       loadPluginsForInstance(instance),
       loadMemoryForInstance(instance),
+      loadMemoryPolicyForInstance(instance),
       loadStatsForInstance(instance)
     ]);
-    return { ...instance, v3: { plugins, memory, stats } };
+    return { ...instance, v3: { plugins, memory, memoryPolicy, stats } };
   }
 
   function setV3Status(element, message, tone = 'info') {
@@ -1511,14 +1729,43 @@
     element.hidden = !message;
   }
 
-  function showPluginConfigFieldError(entry, message) {
+  function showPluginConfigFieldError(entry, message, focus = true) {
     if (!entry || !entry.input) return;
     entry.input.setAttribute('aria-invalid', 'true');
     if (entry.errorElement) {
       entry.errorElement.textContent = message;
       entry.errorElement.hidden = false;
     }
-    entry.input.focus({ preventScroll: true });
+    if (focus) entry.input.focus({ preventScroll: true });
+  }
+
+  // T17 P2: a field that failed validation must actually be visible. Clearing
+  // the search box, the "只看已修改" filter and a foreign group tab (and
+  // expanding the owning section) is what makes the red field reachable instead
+  // of silently filtered out.
+  function revealPluginConfigEntry(entry) {
+    if (!entry || !entry.element) return;
+    const ui = pluginConfigUiState();
+    const plan = pluginConfigService.pluginConfigRevealPlan(entry, ui);
+    const search = $('plugin-config-search');
+    if (plan.clearSearch && search && search.value) search.value = '';
+    const modifiedToggle = $('plugin-config-modified-only');
+    if (modifiedToggle) modifiedToggle.checked = plan.modifiedOnly;
+    ui.modifiedOnly = plan.modifiedOnly;
+    ui.activeGroup = plan.activeGroup;
+    setPluginGroupExpanded(plan.expandGroup, true);
+    updatePluginConfigFilter();
+    if (entry.element.hidden) {
+      // Last resort: drop every filter so the field can never stay invisible.
+      ui.activeGroup = 'all';
+      ui.modifiedOnly = false;
+      if (modifiedToggle) modifiedToggle.checked = false;
+      if (search) search.value = '';
+      updatePluginConfigFilter();
+    }
+    if (plan.scrollIntoView && typeof entry.element.scrollIntoView === 'function') {
+      entry.element.scrollIntoView({ block: 'center' });
+    }
   }
 
   function syncPluginConfigSaveState() {
@@ -1904,23 +2151,20 @@
     clearPluginConfigFeedbackOnly();
     if ($('plugin-config-error')) $('plugin-config-error').hidden = true;
     if ($('plugin-config-status')) $('plugin-config-status').hidden = true;
-    const values = {};
-    let firstInvalid = null;
-    for (const entry of config.entries) {
-      if (entry.legacyHidden) continue;
-      clearPluginConfigFieldError(entry);
-      const result = entry.readValue ? entry.readValue() : { ok: false, message: '无法读取该参数。' };
-      if (!result.ok) {
-        showPluginConfigFieldError(entry, result.message || '参数值无效。');
-        firstInvalid = firstInvalid || entry;
-      } else {
-        values[entry.key] = result.value;
-      }
-    }
-    if (firstInvalid) {
+    for (const entry of config.entries) clearPluginConfigFieldError(entry);
+    // The payload always carries every editable field, including the ones the
+    // current search/group/modified filter hides.
+    const plan = pluginConfigService.pluginConfigSavePayload(config.entries);
+    if (!plan.ok) {
+      plan.invalid.forEach((item, index) => {
+        if (!item.entry) return;
+        revealPluginConfigEntry(item.entry);
+        showPluginConfigFieldError(item.entry, item.message || '参数值无效。', index === 0);
+      });
       setPluginConfigError('请先修正标红的参数。');
       return;
     }
+    const values = plan.values;
     config.saving = true;
     syncPluginConfigSaveState();
     setPluginConfigError('');
@@ -1941,6 +2185,15 @@
       setPluginConfigStatus(detail ? `${outcome} ${detail}` : outcome, restart || !apiAvailable);
       config.restartRequired = restart;
       config.apiAvailable = apiAvailable;
+      // T17 P2: refresh the comparison baseline so "已修改" badges clear after a
+      // successful save (values the server reports win over what was sent).
+      const savedValues = asRecord(response.values);
+      for (const update of pluginConfigService.pluginConfigUpdatedBaselines(config.entries, values, savedValues)) {
+        const entry = config.entries.find((item) => item.key === update.key);
+        if (entry) entry.originalValue = update.value;
+      }
+      refreshAllPluginConfigModifiedEntries();
+      updatePluginConfigFilter();
       const pluginState = instancePluginStatus(config.instanceId, config.pluginId);
       if (pluginState) {
         pluginState.status.message = outcome;
@@ -2071,6 +2324,41 @@
       key: 'safe_tools_allow_list_categories',
       label: '查询表情分类',
       description: '允许机器人查询本地表情分类名称。仅白名单；无电脑控制、终端或任意文件访问。'
+    },
+    {
+      key: 'safe_tools_allow_fetch_webpage',
+      label: '读取公开网页',
+      description: '允许 fetch_webpage 读取公开 HTTP(S) 网页；有 SSRF/大小/超时/重定向限制。'
+    },
+    {
+      key: 'web_auto_fetch_enabled',
+      label: '自动读取消息里的 URL',
+      description: '消息含 URL 且处于阅读/提问语境时自动抓取网页正文；裸链接不触发。'
+    },
+    {
+      key: 'web_auto_fetch_question_only',
+      label: '仅提问语境自动读取',
+      description: '只有“怎么安装/这篇文章讲了什么”等阅读语境才自动抓取，普通闲聊不抓。'
+    },
+    {
+      key: 'safe_tools_allow_search_food_restaurants',
+      label: '搜索饭店',
+      description: '允许 search_food_restaurants 按名称/标签/位置查询饭店。'
+    },
+    {
+      key: 'safe_tools_allow_submit_food_review',
+      label: '提交饭店评价',
+      description: '允许 submit_food_review 在明确添加意图下提交评价；不泄露发送者 QQ。'
+    },
+    {
+      key: 'food_enabled',
+      label: 'Food 功能总开关',
+      description: '允许插件处理 Food 相关命令和自然语言请求。'
+    },
+    {
+      key: 'food_search_enabled',
+      label: 'Food 自然语言搜索',
+      description: '允许自然语言搜索饭店；与手动工具开关独立。'
     }
   ];
 
@@ -2184,7 +2472,7 @@
     for (const permission of AI_TOOL_PERMISSIONS) {
       const input = ui.inputs[permission.key];
       if (!input) continue;
-      input.disabled = disabledBase || (!permission.master && !safeMaster);
+      input.disabled = disabledBase || (!permission.master && permission.key.startsWith('safe_tools_allow_') && !safeMaster);
       const option = input.closest('.ai-tool-option');
       if (option) option.classList.toggle('is-disabled', input.disabled);
     }
@@ -2201,6 +2489,24 @@
       input.disabled = disabledBase || !stickerMaster;
       const wrapper = input.closest('.ai-sticker-number-field');
       if (wrapper) wrapper.classList.toggle('is-disabled', input.disabled);
+    }
+    for (const [key, status] of Object.entries(ui.moduleStatuses || {})) {
+      if (!status) continue;
+      let enabled = false;
+      if (key === 'safe-tools') enabled = Boolean(ui.inputs.safe_tools_enabled && ui.inputs.safe_tools_enabled.checked);
+      else if (key === 'sticker') enabled = Boolean(ui.inputs.sticker_enabled && ui.inputs.sticker_enabled.checked);
+      else {
+        const moduleKeys = key === 'web-search'
+          ? ['safe_tools_allow_fetch_webpage', 'web_auto_fetch_enabled', 'web_auto_fetch_question_only']
+          : ['safe_tools_allow_search_food_restaurants', 'safe_tools_allow_submit_food_review', 'food_enabled', 'food_search_enabled'];
+        const count = moduleKeys.filter((item) => ui.inputs[item] && ui.inputs[item].checked).length;
+        enabled = count > 0;
+        status.textContent = count > 0 ? `已开启 ${count} 项` : '未开启';
+        status.className = `ai-tools-module-status is-${enabled ? 'enabled' : 'disabled'}`;
+        continue;
+      }
+      status.textContent = enabled ? '已开启' : '已关闭';
+      status.className = `ai-tools-module-status is-${enabled ? 'enabled' : 'disabled'}`;
     }
     if (ui.saveButton) ui.saveButton.disabled = disabledBase;
     if (ui.controls) ui.controls.hidden = !ui.supported;
@@ -2245,75 +2551,34 @@
     const controls = makeElement('div', 'ai-tools-controls');
     controls.setAttribute('id', 'ai-tools-controls');
     controls.hidden = true;
-    const masterOption = makeElement('label', 'ai-tool-option is-master');
-    const masterLabel = makeElement('span', 'ai-tool-copy');
-    const masterInput = document.createElement('input');
-    masterInput.setAttribute('type', 'checkbox');
-    masterInput.setAttribute('id', 'ai-tools-enabled');
-    masterInput.dataset.aiToolKey = 'safe_tools_enabled';
-    masterLabel.appendChild(makeElement('strong', '', AI_TOOL_PERMISSIONS[0].label));
-    masterLabel.appendChild(makeElement('small', '', AI_TOOL_PERMISSIONS[0].description));
-    masterOption.appendChild(masterInput);
-    masterOption.appendChild(masterLabel);
-    controls.appendChild(masterOption);
-
-    const subGrid = makeElement('div', 'ai-tools-grid');
-    const inputs = { safe_tools_enabled: masterInput };
+    const inputs = {};
     const numberInputs = {};
-    for (const permission of AI_TOOL_PERMISSIONS.slice(1)) {
-      const option = makeElement('label', 'ai-tool-option');
+    const moduleStatuses = {};
+
+    function makeCheckboxOption(permission, master = false) {
+      const option = makeElement('label', master ? 'ai-tool-option is-master' : 'ai-tool-option');
       const input = document.createElement('input');
       input.setAttribute('type', 'checkbox');
-      input.id = `ai-tools-${permission.key}`;
-      input.dataset.aiToolKey = permission.key;
+      input.id = master
+        ? (permission.key === 'safe_tools_enabled' ? 'ai-tools-enabled' : 'ai-sticker-enabled')
+        : (permission.id || `ai-tools-${permission.key.replace(/_/g, '-')}`);
+      if (master) input.dataset.aiToolKey = permission.key;
+      else input.dataset.aiToolKey = permission.key;
       inputs[permission.key] = input;
       const copy = makeElement('span', 'ai-tool-copy');
       copy.appendChild(makeElement('strong', '', permission.label));
       copy.appendChild(makeElement('small', '', permission.description));
       option.appendChild(input);
       option.appendChild(copy);
-      subGrid.appendChild(option);
+      input.addEventListener('change', () => {
+        setAiToolsError(ui, '');
+        setAiToolsStatus(ui, '', '');
+        syncAiToolsControlState(ui);
+      });
+      return option;
     }
-    controls.appendChild(subGrid);
 
-    const stickerSubsection = makeElement('div', 'ai-tools-subsection');
-    const stickerHeading = makeElement('div', 'ai-tools-subsection-heading');
-    stickerHeading.appendChild(makeElement('h5', '', 'AI 自动表情'));
-    stickerHeading.appendChild(makeElement('p', 'ai-tools-subsection-note', 'direct 模式由插件给模型提供安全表情 marker；memory/astrbot 模式使用本地情绪或分类匹配。只在本地白名单表情库中选择，不需要电脑控制。'));
-    stickerSubsection.appendChild(stickerHeading);
-
-    const stickerMasterOption = makeElement('label', 'ai-tool-option is-master');
-    const stickerMasterInput = document.createElement('input');
-    stickerMasterInput.setAttribute('type', 'checkbox');
-    stickerMasterInput.setAttribute('id', 'ai-sticker-enabled');
-    stickerMasterInput.dataset.aiStickerKey = 'sticker_enabled';
-    inputs.sticker_enabled = stickerMasterInput;
-    const stickerMasterCopy = makeElement('span', 'ai-tool-copy');
-    stickerMasterCopy.appendChild(makeElement('strong', '', AI_STICKER_SWITCHES[0].label));
-    stickerMasterCopy.appendChild(makeElement('small', '', AI_STICKER_SWITCHES[0].description));
-    stickerMasterOption.appendChild(stickerMasterInput);
-    stickerMasterOption.appendChild(stickerMasterCopy);
-    stickerSubsection.appendChild(stickerMasterOption);
-
-    const stickerGrid = makeElement('div', 'ai-tools-grid');
-    for (const permission of AI_STICKER_SWITCHES.slice(1)) {
-      const option = makeElement('label', 'ai-tool-option');
-      const input = document.createElement('input');
-      input.setAttribute('type', 'checkbox');
-      input.setAttribute('id', permission.id || `ai-sticker-${permission.key.replace(/^sticker_/, '').replace(/_/g, '-')}`);
-      input.dataset.aiStickerKey = permission.key;
-      inputs[permission.key] = input;
-      const copy = makeElement('span', 'ai-tool-copy');
-      copy.appendChild(makeElement('strong', '', permission.label));
-      copy.appendChild(makeElement('small', '', permission.description));
-      option.appendChild(input);
-      option.appendChild(copy);
-      stickerGrid.appendChild(option);
-    }
-    stickerSubsection.appendChild(stickerGrid);
-
-    const stickerNumberGrid = makeElement('div', 'ai-sticker-number-grid');
-    for (const field of AI_STICKER_NUMBERS) {
+    function makeNumberOption(field) {
       const wrapper = makeElement('label', 'ai-sticker-number-field');
       wrapper.appendChild(makeElement('strong', '', field.label));
       const input = document.createElement('input');
@@ -2322,7 +2587,7 @@
       input.setAttribute('min', String(field.min));
       input.setAttribute('max', String(field.max));
       input.setAttribute('step', String(field.step));
-      input.setAttribute('id', field.id || `ai-sticker-${field.key.replace(/^sticker_/, '').replace(/_/g, '-')}`);
+      input.id = field.id || `ai-sticker-${field.key.replace(/^sticker_/, '').replace(/_/g, '-')}`;
       input.dataset.aiStickerKey = field.key;
       input.value = String(field.defaultValue);
       numberInputs[field.key] = input;
@@ -2330,17 +2595,113 @@
       wrapper.appendChild(makeElement('small', '', field.key === 'sticker_cooldown_seconds'
         ? '两次自动表情之间的最小间隔；0 表示不增加额外冷却。'
         : `0–1 之间的概率；默认 ${field.defaultValue}。`));
-      stickerNumberGrid.appendChild(wrapper);
+      input.addEventListener('input', () => {
+        setAiToolsError(ui, '');
+        setAiToolsStatus(ui, '', '');
+      });
+      return wrapper;
     }
-    stickerSubsection.appendChild(stickerNumberGrid);
-    controls.appendChild(stickerSubsection);
+
+    function makeModule(key, title, description, options, masterKey, numberFields = []) {
+      const module = makeElement('div', 'ai-tools-module');
+      module.dataset.aiToolsModule = key;
+      module.classList.toggle('is-open', key === 'safe-tools');
+      const summary = makeElement('button', 'ai-tools-module-summary');
+      summary.type = 'button';
+      summary.setAttribute('aria-expanded', key === 'safe-tools' ? 'true' : 'false');
+      const copy = makeElement('span', 'ai-tools-module-copy');
+      copy.appendChild(makeElement('strong', '', title));
+      copy.appendChild(makeElement('small', '', description));
+      const status = makeElement('span', 'ai-tools-module-status', '读取中');
+      summary.appendChild(copy);
+      summary.appendChild(status);
+      moduleStatuses[key] = status;
+
+      const body = makeElement('div', 'ai-tools-module-body');
+      body.hidden = key !== 'safe-tools';
+      summary.addEventListener('click', () => {
+        body.hidden = !body.hidden;
+        module.classList.toggle('is-open', !body.hidden);
+        summary.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
+      });
+      const master = AI_TOOL_PERMISSIONS.find((item) => item.key === masterKey)
+        || AI_STICKER_SWITCHES.find((item) => item.key === masterKey);
+      if (master) body.appendChild(makeCheckboxOption(master, true));
+      const grid = makeElement('div', 'ai-tools-grid');
+      for (const permission of options) grid.appendChild(makeCheckboxOption(permission, false));
+      body.appendChild(grid);
+      if (numberFields.length) {
+        const numberGrid = makeElement('div', 'ai-sticker-number-grid');
+        for (const field of numberFields) numberGrid.appendChild(makeNumberOption(field));
+        body.appendChild(numberGrid);
+      }
+      module.appendChild(summary);
+      module.appendChild(body);
+      controls.appendChild(module);
+    }
+
+    makeModule(
+      'safe-tools',
+      '安全工具',
+      '只开放白名单插件能力；无电脑控制、终端、Shell 或任意文件访问。',
+      ['safe_tools_allow_search_images', 'safe_tools_allow_send_sticker', 'safe_tools_allow_collect_sticker', 'safe_tools_allow_list_categories']
+        .map((key) => AI_TOOL_PERMISSIONS.find((item) => item.key === key))
+        .filter(Boolean),
+      'safe_tools_enabled'
+    );
+    makeModule(
+      'web-search',
+      '搜索与网页',
+      '网页读取、URL 自动阅读和搜索相关能力；受安全工具总开关和插件超时/大小限制约束。',
+      [
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_fetch_webpage'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'web_auto_fetch_enabled'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'web_auto_fetch_question_only'),
+      ].filter(Boolean),
+      null
+    );
+    makeModule(
+      'food-tools',
+      'Food 工具',
+      '饭店搜索与评价提交；评论只写 food.dlsz.top，密码仍由插件内部注入，不进入模型。',
+      [
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_search_food_restaurants'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_submit_food_review'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'food_enabled'),
+        AI_TOOL_PERMISSIONS.find((item) => item.key === 'food_search_enabled'),
+      ].filter(Boolean),
+      null
+    );
+    makeModule(
+      'sticker',
+      'AI 自动表情',
+      '从本实例本地表情库选择；direct 模式由插件给模型提供安全表情 marker；memory/astrbot 模式使用本地情绪或分类匹配；不会读取任意文件或执行系统命令。',
+      AI_STICKER_SWITCHES.slice(1),
+      'sticker_enabled',
+      AI_STICKER_NUMBERS
+    );
     section.appendChild(controls);
+
+    const fullConfigHint = makeElement(
+      'p',
+      'ai-tools-full-config-hint',
+      '这里是安全快捷面板；完整参数仍在「插件管理 → qqbot_enhancer」中维护。'
+    );
+    section.appendChild(fullConfigHint);
+
 
     const actions = makeElement('div', 'ai-tools-actions');
     const saveButton = makeElement('button', 'btn btn-primary btn-small', '保存 AI 工具与表情设置');
     saveButton.type = 'button';
     saveButton.setAttribute('id', 'ai-tools-save');
     actions.appendChild(saveButton);
+    const restartButton = makeElement('button', 'btn btn-secondary btn-small', '重启 AstrBot');
+    restartButton.type = 'button';
+    restartButton.setAttribute('id', 'ai-tools-restart');
+    restartButton.addEventListener('click', () => {
+      void restartAstrBotForSettings(instance, (message, tone) => setAiToolsStatus(ui, message, tone), restartButton);
+    });
+    actions.appendChild(restartButton);
     section.appendChild(actions);
     const status = makeElement('p', 'ai-tools-status');
     status.setAttribute('id', 'ai-tools-status');
@@ -2382,6 +2743,7 @@
       pluginState,
       inputs,
       numberInputs,
+      moduleStatuses,
       supported: Boolean(cachedValues),
       unsupportedReason: '',
       loadFailed: false,
@@ -2389,35 +2751,6 @@
       loadingConfig: true,
       saving: false
     };
-    masterInput.addEventListener('change', () => {
-      setAiToolsError(ui, '');
-      setAiToolsStatus(ui, '', '');
-      syncAiToolsControlState(ui);
-    });
-    for (const permission of AI_TOOL_PERMISSIONS.slice(1)) {
-      inputs[permission.key].addEventListener('change', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-      });
-    }
-    stickerMasterInput.addEventListener('change', () => {
-      setAiToolsError(ui, '');
-      setAiToolsStatus(ui, '', '');
-      syncAiToolsControlState(ui);
-    });
-    for (const permission of AI_STICKER_SWITCHES.slice(1)) {
-      inputs[permission.key].addEventListener('change', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-        syncAiToolsControlState(ui);
-      });
-    }
-    for (const field of AI_STICKER_NUMBERS) {
-      numberInputs[field.key].addEventListener('input', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-      });
-    }
     saveButton.addEventListener('click', () => void saveAiToolsConfig(instance, ui));
     retryButton.addEventListener('click', () => void loadAiToolsConfig(instance, ui));
     syncAiToolsControlState(ui);
@@ -2440,15 +2773,18 @@
       const snapshot = result.snapshot;
       const availableKeys = new Set((snapshot.schema || []).map((field) => field.key));
       const missing = AI_ALL_CONFIG_KEYS.filter((key) => !availableKeys.has(key));
-      if (missing.length > 0) {
+      if (!availableKeys.size) {
         ui.loadFailed = true;
-        ui.supported = Boolean(lastKnownAiToolsValues.get(instance.id));
-        ui.unsupportedReason = '当前插件版本未提供完整的 AI 工具权限或自动表情参数，请先更新 qqbot_enhancer 插件。';
+        ui.supported = false;
+        ui.unsupportedReason = '当前插件版本没有可用的 AI 工具参数，请先更新 qqbot_enhancer 插件。';
         ui.loadingConfig = false;
         ui.loading.hidden = true;
         setAiToolsError(ui, ui.unsupportedReason);
         syncAiToolsControlState(ui);
         return;
+      }
+      if (missing.length > 0) {
+        ui.schemaWarning = `当前插件未提供部分参数：${missing.join(', ')}；已隐藏/禁用这些项，其余仍可保存。`;
       }
       for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
         const input = ui.inputs[permission.key];
@@ -2471,6 +2807,9 @@
       ui.loadFailed = false;
       ui.loadingConfig = false;
       ui.loading.hidden = true;
+      if (ui.schemaWarning) {
+        setAiToolsStatus(ui, ui.schemaWarning, 'warning');
+      }
       if (!snapshot.apiAvailable) {
         setAiToolsStatus(ui, 'AstrBot 当前离线；保存会写入本地配置，可能需要启动或重启 AstrBot 后生效。', 'warning');
       }
@@ -3388,6 +3727,1593 @@
     return '未知';
   }
 
+  function memoryPolicyModeLabel(policy, mode) {
+    const options = (policy && policy.modeOptions) || [];
+    const match = options.find((option) => option.value === mode);
+    return match ? match.label : (mode === 'long_term' ? '长期记忆' : '会话记忆');
+  }
+
+  function memoryPolicyOptionLabel(options, value, fallback) {
+    const match = (options || []).find((option) => option.value === value);
+    return match ? match.label : (fallback || value || '');
+  }
+
+  function memoryPolicyEffectiveText(policy, mode) {
+    if (!mode) return '未知（配置非法或重复，无法确定哪个生效）';
+    if (mode === 'conversation') return 'conversation（只用会话历史）';
+    return memoryPolicyModeLabel(policy, mode);
+  }
+
+  async function restartAstrBotForSettings(instance, setStatus, button) {
+    if (!instance || !instance.id) return;
+    const original = button ? button.textContent : '';
+    if (button) button.disabled = true;
+    try {
+      setStatus('正在重启 AstrBot…', 'info');
+      const data = await apiRequest(instancePath('/api/action', instance.id), {
+        method: 'POST',
+        body: { action: 'restart' }
+      });
+      const message = textValue(data && data.message, '重启指令已发送；请等待 AstrBot 恢复后刷新。');
+      setStatus(message, 'success');
+    } catch (error) {
+      setStatus(formatError(error, '重启 AstrBot 失败。'), 'error');
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+  }
+
+  function buildMemoryPolicySection(instance) {
+    const policy = (instance.v3 && instance.v3.memoryPolicy) || emptyMemoryPolicyState();
+    const disabled = policy.supported !== true;
+    const section = makeElement('section', 'instance-v3-section memory-policy-section');
+    section.dataset.memoryPolicy = 'section';
+
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-memory'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '记忆策略'));
+    headingCopy.appendChild(makeElement(
+      'p',
+      '',
+      '按群开启 AstrBot 原生长期记忆（memory.policy）：只写 AstrBot 配置文件，不读取记忆数据库内容。'
+    ));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+
+    const warning = makeElement('p', 'memory-policy-warning', MEMORY_POLICY_WARNING);
+    warning.dataset.memoryPolicy = 'warning';
+    section.appendChild(warning);
+
+    const statusElement = makeElement('p', 'instance-v3-status');
+    statusElement.dataset.memoryPolicy = 'status';
+    statusElement.setAttribute('role', 'status');
+    if (policy.status === 'unsupported') {
+      setV3Status(statusElement, policy.error || '记忆策略接口暂不可用，未保存任何值。', 'warning');
+    } else if (policy.status === 'error') {
+      setV3Status(
+        statusElement,
+        policy.permissionDenied
+          ? (policy.message || '本机无法读写 AstrBot 配置文件；请按下面的步骤处理，Studio 不会伪造已保存的值。')
+          : (policy.error || '记忆策略读取失败，未保存任何值。'),
+        'error'
+      );
+    } else if (policy.message) {
+      const tone = policy.memoryEnabled === false || policy.invalidRows > 0 ? 'warning' : 'info';
+      setV3Status(statusElement, policy.message, tone);
+    }
+    section.appendChild(statusElement);
+
+    const warningList = makeElement('ul', 'memory-policy-warnings');
+    warningList.dataset.memoryPolicy = 'warnings';
+    for (const item of policy.warnings || []) warningList.appendChild(makeElement('li', '', item));
+    warningList.hidden = !(policy.warnings || []).length;
+    section.appendChild(warningList);
+
+    const errorElement = makeElement('p', 'memory-policy-error', '');
+    errorElement.dataset.memoryPolicy = 'error';
+    errorElement.setAttribute('role', 'alert');
+    errorElement.hidden = true;
+    section.appendChild(errorElement);
+
+    const actionsList = makeElement('ul', 'memory-policy-actions');
+    actionsList.dataset.memoryPolicy = 'actions';
+    for (const item of policy.actions || []) actionsList.appendChild(makeElement('li', '', item));
+    actionsList.hidden = !(policy.actions || []).length;
+    section.appendChild(actionsList);
+
+    if (policy.readChannel || policy.permissionDenied) {
+      const channelNotes = [];
+      if (policy.readChannel) {
+        channelNotes.push(policy.readChannel === 'container'
+          ? '配置文件由 AstrBot 容器持有：已通过容器内命令读写（原子写入 0600）。'
+          : '配置文件由本机 Studio 用户读写。');
+      }
+      if (policy.permissionDenied && !policy.writable) {
+        channelNotes.push('当前无法写入：保存会明确失败，不会显示“已保存”。');
+      }
+      if (channelNotes.length) {
+        const channelLine = makeElement('p', 'memory-policy-hint', channelNotes.join(' '));
+        channelLine.dataset.memoryPolicy = 'channel';
+        section.appendChild(channelLine);
+      }
+    }
+
+    const unsupported = makeElement('p', 'memory-policy-unsupported', '');
+    unsupported.dataset.memoryPolicy = 'unsupported';
+    if (disabled) {
+      unsupported.textContent = policy.error
+        ? `当前实例不支持编辑记忆策略：${policy.error}`
+        : '当前实例不支持编辑记忆策略，Studio 不会显示伪造的已保存值。';
+      unsupported.hidden = false;
+    } else {
+      unsupported.hidden = true;
+    }
+    section.appendChild(unsupported);
+
+    function makeSelect(field, options, value) {
+      const select = document.createElement('select');
+      select.dataset.field = field;
+      select.disabled = disabled;
+      for (const option of options) {
+        const element = document.createElement('option');
+        element.value = option.value;
+        element.textContent = option.label;
+        select.appendChild(element);
+      }
+      if (!options.some((option) => option.value === value)) {
+        const element = document.createElement('option');
+        element.value = value;
+        element.textContent = `当前值：${value}`;
+        select.appendChild(element);
+      }
+      select.value = value;
+      return select;
+    }
+
+    function makeCheckbox(field, checked, labelText) {
+      const label = makeElement('label', 'memory-policy-check');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.dataset.field = field;
+      input.checked = checked === true;
+      input.disabled = disabled;
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(labelText));
+      return label;
+    }
+
+    function makeBudget(field, value, range, labelText) {
+      const label = makeElement('label', 'memory-policy-field memory-policy-budget-field');
+      label.appendChild(makeElement('span', 'memory-policy-label', labelText));
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = String(range[0]);
+      input.max = String(range[1]);
+      input.step = '1';
+      input.dataset.field = field;
+      input.placeholder = `留空=继承（${range[0]}..${range[1]}）`;
+      input.value = value === undefined || value === null ? '' : String(value);
+      input.disabled = disabled;
+      label.appendChild(input);
+      return label;
+    }
+
+    const defaults = makeElement('div', 'memory-policy-defaults');
+    const defaultField = makeElement('label', 'memory-policy-field');
+    defaultField.appendChild(makeElement('span', 'memory-policy-label', '默认模式（未列出群的模式）'));
+    const defaultSelect = makeSelect('default-mode', policy.modeOptions, policy.defaultMode);
+    defaultSelect.dataset.memoryPolicy = 'default-mode';
+    defaultField.appendChild(defaultSelect);
+    defaultField.appendChild(makeElement(
+      'small',
+      'memory-policy-hint',
+      '默认 conversation：只用会话历史。只有下面单独列出的群才会写入/读取长期记忆。'
+    ));
+    defaults.appendChild(defaultField);
+    const privateField = makeElement('label', 'memory-policy-field');
+    privateField.appendChild(makeElement('span', 'memory-policy-label', '私聊模式（固定 scope=user）'));
+    const privateSelect = makeSelect('private-mode', policy.modeOptions, policy.privateMode);
+    privateSelect.dataset.memoryPolicy = 'private-mode';
+    privateField.appendChild(privateSelect);
+    defaults.appendChild(privateField);
+    const privateToggles = makeElement('div', 'memory-policy-toggles');
+    const privateExtract = makeCheckbox('private-extract', policy.privateExtract, '私聊抽取');
+    const privateInject = makeCheckbox('private-inject', policy.privateInject, '私聊注入');
+    privateToggles.appendChild(privateExtract);
+    privateToggles.appendChild(privateInject);
+    privateToggles.appendChild(makeBudget('private-max-items', policy.privateMaxItems, policy.limits.maxItems, '私聊最大条数'));
+    privateToggles.appendChild(makeBudget('private-max-chars', policy.privateMaxChars, policy.limits.maxChars, '私聊最大字符'));
+    defaults.appendChild(privateToggles);
+    const privateNotes = makeElement('div', 'memory-policy-private-notes');
+    privateNotes.dataset.memoryPolicy = 'private-notes';
+    if (!policy.privateConfigured) {
+      privateNotes.appendChild(makeElement(
+        'p',
+        'memory-policy-hint',
+        `未单独配置私聊策略：私聊跟随默认模式（当前 ${memoryPolicyModeLabel(policy, policy.privateEffectiveMode)}）。`
+      ));
+    }
+    if (policy.privateInvalid) {
+      privateNotes.appendChild(makeElement(
+        'p',
+        'memory-policy-row-invalid',
+        '私聊策略配置非法：AstrBot 会把私聊策略降级为 conversation（不是 long_term 生效），请按下面的原因修正。'
+      ));
+      const privateErrors = makeElement('ul', 'memory-policy-row-errors');
+      privateErrors.dataset.memoryPolicy = 'private-errors';
+      for (const item of policy.privateErrors || []) privateErrors.appendChild(makeElement('li', '', item));
+      privateNotes.appendChild(privateErrors);
+    }
+    if (!privateNotes.childNodes.length) privateNotes.hidden = true;
+    defaults.appendChild(privateNotes);
+    section.appendChild(defaults);
+
+    const groupsHeader = makeElement('div', 'memory-policy-groups-header');
+    groupsHeader.appendChild(makeElement('h5', '', '按群覆盖'));
+    const addButton = makeElement('button', 'btn btn-ghost memory-policy-add', '添加群策略');
+    addButton.type = 'button';
+    addButton.dataset.memoryPolicy = 'add';
+    addButton.disabled = disabled;
+    groupsHeader.appendChild(addButton);
+    section.appendChild(groupsHeader);
+
+    const groupsContainer = makeElement('div', 'memory-policy-groups');
+    groupsContainer.dataset.memoryPolicy = 'groups';
+    const emptyText = makeElement('p', 'memory-policy-empty', '还没有群策略：所有群和私聊都按上面的默认模式处理。');
+    emptyText.dataset.memoryPolicy = 'empty';
+
+    function syncEmpty() {
+      emptyText.hidden = groupsContainer.querySelectorAll('[data-memory-policy-row]').length > 0;
+    }
+
+    function makeGroupRow(row) {
+      const rowElement = makeElement('div', 'memory-policy-row');
+      rowElement.dataset.memoryPolicyRow = '';
+
+      const summary = makeElement('div', 'memory-policy-row-summary');
+      const summaryCopy = makeElement('div', 'memory-policy-row-summary-copy');
+      const summaryTitle = makeElement('strong', 'memory-policy-row-title', '新群策略');
+      const summaryMeta = makeElement('span', 'memory-policy-row-meta', '');
+      summaryCopy.appendChild(summaryTitle);
+      summaryCopy.appendChild(summaryMeta);
+      const summaryActions = makeElement('div', 'memory-policy-row-actions');
+
+      const editButton = makeElement('button', 'btn btn-ghost memory-policy-edit', '编辑');
+      editButton.type = 'button';
+      editButton.dataset.memoryPolicyEdit = '';
+      editButton.disabled = disabled;
+      const removeButton = makeElement('button', 'btn btn-ghost memory-policy-delete', '删除');
+      removeButton.type = 'button';
+      removeButton.dataset.memoryPolicyDelete = '';
+      removeButton.disabled = disabled;
+      summaryActions.appendChild(editButton);
+      summaryActions.appendChild(removeButton);
+      summary.appendChild(summaryCopy);
+      summary.appendChild(summaryActions);
+      rowElement.appendChild(summary);
+
+      const fields = makeElement('div', 'memory-policy-row-fields');
+      fields.hidden = true;
+
+      const idField = makeElement('label', 'memory-policy-field');
+      idField.appendChild(makeElement('span', 'memory-policy-label', '群号'));
+      const idInput = document.createElement('input');
+      idInput.type = 'text';
+      idInput.dataset.field = 'group-id';
+      idInput.placeholder = '如 838796241 或 aiocqhttp:838796241';
+      idInput.value = row.groupId || '';
+      idInput.disabled = disabled;
+      idField.appendChild(idInput);
+      fields.appendChild(idField);
+
+      const modeField = makeElement('label', 'memory-policy-field');
+      modeField.appendChild(makeElement('span', 'memory-policy-label', '模式'));
+      const modeSelect = makeSelect('mode', policy.modeOptions, row.mode || 'long_term');
+      modeField.appendChild(modeSelect);
+      fields.appendChild(modeField);
+
+      const scopeField = makeElement('label', 'memory-policy-field');
+      scopeField.appendChild(makeElement('span', 'memory-policy-label', 'scope'));
+      const scopeSelect = makeSelect('scope', policy.scopeOptions, row.scope || 'group');
+      scopeField.appendChild(scopeSelect);
+      fields.appendChild(scopeField);
+
+      const toggles = makeElement('div', 'memory-policy-toggles');
+      const extractCheck = makeCheckbox('extract', row.extract !== false, '抽取');
+      const injectCheck = makeCheckbox('inject', row.inject !== false, '注入');
+      toggles.appendChild(extractCheck);
+      toggles.appendChild(injectCheck);
+      toggles.appendChild(makeBudget('max-items', row.maxItems, policy.limits.maxItems, '最大条数'));
+      toggles.appendChild(makeBudget('max-chars', row.maxChars, policy.limits.maxChars, '最大字符'));
+      fields.appendChild(toggles);
+
+      function updateSummary() {
+        const groupId = String(idInput.value || '').trim();
+        const budget = [];
+        const maxItems = rowElement.querySelector('[data-field="max-items"]');
+        const maxChars = rowElement.querySelector('[data-field="max-chars"]');
+        const extractInput = rowElement.querySelector('[data-field="extract"]');
+        const injectInput = rowElement.querySelector('[data-field="inject"]');
+        if (maxItems && String(maxItems.value || '').trim()) budget.push(`条数 ${maxItems.value}`);
+        if (maxChars && String(maxChars.value || '').trim()) budget.push(`字符 ${maxChars.value}`);
+        summaryTitle.textContent = groupId || '未填写群号';
+        summaryMeta.textContent = [
+          memoryPolicyModeLabel(policy, modeSelect.value),
+          memoryPolicyOptionLabel(policy.scopeOptions, scopeSelect.value, scopeSelect.value),
+          extractInput && extractInput.checked ? '抽取' : '不抽取',
+          injectInput && injectInput.checked ? '注入' : '不注入',
+          ...budget,
+        ].join(' · ') + (row.invalid ? ' · 配置非法，实际降级 conversation' : '');
+      }
+
+      function setEditing(editing) {
+        fields.hidden = !editing;
+        rowElement.classList.toggle('is-editing', editing);
+        editButton.textContent = editing ? '完成' : '编辑';
+        if (editing && typeof idInput.focus === 'function') idInput.focus();
+      }
+
+      rowElement.addEventListener('input', updateSummary);
+      rowElement.addEventListener('change', updateSummary);
+      editButton.addEventListener('click', () => setEditing(fields.hidden));
+      removeButton.addEventListener('click', () => {
+        rowElement.remove();
+        syncEmpty();
+      });
+
+      if (row.invalid) {
+        rowElement.classList.add('is-invalid');
+        fields.appendChild(makeElement(
+          'p',
+          'memory-policy-row-invalid',
+          '该行配置非法：AstrBot 会把整条降级为 conversation，不会按 long_term 生效；请按下面的原因修正后保存。'
+        ));
+      }
+      if ((row.unknownFields || []).length) {
+        fields.appendChild(makeElement(
+          'p',
+          'memory-policy-row-unknown',
+          `未知字段 ${row.unknownFields.join(', ')} 会被 AstrBot 忽略（可能是拼写错误）。`
+        ));
+      }
+      if ((row.errors || []).length) {
+        const rowErrors = makeElement('ul', 'memory-policy-row-errors');
+        rowErrors.dataset.memoryPolicy = 'row-errors';
+        for (const item of row.errors) rowErrors.appendChild(makeElement('li', '', item));
+        fields.appendChild(rowErrors);
+      }
+      const effective = makeElement(
+        'p',
+        'memory-policy-row-effective',
+        `实际生效：${memoryPolicyEffectiveText(policy, row.effectiveMode)}`
+      );
+      effective.dataset.memoryPolicy = 'row-effective';
+      fields.appendChild(effective);
+      rowElement.appendChild(fields);
+      updateSummary();
+      rowElement._setMemoryPolicyEditing = setEditing;
+      rowElement._updateMemoryPolicySummary = updateSummary;
+      return rowElement;
+    }
+
+    for (const row of policy.rows || []) groupsContainer.appendChild(makeGroupRow(row));
+    groupsContainer.appendChild(emptyText);
+    syncEmpty();
+    section.appendChild(groupsContainer);
+
+    addButton.addEventListener('click', () => {
+      const rowElement = makeGroupRow({ groupId: '', mode: 'long_term', scope: 'group', extract: true, inject: true, maxItems: '', maxChars: '' });
+      groupsContainer.insertBefore(rowElement, emptyText);
+      syncEmpty();
+      if (typeof rowElement._setMemoryPolicyEditing === 'function') {
+        rowElement._setMemoryPolicyEditing(true);
+      }
+    });
+
+    function rowValue(rowElement, field) {
+      const input = rowElement.querySelector(`[data-field="${field}"]`);
+      return input ? input : null;
+    }
+
+    function budgetValue(input) {
+      if (!input) return null;
+      const raw = textValue(input.value, '').trim();
+      if (raw === '') return null;
+      const number = Number(raw);
+      // Non-numeric text is forwarded so the server-side validator (the
+      // authoritative one) rejects it with a precise message.
+      return Number.isFinite(number) ? number : raw;
+    }
+
+    function setPolicyError(message) {
+      errorElement.textContent = message || '';
+      errorElement.hidden = !message;
+    }
+
+    const footer = makeElement('div', 'memory-policy-footer');
+    const saveButton = makeElement('button', 'btn btn-primary btn-small memory-policy-save', '保存记忆策略');
+    saveButton.type = 'button';
+    saveButton.dataset.memoryPolicy = 'save';
+    saveButton.disabled = disabled;
+    footer.appendChild(saveButton);
+    const restartButton = makeElement('button', 'btn btn-secondary btn-small memory-policy-restart', '重启 AstrBot');
+    restartButton.type = 'button';
+    restartButton.dataset.memoryPolicy = 'restart';
+    restartButton.disabled = disabled;
+    restartButton.addEventListener('click', () => {
+      void restartAstrBotForSettings(
+        instance,
+        (message, tone) => setV3Status(statusElement, message, tone),
+        restartButton
+      );
+    });
+    footer.appendChild(restartButton);
+    footer.appendChild(makeElement(
+      'span',
+      'memory-policy-hint',
+      policy.hotReload
+        ? '保存后下一轮消息生效（策略缓存最多 5 秒）。'
+        : '保存后需重启 AstrBot（或重新加载配置）才生效：面板写配置文件，不调用 AstrBot 热重载接口。'
+    ));
+    if (policy.configPath) footer.appendChild(makeElement('span', 'memory-policy-path', `配置文件：${policy.configPath}`));
+    section.appendChild(footer);
+
+    let saving = false;
+    async function savePolicy() {
+      if (disabled || saving) return;
+      setPolicyError('');
+      setV3Status(statusElement, '', 'info');
+      const payload = {
+        default_mode: defaultSelect.value,
+        private: {
+          mode: privateSelect.value,
+          scope: 'user',
+          extract: privateExtract.querySelector('input').checked,
+          inject: privateInject.querySelector('input').checked,
+          max_items: budgetValue(privateToggles.querySelector('[data-field="private-max-items"]')),
+          max_chars: budgetValue(privateToggles.querySelector('[data-field="private-max-chars"]'))
+        },
+        groups: []
+      };
+      let firstInvalid = null;
+      for (const rowElement of groupsContainer.querySelectorAll('[data-memory-policy-row]')) {
+        const idInput = rowValue(rowElement, 'group-id');
+        const groupId = textValue(idInput && idInput.value, '').trim();
+        if (!groupId) {
+          firstInvalid = firstInvalid || idInput;
+          rowElement.classList.add('is-invalid');
+          continue;
+        }
+        rowElement.classList.remove('is-invalid');
+        payload.groups.push({
+          group_id: groupId,
+          mode: rowValue(rowElement, 'mode').value,
+          scope: rowValue(rowElement, 'scope').value,
+          extract: rowValue(rowElement, 'extract').checked,
+          inject: rowValue(rowElement, 'inject').checked,
+          max_items: budgetValue(rowValue(rowElement, 'max-items')),
+          max_chars: budgetValue(rowValue(rowElement, 'max-chars'))
+        });
+      }
+      if (firstInvalid) {
+        setPolicyError('请填写每一行群策略的群号，或删除该行。');
+        if (typeof firstInvalid.focus === 'function') firstInvalid.focus();
+        return;
+      }
+      saving = true;
+      saveButton.disabled = true;
+      saveButton.textContent = '保存中…';
+      try {
+        const data = await apiRequest(
+          `/api/instances/${encodeURIComponent(instance.id)}/memory-policy`,
+          { method: 'POST', body: payload }
+        );
+        const next = normaliseMemoryPolicyPayload(data);
+        instance.v3 = instance.v3 || {};
+        instance.v3.memoryPolicy = next;
+        updateV3Summary(instance);
+        // Re-render from the server response so no saved value is invented.
+        section.replaceWith(buildMemoryPolicySection(instance));
+      } catch (error) {
+        const payload = error && error.data && typeof error.data === 'object' ? error.data : null;
+        const steps = payload ? memoryPolicyStringList(payload.actions) : [];
+        const detail = formatError(error, '记忆策略保存失败。');
+        setPolicyError(steps.length ? `${detail} ${steps.join(' ')}` : detail);
+        if (payload && payload.supported === true) {
+          // Permission/container problem: the panel stays usable, but nothing
+          // was saved and the steps say how to fix it.
+          setV3Status(statusElement, '未保存：请按上方步骤处理后重试。Studio 不会显示伪造的已保存状态。', 'error');
+        }
+        const firstInput = section.querySelector('input, select');
+        if (firstInput && typeof firstInput.focus === 'function') firstInput.focus();
+      } finally {
+        saving = false;
+        saveButton.disabled = disabled;
+        saveButton.textContent = '保存记忆策略';
+      }
+    }
+    saveButton.addEventListener('click', () => void savePolicy());
+    return section;
+  }
+
+
+  // ------------------------------------------------------------------
+  // Memory content manager (scope-scoped read/write through Studio API)
+  // ------------------------------------------------------------------
+  const MEMORY_CONTENT_KINDS = ['fact', 'preference', 'identity', 'profile', 'habit', 'note'];
+  const MEMORY_CONTENT_SCOPES = [
+    { value: 'group', label: '群聊 group' },
+    { value: 'group_member', label: '群内发言人 group_member' },
+    { value: 'user', label: '用户 user' },
+    { value: 'conversation', label: '会话 conversation' },
+    { value: 'persona', label: '人格 persona' },
+    { value: 'global', label: '全局 global' }
+  ];
+  const MEMORY_CONTENT_PAGE_SIZE = 20;
+  const memoryContentStates = new Map();
+
+  function emptyMemoryContentState() {
+    return {
+      scopeType: 'group',
+      scopeId: '',
+      query: '',
+      offset: 0,
+      total: 0,
+      records: [],
+      stats: null,
+      status: 'idle',
+      statusText: '',
+      statusTone: 'info',
+      loading: false,
+      section: null,
+      selectedId: '',
+      editing: null,
+      busy: false,
+      armedDeleteId: '',
+      armedForget: false,
+      armedImport: false,
+      armedReflect: false,
+      importPreview: null,
+      importError: '',
+      importName: '',
+      importFileName: '',
+      importDedup: 'skip',
+      importRecords: null,
+      available: true,
+      editingError: '',
+      reflectPreview: null,
+      reflectError: ''
+    };
+  }
+
+  function memoryContentState(instance) {
+    const key = instance.id;
+    if (!memoryContentStates.has(key)) memoryContentStates.set(key, emptyMemoryContentState());
+    return memoryContentStates.get(key);
+  }
+
+  function memoryContentScopeReady(state) {
+    return Boolean(state.scopeType && state.scopeId.trim());
+  }
+
+  function memoryContentPath(instance, tail) {
+    return `/api/instances/${encodeURIComponent(instance.id)}/memory/${tail}`;
+  }
+
+  function memoryContentQuery(state, extra = '') {
+    const params = new URLSearchParams();
+    params.set('scope_type', state.scopeType);
+    params.set('scope_id', state.scopeId.trim());
+    if (extra) params.set('extra', extra);
+    return params.toString();
+  }
+
+  function memoryContentErrorText(error, fallback) {
+    const payload = error && error.data && typeof error.data === 'object' ? error.data : {};
+    if (payload && payload.available === false) {
+      return textValue(payload.message || payload.error, '记忆数据库当前不可用。');
+    }
+    return formatError(error, fallback);
+  }
+
+  function memoryContentMarkUnavailable(instance, error) {
+    const payload = error && error.data && typeof error.data === 'object' ? error.data : {};
+    if (payload && payload.available === false) {
+      memoryContentState(instance).available = false;
+      return true;
+    }
+    return false;
+  }
+
+  function setMemoryContentStatus(state, tone, message) {
+    state.statusTone = tone || 'info';
+    state.statusText = message || '';
+    const element = state.section ? state.section.querySelector('[data-memory-content="status"]') : null;
+    if (element) setV3Status(element, state.statusText, state.statusTone);
+  }
+
+  function memoryContentSetControlsDisabled(state, disabled) {
+    if (!state.section) return;
+    for (const element of $$('[data-memory-content-action]', state.section)) element.disabled = disabled;
+    for (const element of $$('[data-memory-content-field]', state.section)) element.disabled = disabled;
+  }
+
+  function memoryContentKindText(kind) {
+    const map = {
+      fact: '事实',
+      preference: '偏好',
+      identity: '身份',
+      profile: '资料',
+      habit: '习惯',
+      note: '备注'
+    };
+    return map[kind] || kind || '未知';
+  }
+
+  function memoryContentTimeText(record) {
+    const updated = textValue(record.updated_at, '');
+    if (!updated) return '时间未知';
+    const short = updated.replace('T', ' ').replace(/\.\d+/, '').slice(0, 16);
+    return short ? short : '时间未知';
+  }
+
+  function memoryContentExpiryText(record) {
+    if (!record || !record.expires_at_epoch) return '永久';
+    if (record.expired) return '已过期';
+    const seconds = Number(record.expires_in_seconds);
+    if (!Number.isFinite(seconds) || seconds <= 0) return '即将过期';
+    if (seconds >= 86400) return `${Math.floor(seconds / 86400)} 天后过期`;
+    if (seconds >= 3600) return `${Math.floor(seconds / 3600)} 小时后过期`;
+    return `${Math.max(1, Math.floor(seconds / 60))} 分钟后过期`;
+  }
+
+  async function loadMemoryContentScope(instance) {
+    const state = memoryContentState(instance);
+    if (!memoryContentScopeReady(state)) {
+      state.total = 0;
+      state.records = [];
+      state.stats = null;
+      state.status = 'unsupported';
+      renderMemoryContentState(instance);
+      return;
+    }
+    state.loading = true;
+    state.status = 'loading';
+    state.statusTone = 'info';
+    state.statusText = '正在读取记忆…';
+    renderMemoryContentState(instance);
+    try {
+      const query = memoryContentQuery(state);
+      const statsData = asRecord(await apiRequest(`${memoryContentPath(instance, 'stats')}?${query}`));
+      const listQuery = `${query}&q=${encodeURIComponent(state.query)}&limit=${MEMORY_CONTENT_PAGE_SIZE}&offset=${state.offset}`;
+      const listData = asRecord(await apiRequest(`${memoryContentPath(instance, 'records')}?${listQuery}`));
+      state.available = true;
+      state.stats = asRecord(statsData.stats);
+      state.total = Number(listData.total) || 0;
+      state.records = Array.isArray(listData.records) ? listData.records : [];
+      state.status = state.total > 0 ? 'ok' : 'empty';
+      state.statusText = state.total > 0 ? '' : (textValue(listData.message, '该 scope 还没有记忆。'));
+      if (!state.records.some((item) => String(item.id) === String(state.selectedId))) {
+        state.selectedId = '';
+        state.editing = null;
+      }
+    } catch (error) {
+      memoryContentMarkUnavailable(instance, error);
+      state.status = 'error';
+      state.statusTone = 'error';
+      state.statusText = memoryContentErrorText(error, '读取记忆失败。');
+      state.records = [];
+      state.total = 0;
+      state.stats = null;
+    } finally {
+      state.loading = false;
+      renderMemoryContentState(instance);
+    }
+  }
+
+  function memoryContentOffsetMax(state) {
+    const total = Number(state.total) || 0;
+    return Math.max(0, Math.ceil(total / MEMORY_CONTENT_PAGE_SIZE) * MEMORY_CONTENT_PAGE_SIZE);
+  }
+
+  async function memoryContentPage(instance, nextOffset) {
+    const state = memoryContentState(instance);
+    state.offset = Math.max(0, Math.min(nextOffset, memoryContentOffsetMax(state)));
+    await loadMemoryContentScope(instance);
+  }
+
+  async function memoryContentSearch(instance) {
+    const state = memoryContentState(instance);
+    state.offset = 0;
+    await loadMemoryContentScope(instance);
+  }
+
+  function memoryContentScopeHint(instance) {
+    const policy = (instance.v3 && instance.v3.memoryPolicy) || {};
+    const groups = Array.isArray(policy.groups) ? policy.groups : [];
+    const ids = groups
+      .map((row) => textValue(row && row.group_id, ''))
+      .filter((value) => value);
+    if (!ids.length) {
+      return 'scope_id 形如 <平台>:<群号> 或 <平台>:<QQ号>（例如 aiocqhttp:838796241）。';
+    }
+    return `scope_id 形如 <平台>:<群号>；已配置的群号：${ids.slice(0, 6).join('、')}（平台名以 AstrBot 适配器为准）。`;
+  }
+
+  function memoryContentDatalist(instance) {
+    const policy = (instance.v3 && instance.v3.memoryPolicy) || {};
+    const groups = Array.isArray(policy.groups) ? policy.groups : [];
+    const list = makeElement('datalist');
+    list.id = 'memory-content-scope-ids';
+    for (const row of groups) {
+      const value = textValue(row && row.group_id, '');
+      if (!value) continue;
+      const option = makeElement('option');
+      option.value = value;
+      list.appendChild(option);
+    }
+    if (!list.childElementCount) {
+      const option = makeElement('option');
+      option.value = 'all';
+      list.appendChild(option);
+    }
+    return list;
+  }
+
+  function memoryContentField(state, field, labelText, input) {
+    const wrapper = makeElement('label', 'memory-content-field');
+    wrapper.appendChild(makeElement('span', 'memory-content-field-label', labelText));
+    wrapper.appendChild(input);
+    input.dataset.memoryContentField = field;
+    return wrapper;
+  }
+
+  function memoryContentSelect(state, field, options, value) {
+    const select = makeElement('select', 'memory-content-input');
+    for (const option of options) {
+      const element = makeElement('option', '', option.label);
+      element.value = option.value;
+      select.appendChild(element);
+    }
+    select.value = value;
+    select.dataset.memoryContentField = field;
+    return select;
+  }
+
+  function renderMemoryContentRecords(instance, list) {
+    const state = memoryContentState(instance);
+    list.replaceChildren();
+    if (state.status === 'loading') {
+      list.appendChild(makeElement('p', 'memory-content-empty', '正在读取记忆…'));
+      return;
+    }
+    if (state.status === 'error') {
+      list.appendChild(makeElement('p', 'memory-content-empty is-error', state.statusText || '读取记忆失败。'));
+      return;
+    }
+    if (!state.records.length) {
+      const text = state.query
+        ? `没有匹配“${state.query}”的记忆。`
+        : (state.statusText || '该 scope 还没有记忆。');
+      list.appendChild(makeElement('p', 'memory-content-empty', text));
+      return;
+    }
+    for (const record of state.records) {
+      const item = makeElement('article', 'memory-content-record');
+      if (String(record.id) === String(state.selectedId)) item.classList.add('is-selected');
+      const head = makeElement('div', 'memory-content-record-head');
+      const badge = makeElement('span', 'memory-content-kind', memoryContentKindText(record.kind));
+      head.appendChild(badge);
+      head.appendChild(makeElement('span', 'memory-content-record-id', `#${record.id}`));
+      head.appendChild(makeElement('span', 'memory-content-record-time', memoryContentTimeText(record)));
+      if (record.expired) head.appendChild(makeElement('span', 'memory-content-badge is-warn', '已过期'));
+      if (record.redacted) head.appendChild(makeElement('span', 'memory-content-badge', '含敏感词已隐去'));
+      item.appendChild(head);
+      item.appendChild(makeElement('p', 'memory-content-record-text', record.content));
+      const meta = makeElement('p', 'memory-content-record-meta');
+      meta.textContent = `置信 ${Number(record.confidence || 0).toFixed(2)} · 重要度 ${Number(record.importance || 0).toFixed(2)} · 命中 ${record.hits || 0} 次 · ${memoryContentExpiryText(record)}`;
+      item.appendChild(meta);
+      const actions = makeElement('div', 'memory-content-record-actions');
+      const detailButton = makeElement('button', 'btn btn-ghost btn-small', '查看/编辑');
+      detailButton.type = 'button';
+      detailButton.dataset.memoryContentAction = `detail:${record.id}`;
+      actions.appendChild(detailButton);
+      const armed = String(state.armedDeleteId) === String(record.id);
+      const deleteButton = makeElement(
+        'button',
+        armed ? 'btn btn-danger btn-small is-armed' : 'btn btn-danger btn-small',
+        armed ? '再次点击确认删除' : '删除'
+      );
+      deleteButton.type = 'button';
+      deleteButton.dataset.memoryContentAction = `delete:${record.id}`;
+      actions.appendChild(deleteButton);
+      item.appendChild(actions);
+      if (String(state.selectedId) === String(record.id)) item.appendChild(renderMemoryContentDetail(instance));
+      list.appendChild(item);
+    }
+  }
+
+  function renderMemoryContentDetail(instance, options = {}) {
+    const state = memoryContentState(instance);
+    const isNew = options.isNew === true;
+    const editor = makeElement('div', 'memory-content-editor');
+    const record = state.editing || {};
+    const content = document.createElement('textarea');
+    content.className = 'memory-content-textarea';
+    content.rows = 3;
+    content.maxLength = 200;
+    content.value = textValue(record.content, '');
+    content.dataset.memoryContentField = 'edit-content';
+    editor.appendChild(memoryContentField(state, 'edit-content', '记忆内容（最多 200 字符）', content));
+    const kind = memoryContentSelect(
+      state,
+      'edit-kind',
+      MEMORY_CONTENT_KINDS.map((item) => ({ value: item, label: memoryContentKindText(item) })),
+      textValue(record.kind, 'fact')
+    );
+    editor.appendChild(memoryContentField(state, 'edit-kind', '类型', kind));
+    const importance = document.createElement('input');
+    importance.type = 'number';
+    importance.min = '0';
+    importance.max = '1';
+    importance.step = '0.05';
+    importance.value = String(Number(record.importance || 0.5));
+    importance.dataset.memoryContentField = 'edit-importance';
+    editor.appendChild(memoryContentField(state, 'edit-importance', '重要度 0-1', importance));
+    const confidence = document.createElement('input');
+    confidence.type = 'number';
+    confidence.min = '0';
+    confidence.max = '1';
+    confidence.step = '0.05';
+    confidence.value = String(Number(record.confidence || 0.5));
+    confidence.dataset.memoryContentField = 'edit-confidence';
+    editor.appendChild(memoryContentField(state, 'edit-confidence', '置信度 0-1', confidence));
+    const ttl = document.createElement('input');
+    ttl.type = 'number';
+    ttl.min = '0';
+    ttl.step = '60';
+    ttl.placeholder = isNew ? '留空=永久' : '留空=不修改；0=永久';
+    ttl.dataset.memoryContentField = 'edit-ttl';
+    editor.appendChild(memoryContentField(state, 'edit-ttl', 'TTL（秒）', ttl));
+    const hint = makeElement(
+      'p',
+      'memory-content-hint',
+      '保存后由后端返回真实记录；Studio 不会显示未保存的“已保存”状态。'
+    );
+    editor.appendChild(hint);
+    const actions = makeElement('div', 'memory-content-editor-actions');
+    const saveLabel = isNew ? '新增记忆' : '保存修改';
+    const save = makeElement('button', 'btn btn-primary btn-small', state.busy ? '保存中…' : saveLabel);
+    save.type = 'button';
+    save.dataset.memoryContentAction = isNew ? 'save-new' : 'save-edit';
+    save.disabled = state.busy;
+    actions.appendChild(save);
+    const cancel = makeElement('button', 'btn btn-ghost btn-small', '取消');
+    cancel.type = 'button';
+    cancel.dataset.memoryContentAction = 'cancel-edit';
+    actions.appendChild(cancel);
+    editor.appendChild(actions);
+    if (state.editingError) editor.appendChild(makeElement('p', 'memory-content-error', state.editingError));
+    return editor;
+  }
+
+  function renderMemoryContentImportPreview(instance, container) {
+    const state = memoryContentState(instance);
+    container.replaceChildren();
+    if (state.importError) {
+      container.appendChild(makeElement('p', 'memory-content-error', state.importError));
+    }
+    const preview = state.importPreview;
+    if (!preview) return;
+    const summary = makeElement('div', 'memory-content-preview');
+    const lines = [
+      `文件：${state.importFileName || '未选择'}`,
+      `共 ${preview.total} 条：可写入 ${preview.valid} 条，非法 ${(preview.invalid || []).length} 条`,
+      `新增 ${preview.would_create} 条 · 更新 ${preview.would_update} 条 · 跳过 ${preview.would_skip} 条 · 冲突 ${(preview.conflicts || []).length} 处`,
+      `去重策略：${preview.dedup === 'overwrite' ? '同键覆盖' : '同键跳过'}`
+    ];
+    if (preview.exceeds_scope_cap) lines.push(`导入后将超过 ${preview.cap} 条上限，需先清理旧记忆。`);
+    for (const line of lines) summary.appendChild(makeElement('p', '', line));
+    for (const item of (preview.invalid || []).slice(0, 8)) {
+      summary.appendChild(makeElement('p', 'memory-content-error', `第 ${Number(item.index) + 1} 条非法：${textValue(item.reason, '')}`));
+    }
+    container.appendChild(summary);
+    const armed = state.armedImport;
+    const apply = makeElement(
+      'button',
+      armed ? 'btn btn-danger btn-small is-armed' : 'btn btn-primary btn-small',
+      armed ? '再次点击确认写入' : '确认写入'
+    );
+    apply.type = 'button';
+    apply.dataset.memoryContentAction = 'apply-import';
+    apply.disabled = state.busy || state.available === false || !preview.valid || preview.exceeds_scope_cap;
+    container.appendChild(apply);
+  }
+
+  function renderMemoryContentReflectPreview(instance, container) {
+    const state = memoryContentState(instance);
+    container.replaceChildren();
+    if (state.reflectError) container.appendChild(makeElement('p', 'memory-content-error', state.reflectError));
+    const preview = state.reflectPreview;
+    if (!preview) return;
+    const counts = asRecord(preview.counts);
+    container.appendChild(makeElement(
+      'p',
+      'memory-content-hint',
+      `共 ${Number(counts.records) || 0} 条：近重复 ${Number(counts.duplicates) || 0} 组 · 疑似矛盾 ${Number(counts.contradictions) || 0} 对 · 已过期 ${Number(counts.expired) || 0} 条 · 低价值 ${Number(counts.low_value) || 0} 条`
+    ));
+    for (const cluster of (preview.duplicates || []).slice(0, 5)) {
+      container.appendChild(makeElement(
+        'p',
+        '',
+        `重复组保留 #${cluster.keep_id}，清理 #${(cluster.ids || []).filter((id) => id !== cluster.keep_id).join('、#')}：${(cluster.contents || [])[0] || ''}`
+      ));
+    }
+    for (const pair of (preview.contradictions || []).slice(0, 5)) {
+      container.appendChild(makeElement(
+        'p',
+        'memory-content-warn',
+        `疑似矛盾（不删除）：#${(pair.ids || []).join(' / #')}：${(pair.contents || []).join(' ↔ ')}`
+      ));
+    }
+    container.appendChild(makeElement('p', 'memory-content-hint', 'apply 会先写 0600 备份，再清理重复/过期记录；矛盾只报告不删除。'));
+    const armed = state.armedReflect;
+    const apply = makeElement(
+      'button',
+      armed ? 'btn btn-danger btn-small is-armed' : 'btn btn-primary btn-small',
+      armed ? '再次点击确认整理' : '应用整理'
+    );
+    apply.type = 'button';
+    apply.dataset.memoryContentAction = 'apply-reflect';
+    apply.disabled = state.busy || state.available === false
+      || !((Number(counts.duplicates) || 0) + (Number(counts.expired) || 0));
+    container.appendChild(apply);
+  }
+
+  function renderMemoryContentState(instance) {
+    const state = memoryContentState(instance);
+    const section = state.section;
+    if (!section) return;
+    memoryContentSetControlsDisabled(state, state.busy || state.available === false);
+    section.classList.toggle('is-unavailable', state.available === false);
+    const stats = asRecord(state.stats);
+    const summary = section.querySelector('[data-memory-content="summary"]');
+    if (summary) {
+      summary.textContent = state.stats
+        ? `当前 scope 共 ${Number(stats.total) || 0} 条记忆 · 命中 ${Number(stats.hits) || 0} 次 · 已过期 ${Number(stats.expired) || 0} 条 · 上限 ${Number(stats.cap) || 500}`
+        : '选择 scope 后读取统计。';
+    }
+    setV3Status(section.querySelector('[data-memory-content="status"]'), state.statusText, state.statusTone);
+    const records = section.querySelector('[data-memory-content="records"]');
+    if (records) renderMemoryContentRecords(instance, records);
+    const pager = section.querySelector('[data-memory-content="pager"]');
+    if (pager) {
+      const page = Math.floor(state.offset / MEMORY_CONTENT_PAGE_SIZE) + 1;
+      const pages = Math.max(1, Math.ceil(state.total / MEMORY_CONTENT_PAGE_SIZE));
+      pager.textContent = state.total ? `第 ${page} / ${pages} 页 · 共 ${state.total} 条` : '';
+    }
+    const controlsDisabled = state.busy || state.available === false;
+    const prev = section.querySelector('[data-memory-content="prev"]');
+    const next = section.querySelector('[data-memory-content="next"]');
+    if (prev) prev.disabled = controlsDisabled || state.offset <= 0;
+    if (next) next.disabled = controlsDisabled || state.offset + MEMORY_CONTENT_PAGE_SIZE >= state.total;
+    renderMemoryContentImportPreview(instance, section.querySelector('[data-memory-content="import-preview"]'));
+    renderMemoryContentReflectPreview(instance, section.querySelector('[data-memory-content="reflect-preview"]'));
+    const forgetButton = section.querySelector('[data-memory-content-action="forget"]');
+    if (forgetButton) {
+      forgetButton.textContent = state.armedForget ? '再次点击确认忘记整个 scope' : '忘记整个 scope';
+      forgetButton.classList.toggle('is-armed', state.armedForget);
+      forgetButton.disabled = controlsDisabled || !memoryContentScopeReady(state) || !state.total;
+    }
+    // A failed read must stay retryable: "读取" is the recovery action.
+    const retryButton = section.querySelector('[data-memory-content-action="load"]');
+    if (retryButton) retryButton.disabled = state.busy;
+    if (state.selectedId === 'new') {
+      const recordsBox = section.querySelector('[data-memory-content="records"]');
+      if (recordsBox) recordsBox.appendChild(renderMemoryContentDetail(instance, { isNew: true }));
+    }
+  }
+
+  async function memoryContentSelectRecord(instance, recordId) {
+    const state = memoryContentState(instance);
+    state.selectedId = String(recordId);
+    state.editing = null;
+    state.editingError = '';
+    renderMemoryContentState(instance);
+    try {
+      const query = memoryContentQuery(state);
+      const data = asRecord(await apiRequest(`${memoryContentPath(instance, 'records')}/${encodeURIComponent(recordId)}?${query}`));
+      state.editing = asRecord(data.record);
+      state.editingError = '';
+    } catch (error) {
+      state.editingError = memoryContentErrorText(error, '读取记忆详情失败。');
+    }
+    renderMemoryContentState(instance);
+  }
+
+  function memoryContentEditorValue(instance, field) {
+    const state = memoryContentState(instance);
+    const section = state.section;
+    if (!section) return '';
+    const element = section.querySelector(`[data-memory-content-field="${field}"]`);
+    return element ? String(element.value || '') : '';
+  }
+
+  async function memoryContentSaveEdit(instance) {
+    const state = memoryContentState(instance);
+    if (!state.selectedId || state.busy) return;
+    const payload = {
+      scope_type: state.scopeType,
+      scope_id: state.scopeId.trim(),
+      content: memoryContentEditorValue(instance, 'edit-content'),
+      kind: memoryContentEditorValue(instance, 'edit-kind'),
+      importance: memoryContentEditorValue(instance, 'edit-importance'),
+      confidence: memoryContentEditorValue(instance, 'edit-confidence')
+    };
+    const ttl = memoryContentEditorValue(instance, 'edit-ttl').trim();
+    if (ttl) {
+      if (Number(ttl) <= 0) payload.expires_at = null;
+      else payload.ttl_seconds = Number(ttl);
+    }
+    state.busy = true;
+    state.editingError = '';
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(
+        `${memoryContentPath(instance, 'records')}/${encodeURIComponent(state.selectedId)}`,
+        { method: 'PATCH', body: payload }
+      ));
+      state.editing = asRecord(data.record);
+      state.status = 'ok';
+      state.statusText = textValue(data.message, '已保存修改。');
+      state.statusTone = 'success';
+      state.armedDeleteId = '';
+      state.busy = false;
+      await loadMemoryContentScope(instance);
+      return;
+    } catch (error) {
+      state.editingError = memoryContentErrorText(error, '保存修改失败。');
+      state.status = 'error';
+      state.statusText = state.editingError;
+      state.statusTone = 'error';
+    } finally {
+      state.busy = false;
+    }
+    renderMemoryContentState(instance);
+  }
+
+  async function memoryContentDelete(instance, recordId) {
+    const state = memoryContentState(instance);
+    if (state.busy) return;
+    if (String(state.armedDeleteId) !== String(recordId)) {
+      state.armedDeleteId = String(recordId);
+      state.armedForget = false;
+      renderMemoryContentState(instance);
+      return;
+    }
+    state.busy = true;
+    state.status = 'loading';
+    state.statusText = '正在删除…';
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(
+        `${memoryContentPath(instance, 'records')}/${encodeURIComponent(recordId)}`,
+        {
+          method: 'DELETE',
+          body: {
+            scope_type: state.scopeType,
+            scope_id: state.scopeId.trim(),
+            confirm: String(recordId)
+          }
+        }
+      ));
+      state.armedDeleteId = '';
+      state.selectedId = '';
+      state.editing = null;
+      state.busy = false;
+      await loadMemoryContentScope(instance);
+      setMemoryContentStatus(state, 'success', textValue(data.message, '已删除 1 条记忆。'));
+      renderMemoryContentState(instance);
+      return;
+    } catch (error) {
+      state.status = 'error';
+      state.statusText = memoryContentErrorText(error, '删除记忆失败。');
+      state.statusTone = 'error';
+    } finally {
+      state.busy = false;
+    }
+    renderMemoryContentState(instance);
+  }
+
+  async function memoryContentForget(instance) {
+    const state = memoryContentState(instance);
+    if (state.busy || !memoryContentScopeReady(state)) return;
+    if (!state.armedForget) {
+      state.armedForget = true;
+      state.armedDeleteId = '';
+      renderMemoryContentState(instance);
+      return;
+    }
+    state.busy = true;
+    state.status = 'loading';
+    state.statusText = '正在清理整个 scope…';
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(memoryContentPath(instance, 'forget'), {
+        method: 'POST',
+        body: {
+          scope_type: state.scopeType,
+          scope_id: state.scopeId.trim(),
+          confirm: state.scopeId.trim()
+        }
+      }));
+      state.armedForget = false;
+      state.busy = false;
+      await loadMemoryContentScope(instance);
+      setMemoryContentStatus(state, 'success', textValue(data.message, '已清理该 scope。'));
+      renderMemoryContentState(instance);
+      return;
+    } catch (error) {
+      state.status = 'error';
+      state.statusText = memoryContentErrorText(error, '忘记 scope 失败。');
+      state.statusTone = 'error';
+    } finally {
+      state.busy = false;
+    }
+    renderMemoryContentState(instance);
+  }
+
+  async function memoryContentExport(instance) {
+    const state = memoryContentState(instance);
+    if (state.busy || !memoryContentScopeReady(state)) return;
+    state.busy = true;
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(memoryContentPath(instance, 'export'), {
+        method: 'POST',
+        body: { scope_type: state.scopeType, scope_id: state.scopeId.trim() }
+      }));
+      const payload = JSON.stringify(data, null, 2);
+      const blob = new Blob([payload], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `memory-${state.scopeType}-${state.scopeId.trim().replace(/[^A-Za-z0-9_.-]/g, '_')}.json`;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setMemoryContentStatus(state, 'success', `已导出 ${Number(data.count) || 0} 条记忆。`);
+    } catch (error) {
+      setMemoryContentStatus(state, 'error', memoryContentErrorText(error, '导出失败。'));
+    } finally {
+      state.busy = false;
+      renderMemoryContentState(instance);
+    }
+  }
+
+  async function memoryContentReadImportFile(instance, file) {
+    const state = memoryContentState(instance);
+    state.importError = '';
+    state.importPreview = null;
+    state.armedImport = false;
+    if (!file) return;
+    state.importFileName = file.name || '';
+    let text = '';
+    try {
+      text = await file.text();
+    } catch (error) {
+      state.importError = '无法读取所选文件。';
+      renderMemoryContentState(instance);
+      return;
+    }
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      state.importError = '文件不是合法 JSON。';
+      renderMemoryContentState(instance);
+      return;
+    }
+    let records = Array.isArray(parsed) ? parsed : asRecord(parsed).records;
+    if (!Array.isArray(records)) {
+      state.importError = 'JSON 中缺少 records 数组。';
+      renderMemoryContentState(instance);
+      return;
+    }
+    if (!memoryContentScopeReady(state)) {
+      state.importError = '请先选择 scope。';
+      renderMemoryContentState(instance);
+      return;
+    }
+    await memoryContentPreviewImport(instance, records);
+  }
+
+  async function memoryContentPreviewImport(instance, records) {
+    const state = memoryContentState(instance);
+    state.busy = true;
+    state.importError = '';
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(memoryContentPath(instance, 'import'), {
+        method: 'POST',
+        body: {
+          scope_type: state.scopeType,
+          scope_id: state.scopeId.trim(),
+          records,
+          apply: false,
+          dedup: state.importDedup === 'overwrite' ? 'overwrite' : 'skip',
+          skip_invalid: true
+        }
+      }));
+      state.importPreview = asRecord(data.preview);
+      state.importRecords = records;
+    } catch (error) {
+      state.importError = memoryContentErrorText(error, '导入预览失败。');
+      state.importPreview = null;
+    } finally {
+      state.busy = false;
+      renderMemoryContentState(instance);
+    }
+  }
+
+  async function memoryContentApplyImport(instance) {
+    const state = memoryContentState(instance);
+    if (state.busy || !Array.isArray(state.importRecords)) return;
+    if (!state.armedImport) {
+      state.armedImport = true;
+      renderMemoryContentState(instance);
+      return;
+    }
+    state.busy = true;
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(memoryContentPath(instance, 'import'), {
+        method: 'POST',
+        body: {
+          scope_type: state.scopeType,
+          scope_id: state.scopeId.trim(),
+          records: state.importRecords,
+          apply: true,
+          confirm: state.scopeId.trim(),
+          dedup: state.importDedup === 'overwrite' ? 'overwrite' : 'skip',
+          skip_invalid: true
+        }
+      }));
+      state.armedImport = false;
+      state.importPreview = null;
+      state.importRecords = null;
+      state.busy = false;
+      await loadMemoryContentScope(instance);
+      setMemoryContentStatus(state, 'success', textValue(data.message, '导入完成。'));
+      renderMemoryContentState(instance);
+      return;
+    } catch (error) {
+      state.importError = memoryContentErrorText(error, '写入导入数据失败（事务已回滚，未写入半份）。');
+      state.status = 'error';
+      state.statusText = state.importError;
+      state.statusTone = 'error';
+    } finally {
+      state.busy = false;
+    }
+    renderMemoryContentState(instance);
+  }
+
+  async function memoryContentReflect(instance, apply) {
+    const state = memoryContentState(instance);
+    if (state.busy || !memoryContentScopeReady(state)) return;
+    if (apply && !state.reflectPreview) return;
+    if (apply && !state.armedReflect) {
+      state.armedReflect = true;
+      renderMemoryContentState(instance);
+      return;
+    }
+    state.busy = true;
+    state.reflectError = '';
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(memoryContentPath(instance, 'reflect'), {
+        method: 'POST',
+        body: {
+          scope_type: state.scopeType,
+          scope_id: state.scopeId.trim(),
+          apply: Boolean(apply),
+          confirm: apply ? state.scopeId.trim() : ''
+        }
+      }));
+      if (apply) {
+        state.armedReflect = false;
+        state.reflectPreview = null;
+        state.busy = false;
+        await loadMemoryContentScope(instance);
+        setMemoryContentStatus(state, 'success', textValue(data.message, '整理完成。'));
+        renderMemoryContentState(instance);
+        return;
+      }
+      state.reflectPreview = asRecord(data.preview);
+      state.armedReflect = false;
+      state.statusTone = 'info';
+    } catch (error) {
+      state.reflectError = memoryContentErrorText(error, '整理预览失败。');
+      state.status = 'error';
+      state.statusText = state.reflectError;
+      state.statusTone = 'error';
+    } finally {
+      state.busy = false;
+    }
+    renderMemoryContentState(instance);
+  }
+
+  function buildMemoryContentSection(instance) {
+    const state = memoryContentState(instance);
+    const section = makeElement('section', 'instance-v3-section memory-content-section');
+    section.dataset.memoryContent = 'section';
+    state.section = section;
+
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-memory'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '记忆内容'));
+    headingCopy.appendChild(makeElement(
+      'p',
+      '',
+      '按 scope 查看、编辑、导出/导入 AstrBot 长期记忆内容；每次操作都必须显式指定 scope，Studio 不会返回其他 scope 的数据。'
+    ));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+
+    const controls = makeElement('div', 'memory-content-controls');
+    const scopeSelect = memoryContentSelect(
+      state,
+      'scope-type',
+      MEMORY_CONTENT_SCOPES,
+      state.scopeType
+    );
+    controls.appendChild(memoryContentField(state, 'scope-type', 'Scope 类型', scopeSelect));
+    const scopeInput = document.createElement('input');
+    scopeInput.type = 'text';
+    scopeInput.className = 'memory-content-input';
+    scopeInput.value = state.scopeId;
+    scopeInput.placeholder = '群号或 aiocqhttp:群号；group_member 填 aiocqhttp:群号:QQ';
+    scopeInput.setAttribute('list', 'memory-content-scope-ids');
+    scopeInput.dataset.memoryContentField = 'scope-id';
+    controls.appendChild(memoryContentField(state, 'scope-id', 'Scope ID', scopeInput));
+    controls.appendChild(memoryContentDatalist(instance));
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'memory-content-input';
+    searchInput.value = state.query;
+    searchInput.placeholder = '关键词（内容/键）';
+    searchInput.dataset.memoryContentField = 'query';
+    controls.appendChild(memoryContentField(state, 'query', '搜索', searchInput));
+    const loadButton = makeElement('button', 'btn btn-primary btn-small', '读取');
+    loadButton.type = 'button';
+    loadButton.dataset.memoryContentAction = 'load';
+    controls.appendChild(loadButton);
+    const searchButton = makeElement('button', 'btn btn-ghost btn-small', '搜索');
+    searchButton.type = 'button';
+    searchButton.dataset.memoryContentAction = 'search';
+    controls.appendChild(searchButton);
+    section.appendChild(controls);
+
+    section.appendChild(makeElement('p', 'memory-content-hint', memoryContentScopeHint(instance)));
+    section.appendChild(makeElement('p', 'memory-content-summary memory-content-hint', ''))
+      .dataset.memoryContent = 'summary';
+    const status = makeElement('p', 'instance-v3-status');
+    status.dataset.memoryContent = 'status';
+    status.setAttribute('role', 'status');
+    section.appendChild(status);
+    const summary = section.querySelector('[data-memory-content="summary"]');
+    if (summary) summary.dataset.memoryContent = 'summary';
+
+    const list = makeElement('div', 'memory-content-records');
+    list.dataset.memoryContent = 'records';
+    section.appendChild(list);
+
+    const pager = makeElement('div', 'memory-content-pager');
+    pager.dataset.memoryContent = 'pager';
+    section.appendChild(pager);
+    const prev = makeElement('button', 'btn btn-ghost btn-small', '上一页');
+    prev.type = 'button';
+    prev.dataset.memoryContent = 'prev';
+    const next = makeElement('button', 'btn btn-ghost btn-small', '下一页');
+    next.type = 'button';
+    next.dataset.memoryContent = 'next';
+    section.appendChild(prev);
+    section.appendChild(next);
+
+    const toolbar = makeElement('div', 'memory-content-toolbar');
+    const addButton = makeElement('button', 'btn btn-primary btn-small', '手动新增');
+    addButton.type = 'button';
+    addButton.dataset.memoryContentAction = 'add';
+    toolbar.appendChild(addButton);
+    const exportButton = makeElement('button', 'btn btn-ghost btn-small', '导出当前 scope');
+    exportButton.type = 'button';
+    exportButton.dataset.memoryContentAction = 'export';
+    toolbar.appendChild(exportButton);
+    const reflectButton = makeElement('button', 'btn btn-ghost btn-small', '整理预览');
+    reflectButton.type = 'button';
+    reflectButton.dataset.memoryContentAction = 'reflect';
+    toolbar.appendChild(reflectButton);
+    const forgetButton = makeElement('button', 'btn btn-danger btn-small', '忘记整个 scope');
+    forgetButton.type = 'button';
+    forgetButton.dataset.memoryContentAction = 'forget';
+    toolbar.appendChild(forgetButton);
+    section.appendChild(toolbar);
+
+    const importBox = makeElement('div', 'memory-content-import');
+    importBox.appendChild(makeElement('h5', '', '导入/恢复'));
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'application/json,.json';
+    fileInput.dataset.memoryContentField = 'import-file';
+    importBox.appendChild(fileInput);
+    const dedupSelect = memoryContentSelect(
+      state,
+      'import-dedup',
+      [
+        { value: 'skip', label: '冲突时跳过' },
+        { value: 'overwrite', label: '同键覆盖' }
+      ],
+      state.importDedup
+    );
+    importBox.appendChild(memoryContentField(state, 'import-dedup', '去重策略', dedupSelect));
+    const importPreview = makeElement('div', 'memory-content-preview-box');
+    importPreview.dataset.memoryContent = 'import-preview';
+    importBox.appendChild(importPreview);
+    section.appendChild(importBox);
+
+    const reflectBox = makeElement('div', 'memory-content-reflect');
+    reflectBox.appendChild(makeElement('h5', '', '整理预览（dry-run）'));
+    const reflectPreview = makeElement('div', 'memory-content-preview-box');
+    reflectPreview.dataset.memoryContent = 'reflect-preview';
+    reflectBox.appendChild(reflectPreview);
+    section.appendChild(reflectBox);
+
+    controls.querySelector('[data-memory-content-action="load"]').addEventListener('click', () => {
+      state.armedForget = false;
+      state.armedDeleteId = '';
+      state.query = String((searchInput.value || '')).trim();
+      void loadMemoryContentScope(instance);
+    });
+    controls.querySelector('[data-memory-content-action="search"]').addEventListener('click', () => {
+      state.query = String((searchInput.value || '')).trim();
+      void memoryContentSearch(instance);
+    });
+    prev.addEventListener('click', () => void memoryContentPage(instance, state.offset - MEMORY_CONTENT_PAGE_SIZE));
+    next.addEventListener('click', () => void memoryContentPage(instance, state.offset + MEMORY_CONTENT_PAGE_SIZE));
+    scopeSelect.addEventListener('change', () => {
+      state.scopeType = scopeSelect.value;
+      state.offset = 0;
+      state.selectedId = '';
+      state.editing = null;
+      state.importPreview = null;
+      state.reflectPreview = null;
+      state.armedForget = false;
+      state.armedReflect = false;
+      state.armedImport = false;
+      renderMemoryContentState(instance);
+    });
+    scopeInput.addEventListener('input', () => {
+      state.scopeId = String(scopeInput.value || '').trim();
+      renderMemoryContentState(instance);
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        state.query = String(searchInput.value || '').trim();
+        void memoryContentSearch(instance);
+      }
+    });
+    addButton.addEventListener('click', () => {
+      if (!memoryContentScopeReady(state)) {
+        setMemoryContentStatus(state, 'warning', '请先填写 scope ID。');
+        return;
+      }
+      state.selectedId = 'new';
+      state.editing = { content: '', kind: 'fact', importance: 0.5, confidence: 0.5 };
+      state.editingError = '';
+      renderMemoryContentState(instance);
+    });
+    exportButton.addEventListener('click', () => void memoryContentExport(instance));
+    reflectButton.addEventListener('click', () => void memoryContentReflect(instance, false));
+    forgetButton.addEventListener('click', () => void memoryContentForget(instance));
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+      void memoryContentReadImportFile(instance, file);
+    });
+    dedupSelect.addEventListener('change', () => {
+      state.importDedup = dedupSelect.value === 'overwrite' ? 'overwrite' : 'skip';
+      if (Array.isArray(state.importRecords)) void memoryContentPreviewImport(instance, state.importRecords);
+    });
+    section.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!target || !target.dataset) return;
+      const action = target.dataset.memoryContentAction || '';
+      if (!action) return;
+      event.preventDefault();
+      if (action === 'save-new') {
+        void memoryContentCreate(instance);
+        return;
+      }
+      if (action.startsWith('detail:')) {
+        void memoryContentSelectRecord(instance, action.slice(7));
+        return;
+      }
+      if (action.startsWith('delete:')) {
+        void memoryContentDelete(instance, action.slice(7));
+        return;
+      }
+      if (action === 'save-edit') {
+        void memoryContentSaveEdit(instance);
+        return;
+      }
+      if (action === 'cancel-edit') {
+        state.selectedId = '';
+        state.editing = null;
+        state.editingError = '';
+        renderMemoryContentState(instance);
+        return;
+      }
+      if (action === 'apply-import') void memoryContentApplyImport(instance);
+      if (action === 'apply-reflect') void memoryContentReflect(instance, true);
+    });
+
+    renderMemoryContentState(instance);
+    if (memoryContentScopeReady(state)) void loadMemoryContentScope(instance);
+    else setMemoryContentStatus(state, 'info', '填写 scope ID 后点击“读取”；Studio 不会跨 scope 列出记忆。');
+    return section;
+  }
+
+  async function memoryContentCreate(instance) {
+    const state = memoryContentState(instance);
+    if (state.busy) return;
+    const payload = {
+      scope_type: state.scopeType,
+      scope_id: state.scopeId.trim(),
+      content: memoryContentEditorValue(instance, 'edit-content'),
+      kind: memoryContentEditorValue(instance, 'edit-kind'),
+      importance: memoryContentEditorValue(instance, 'edit-importance'),
+      confidence: memoryContentEditorValue(instance, 'edit-confidence'),
+      dedup: 'skip'
+    };
+    const ttl = memoryContentEditorValue(instance, 'edit-ttl').trim();
+    if (ttl && Number(ttl) > 0) payload.ttl_seconds = Number(ttl);
+    state.busy = true;
+    state.editingError = '';
+    renderMemoryContentState(instance);
+    try {
+      const data = asRecord(await apiRequest(memoryContentPath(instance, 'records'), {
+        method: 'POST',
+        body: payload
+      }));
+      state.busy = false;
+      state.selectedId = '';
+      state.editing = null;
+      await loadMemoryContentScope(instance);
+      setMemoryContentStatus(state, 'success', textValue(data.message, '已新增 1 条记忆。'));
+      renderMemoryContentState(instance);
+      return;
+    } catch (error) {
+      state.editingError = memoryContentErrorText(error, '新增记忆失败。');
+      state.status = 'error';
+      state.statusText = state.editingError;
+      state.statusTone = 'error';
+    } finally {
+      state.busy = false;
+    }
+    renderMemoryContentState(instance);
+  }
+
   function buildStatsSection(instance) {
     const stats = (instance.v3 && instance.v3.stats) || emptyStatsState();
     const section = makeElement('section', 'instance-v3-section');
@@ -3734,6 +5660,7 @@
           const existing = instance.v3 || {
             plugins: emptyPluginState(),
             memory: emptyMemoryState(instance.memory_mode_hint || ''),
+            memoryPolicy: emptyMemoryPolicyState(),
             stats: emptyStatsState()
           };
           const message = formatError(error, '可选运维信息读取失败。');
@@ -3742,6 +5669,7 @@
             v3: {
               plugins: { ...existing.plugins, status: 'error', error: message },
               memory: { ...existing.memory, status: 'error', error: message },
+              memoryPolicy: existing.memoryPolicy || { ...emptyMemoryPolicyState(), status: 'error', error: message },
               stats: { ...existing.stats, status: 'error', error: message }
             }
           };

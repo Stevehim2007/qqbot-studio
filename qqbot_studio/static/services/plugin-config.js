@@ -478,6 +478,63 @@
     return textValue(value, '');
   }
 
+
+  // ------------------------------------------------------------------
+  // Save pipeline helpers (T17 P2): complete payload, baseline refresh and
+  // "make the invalid field visible" planning.  Pure functions so the console
+  // wiring stays a thin adapter and the contract is node-testable.
+  // ------------------------------------------------------------------
+  function pluginConfigSavePayload(entries) {
+    const values = {};
+    const invalid = [];
+    for (const entry of entries || []) {
+      if (!entry || entry.legacyHidden) continue;
+      const key = textValue(entry.key, '');
+      const result = typeof entry.readValue === 'function'
+        ? entry.readValue()
+        : { ok: false, message: '无法读取该参数。' };
+      if (!key || !result || result.ok !== true) {
+        invalid.push({ key, entry, message: (result && result.message) || '参数值无效。' });
+        continue;
+      }
+      values[key] = result.value;
+    }
+    // Every editable field (including filtered-out ones) is submitted: saving
+    // must never silently drop fields the current filter hides.
+    return { ok: invalid.length === 0, values, invalid };
+  }
+
+  function pluginConfigUpdatedBaselines(entries, submitted, saved) {
+    const submittedValues = asRecord(submitted);
+    const savedValues = asRecord(saved);
+    const updates = [];
+    for (const entry of entries || []) {
+      if (!entry || entry.legacyHidden) continue;
+      const key = textValue(entry.key, '');
+      if (!key || !Object.prototype.hasOwnProperty.call(submittedValues, key)) continue;
+      updates.push({
+        key,
+        value: Object.prototype.hasOwnProperty.call(savedValues, key)
+          ? savedValues[key]
+          : submittedValues[key]
+      });
+    }
+    return updates;
+  }
+
+  function pluginConfigRevealPlan(entry, uiState) {
+    const ui = asRecord(uiState);
+    const groupId = textValue(asRecord(entry).groupId, '').trim() || 'advanced';
+    const activeGroup = textValue(ui.activeGroup, 'all') || 'all';
+    return {
+      clearSearch: true,
+      modifiedOnly: false,
+      activeGroup: activeGroup === 'all' || activeGroup === groupId ? activeGroup : 'all',
+      expandGroup: groupId,
+      scrollIntoView: true
+    };
+  }
+
   function pluginConfigPath(instanceId, pluginId) {
     return `/api/instances/${encodeURIComponent(instanceId)}/plugins/${encodeURIComponent(pluginId)}/config`;
   }
@@ -522,6 +579,9 @@
       isSensitivePluginField,
       pluginConfigUnsupportedMessage,
       sanitisePluginText,
+      pluginConfigSavePayload,
+      pluginConfigUpdatedBaselines,
+      pluginConfigRevealPlan,
       pluginValueLookup,
       pluginListText,
       pluginInputText,

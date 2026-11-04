@@ -27,8 +27,20 @@ from .assistant_ext import (
     ASSISTANT_REPO_URL,
 )
 from .astrbot_api import AstrBotAPIError
-from .deployer import PROMPT_PROFILES_MAX_REQUEST_BYTES, DeploymentError
+from .deployer import (
+    PROMPT_PROFILES_MAX_REQUEST_BYTES,
+    DeploymentError,
+    MemoryPolicyUnsupportedError,
+    MemoryPolicyWriteUnavailableError,
+)
 from .dockerctl import DockerError
+from .memory_admin import (
+    MemoryAdmin,
+    MemoryAdminError,
+    MemoryAdminUnavailable,
+    MemoryConflict,
+    MemoryRecordNotFound,
+)
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
 from .updater import (
@@ -256,7 +268,33 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         self._method_not_allowed()
 
     def do_PATCH(self) -> None:  # noqa: N802
-        self._method_not_allowed()
+        if not self._validate_host_header():
+            self._error(HTTPStatus.BAD_REQUEST, "Invalid Host header")
+            return
+        if not self._check_token():
+            self._error(HTTPStatus.FORBIDDEN, "本地访问令牌无效或已过期，请回到启动器重新打开本页面。")
+            return
+        parsed = urlsplit(self.path)
+        nested = self._nested_instance_route(parsed.path)
+        route = self._memory_admin_route(nested[1]) if nested is not None else None
+        if nested is None or route is None or route[0] != "record":
+            self._method_not_allowed()
+            return
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        instance_id, _ = nested
+        try:
+            self.server.context.studio.get_instance_meta(instance_id)
+            manager = self.server.context.studio.get_manager(instance_id)
+            self._serve_memory_admin(
+                manager, route, method="PATCH", payload=payload, query=self._query(parsed)
+            )
+        except ValueError as exc:
+            self._error(HTTPStatus.BAD_REQUEST, str(exc))
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "更新记忆失败，请查看启动器终端日志。")
 
     def do_TRACE(self) -> None:  # noqa: N802
         self._method_not_allowed()
@@ -343,6 +381,213 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "message": "插件配置接口暂不可用；主控制台和其它插件不受影响。",
             "error": detail,
         }
+
+    # ------------------------------------------------------------------
+    # Per-group long-term memory policy
+    # ------------------------------------------------------------------
+    def _memory_policy_unavailable(self, detail: str) -> dict[str, Any]:
+        """Explicit unsupported state; never a fabricated saved-policy value."""
+
+        return {
+            "ok": False,
+            "available": False,
+            "supported": False,
+            "saved": False,
+            "default_mode": "",
+            "private": {},
+            "groups": [],
+            "warnings": [],
+            "config_path": "",
+            "policy_path": "memory.policy",
+            "mode_options": [],
+            "scope_options": [],
+            "limits": {},
+            "memory_enabled": None,
+            "read_channel": "",
+            "write_channel": "",
+            "readable": False,
+            "writable": False,
+            "container_running": False,
+            "permission_denied": False,
+            "actions": [],
+            "patch_hint": "unknown",
+            "restart_required": False,
+            "hot_reload": False,
+            "warning": "长期记忆只对已列出的群生效；未列出的群保持 conversation（只用会话历史）。",
+            "message": "当前实例不支持保存记忆策略。",
+            "error": detail,
+        }
+
+    def _serve_memory_policy(
+        self,
+        manager: Any,
+        *,
+        payload: dict[str, Any] | None = None,
+        read_only: bool = False,
+    ) -> None:
+        method = "get_memory_policy" if read_only else "set_memory_policy"
+        handler = getattr(manager, method, None)
+        if not callable(handler):
+            self._json(
+                HTTPStatus.NOT_IMPLEMENTED,
+                self._memory_policy_unavailable("当前后端未提供记忆策略接口。"),
+            )
+            return
+        try:
+            result = handler() if read_only else handler(payload)
+        except DeploymentError:
+            # Validation failures (400) and unsupported instances (409) are
+            # reported by the outer handlers, not swallowed as "ok: false".
+            raise
+        except Exception as exc:  # noqa: BLE001 - optional panel isolation
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.OK,
+                self._memory_policy_unavailable(f"读取记忆策略失败：{exc}"),
+            )
+            return
+        if not isinstance(result, dict):
+            result = self._memory_policy_unavailable("记忆策略接口返回格式异常。")
+        self._json(HTTPStatus.OK, result)
+
+    # ------------------------------------------------------------------
+    # Memory content administration (scope-scoped read/write)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _memory_admin_route(subroute: str) -> tuple[str, str] | None:
+        """Parse ``memory/...`` subroutes; ``memory`` alone stays the mode API."""
+
+        prefix = "memory/"
+        if not subroute.startswith(prefix):
+            return None
+        parts = [part for part in subroute[len(prefix) :].split("/") if part]
+        if not parts:
+            return None
+        head = parts[0]
+        if head in {"stats", "forget", "export", "import", "reflect"} and len(parts) == 1:
+            return head, ""
+        if head == "records":
+            if len(parts) == 1:
+                return "records", ""
+            if len(parts) == 2:
+                return "record", parts[1]
+        return None
+
+    @staticmethod
+    def _memory_admin_for(manager: Any) -> MemoryAdmin:
+        docker = getattr(manager, "docker", None)
+        data_dir = getattr(manager, "astrbot_data_dir", None)
+        if data_dir is None:
+            base = getattr(manager, "data_dir", None)
+            data_dir = Path(base) / "data" / "astrbot" if base else Path("data") / "astrbot"
+        backup_base = getattr(manager, "data_dir", None) or Path(data_dir).parent.parent
+        return MemoryAdmin(
+            data_dir,
+            docker=docker,
+            container_name=str(getattr(docker, "ASTRBOT_CONTAINER", "") or ""),
+            backup_dir=Path(backup_base) / "memory-backups",
+        )
+
+    def _serve_memory_admin(
+        self,
+        manager: Any,
+        route: tuple[str, str],
+        *,
+        method: str,
+        payload: dict[str, Any] | None = None,
+        query: dict[str, list[str]] | None = None,
+    ) -> None:
+        action, tail = route
+        body = payload or {}
+        values = query or {}
+
+        def pick(name: str) -> Any:
+            if body.get(name) is not None:
+                return body.get(name)
+            found = values.get(name) or []
+            return found[0] if found else ""
+
+        try:
+            admin = self._memory_admin_for(manager)
+            scope_type = pick("scope_type")
+            scope_id = pick("scope_id")
+            if method == "GET" and action == "stats":
+                result = admin.stats(scope_type, scope_id)
+            elif method == "GET" and action == "records":
+                result = admin.list_records(
+                    scope_type,
+                    scope_id,
+                    query=pick("q"),
+                    limit=pick("limit") or None,
+                    offset=pick("offset") or None,
+                )
+            elif method == "GET" and action == "record":
+                result = admin.get_record(scope_type, scope_id, tail)
+            elif method == "POST" and action == "records":
+                result = admin.create_record(scope_type, scope_id, body)
+            elif method == "PATCH" and action == "record":
+                result = admin.update_record(scope_type, scope_id, tail, body)
+            elif method == "DELETE" and action == "record":
+                result = admin.delete_record(
+                    scope_type, scope_id, tail, confirm=body.get("confirm", pick("confirm"))
+                )
+            elif method == "POST" and action == "forget":
+                result = admin.forget(scope_type, scope_id, confirm=body.get("confirm", ""))
+            elif method == "POST" and action == "export":
+                result = admin.export_scope(scope_type, scope_id)
+            elif method == "POST" and action == "import":
+                result = admin.import_records(scope_type, scope_id, body)
+            elif method == "POST" and action == "reflect":
+                result = admin.reflect(
+                    scope_type,
+                    scope_id,
+                    apply_changes=bool(body.get("apply")),
+                    confirm=body.get("confirm", ""),
+                )
+            else:
+                self._method_not_allowed()
+                return
+        except MemoryRecordNotFound as exc:
+            self._json(
+                HTTPStatus.NOT_FOUND,
+                {"ok": False, "available": True, "message": str(exc), "error": str(exc)},
+            )
+            return
+        except MemoryConflict as exc:
+            self._json(
+                HTTPStatus.CONFLICT,
+                {"ok": False, "available": True, "message": str(exc), "error": str(exc)},
+            )
+            return
+        except MemoryAdminUnavailable as exc:
+            actions = list(getattr(exc, "actions", []) or [])
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "available": False,
+                    "permission_denied": bool(getattr(exc, "permission_denied", False)),
+                    "empty": bool(getattr(exc, "empty", False)),
+                    "corrupt": bool(getattr(exc, "corrupt", False)),
+                    "actions": actions,
+                    "message": str(exc),
+                    "error": str(exc),
+                },
+            )
+            return
+        except MemoryAdminError as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "available": True, "message": str(exc), "error": str(exc)},
+            )
+            return
+        if not isinstance(result, dict):
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"ok": False, "message": "记忆管理接口返回格式异常。"},
+            )
+            return
+        self._json(HTTPStatus.OK, result)
 
     # ------------------------------------------------------------------
     # HTML/static routes
@@ -639,6 +884,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._json(HTTPStatus.OK, getter())
                     return
+                memory_route = self._memory_admin_route(subroute)
+                if memory_route is not None:
+                    self._serve_memory_admin(manager, memory_route, method="GET", query=query)
+                    return
+                if subroute == "memory-policy":
+                    self._serve_memory_policy(manager, read_only=True)
+                    return
                 if subroute == "memory":
                     getter = getattr(manager, "get_memory_mode", None)
                     if not callable(getter):
@@ -654,6 +906,11 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.OK, getter(instance_id))
                     return
                 self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+                return
+            if path == "/api/memory-policy":
+                instance_id = ctx.instance_id(query)
+                manager = ctx.studio.get_manager(instance_id)
+                self._serve_memory_policy(manager, read_only=True)
                 return
             if path == "/api/memory":
                 instance_id = ctx.instance_id(query)
@@ -766,6 +1023,27 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "logs": manager.get_logs(service, lines)})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+        except MemoryPolicyWriteUnavailableError as exc:
+            # A permission/container problem is not "unsupported": keep the
+            # instance editable-looking and return repair steps, never a fake save.
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "available": False,
+                    "supported": True,
+                    "saved": False,
+                    "permission_denied": True,
+                    "actions": list(getattr(exc, "actions", []) or []),
+                    "message": str(exc),
+                    "error": str(exc),
+                },
+            )
+        except MemoryPolicyUnsupportedError as exc:
+            self._json(
+                HTTPStatus.CONFLICT,
+                {"ok": False, "available": False, "supported": False, "message": str(exc)},
+            )
         except (DeploymentError, ValueError, UpdateError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except DockerError as exc:
@@ -970,6 +1248,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                memory_route = self._memory_admin_route(subroute)
+                if memory_route is not None:
+                    self._serve_memory_admin(
+                        manager, memory_route, method="POST", payload=payload, query=query
+                    )
+                    return
+                if subroute == "memory-policy":
+                    self._serve_memory_policy(manager, payload=payload)
+                    return
                 if subroute == "prompts":
                     updater = getattr(manager, "update_prompt_profiles", None)
                     if not callable(updater):
@@ -1096,6 +1383,11 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     )
                 self._json(HTTPStatus.OK, result)
                 return
+            if path == "/api/memory-policy":
+                instance_id = ctx.instance_id(query, payload)
+                manager = ctx.studio.get_manager(instance_id)
+                self._serve_memory_policy(manager, payload=payload)
+                return
             if path == "/api/memory":
                 mode = str(payload.get("mode") or payload.get("memory_mode") or "").strip()
                 setter = getattr(manager, "set_memory_mode", None)
@@ -1142,6 +1434,25 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "message": message})
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在")
+        except MemoryPolicyWriteUnavailableError as exc:
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "available": False,
+                    "supported": True,
+                    "saved": False,
+                    "permission_denied": True,
+                    "actions": list(getattr(exc, "actions", []) or []),
+                    "message": str(exc),
+                    "error": str(exc),
+                },
+            )
+        except MemoryPolicyUnsupportedError as exc:
+            self._json(
+                HTTPStatus.CONFLICT,
+                {"ok": False, "available": False, "supported": False, "message": str(exc)},
+            )
         except (DeploymentError, ValueError, UpdateError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except DockerError as exc:
@@ -1160,6 +1471,33 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.FORBIDDEN, "本地访问令牌无效或已过期，请回到启动器重新打开本页面。")
             return
         parsed = urlsplit(self.path)
+        nested = self._nested_instance_route(parsed.path)
+        memory_route = self._memory_admin_route(nested[1]) if nested is not None else None
+        if nested is not None and memory_route is None:
+            # Never let a nested path fall through to "delete instance".
+            self._error(HTTPStatus.NOT_FOUND, "接口不存在。")
+            return
+        if nested is not None and memory_route is not None:
+            instance_id, _ = nested
+            payload = self._read_json_body(allow_empty=True)
+            if payload is None:
+                return
+            try:
+                self.server.context.studio.get_instance_meta(instance_id)
+                manager = self.server.context.studio.get_manager(instance_id)
+                self._serve_memory_admin(
+                    manager,
+                    memory_route,
+                    method="DELETE",
+                    payload=payload,
+                    query=self._query(parsed),
+                )
+            except ValueError as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "删除记忆失败，请查看启动器终端日志。")
+            return
         try:
             if parsed.path.startswith("/api/instances/"):
                 instance_id = urllib.parse.unquote(parsed.path[len("/api/instances/") :]).strip()

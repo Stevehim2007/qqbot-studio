@@ -1,0 +1,61 @@
+{
+  "_comment": "记忆整理（reflection）样例：确定性、可解释、无 LLM。apply 前先备份；矛盾只报告不删除。",
+  "settings": {
+    "similarity": 0.86,
+    "contradiction_similarity": 0.6,
+    "low_value_importance": 0.35,
+    "low_value_hits": 0,
+    "backup": true
+  },
+  "rows": [
+    {
+      "scope_type": "group",
+      "scope_id": "aiocqhttp:2001",
+      "key": "偏好.火锅",
+      "content": "用户喜欢麻辣火锅",
+      "importance": 0.8,
+      "confidence": 0.9
+    },
+    {
+      "scope_type": "group",
+      "scope_id": "aiocqhttp:2001",
+      "key": "偏好.火锅.重复",
+      "content": "用户喜欢麻辣火锅。",
+      "importance": 0.3,
+      "confidence": 0.4
+    },
+    {
+      "scope_type": "group",
+      "scope_id": "aiocqhttp:2001",
+      "key": "偏好.火锅.反",
+      "content": "用户不喜欢麻辣火锅",
+      "importance": 0.6,
+      "confidence": 0.7
+    },
+    {
+      "scope_type": "group",
+      "scope_id": "aiocqhttp:2001",
+      "key": "低价值",
+      "content": "随口一句",
+      "importance": 0.1,
+      "confidence": 0.2
+    },
+    {
+      "scope_type": "group",
+      "scope_id": "aiocqhttp:2001",
+      "key": "过期",
+      "content": "过期事实",
+      "importance": 0.6,
+      "confidence": 0.7,
+      "ttl_seconds": -60
+    }
+  ],
+  "expect": {
+    "records": 5,
+    "duplicate_groups": 1,
+    "duplicate_rows": 1,
+    "contradictions": 1,
+    "low_value": 1,
+    "expired": 1
+  }
+}

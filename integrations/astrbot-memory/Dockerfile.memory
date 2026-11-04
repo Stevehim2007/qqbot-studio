@@ -1,0 +1,56 @@
+# AstrBot v4.29.3 + native long-term memory patch (overlay image).
+#
+# NOT BUILT in the delivery environment (no Docker daemon available there):
+# verify the base image layout/entrypoint against the official image before use.
+#
+# Build context is the REPOSITORY ROOT (the directory that contains
+# ``integrations/``), because the COPY sources below are repo-root relative:
+#
+#   docker build -f integrations/astrbot-memory/Dockerfile.memory \
+#     -t qqbot-astrbot:4.29.3-memory .
+#
+# ``tests/test_packaging.py`` statically checks every COPY source against this
+# documented context (no Docker daemon needed).
+#
+# Then point QQ Bot Studio at the local tag (qqbot_studio side is out of scope
+# for this patch), e.g. ASTRBOT_IMAGE=qqbot-astrbot:4.29.3-memory in .env.
+#
+# Pinned upstream: AstrBot v4.29.3 (commit f61a7f4).
+ARG ASTRBOT_BASE=ghcr.io/astrbotdevs/astrbot:4.29.3
+
+# ---- stage 1: clone the pinned tag, keep only what the build needs ----------
+FROM alpine:3.20 AS source
+ARG ASTRBOT_TAG=v4.29.3
+RUN apk add --no-cache curl tar ca-certificates \
+ && curl -L --retry 4 --retry-all-errors -o /tmp/astrbot.tar.gz \
+      "https://codeload.github.com/AstrBotDevs/AstrBot/tar.gz/refs/tags/${ASTRBOT_TAG}" \
+ && mkdir -p /src && tar -xzf /tmp/astrbot.tar.gz -C /src --strip-components=1
+COPY integrations/astrbot-memory/patches/0001-native-memory.patch /tmp/0001-native-memory.patch
+RUN cd /src \
+ && (command -v patch >/dev/null 2>&1 || apk add --no-cache patch) \
+ && patch -p1 --dry-run < /tmp/0001-native-memory.patch \
+ && patch -p1 < /tmp/0001-native-memory.patch \
+ && test -f astrbot/core/memory/integration.py
+
+# ---- stage 2: overlay onto the official runtime image ----------------------
+FROM ${ASTRBOT_BASE}
+
+# The official image keeps the project at /AstrBot (main.py at its root).
+# If your image uses another path, override it here.
+ARG ASTRBOT_HOME=/AstrBot
+
+# COPY runs as root at build time; the runtime USER of the base image is kept.
+COPY --from=source /src/astrbot/core/memory/ ${ASTRBOT_HOME}/astrbot/core/memory/
+COPY --from=source /src/astrbot/core/astr_main_agent.py ${ASTRBOT_HOME}/astrbot/core/astr_main_agent.py
+COPY --from=source /src/astrbot/core/config/default.py ${ASTRBOT_HOME}/astrbot/core/config/default.py
+COPY --from=source /src/astrbot/core/pipeline/process_stage/method/agent_sub_stages/internal.py \
+     ${ASTRBOT_HOME}/astrbot/core/pipeline/process_stage/method/agent_sub_stages/internal.py
+COPY integrations/astrbot-memory/fixtures/memory_config.example.json \
+     /opt/astrbot-memory/memory_config.example.json
+
+# Memory stays OFF unless the mounted data/cmd_config.json enables it.  AstrBot
+# v4.29.3 reads ASTRBOT_CONFIG_PATH = <data>/cmd_config.json; a wrong filename
+# does not raise, memory just never turns on:
+#   "memory": { "enable": true, "policy": { "default_mode": "conversation", ... } }
+# The file is loaded at AstrBot startup, so restart the container after editing it.
+# The sidecar DB lands in data/astrbot_memory.db (inside the AstrBot data volume).

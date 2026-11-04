@@ -1,0 +1,81 @@
+{
+  "memory": {
+    "enable": true,
+    "db_path": "",
+    "max_chars": 800,
+    "max_items": 6,
+    "min_confidence": 0.35,
+    "ttl_days": 0,
+    "read_user": true,
+    "read_group": true,
+    "read_conversation": true,
+    "read_persona": true,
+    "read_global": true,
+    "heuristic_extract": true,
+    "llm_extract": false,
+    "queue_size": 64,
+    "max_records_per_scope": 500,
+    "policy": {
+      "default_mode": "conversation",
+      "private": {
+        "mode": "long_term",
+        "scope": "user",
+        "extract": true,
+        "inject": true
+      },
+      "groups": {
+        "838796241": {
+          "mode": "long_term",
+          "scope": "group",
+          "extract": true,
+          "inject": true
+        },
+        "aiocqhttp:12345": {
+          "mode": "long_term",
+          "scope": "group_user",
+          "extract": true,
+          "inject": true,
+          "max_items": 8,
+          "max_chars": 1500
+        },
+        "777777": {
+          "mode": "long_term",
+          "scope": "group_member",
+          "extract": true,
+          "inject": true
+        }
+      }
+    },
+    "llm": {
+      "enable": false,
+      "endpoint": "",
+      "model": "",
+      "api_key_env": "ASTRBOT_MEMORY_LLM_API_KEY",
+      "timeout_s": 8.0,
+      "max_input_chars": 800,
+      "max_candidates": 5,
+      "max_calls": 50
+    },
+    "semantic": {
+      "enable": false,
+      "provider": "local",
+      "endpoint": "",
+      "model": "",
+      "timeout_s": 5.0,
+      "max_input_chars": 400,
+      "dim": 64,
+      "min_cosine": 0.2,
+      "weight": 0.3,
+      "auto_backfill": false,
+      "batch": 16
+    },
+    "reflect": {
+      "similarity": 0.86,
+      "contradiction_similarity": 0.6,
+      "low_value_importance": 0.35,
+      "low_value_hits": 0,
+      "backup": true,
+      "max_scan": 500
+    }
+  }
+}

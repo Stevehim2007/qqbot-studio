@@ -1,0 +1,47 @@
+{
+  "_comment": "按群长期记忆策略样例（memory.policy）。777777 用 group_member（说话人维度），最后一项刻意写错，用于验证非法条目 fail-safe 到 conversation 且不影响其它群。",
+  "default_mode": "conversation",
+  "private": {
+    "mode": "long_term",
+    "scope": "user",
+    "extract": true,
+    "inject": true
+  },
+  "groups": {
+    "838796241": {
+      "mode": "long_term",
+      "scope": "group",
+      "extract": true,
+      "inject": true
+    },
+    "aiocqhttp:12345": {
+      "mode": "long_term",
+      "scope": "group_user",
+      "extract": true,
+      "inject": false,
+      "max_items": 8,
+      "max_chars": 1500
+    },
+    "999999": {
+      "mode": "long_term",
+      "scope": "user",
+      "extract": false,
+      "inject": true,
+      "max_items": 3,
+      "max_chars": 400
+    },
+    "2002": {
+      "mode": "always",
+      "scope": "group",
+      "extract": true
+    },
+    "777777": {
+      "mode": "long_term",
+      "scope": "group_member",
+      "extract": true,
+      "inject": true,
+      "max_items": 5,
+      "max_chars": 600
+    }
+  }
+}

@@ -7,26 +7,58 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.0（正式版）— 长期记忆与记忆管理
+
+- 正式合并长期记忆、按群策略、记忆内容管理、记忆聊天命令、reflection、LLM 抽取、语义检索、群内说话人 scope。
+- 新增/更新 Studio 记忆内容面板与插件参数保存上限（264 字段 schema 可保存）。
+- 修复 memory logger 的 `plugin_tag` / `short_levelname` 日志字段，避免日志触发导致 agent 中断。
+- 更新/回滚确认框移到顶部；更新后自动测试与确认清单继续生效。
+
 ## v4.2.3（正式版）— 参数与更新体验修复
 
-- 插件字段保存上限从 256 提升到 2048，适配当前 264 字段的 qqbot_enhancer schema。
-- 更新/回滚确认框移动到弹窗上方并保持可见，减少滚动后误点。
-- 修复稳定版中 264 字段插件参数无法保存的问题。
+- 插件字段保存上限从 256 提升到 2048，适配当前 264 字段 schema。
+- 更新/回滚确认框移动到弹窗上方并保持可见。
 
-## v4.2.2（正式版）— 更新后自动验证
+## v4.2.3-beta.1 — 测试版：长期记忆、美食智能与按群策略
 
-- 更新/回退切换代码后，重启管理服务前自动运行仓库测试、Python/JS 语法检查。
-- 设置 `ASTRBOT_SRC_TGZ` 时同时运行 AstrBot memory patch 验证。
-- 测试失败时保留旧管理服务运行，不自动重启坏版本；可用 `QQBOT_STUDIO_AUTO_TEST=0` 显式关闭。
+- 记忆策略增加 `data/astrbot/memory_policy.json` 持久化 sidecar；AstrBot 重启重写 `cmd_config.json` 后策略不再丢失，面板读取 sidecar 优先。
 
-## v4.2.1（正式版）— 美食智能与站点 v1.3
+### 记忆内容管理（Studio，t33）
 
-- qqbot_enhancer 2.8.0：按群默认地点 `food_group_locations`（JSON）+ 群名安全推断城市（只认显式省/市/州后缀）；已知长春群将「长春火锅」补为长春市，不再追问区县；未知群仍追问。
-- 已有完整位置路径直接复用 `location_id`；`位置已存在`/`LOCATION_EXISTS` 只重解析并重试一次，不重复创建。
-- food.dlsz.top v1.3 站点补丁：Markdown 评价（escape-first/XSS 安全）、全地址搜索、按位置筛饭店、上传页已存在位置直接选择（不发 new_location_name）。
-- 全地址搜索用递归 CTE 现算路径，不新增 schema；支持长春市朝阳区/中国吉林省长春市朝阳区/分段乱序。
+- 实例设置新增「记忆内容」面板：scope 选择（group/user/conversation/persona/global）、关键词搜索、
+  分页、单条详情/编辑、单条删除、按 scope 忘记、导出 JSON、导入预览（冲突/非法/上限汇总）、
+  整理 dry-run/apply；不可用时明确显示原因并禁用写操作，不显示伪造的已保存值。
+- 新后端模块 `qqbot_studio/memory_admin.py` + 路由：
+  `GET memory/stats|records[/<id>]`、`POST memory/records`、`PATCH/DELETE memory/records/<id>`、
+  `POST memory/forget|export|import|reflect`。每个操作显式 scope，无跨 scope 列表；删除/忘记/导入/整理
+  必须带 `confirm`（单条=记录 id，scope 级=scope_id）。
+- 安全：密钥/密码样式写入即拒绝、读取与导出再脱敏；响应不暴露数据库路径；读用 SQLite 只读 URI，
+  写为单事务（失败回滚）+ `busy_timeout` 8s；导入/整理 apply 前写 0700 目录 + 0600 原子备份。
+- Docker 权限降级：宿主无权限时改用 `docker exec` 在容器内执行同一批参数化语句（固定 argv、无 shell）。
+- 契约：[`docs/memory-admin-api.md`](docs/memory-admin-api.md)；测试 `tests/test_memory_admin.py` 40 个用例；
+  全仓 760 tests OK。
 
-## v4.2.0（正式版）— 更新通道（稳定/测试）与同大版本任意回滚
+### 长期记忆聊天命令（qqbot_enhancer 2.9.0，默认关闭）
+
+- 新增 `/记忆 状态|搜索 <关键词>|删除 <id>|忘记 本群|我的|整理`：默认
+  `memory_commands_enabled=false`；仅 AstrBot 管理员、QQ 群主/管理员或
+  `memory_commands_allow_user_ids` 允许名单可用；群聊只管理本群 `group` 作用域，
+  私聊只管理自己的 `user` 作用域，从不 `export_all()`。
+- `删除/忘记` 另需 `memory_commands_destructive_enabled=true`；`忘记` 必须显式
+  `本群|我的`；未装记忆补丁、服务关闭、id 不在当前作用域、服务未确认删除/忘记时
+  明确失败，不伪造成功；输出先脱敏密钥再截断，条数与总长度均可配置。
+- `整理` 为纯本地 dry-run 预览（完全重复/近似重复/低价值/过期），不调用 LLM、不写库。
+- 测试：`tests/test_memory_commands.py` 36 + 插件 handler 8；全仓 720 tests OK（记忆内容管理合入后 760 tests OK）。
+
+- 测试分支：继承正式版 `4.2.0`，新增 AstrBot 原生长期记忆、按群 `conversation/long_term` 策略、Studio 记忆策略面板、参数分组面板和 stable/test 更新回退功能。
+- 测试版不等同于正式版；长期记忆/策略需真实 AstrBot/Docker E2E 后才可合并。
+- 主仓库测试：671 tests OK；AstrBot memory patch：125 tests OK（评审快照）。
+- 美食智能（qqbot_enhancer t28）：按群默认地点 `food_group_locations`（JSON）+ 群名安全推断城市（仅显式
+  `省/市/州` 后缀），「长春火锅」在已知长春群自动补城市、区县合并为完整路径，未知群仍追问；
+  已有位置完整路径直接复用 `location_id`，`位置已存在`/`LOCATION_EXISTS` 只重解析并重试一次，
+  不重复创建、无半截写入。
+
+## v4.2.0 — 更新通道（稳定/测试）与同大版本任意回滚
 
 - 控制台新增「更新与回滚」面板：当前版本/提交/大版本/工作区状态，稳定版与测试版分页。
 - 稳定版只快进 `origin/main`；测试版只接受登记的测试分支/预发布标签（默认 `feat/long-term-memory-test`），拒绝任意分支、提交号或 URL。
@@ -36,11 +68,36 @@
 - 新增 `update-history.json`（from/to 版本、提交、通道、时间、结果，错误脱敏）及 `/api/update/status|versions|history|rollback`。
 - 新增真实 Git 仓库测试：同大版本任意选择、跨大版本拒绝、非法 ref/URL 拒绝、脏工作区拒绝、备份与失败恢复、数据不变、历史与通道。
 
+### 记忆策略面板（Studio）
+
+- 修复「cmd_config.json 权限被拒 → 面板显示不支持」：本机 `EACCES/EPERM` 时自动改用 AstrBot 容器内读写
+  （`docker exec`，argv 直传不经 shell；容器内写 `*.studio.tmp` → fsync → `chmod 0600` → `os.replace`
+  原子替换；容器名校验，载荷上限 96 KB）。两条通道都不可用（容器未启动/容器内拒绝）时返回 503 +
+  `actions`（启动实例 / chown+chmod 修权限）、`supported` 仍为 true、`saved:false`，面板显示"未保存"，
+  绝不伪造已保存状态。GET 新增 `read_channel/write_channel/readable/writable/container_running/
+  permission_denied/actions`（`writable` 用 `os.access(W_OK)` 实测）。错误信息统一脱敏，日志/响应不含密钥。
 
 
-
-
-
+- 控制台实例设置新增「记忆策略」面板：默认模式（conversation/long_term）、私聊模式、
+  按群增删改行（群号、模式、scope=group/user/group_user、抽取/注入开关、最大条数/字符）。
+- 新增 `GET/POST /api/instances/<id>/memory-policy`（兼容 `/api/memory-policy?instance=`）：
+  读写 AstrBot 的 `memory.policy`，只替换该键，其它设置与 `memory.*` 其它键原样保留，原子写 0600。
+- 面板明确提示：长期记忆只对列出的群生效，未列出的群与私聊保持 conversation（只用会话历史）；
+  `memory.enable=false` 时提示策略不会生效；上游没有 `memory.policy` 在线接口，保存后需重启 AstrBot
+  （或重新加载配置）才生效，响应 `restart_required=true`。
+- 实例没有 AstrBot 配置时显示"不支持"（POST 409），不伪造已保存值；旧后端返回 501。
+- 后端校验：模式/scope 枚举、布尔开关、`max_items 1..50`/`max_chars 80..8000` 整数、群号
+  4-20 位数字或 `platform:群号`、重复行/未知字段/超过 200 行一律拒绝且不写文件；令牌校验不变。
+- 只读 JSON 配置，从不读取记忆数据库内容；日志/响应不含其它配置值或密钥。
+- 插件参数编辑器（T17 P2）：保存成功后刷新比较基线使「已修改」标记正确清除；校验失败时清除
+  搜索/分组/只看已修改过滤并滚动聚焦到出错字段；保存载荷仍包含全部 256 个字段。
+- 非法存量策略如实上报（t24/t26 复查修正）：private `scope=group`、`max_items=999` 越界、未知字段、
+  非法 mode/scope/类型、strip 后重复群号都会逐条进 `warnings[]`（字段+原因+降级后果），每条策略新增
+  `invalid`/`errors[]`/`unknown_fields[]`/`effective_mode`/`effective_scope` 和顶层 `invalid_rows`；
+  不再把 private 的 `scope=group` 静默改成 `user`，也不会把非法条目显示成生效中的 long_term
+  （面板标红 + 「实际生效：conversation」，重复群号显示「未知」）。`private` 未配置时如实显示跟随默认模式。
+- 测试：`tests/test_memory_policy_studio.py`（33 项）、`tests/test_memory_policy_ui_static.py`（19 项，
+  含 node 契约与 256 字段回归）；文档见 `docs/memory-policy.md`。未做真实 AstrBot 进程 E2E。
 
 ## v4.1.1 — 网页智能阅读 + 饭店搜索/地址创建 + AstrBot 断连修复
 
