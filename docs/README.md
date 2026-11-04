@@ -57,3 +57,5 @@
 - [`qa-report-final.md`](qa-report-final.md)：Ponytail 第二阶段后的最终 QA（v4.1.1，0 P0/P1）
 
 - [CHANGELOG.md](../CHANGELOG.md)：完整版本更新日志
+
+- [`plugin-modularization.md`](plugin-modularization.md)：插件独立化与插件市场可行性评估。
