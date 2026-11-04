@@ -239,7 +239,14 @@ index 0000000..ed46f6e
 +from .text import tokenize
 +
 +logger = logging.LoggerAdapter(
-+    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++    logging.getLogger("astrbot.memory"),
++    {
++        "plugin_tag": "[astrbot_memory]",
++        # AstrBot's formatter expects these fields; records from the memory
++        # package do not pass through its normal plugin logger filter.
++        "short_levelname": "INFO",
++        "astrbot_version_tag": "",
++    },
 +)
 +
 +DEFAULT_LOCAL_DIM = 64
@@ -710,7 +717,14 @@ index 0000000..32ed401
 +from .types import MemoryContext
 +
 +logger = logging.LoggerAdapter(
-+    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++    logging.getLogger("astrbot.memory"),
++    {
++        "plugin_tag": "[astrbot_memory]",
++        # AstrBot's formatter expects these fields; records from the memory
++        # package do not pass through its normal plugin logger filter.
++        "short_levelname": "INFO",
++        "astrbot_version_tag": "",
++    },
 +)
 +
 +INJECTED_EXTRA_KEY = "_memory_injected_ids"
@@ -876,7 +890,14 @@ index 0000000..d4fd5de
 +from .types import Candidate, MemoryContext
 +
 +logger = logging.LoggerAdapter(
-+    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++    logging.getLogger("astrbot.memory"),
++    {
++        "plugin_tag": "[astrbot_memory]",
++        # AstrBot's formatter expects these fields; records from the memory
++        # package do not pass through its normal plugin logger filter.
++        "short_levelname": "INFO",
++        "astrbot_version_tag": "",
++    },
 +)
 +
 +DEFAULT_ENDPOINT_PATH = "/v1/chat/completions"
@@ -1254,7 +1275,14 @@ index 0000000..70ac101
 +from dataclasses import dataclass
 +
 +logger = logging.LoggerAdapter(
-+    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++    logging.getLogger("astrbot.memory"),
++    {
++        "plugin_tag": "[astrbot_memory]",
++        # AstrBot's formatter expects these fields; records from the memory
++        # package do not pass through its normal plugin logger filter.
++        "short_levelname": "INFO",
++        "astrbot_version_tag": "",
++    },
 +)
 +
 +MODE_CONVERSATION = "conversation"
@@ -1982,7 +2010,14 @@ index 0000000..bfdaca4
 +from .types import Candidate, MemoryContext, MemoryRecord
 +
 +logger = logging.LoggerAdapter(
-+    logging.getLogger("astrbot.memory"), {"plugin_tag": "astrbot_memory"}
++    logging.getLogger("astrbot.memory"),
++    {
++        "plugin_tag": "[astrbot_memory]",
++        # AstrBot's formatter expects these fields; records from the memory
++        # package do not pass through its normal plugin logger filter.
++        "short_levelname": "INFO",
++        "astrbot_version_tag": "",
++    },
 +)
 +
 +DEFAULT_MEMORY_CONFIG: dict = {
