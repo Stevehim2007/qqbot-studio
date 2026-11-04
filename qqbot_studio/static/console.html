@@ -324,6 +324,13 @@
           <div class="update-current-item"><span>工作区</span><strong id="update-current-dirty">—</strong></div>
         </section>
         <p id="update-warning" class="update-warning" role="alert" hidden></p>
+        <div id="update-confirm" class="update-confirm" hidden>
+          <p id="update-confirm-text" class="update-confirm-text"></p>
+          <div class="update-confirm-actions">
+            <button id="update-confirm-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
+            <button id="update-confirm-ok" class="btn btn-primary btn-small" type="button">确认</button>
+          </div>
+        </div>
         <div class="update-tabs" role="tablist" aria-label="更新通道">
           <button id="update-tab-stable" class="update-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="update-stable-pane">稳定版</button>
           <button id="update-tab-test" class="update-tab" type="button" role="tab" aria-selected="false" aria-controls="update-test-pane">测试版</button>
@@ -351,13 +358,6 @@
           <ul id="update-history-list" class="update-history-list" role="list"></ul>
           <p id="update-history-empty" class="update-empty" hidden>还没有更新或回滚记录。</p>
         </section>
-        <div id="update-confirm" class="update-confirm" hidden>
-          <p id="update-confirm-text" class="update-confirm-text"></p>
-          <div class="update-confirm-actions">
-            <button id="update-confirm-cancel" class="btn btn-quiet btn-small" type="button">取消</button>
-            <button id="update-confirm-ok" class="btn btn-primary btn-small" type="button">确认</button>
-          </div>
-        </div>
         <p id="update-error" class="update-error" role="alert" hidden></p>
         <p id="update-status" class="update-status" role="status" hidden></p>
       </div>
