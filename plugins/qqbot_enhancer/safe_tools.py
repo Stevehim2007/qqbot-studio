@@ -302,6 +302,10 @@ def tool_instruction(enabled_tools: list[str]) -> str:
         lines.append(
             'send_sticker(category="分类") / emotion="happy" / tag="嘲讽"'
         )
+        lines.append(
+            "send_sticker 只是附加表情，必须同时保留正常的自然语言回复；"
+            "不要只输出表情标记，也不要用表情代替回答、同意或拒绝"
+        )
     if "collect_sticker" in enabled_tools:
         lines.append('collect_sticker(category="分类")')
     if "list_sticker_categories" in enabled_tools:
