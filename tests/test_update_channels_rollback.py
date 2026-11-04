@@ -299,16 +299,16 @@ class RollbackSafetyTests(ReleaseRepoTestCase):
 
 class ChannelApplyTests(ReleaseRepoTestCase):
     def test_test_channel_switches_allowlisted_branch(self):
-        git(self.root, "branch", "feat/long-term-memory-test")
+        git(self.root, "branch", "feat/plugin-repository-4.3")
         result = list_versions("test", root=self.root, data_dir=self.data)
         self.assertTrue(result["ok"])
         refs = [item["ref"] for item in result["versions"]]
-        self.assertIn("origin/feat/long-term-memory-test", refs)
+        self.assertIn("origin/feat/plugin-repository-4.3", refs)
         applied = apply_update(
             "test",
             root=self.root,
             data_dir=self.data,
-            test_ref="feat/long-term-memory-test",
+            test_ref="feat/plugin-repository-4.3",
             restart=False,
         )
         self.assertTrue(applied["ok"])

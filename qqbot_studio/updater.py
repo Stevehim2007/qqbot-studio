@@ -46,7 +46,7 @@ CHANNEL_LABELS = {"stable": "稳定版", "test": "测试版"}
 CHANNELS = tuple(CHANNEL_LABELS)
 FORMAL_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 # Explicit allowlist for the test channel. Nothing else is switchable.
-TEST_BRANCHES: tuple[str, ...] = ("feat/long-term-memory-test",)
+TEST_BRANCHES: tuple[str, ...] = ("feat/plugin-repository-4.3",)
 TEST_TAGS: tuple[str, ...] = ()
 HISTORY_LIMIT = 50
 LOCK_STALE_SECONDS = 30 * 60

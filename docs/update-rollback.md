@@ -7,7 +7,7 @@
 | 通道 | 来源 | 规则 |
 | --- | --- | --- |
 | 稳定版 stable | GitHub 正式发布 / `origin/main` | 只允许 `git merge --ff-only` 快进；分叉或领先提交会被拒绝 |
-| 测试版 test | 显式 allowlist（`qqbot_studio/updater.py` 的 `TEST_BRANCHES` / `TEST_TAGS`） | 默认只登记 `feat/long-term-memory-test`；不接受任意分支、提交号或 URL |
+| 测试版 test | 显式 allowlist（`qqbot_studio/updater.py` 的 `TEST_BRANCHES` / `TEST_TAGS`） | 默认只登记 `feat/plugin-repository-4.3`；不接受任意分支、提交号或 URL |
 
 ## 回滚
 
