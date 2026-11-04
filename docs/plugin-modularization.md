@@ -84,3 +84,16 @@ P1 web_fetch / image_search 独立化
 P2 food / sticker 独立化
 P3 memory_commands / 兼容包拆分
 ```
+
+## 插件分组（必须支持）
+
+插件市场需要支持用户自定义插件分组，例如：
+
+```text
+分组：QQ Bot
+  - qqbot_core_reply
+  - qqbot_image_search
+  - qqbot_food
+```
+
+要求：创建/重命名/删除分组；把插件加入/移出分组；删除分组不能删除插件；删除插件要自动移除分组关系；插件列表按分组过滤/折叠；分组持久化在 Studio 实例数据，不写入 AstrBot 插件源码。
