@@ -149,3 +149,27 @@ python3 -m unittest discover -s tests -q
 ```
 
 专项覆盖见 `tests/test_plugin_market.py` 与 `tests/test_plugin_market_api.py`。
+
+## 8. AstrBot root 配置权限
+
+AstrBot 容器默认以 root 写 bind mount，首次加载新插件时可能生成：
+
+```text
+root:root 0600  data/astrbot/config/qqbot_*_config.json
+```
+
+Studio 以 ubuntu 运行时会读不到，并误报“配置损坏”。插件安装/重启后运行：
+
+```bash
+./scripts/fix-astrbot-config-ownership.sh
+```
+
+默认使用：
+
+```text
+ASTRBOT_CONTAINER=qqbot-bot-1-astrbot
+HOST_UID=1000
+HOST_GID=1001
+```
+
+该方案不改变 AstrBot 的 root 运行方式，只修正插件配置文件的宿主机所有权。
