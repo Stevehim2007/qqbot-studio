@@ -7,6 +7,10 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.0-beta.3 — 核心门禁测试修正
+
+- 旧主回复门禁改用 `ConfigReader.bool`，避免测试中 monkeypatch `_cfg_bool` 导致误关闭。
+
 ## v4.3.0-beta.2 — 核心回复切换门禁
 
 - 新增 `legacy_core_reply_enabled` 配置：关闭旧增强主回复，保留明确命令、Food、表情和 safe_tools marker。
