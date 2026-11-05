@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.0-beta.2 — 核心回复切换门禁
+
+- 新增 `legacy_core_reply_enabled` 配置：关闭旧增强主回复，保留明确命令、Food、表情和 safe_tools marker。
+- 新增独立 `qqbot_core_reply` 3.1.1，默认关闭；仅在旧主回复门禁关闭且显式启用时接管 @/私聊主回复。
+- 明确命令统一跳过核心模型回复，避免 `/网页`、`/图片搜索` 等命令被二次模型处理。
+
 ## v4.3.0-beta.1 — 测试版：插件仓库、插件分组与模块化（基于正式版 4.3.0）
 
 ### 插件市场、安装/删除与分组基础（Studio）
