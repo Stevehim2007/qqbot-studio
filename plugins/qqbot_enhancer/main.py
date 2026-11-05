@@ -318,7 +318,7 @@ class QQBotEnhancerPlugin(Star):
         # v3 cutover gate: when the standalone core owns the main reply, the
         # legacy enhancer must still handle explicit commands but must not
         # produce a second main reply/model call.
-        if not self._cfg_bool("legacy_core_reply_enabled"):
+        if not self._config_reader.bool("legacy_core_reply_enabled"):
             return
 
         mode: str | None = None
