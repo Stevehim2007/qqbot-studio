@@ -1,4 +1,10 @@
 {
+  "legacy_core_reply_enabled": {
+    "description": "旧增强继续处理 @/私聊/群聊主回复",
+    "type": "bool",
+    "default": true,
+    "hint": "v3 核心回复切换时必须设为 false。关闭后旧增强仍处理明确命令、Food、表情和 safe_tools marker，但不再产生主回复。"
+  },
   "memory_mode": {
     "description": "对话记忆模式",
     "type": "string",

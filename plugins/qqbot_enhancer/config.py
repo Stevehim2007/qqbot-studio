@@ -8,6 +8,7 @@ COLLECTED_CATEGORY_MAX_CHARS = 32
 
 DEFAULTS: dict[str, Any] = {
     "memory_mode": "direct",
+    "legacy_core_reply_enabled": True,
     "memory_commands_enabled": False,
     "memory_commands_destructive_enabled": False,
     "memory_commands_allow_user_ids": "",

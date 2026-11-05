@@ -315,6 +315,12 @@ class QQBotEnhancerPlugin(Star):
     async def on_qq_message(self, event: AstrMessageEvent):
         """处理 QQ 群聊/私聊消息。"""
 
+        # v3 cutover gate: when the standalone core owns the main reply, the
+        # legacy enhancer must still handle explicit commands but must not
+        # produce a second main reply/model call.
+        if not self._cfg_bool("legacy_core_reply_enabled"):
+            return
+
         mode: str | None = None
         should_stop = False
         yielded = False
