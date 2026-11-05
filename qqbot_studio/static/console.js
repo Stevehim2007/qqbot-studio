@@ -2219,6 +2219,415 @@
     return plugin ? { instance, plugin, status } : null;
   }
 
+  function pluginMarketActionLabel(entry) {
+    const status = textValue(entry.status, '');
+    if (status === 'available') return '安装';
+    if (status === 'update_available') return '更新';
+    if (status === 'reserved') return '主插件保留';
+    if (status === 'unregistered') return '目录未登记';
+    return '已安装';
+  }
+
+  function pluginMarketActionEnabled(entry) {
+    return textValue(entry.status, '') === 'available' || textValue(entry.status, '') === 'update_available';
+  }
+
+  function pluginMarketStatusText(entry) {
+    const status = textValue(entry.status, '');
+    if (status === 'available') return '可安装';
+    if (status === 'update_available') return '可更新';
+    if (status === 'reserved') return '保留';
+    if (status === 'unregistered') return '未登记目录';
+    return '已安装';
+  }
+
+  function pluginMarketIdempotencyKey(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
+  function pluginMarketAskConfirm(panel, message) {
+    return new Promise((resolve) => {
+      const previous = panel.querySelector('[data-plugin-market-confirm]');
+      if (previous) previous.remove();
+      const box = makeElement('div', 'plugin-market-confirm');
+      box.dataset.pluginMarketConfirm = 'true';
+      box.setAttribute('role', 'alertdialog');
+      box.setAttribute('aria-label', '确认插件市场操作');
+      const copy = makeElement('p', 'plugin-market-confirm-copy', message);
+      const actions = makeElement('div', 'plugin-market-confirm-actions');
+      const cancel = makeElement('button', 'btn btn-small btn-quiet', '取消');
+      cancel.type = 'button';
+      const accept = makeElement('button', 'btn btn-small btn-primary', '确认');
+      accept.type = 'button';
+      const finish = (value) => {
+        box.remove();
+        resolve(value);
+      };
+      cancel.addEventListener('click', () => finish(false));
+      accept.addEventListener('click', () => finish(true));
+      actions.appendChild(cancel);
+      actions.appendChild(accept);
+      box.appendChild(copy);
+      box.appendChild(actions);
+      panel.prepend(box);
+      cancel.focus();
+    });
+  }
+
+  function pluginMarketAskText(panel, titleText, defaultValue) {
+    return new Promise((resolve) => {
+      const previous = panel.querySelector('[data-plugin-market-confirm]');
+      if (previous) previous.remove();
+      const box = makeElement('div', 'plugin-market-confirm');
+      box.dataset.pluginMarketConfirm = 'true';
+      box.setAttribute('role', 'dialog');
+      box.setAttribute('aria-label', titleText);
+      const label = makeElement('label', 'plugin-market-confirm-label', titleText);
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 80;
+      input.value = textValue(defaultValue, '');
+      const actions = makeElement('div', 'plugin-market-confirm-actions');
+      const cancel = makeElement('button', 'btn btn-small btn-quiet', '取消');
+      cancel.type = 'button';
+      const accept = makeElement('button', 'btn btn-small btn-primary', '确定');
+      accept.type = 'button';
+      const finish = (value) => {
+        box.remove();
+        resolve(value);
+      };
+      cancel.addEventListener('click', () => finish(null));
+      accept.addEventListener('click', () => finish(input.value));
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          finish(input.value);
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(null);
+        }
+      });
+      label.appendChild(input);
+      actions.appendChild(cancel);
+      actions.appendChild(accept);
+      box.appendChild(label);
+      box.appendChild(actions);
+      panel.prepend(box);
+      input.focus();
+      input.select();
+    });
+  }
+
+  function pluginMarketSetStatus(panel, message, tone = 'info') {
+    const target = panel.querySelector('[data-plugin-market-status]');
+    if (target) setV3Status(target, message, tone);
+  }
+
+  function pluginMarketInstalledChoices(instance, marketData) {
+    const choices = new Map();
+    for (const item of Array.isArray(marketData && marketData.installed) ? marketData.installed : []) {
+      const id = textValue(item.plugin_id || item.id, '');
+      if (id) choices.set(id, textValue(item.name || id, id));
+    }
+    const plugins = instance && instance.v3 && instance.v3.plugins ? instance.v3.plugins.items : [];
+    for (const item of Array.isArray(plugins) ? plugins : []) {
+      const id = textValue(item.id, '');
+      if (id) choices.set(id, textValue(item.name || id, id));
+    }
+    return choices;
+  }
+
+  async function applyPluginGroupActions(instance, actions, panel, confirmText) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    if (!(await pluginMarketAskConfirm(panel, confirmText || '确认应用这些插件分组变更？不会删除任何插件文件。'))) return false;
+    pluginMarketSetStatus(panel, '正在生成分组预览…', 'info');
+    try {
+      const preview = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups/preview`, {
+        method: 'POST',
+        body: { actions }
+      });
+      const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups/apply`, {
+        method: 'POST',
+        body: {
+          preview_token: preview.preview_token,
+          actions,
+          confirm: true,
+          idempotency_key: pluginMarketIdempotencyKey(`group-${instance.id}`)
+        }
+      });
+      pluginMarketSetStatus(panel, textValue(result.message, '分组已更新。'), 'success');
+      return true;
+    } catch (error) {
+      pluginMarketSetStatus(panel, formatError(error, '插件分组更新失败。'), 'error');
+      return false;
+    }
+  }
+
+  async function startPluginOperation(instance, entry, operation, panel) {
+    if (operation !== 'delete' && !pluginMarketActionEnabled(entry)) return;
+    const pluginId = textValue(entry.plugin_id || entry.id, '');
+    if (!pluginId) return;
+    const verb = operation === 'delete' ? '删除' : operation === 'update' ? '更新' : '安装';
+    const version = textValue(entry.version, '');
+    const sha = textValue(entry.sha256, '');
+    const confirmMessage = operation === 'delete'
+      ? `确认删除插件 ${pluginId} 的代码目录？\n只删除市场登记的代码目录；配置、plugin_data、数据库和会话都会保留，分组关系会清理。`
+      : `确认${verb}插件 ${pluginId}${version ? ` v${version}` : ''}？\nSHA256：${sha}\n插件代码会写入实例插件目录，配置/plugin_data/数据库/会话不会被删除。`;
+    if (!(await pluginMarketAskConfirm(panel, confirmMessage))) return;
+    pluginMarketSetStatus(panel, `正在生成${verb}预览…`, 'info');
+    try {
+      const preview = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-operations/preview`, {
+        method: 'POST',
+        body: { operation, plugin_id: pluginId }
+      });
+      pluginMarketSetStatus(panel, `正在${verb}插件…`, 'info');
+      const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-operations`, {
+        method: 'POST',
+        body: {
+          operation,
+          plugin_id: pluginId,
+          preview_token: preview.preview_token,
+          confirm: true,
+          idempotency_key: pluginMarketIdempotencyKey(`operation-${instance.id}`)
+        }
+      });
+      pluginMarketSetStatus(panel, textValue(result.message, `插件已${verb}。`), 'success');
+      if (instance.v3) instance.v3.plugins = await loadPluginsForInstance(instance);
+      updateV3Summary(instance);
+      if (instanceSettings.isOpenFor(instance.id)) instanceSettings.refresh();
+    } catch (error) {
+      pluginMarketSetStatus(panel, formatError(error, `插件${verb}失败。`), 'error');
+    }
+  }
+
+  function renderPluginMarketPanel(instance, panel, marketData, groupData) {
+    panel.replaceChildren();
+    panel.dataset.loaded = 'true';
+    const status = makeElement('p', 'instance-v3-status plugin-market-status');
+    status.dataset.pluginMarketStatus = 'status';
+    status.setAttribute('role', 'status');
+    status.hidden = true;
+    panel.appendChild(status);
+
+    const marketBlock = makeElement('section', 'plugin-market-block');
+    const marketHead = makeElement('div', 'plugin-market-block-head');
+    marketHead.appendChild(makeElement('h5', '', '独立插件市场'));
+    const sourceBits = [];
+    if (marketData && marketData.source && marketData.source.name) sourceBits.push(`来源：${marketData.source.name}`);
+    if (marketData && marketData.refreshed_at) sourceBits.push(`刷新：${marketData.refreshed_at}`);
+    marketHead.appendChild(makeElement('span', 'plugin-market-source', sourceBits.join(' · ') || '尚未刷新'));
+    marketBlock.appendChild(marketHead);
+    const entries = marketData && Array.isArray(marketData.entries) ? marketData.entries : [];
+    if (!entries.length) {
+      marketBlock.appendChild(makeElement('p', 'instance-v3-empty', '市场暂无条目。请把 catalog.json 放入实例 studio-plugins/market，或配置受信 URL 后刷新。'));
+    } else {
+      const list = makeElement('div', 'plugin-market-list');
+      for (const entry of entries) {
+        const row = makeElement('div', 'plugin-market-entry');
+        const info = makeElement('div', 'plugin-info');
+        const title = makeElement('div', 'plugin-title-line');
+        title.appendChild(makeElement('strong', 'plugin-name', textValue(entry.name || entry.id, entry.id)));
+        title.appendChild(makeElement('span', 'plugin-source-badge', pluginMarketStatusText(entry)));
+        if (entry.version) title.appendChild(makeElement('span', 'plugin-version', `v${entry.version}`));
+        info.appendChild(title);
+        if (entry.description) info.appendChild(makeElement('p', 'plugin-description', entry.description));
+        if (entry.installed_version && entry.installed_version !== entry.version) {
+          info.appendChild(makeElement('p', 'plugin-market-meta', `当前版本：${entry.installed_version}`));
+        }
+        if (entry.error) info.appendChild(makeElement('p', 'plugin-error', entry.error));
+        row.appendChild(info);
+        const control = makeElement('div', 'plugin-market-entry-control');
+        if (pluginMarketActionEnabled(entry)) {
+          const operation = textValue(entry.status, '') === 'update_available' ? 'update' : 'install';
+          const button = makeElement('button', 'btn btn-secondary btn-small', pluginMarketActionLabel(entry));
+          button.type = 'button';
+          button.addEventListener('click', () => void startPluginOperation(instance, entry, operation, panel));
+          control.appendChild(button);
+        }
+        if (entry.installed === true && entry.reserved !== true) {
+          const removeButton = makeElement('button', 'btn btn-small btn-quiet plugin-danger-action', '删除插件');
+          removeButton.type = 'button';
+          removeButton.addEventListener('click', () => void startPluginOperation(instance, entry, 'delete', panel));
+          control.appendChild(removeButton);
+        } else if (!pluginMarketActionEnabled(entry)) {
+          const state = makeElement('span', 'plugin-state-text', pluginMarketActionLabel(entry));
+          control.appendChild(state);
+        }
+        row.appendChild(control);
+        list.appendChild(row);
+      }
+      marketBlock.appendChild(list);
+    }
+    panel.appendChild(marketBlock);
+
+    const groupBlock = makeElement('section', 'plugin-market-block');
+    const groupHead = makeElement('div', 'plugin-market-block-head');
+    groupHead.appendChild(makeElement('h5', '', '插件分组'));
+    groupHead.appendChild(makeElement('span', 'plugin-market-source', '分组只存 SQLite；删除分组不会删除插件文件。'));
+    groupBlock.appendChild(groupHead);
+
+    const createRow = makeElement('div', 'plugin-group-create');
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.maxLength = 80;
+    nameInput.placeholder = '新分组名称';
+    nameInput.setAttribute('aria-label', '新分组名称');
+    const createButton = makeElement('button', 'btn btn-small btn-secondary', '创建分组');
+    createButton.type = 'button';
+    createButton.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        pluginMarketSetStatus(panel, '请输入分组名称。', 'warning');
+        return;
+      }
+      const ok = await applyPluginGroupActions(
+        instance,
+        [{ op: 'create', name }],
+        panel,
+        `确认创建分组“${name}”？`
+      );
+      if (ok) await loadPluginMarketPanel(instance, panel);
+    });
+    createRow.appendChild(nameInput);
+    createRow.appendChild(createButton);
+    groupBlock.appendChild(createRow);
+
+    const groups = groupData && Array.isArray(groupData.groups) ? groupData.groups : [];
+    if (!groups.length) {
+      groupBlock.appendChild(makeElement('p', 'instance-v3-empty', '尚未创建分组。'));
+    } else {
+      const choices = pluginMarketInstalledChoices(instance, marketData);
+      const groupList = makeElement('div', 'plugin-group-list');
+      for (const group of groups) {
+        const groupId = textValue(group.id, '');
+        const card = makeElement('div', 'plugin-group-card');
+        const groupHeadRow = makeElement('div', 'plugin-group-head');
+        groupHeadRow.appendChild(makeElement('strong', 'plugin-group-name', textValue(group.name, '未命名分组')));
+        const rename = makeElement('button', 'btn btn-small btn-quiet', '改名');
+        rename.type = 'button';
+        rename.addEventListener('click', async () => {
+          const nextName = await pluginMarketAskText(panel, '新的分组名称', textValue(group.name, ''));
+          if (!nextName || !nextName.trim() || nextName.trim() === group.name) return;
+          const ok = await applyPluginGroupActions(
+            instance,
+            [{ op: 'rename', group_id: groupId, name: nextName.trim() }],
+            panel,
+            `确认将分组改名为“${nextName.trim()}”？`
+          );
+          if (ok) await loadPluginMarketPanel(instance, panel);
+        });
+        const removeGroup = makeElement('button', 'btn btn-small btn-quiet plugin-danger-action', '删除分组');
+        removeGroup.type = 'button';
+        removeGroup.addEventListener('click', async () => {
+          const ok = await applyPluginGroupActions(
+            instance,
+            [{ op: 'delete', group_id: groupId }],
+            panel,
+            `确认删除分组“${group.name}”？只删除分组元数据，不删除任何插件文件或配置。`
+          );
+          if (ok) await loadPluginMarketPanel(instance, panel);
+        });
+        groupHeadRow.appendChild(rename);
+        groupHeadRow.appendChild(removeGroup);
+        card.appendChild(groupHeadRow);
+
+        const members = Array.isArray(group.plugin_ids) ? group.plugin_ids : [];
+        if (members.length) {
+          const chips = makeElement('div', 'plugin-group-members');
+          for (const pluginId of members) {
+            const chip = makeElement('span', 'plugin-group-chip', pluginId);
+            const remove = makeElement('button', 'plugin-group-chip-remove', '×');
+            remove.type = 'button';
+            remove.title = `从分组移出 ${pluginId}`;
+            remove.setAttribute('aria-label', `从分组移出 ${pluginId}`);
+            remove.addEventListener('click', async () => {
+              const ok = await applyPluginGroupActions(
+                instance,
+                [{ op: 'remove', group_id: groupId, plugin_id: pluginId }],
+                panel,
+                `确认把 ${pluginId} 移出分组“${group.name}”？不会删除插件文件。`
+              );
+              if (ok) await loadPluginMarketPanel(instance, panel);
+            });
+            chip.appendChild(remove);
+            chips.appendChild(chip);
+          }
+          card.appendChild(chips);
+        } else {
+          card.appendChild(makeElement('p', 'instance-v3-empty', '分组内暂无插件。'));
+        }
+
+        const available = Array.from(choices.entries()).filter(([pluginId]) => !members.includes(pluginId));
+        if (available.length) {
+          const addRow = makeElement('div', 'plugin-group-add');
+          const select = document.createElement('select');
+          select.setAttribute('aria-label', `选择加入分组 ${group.name} 的插件`);
+          for (const [pluginId, label] of available) {
+            const option = document.createElement('option');
+            option.value = pluginId;
+            option.textContent = `${label} (${pluginId})`;
+            select.appendChild(option);
+          }
+          const addButton = makeElement('button', 'btn btn-small btn-secondary', '加入分组');
+          addButton.type = 'button';
+          addButton.addEventListener('click', async () => {
+            const pluginId = select.value;
+            if (!pluginId) return;
+            const ok = await applyPluginGroupActions(
+              instance,
+              [{ op: 'add', group_id: groupId, plugin_id: pluginId }],
+              panel,
+              `确认把 ${pluginId} 加入分组“${group.name}”？`
+            );
+            if (ok) await loadPluginMarketPanel(instance, panel);
+          });
+          addRow.appendChild(select);
+          addRow.appendChild(addButton);
+          card.appendChild(addRow);
+        }
+        groupList.appendChild(card);
+      }
+      groupBlock.appendChild(groupList);
+    }
+    panel.appendChild(groupBlock);
+  }
+
+  async function loadPluginMarketPanel(instance, panel) {
+    panel.dataset.loading = 'true';
+    panel.dataset.loaded = '';
+    panel.replaceChildren(makeElement('p', 'plugin-config-loading', '正在读取插件市场与分组…'));
+    try {
+      const [marketData, groupData] = await Promise.all([
+        apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-market`),
+        apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups`)
+      ]);
+      renderPluginMarketPanel(instance, panel, asRecord(marketData), asRecord(groupData));
+    } catch (error) {
+      panel.replaceChildren();
+      const message = makeElement('p', 'plugin-error', formatError(error, '插件市场读取失败。'));
+      message.setAttribute('role', 'alert');
+      panel.appendChild(message);
+      panel.dataset.loaded = 'true';
+    } finally {
+      panel.dataset.loading = '';
+    }
+  }
+
+  async function refreshPluginMarket(instance, panel) {
+    pluginMarketSetStatus(panel, '正在刷新市场清单…', 'info');
+    try {
+      const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-market/refresh`, {
+        method: 'POST',
+        body: {}
+      });
+      await loadPluginMarketPanel(instance, panel);
+      pluginMarketSetStatus(panel, textValue(result.message, '插件市场已刷新。'), 'success');
+    } catch (error) {
+      pluginMarketSetStatus(panel, formatError(error, '插件市场刷新失败。'), 'error');
+    }
+  }
+
   function buildPluginSection(instance) {
     const plugins = (instance.v3 && instance.v3.plugins) || emptyPluginState();
     const section = makeElement('section', 'instance-v3-section');
@@ -2245,6 +2654,33 @@
     } else if (plugins.restartRequired) {
       setV3Status(statusElement, '插件配置已变更，请重启 AstrBot 生效。', 'warning');
     }
+
+    const marketTools = makeElement('div', 'plugin-market-tools');
+    const marketToggle = makeElement('button', 'btn btn-secondary btn-small', '插件市场与分组');
+    marketToggle.type = 'button';
+    marketToggle.setAttribute('aria-expanded', 'false');
+    marketToggle.setAttribute('aria-controls', `plugin-market-panel-${instance.id}`);
+    const marketRefresh = makeElement('button', 'btn btn-quiet btn-small', '刷新市场');
+    marketRefresh.type = 'button';
+    marketRefresh.hidden = true;
+    const marketPanel = makeElement('div', 'plugin-market-panel');
+    marketPanel.id = `plugin-market-panel-${instance.id}`;
+    marketPanel.hidden = true;
+    marketPanel.dataset.pluginMarket = 'panel';
+    marketToggle.addEventListener('click', () => {
+      const opening = marketPanel.hidden;
+      marketPanel.hidden = !opening;
+      marketToggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      marketRefresh.hidden = !opening;
+      if (opening && !marketPanel.dataset.loaded && !marketPanel.dataset.loading) {
+        void loadPluginMarketPanel(instance, marketPanel);
+      }
+    });
+    marketRefresh.addEventListener('click', () => void refreshPluginMarket(instance, marketPanel));
+    marketTools.appendChild(marketToggle);
+    marketTools.appendChild(marketRefresh);
+    marketTools.appendChild(marketPanel);
+    section.appendChild(marketTools);
 
     if (plugins.items.length > 0) {
       const list = makeElement('div', 'plugin-list');

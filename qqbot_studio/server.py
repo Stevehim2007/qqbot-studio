@@ -41,6 +41,7 @@ from .memory_admin import (
     MemoryConflict,
     MemoryRecordNotFound,
 )
+from .plugin_market import PluginMarketError, sanitize_error_text
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
 from .updater import (
@@ -381,6 +382,66 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "message": "插件配置接口暂不可用；主控制台和其它插件不受影响。",
             "error": detail,
         }
+
+    def _serve_plugin_api_result(self, operation) -> None:
+        """Run one optional plugin-market call and map errors safely.
+
+        Plugin errors carry a deliberate public code/message.  Unexpected
+        exceptions are logged server-side, while the HTTP response contains only
+        a generic message so filesystem paths, remote URLs and credentials are
+        not reflected back to the browser.
+        """
+
+        try:
+            result = operation()
+        except PluginMarketError as exc:
+            self._json(exc.http_status, exc.to_public_dict())
+            return
+        except ValueError as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {
+                    "ok": False,
+                    "code": "invalid_request",
+                    "message": sanitize_error_text(exc),
+                },
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - isolate optional plugin surface
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {
+                    "ok": False,
+                    "code": "plugin_internal_error",
+                    "message": "插件市场操作失败，详情请查看管理服务终端日志。",
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {
+                    "ok": False,
+                    "code": "plugin_invalid_response",
+                    "message": "插件市场接口返回格式异常。",
+                },
+            )
+            return
+        self._json(HTTPStatus.OK, result)
+
+    @staticmethod
+    def _plugin_group_route_action(payload: dict[str, Any]) -> str:
+        return str(payload.get("action") or payload.get("op") or "").strip().lower()
+
+    @staticmethod
+    def _plugin_market_source(payload: dict[str, Any]) -> Any:
+        if "source" in payload:
+            return payload.get("source")
+        for key in ("catalog", "url", "path", "file"):
+            if payload.get(key) not in {None, ""}:
+                return payload.get(key)
+        return None
 
     # ------------------------------------------------------------------
     # Per-group long-term memory policy
@@ -884,6 +945,40 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._json(HTTPStatus.OK, getter())
                     return
+                if subroute == "plugin-market":
+                    getter = getattr(manager, "get_plugin_market", None)
+                    if not callable(getter):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件市场接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: getter())
+                    return
+                if subroute == "plugin-groups":
+                    getter = getattr(manager, "get_plugin_groups", None)
+                    if not callable(getter):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件分组接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: getter())
+                    return
+                if subroute.startswith("plugin-operations/"):
+                    operation_id = subroute[len("plugin-operations/") :].strip("/")
+                    if not operation_id or "/" in operation_id:
+                        self._error(HTTPStatus.NOT_FOUND, "插件操作不存在。")
+                        return
+                    getter = getattr(manager, "get_plugin_operation", None)
+                    if not callable(getter):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件操作查询接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: getter(operation_id))
+                    return
                 memory_route = self._memory_admin_route(subroute)
                 if memory_route is not None:
                     self._serve_memory_admin(manager, memory_route, method="GET", query=query)
@@ -1111,12 +1206,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             )
         )
         payload = self._read_json_body(
-            allow_empty=path in {
-                "/api/assistant/install",
-                "/api/assistant/update",
-                "/api/assistant/start",
-                "/api/assistant/stop",
-            },
+            allow_empty=(
+                path in {
+                    "/api/assistant/install",
+                    "/api/assistant/update",
+                    "/api/assistant/start",
+                    "/api/assistant/stop",
+                }
+                or stripped_path.endswith("/plugin-market/refresh")
+            ),
             max_bytes=(
                 PROMPT_PROFILES_MAX_REQUEST_BYTES
                 if large_prompt_payload
@@ -1248,6 +1346,73 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "plugin-market/refresh":
+                    refresher = getattr(manager, "refresh_plugin_market", None)
+                    if not callable(refresher):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件市场刷新接口。",
+                        )
+                        return
+                    source = self._plugin_market_source(payload)
+                    self._serve_plugin_api_result(lambda: refresher(source))
+                    return
+                if subroute == "plugin-groups/preview":
+                    previewer = getattr(manager, "preview_plugin_groups", None)
+                    if not callable(previewer):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件分组预览接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: previewer(payload))
+                    return
+                if subroute == "plugin-groups/apply":
+                    applier = getattr(manager, "apply_plugin_groups", None)
+                    if not callable(applier):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件分组应用接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: applier(payload))
+                    return
+                if subroute == "plugin-groups":
+                    action = self._plugin_group_route_action(payload)
+                    if action == "preview":
+                        previewer = getattr(manager, "preview_plugin_groups", None)
+                        if not callable(previewer):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件分组预览接口。")
+                            return
+                        self._serve_plugin_api_result(lambda: previewer(payload))
+                        return
+                    if action == "apply" or payload.get("preview_token"):
+                        applier = getattr(manager, "apply_plugin_groups", None)
+                        if not callable(applier):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件分组应用接口。")
+                            return
+                        self._serve_plugin_api_result(lambda: applier(payload))
+                        return
+                    executor = getattr(manager, "execute_plugin_group_action", None)
+                    if not callable(executor):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件分组写入接口。")
+                        return
+                    self._serve_plugin_api_result(lambda: executor(payload))
+                    return
+                if subroute == "plugin-operations/preview":
+                    previewer = getattr(manager, "preview_plugin_operation", None)
+                    if not callable(previewer):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件操作预览接口。")
+                        return
+                    self._serve_plugin_api_result(lambda: previewer(payload))
+                    return
+                if subroute == "plugin-operations":
+                    executor = getattr(manager, "execute_plugin_operation", None)
+                    if not callable(executor):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件操作接口。")
+                        return
+                    self._serve_plugin_api_result(lambda: executor(payload))
+                    return
                 memory_route = self._memory_admin_route(subroute)
                 if memory_route is not None:
                     self._serve_memory_admin(

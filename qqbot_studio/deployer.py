@@ -224,6 +224,7 @@ class DeployManager:
         astrbot_container: str = "qqbot-astrbot",
         snowluma_container: str = "qqbot-snowluma",
         network_name: str = "qqbot-studio-net",
+        plugin_market_trusted_hosts: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         self.store = store or Store(data_dir or default_data_dir())
         # Additive migration: old config.json files gain optional fields while
@@ -256,6 +257,8 @@ class DeployManager:
         self._api_client_factory = api_client_factory or (
             lambda base_url, username, password: AstrBotClient(base_url, username, password)
         )
+        self._plugin_market_trusted_hosts = tuple(plugin_market_trusted_hosts or ())
+        self._plugin_market_service: Any | None = None
         self._lock = threading.RLock()
         self._jobs: dict[str, Job] = {}
         self._job_order: list[str] = []
@@ -2936,6 +2939,72 @@ class DeployManager:
             "message": message or ("插件已启用。" if enabled else "插件已禁用。"),
             "error": "",
         }
+
+    # ------------------------------------------------------------------
+    # Plugin market and grouping (v4.3 beta; additive API)
+    # ------------------------------------------------------------------
+    @property
+    def plugin_market_service(self):
+        """Lazily construct the instance-scoped plugin market service.
+
+        The service intentionally shares this manager's ``RLock`` and uses the
+        manager's instance data directory.  It never touches site-packages,
+        Docker, AstrBot credentials, or the bundled enhancer source tree.
+        """
+
+        with self._lock:
+            if self._plugin_market_service is None:
+                from .plugin_market import PluginMarket
+
+                self._plugin_market_service = PluginMarket(
+                    self.data_dir,
+                    plugin_root=self.astrbot_data_dir / "plugins",
+                    lock=self._lock,
+                    redact=self.redact_sensitive_text,
+                    trusted_hosts=self._plugin_market_trusted_hosts,
+                )
+            return self._plugin_market_service
+
+    def get_plugin_market(self) -> dict[str, Any]:
+        return self.plugin_market_service.market_status()
+
+    def refresh_plugin_market(self, source: Any = None) -> dict[str, Any]:
+        return self.plugin_market_service.refresh_market(source)
+
+    def get_plugin_groups(self) -> dict[str, Any]:
+        return self.plugin_market_service.list_plugin_groups()
+
+    def preview_plugin_groups(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.preview_plugin_groups(payload)
+
+    def apply_plugin_groups(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.apply_plugin_groups(payload)
+
+    def execute_plugin_group_action(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.execute_plugin_group_action(payload)
+
+    def preview_plugin_operation(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.preview_operation(payload)
+
+    def execute_plugin_operation(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.execute_operation(payload)
+
+    def get_plugin_operation(self, operation_id: str) -> dict[str, Any]:
+        return self.plugin_market_service.get_operation(operation_id)
+
+    # Conventional aliases used by server adapters and tests.
+    get_market = get_plugin_market
+    refresh_market = refresh_plugin_market
+    list_plugin_groups = get_plugin_groups
+    preview_plugin_group_change = preview_plugin_groups
+    apply_plugin_group_change = apply_plugin_groups
+    preview_groups = preview_plugin_groups
+    apply_groups = apply_plugin_groups
+    preview_market_operation = preview_plugin_operation
+    preview_plugin_market_operation = preview_plugin_operation
+    run_plugin_operation = execute_plugin_operation
+    execute_market_operation = execute_plugin_operation
+    get_market_operation = get_plugin_operation
 
     # ------------------------------------------------------------------
     # Plugin parameter get/set

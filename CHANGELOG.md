@@ -9,6 +9,26 @@
 
 ## v4.3.0-beta.1 — 测试版：插件仓库、插件分组与模块化（基于正式版 4.3.0）
 
+### 插件市场、安装/删除与分组基础（Studio）
+
+- 新增 `qqbot_studio/plugin_market.py`：manifest 规范化/校验、固定 SHA-256、固定本地或受信 HTTPS 来源、
+  精确 ZIP 根目录校验；拒绝路径穿越、绝对路径、反斜杠、重复/大小写冲突条目、符号链接、特殊文件、
+  加密条目和异常压缩比；不运行 pip、不写 `site-packages`。
+- 安装/更新使用实例内暂存与原子替换，更新前把旧代码备份到 `studio-plugins/backups/plugins/<id>/`；
+  删除只移除市场登记并确认的 `data/astrbot/plugins/<id>`，配置、`plugin_data`、数据库、会话保留。
+  `qqbot_enhancer` 作为主回复/safe marker owner 保留，市场不能安装、覆盖、更新或删除。
+- 分组状态持久化到 `studio-plugins/state.sqlite3`，支持多对多成员关系、创建/改名/删除、加入/移出；
+  删除分组仅执行 SQLite 操作，删除插件成功时清理关系。损坏 SQLite/登记表不会被自动清空或覆盖。
+- 新增兼容扩展 API：`/plugin-market`、`/plugin-market/refresh`、`/plugin-groups[/preview|/apply]`、
+  `/plugin-operations[/preview]`、`/plugin-operations/<id>`；分组与插件操作使用 preview token、显式
+  `confirm` 和幂等键，旧 `/plugins` 列表、启停、参数保存路由保持不变。
+- 控制台插件区新增「插件市场与分组」入口：市场刷新、安装/更新/删除确认、分组创建/改名/删除、
+  加入/移出和操作状态提示；不使用 alert/confirm 阻塞弹窗。
+- 新增 `qqbot_studio/plugin_config_migration.py`：field-map 读取/校验与只读迁移预览。未知源字段、
+  目标 only 字段和 field-map 未知元数据均保留；目标已有值只报冲突不覆盖；本测试版不实际搬 264 字段。
+- 文档：[`docs/plugin-market-v1.md`](docs/plugin-market-v1.md)；专项测试
+  `tests/test_plugin_market.py` + `tests/test_plugin_market_api.py`；全仓 801 tests OK。
+
 - 记忆策略增加 `data/astrbot/memory_policy.json` 持久化 sidecar；AstrBot 重启重写 `cmd_config.json` 后策略不再丢失，面板读取 sidecar 优先。
 
 ### 记忆内容管理（Studio，t33）
