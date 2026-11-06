@@ -41,6 +41,7 @@
 - 本机没有服务器 SSH 凭据（id_ed25519 被 192.144.206.201 拒绝），QA bot-4 的实机部署与 E2E 尚未执行。
 - v4.3.0-beta.4 的 GitHub Release 尚未创建（无 API token），市场下载 URL 暂不可用；QA 可用本地 artifacts ZIP 解压安装。
 - `migrations/modular-v2-v3/field-map.json` 的 261 个 blocked 是相对基线插件 schema 的快照；最终 schema 已覆盖大部分字段，退出前需按最终插件重新生成一次盘点。
+- 真实 265 字段 dry-run：20 个 image_search 字段已映射到新 canonical 键；9 个旧字段在最终 schema 无对应项，脚本会列入 `unmapped_source_keys` 而不是静默丢弃：`conversation_auto_create_enabled`、`ambient_group_reply_probability`、`ai_unified_tool_protocol_enabled`、`safe_tools_max_categories`、`web_auto_fetch_{enabled,max_urls,max_chars,timeout_seconds,question_only}`。其中 web 自动抓取未列入 v2/v3 契约，属最终架构主动不保留项。
 - 旧实例（bot-1）仍保留 enhancer 代码与配置，属过渡状态；最终切换需在 QA 验收后单独执行。
 
 ## Next step

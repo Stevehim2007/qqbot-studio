@@ -74,9 +74,30 @@ EXPLICIT_FIELD_MAP: dict[str, tuple[str, str]] = {
     "web_fetch_cooldown_seconds": ("qqbot_safe_tools", "web_fetch_cooldown_seconds"),
     "food_search_cooldown_seconds": ("qqbot_safe_tools", "food_search_cooldown_seconds"),
     "food_submit_cooldown_seconds": ("qqbot_safe_tools", "food_submit_cooldown_seconds"),
-    "image_search_group_cooldown_seconds": ("qqbot_safe_tools", "image_search_cooldown_seconds"),
-    "image_search_user_cooldown_seconds": ("qqbot_safe_tools", "image_search_cooldown_seconds"),
+    "image_search_group_cooldown_seconds": ("qqbot_image_search", "group_cooldown_seconds"),
+    "image_search_user_cooldown_seconds": ("qqbot_image_search", "user_cooldown_seconds"),
     "sticker_cooldown_seconds": ("qqbot_safe_tools", "sticker_cooldown_seconds"),
+    # Image search flat legacy names -> canonical final names
+    "image_search_enabled": ("qqbot_image_search", "enabled"),
+    "image_search_natural_language_enabled": ("qqbot_image_search", "natural_language_enabled"),
+    "image_search_timeout_seconds": ("qqbot_image_search", "timeout_seconds"),
+    "image_search_result_count": ("qqbot_image_search", "max_results"),
+    "image_search_safe_search": ("qqbot_image_search", "safe_search"),
+    "image_search_max_response_bytes": ("qqbot_image_search", "max_response_bytes"),
+    "image_search_max_keyword_chars": ("qqbot_image_search", "max_keyword_chars"),
+    "image_search_success_prefix": ("qqbot_image_search", "success_prefix"),
+    "image_search_usage_reply": ("qqbot_image_search", "usage_reply"),
+    "image_search_disabled_reply": ("qqbot_image_search", "disabled_reply"),
+    "image_search_empty_reply": ("qqbot_image_search", "empty_reply"),
+    "image_search_error_reply": ("qqbot_image_search", "error_reply"),
+    "image_search_timeout_reply": ("qqbot_image_search", "timeout_reply"),
+    "image_search_cooldown_reply": ("qqbot_image_search", "cooldown_reply"),
+    "image_search_second_source_enabled": ("qqbot_image_search", "baidu_fallback_enabled"),
+    "image_search_download_timeout_seconds": ("qqbot_image_search", "download_timeout_seconds"),
+    "image_search_download_max_bytes": ("qqbot_image_search", "download_max_bytes"),
+    "image_search_download_attempts": ("qqbot_image_search", "download_attempts"),
+    "image_search_relevance_enabled": ("qqbot_image_search", "relevance_enabled"),
+    "image_search_min_relevance_score": ("qqbot_image_search", "min_relevance_score"),
     # Final ownership/defaults
     "legacy_core_reply_enabled": ("qqbot_core_reply", "enabled"),
 }
@@ -300,6 +321,10 @@ def build_plan(
         any_mapped = False
         for plugin_id, target_key in destinations:
             if plugin_id not in schemas or target_key not in schemas[plugin_id]:
+                if explicit is not None:
+                    warnings.append(
+                        f"{source_key} 的目标 {plugin_id}.{target_key} 不在最终 schema，未迁移"
+                    )
                 continue
             ok, coerced = _coerce_by_schema(raw_value, schemas[plugin_id][target_key])
             if not ok:
@@ -310,7 +335,7 @@ def build_plan(
             targets[plugin_id][target_key] = coerced
             mapped[plugin_id][target_key] = source_key
             any_mapped = True
-        if not any_mapped and not explicit:
+        if not any_mapped:
             unmapped.append(source_key)
 
     # Existing non-default target config values always win unless absent.

@@ -53,6 +53,9 @@ class FinalMigrationTests(unittest.TestCase):
                 "sticker_probability": 0.2,
                 "collected_sticker_enabled": True,
                 "image_search_enabled": False,
+                "image_search_group_cooldown_seconds": 15,
+                "image_search_safe_search": "moderate",
+                "web_auto_fetch_enabled": True,
                 "unknown_old_feature": "kept-only-in-report",
             },
         )
@@ -79,6 +82,12 @@ class FinalMigrationTests(unittest.TestCase):
             "qqbot_image_search": {
                 "enabled": {"type": "bool", "default": True},
                 "user_cooldown_seconds": {"type": "int", "default": 60},
+                "group_cooldown_seconds": {"type": "int", "default": 30},
+                "safe_search": {
+                    "type": "string",
+                    "default": "strict",
+                    "options": ["strict", "moderate", "off"],
+                },
             },
             "qqbot_food": {
                 "food_enabled": {"type": "bool", "default": True},
@@ -119,7 +128,13 @@ class FinalMigrationTests(unittest.TestCase):
         self.assertEqual(plan.targets["qqbot_food"]["food_max_results"], 4)
         self.assertEqual(plan.targets["qqbot_stickers"]["sticker_probability"], 0.2)
         self.assertEqual(plan.targets["qqbot_memory_commands"]["allow_user_ids"], "10001,10002")
+        # The final cutover always enables the seven owners, even if the
+        # legacy toggle was off.
+        self.assertTrue(plan.targets["qqbot_image_search"]["enabled"])
+        self.assertEqual(plan.targets["qqbot_image_search"]["safe_search"], "moderate")
+        self.assertEqual(plan.targets["qqbot_image_search"]["group_cooldown_seconds"], 15)
         self.assertIn("unknown_old_feature", plan.unmapped_source_keys)
+        self.assertIn("web_auto_fetch_enabled", plan.unmapped_source_keys)
         self.assertNotIn("unknown_old_feature", json.dumps(plan.targets, ensure_ascii=False))
 
     def test_nondefault_existing_target_wins_and_default_is_replaced(self):
@@ -136,6 +151,16 @@ class FinalMigrationTests(unittest.TestCase):
         self.assertIn("sticker_probability", plan.conflicts["qqbot_stickers"])
         self.assertEqual(plan.targets["qqbot_food"]["food_max_results"], 4)
         self.assertNotIn("qqbot_food", plan.conflicts)
+
+    def test_explicit_mapping_without_target_schema_key_is_reported(self):
+        image_schema = self.plugins / "qqbot_image_search" / "_conf_schema.json"
+        value = json.loads(image_schema.read_text(encoding="utf-8"))
+        value.pop("enabled")
+        write(image_schema, value)
+        plan = build_plan(self.astrbot, self.plugins)
+        self.assertIn("image_search_enabled", plan.unmapped_source_keys)
+        self.assertTrue(any("image_search_enabled" in item for item in plan.warnings))
+        self.assertNotIn("image_search_enabled", plan.mapped.get("qqbot_image_search", {}))
 
     def test_invalid_type_uses_default_and_warns(self):
         config = json.loads(self.legacy_path.read_text(encoding="utf-8"))
