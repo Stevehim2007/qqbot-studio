@@ -275,6 +275,8 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 
 最终模块化版本只保留七个独立插件：`qqbot_core_reply`（回复/人格/会话/点歌）、`qqbot_safe_tools`（唯一 marker/授权/确认/审计）、`qqbot_web_reader`、`qqbot_image_search`、`qqbot_food`、`qqbot_stickers`、`qqbot_memory_commands`。部署过程**不再**复制 `qqbot_enhancer` 或 `qqbot_core_full`；请在控制台的插件市场按依赖顺序安装这七个包。
 
+插件开发与新增插件规范见 [docs/plugin-standard.md](docs/plugin-standard.md)。
+
 > 旧实例仍保留 `qqbot_enhancer` 配置、`plugin_data`、会话与记忆，升级时通过迁移脚本复制配置并停用旧代码，不删除任何实例数据。新实例的回复职责只由 `qqbot_core_reply` 承担。
 
 | 功能 | 行为/命令 | 关键配置 |
