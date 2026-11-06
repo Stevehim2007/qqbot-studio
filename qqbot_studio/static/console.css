@@ -1726,3 +1726,69 @@ body.console-modal-open { overflow: hidden; }
   font-size: 9.5px;
 }
 .plugin-market-confirm-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* Plugin market tabs, five-item pagination, and AstrBot group whitelist. */
+.plugin-market-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0;
+  border-bottom: 1px solid var(--line, #d9dce3);
+}
+.plugin-market-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted, #687083);
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.plugin-market-tab.is-active {
+  border-bottom-color: var(--accent, #3b6cf6);
+  color: var(--text, #202532);
+  font-weight: 600;
+}
+.plugin-market-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.plugin-market-page-label {
+  color: var(--muted, #687083);
+  font-size: 12px;
+}
+.group-whitelist-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.group-whitelist-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.group-whitelist-label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted, #687083);
+  font-size: 13px;
+}
+.group-whitelist-ids {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 112px;
+  padding: 9px 10px;
+  border: 1px solid var(--line, #d9dce3);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: var(--text, #202532);
+  font: inherit;
+  resize: vertical;
+}
+.group-whitelist-actions {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -3075,6 +3075,70 @@ class DeployManager:
     ) -> dict[str, Any]:
         return self.plugin_control_bridge.call(method, scope=scope, body=body)
 
+    def get_group_whitelist(self) -> dict[str, Any]:
+        """Read AstrBot's group-id whitelist from cmd_config.json."""
+
+        data, error, channel = self._read_astrbot_config()
+        if error:
+            return {"ok": False, "enabled": False, "group_ids": [], "channel": channel, "error": error}
+        platform = data.get("platform_settings") if isinstance(data, dict) else None
+        if not isinstance(platform, dict):
+            return {"ok": False, "enabled": False, "group_ids": [], "channel": channel, "error": "cmd_config.json 缺少 platform_settings。"}
+        enabled = platform.get("enable_id_white_list", False)
+        if not isinstance(enabled, bool):
+            return {"ok": False, "enabled": False, "group_ids": [], "channel": channel, "error": "enable_id_white_list 必须是布尔值。"}
+        raw = platform.get("id_whitelist", [])
+        if not isinstance(raw, list):
+            return {"ok": False, "enabled": enabled, "group_ids": [], "channel": channel, "error": "id_whitelist 必须是数组。"}
+        groups: list[str] = []
+        for item in raw[:1000]:
+            if isinstance(item, (str, int)) and str(item).strip():
+                groups.append(str(item).strip())
+        return {"ok": True, "enabled": enabled, "group_ids": groups, "channel": channel, "error": ""}
+
+    def set_group_whitelist(self, payload: Any) -> dict[str, Any]:
+        """Persist AstrBot's group-id whitelist; restart is required to apply."""
+
+        if not isinstance(payload, dict):
+            raise ValueError("群组白名单参数必须是对象。")
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled 必须是布尔值。")
+        raw = payload.get("group_ids")
+        if not isinstance(raw, list):
+            raise ValueError("group_ids 必须是数组。")
+        group_ids: list[str] = []
+        seen: set[str] = set()
+        for item in raw[:1000]:
+            value = str(item).strip() if isinstance(item, (str, int)) else ""
+            if not value:
+                continue
+            if len(value) > 128 or any(ch.isspace() for ch in value):
+                raise ValueError("群号不能包含空白且长度不能超过 128。")
+            if value not in seen:
+                seen.add(value)
+                group_ids.append(value)
+        data, error, channel = self._read_astrbot_config()
+        if error:
+            return {"ok": False, "error": error, "channel": channel}
+        platform = data.get("platform_settings") if isinstance(data, dict) else None
+        if not isinstance(platform, dict):
+            platform = {}
+            data["platform_settings"] = platform
+        platform["enable_id_white_list"] = enabled
+        platform["id_whitelist"] = group_ids
+        write_channel, write_error = self._write_astrbot_config(data)
+        if write_error:
+            return {"ok": False, "error": write_error, "channel": channel}
+        return {
+            "ok": True,
+            "enabled": enabled,
+            "group_ids": group_ids,
+            "channel": write_channel or channel,
+            "restart_required": True,
+            "message": "群组白名单已保存；重启 AstrBot 后生效。",
+        }
+
     def get_plugin_market(self) -> dict[str, Any]:
         return self.plugin_market_service.market_status()
 

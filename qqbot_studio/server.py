@@ -1185,6 +1185,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 if subroute == "memory-policy":
                     self._serve_memory_policy(manager, read_only=True)
                     return
+                if subroute == "group-whitelist":
+                    getter = getattr(manager, "get_group_whitelist", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供群组白名单接口。")
+                        return
+                    self._json(HTTPStatus.OK, getter())
+                    return
                 if subroute == "memory":
                     getter = getattr(manager, "get_memory_mode", None)
                     if not callable(getter):
@@ -1818,6 +1825,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         HTTPStatus.OK,
                         setter(plugin_id, bool(payload["enabled"])),
                     )
+                    return
+                if subroute == "group-whitelist":
+                    setter = getattr(manager, "set_group_whitelist", None)
+                    if not callable(setter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供群组白名单接口。")
+                        return
+                    self._json(HTTPStatus.OK, setter(payload))
                     return
                 if subroute == "memory":
                     mode = str(payload.get("mode") or payload.get("memory_mode") or "").strip()

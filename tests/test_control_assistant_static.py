@@ -347,55 +347,23 @@ class ControlAssistantStaticTests(unittest.TestCase):
         for script in ("/services/api.js", "/services/plugin-config.js", "/components/instance-settings.js"):
             self.assertIn(f'src="{script}"', self.console_html)
 
-    def test_console_ai_tools_and_auto_sticker_permissions_contract(self) -> None:
-        for token in (
+    def test_console_has_no_legacy_ai_tools_panel(self) -> None:
+        for removed in (
+            "buildAiToolsSection",
             "AI 工具权限",
             "AI 自动表情",
-            "允许机器人自己调用插件能力",
-            "搜索图片",
-            "发送表情",
-            "收藏表情",
-            "查询表情分类",
-            "仅白名单",
-            "无电脑控制",
+            "qqbot_enhancer",
             "safe_tools_enabled",
-            "safe_tools_allow_search_images",
-            "safe_tools_allow_send_sticker",
-            "safe_tools_allow_collect_sticker",
-            "safe_tools_allow_list_categories",
-            "sticker_enabled",
-            "sticker_ai_select_enabled",
-            "sticker_ai_marker_enabled",
-            "sticker_ai_select_probability",
-            "sticker_probability",
-            "sticker_cooldown_seconds",
-            "collected_sticker_enabled",
-            "defaultValue: 0.6",
-            "direct 模式由插件给模型提供安全表情 marker",
-            "memory/astrbot 模式使用本地情绪或分类匹配",
-            "pluginConfigService.load(instance.id, 'qqbot_enhancer')",
-            "pluginConfigService.save(instance.id, 'qqbot_enhancer', values)",
-            "当前后端不支持 AI 工具权限。",
-            "已保存；AstrBot 已热重载。",
-            "已保存；AstrBot 需要重启后生效。",
-            "AI_STICKER_NUMBERS", "ui.numberInputs[field.key]",
-            "values[field.key] = number;", "ai-sticker-number-grid",
-            "ai-tools-controls", "ai-tools-enabled", "ai-tools-save",
-            "ai-tools-error", "ai-sticker-enabled",
-            "ai-sticker-ai-select-probability", "ai-sticker-probability",
-            "ai-sticker-cooldown-seconds",
-            "QQ 增强插件当前已禁用", "插件当前已禁用",
         ):
-            self.assertIn(token, self.console_js)
-        for style in (
-            ".ai-tools-section", ".ai-tools-controls", ".ai-tools-grid",
-            ".ai-tools-subsection", ".ai-sticker-number-grid",
-            ".ai-tools-section.is-plugin-disabled",
+            self.assertNotIn(removed, self.console_js)
+        for added in (
+            "group-whitelist-section",
+            "group-whitelist-ids",
+            "plugin-market-tabs",
+            "plugin-market-pager",
+            "/group-whitelist",
         ):
-            self.assertIn(style, self.console_css)
-        for forbidden in ("innerHTML", "localStorage", "sessionStorage"):
-            self.assertNotIn(forbidden, self.console_js)
-        self.assertNotRegex(self.console_js, r"\balert\s*\(|\bconfirm\s*\(")
+            self.assertIn(added, self.console_js)
 
     def test_console_prompt_manager_modal_contract(self) -> None:
         required = {
@@ -471,12 +439,9 @@ class ControlAssistantStaticTests(unittest.TestCase):
             "filterLegacyPromptSnapshot",
             "probePromptProfiles",
             "profilesAvailable",
-            "lastKnownAiToolsValues",
             "lastKnownMemoryModes",
             "memory-refresh-btn",
-            "ai-tools-retry",
             "刷新重试",
-            "ui.loadFailed",
         ):
             self.assertIn(token, self.console_js)
         self.assertNotIn("切换后会开始新会话", self.console_js + self.console_html)
@@ -587,9 +552,22 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class AiToolsModularStaticTests(unittest.TestCase):
-    def test_ai_tools_is_split_into_collapsible_modules(self) -> None:
+class InstanceSettingsStaticTests(unittest.TestCase):
+    def test_settings_have_market_tabs_pagination_and_whitelist(self) -> None:
         js = (ROOT / "qqbot_studio" / "static" / "console.js").read_text(encoding="utf-8")
-        css = (ROOT / "qqbot_studio" / "static" / "console.css").read_text(encoding="utf-8")
-        for token in ("ai-tools-module", "dataset.aiToolsModule", "安全工具", "自动表情", "ai-tools-module-status", "ai-tools-full-config-hint"):
-            self.assertTrue(token in js or token in css, token)
+        for token in (
+            "plugin-market-tabs",
+            "plugin-market-pane",
+            "plugin-market-pager",
+            "pageSize = 5",
+            "skipConfirm: true",
+            "renderInstances({ refreshSettings: !silent })",
+            "group-whitelist-section",
+            "enabled: enabled.checked, group_ids: groupIds",
+        ):
+            self.assertIn(token, js)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
