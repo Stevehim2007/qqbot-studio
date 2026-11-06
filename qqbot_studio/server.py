@@ -41,7 +41,23 @@ from .memory_admin import (
     MemoryConflict,
     MemoryRecordNotFound,
 )
+from .plugin_control import ControlError, ControlMethodError, ControlUnavailable, FIXED_RPC_METHODS
 from .plugin_market import PluginMarketError, sanitize_error_text
+from .plugin_state import (
+    PluginRevisionConflict,
+    PluginStateCorruptError,
+    PluginStateError,
+    StaleOwnerEpochError,
+)
+from .plugin_transactions import (
+    MigrationBridgeUnavailable,
+    MigrationConflict,
+    MigrationError,
+    MigrationManualRecovery,
+    MigrationNotFound,
+    MigrationPlanError,
+    MigrationStateError,
+)
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
 from .updater import (
@@ -442,6 +458,117 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             if payload.get(key) not in {None, ""}:
                 return payload.get(key)
         return None
+
+    @staticmethod
+    def _migration_service_for(manager: Any) -> Any:
+        service = getattr(manager, "plugin_migration_service", None)
+        if service is not None:
+            return service
+        data_dir = getattr(manager, "data_dir", None)
+        if data_dir is None:
+            raise MigrationStateError("当前后端未提供迁移服务。")
+        from .plugin_transactions import PluginMigrationService
+
+        return PluginMigrationService(data_dir)
+
+    @staticmethod
+    def _plugin_bridge_status(manager: Any) -> dict[str, Any]:
+        value = getattr(manager, "plugin_control_status", None)
+        if callable(value):
+            try:
+                result = value()
+            except Exception:  # noqa: BLE001 - bridge status is a safe card
+                result = None
+            if isinstance(result, dict):
+                return result
+        if isinstance(value, dict):
+            return dict(value)
+        return {
+            "ok": True,
+            "enabled": False,
+            "configured": False,
+            "ready": False,
+            "reachable": None,
+            "transport": "none",
+            "reason": "bridge_disabled",
+        }
+
+    @classmethod
+    def _require_plugin_bridge(cls, manager: Any) -> dict[str, Any]:
+        status = cls._plugin_bridge_status(manager)
+        if not bool(status.get("ready")):
+            raise MigrationBridgeUnavailable(
+                "插件控制桥未就绪，迁移/控制操作已按失败关闭（bridge_unavailable）。"
+            )
+        return status
+
+    def _serve_migration_result(self, operation) -> None:
+        try:
+            result = operation()
+        except (PluginStateError, MigrationError) as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except ControlError as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except ValueError as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "code": "invalid_request", "message": sanitize_error_text(exc)},
+            )
+            return
+        except Exception:  # noqa: BLE001 - isolate optional migration surface
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {
+                    "ok": False,
+                    "code": "migration_internal_error",
+                    "message": "迁移控制服务处理失败，详情请查看管理服务终端日志。",
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"ok": False, "code": "migration_invalid_response", "message": "迁移服务返回格式异常。"},
+            )
+            return
+        self._json(HTTPStatus.OK, result)
+
+    def _serve_control_result(self, operation) -> None:
+        try:
+            result = operation()
+        except ControlError as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except (PluginStateError, MigrationError) as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except ValueError as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "code": "invalid_request", "message": sanitize_error_text(exc)},
+            )
+            return
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "code": "bridge_unavailable",
+                    "message": "插件控制桥不可用，操作已按失败关闭。",
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            self._json(
+                HTTPStatus.BAD_GATEWAY,
+                {"ok": False, "code": "control_invalid_response", "message": "插件控制桥返回格式异常。"},
+            )
+            return
+        self._json(HTTPStatus.OK, result)
 
     # ------------------------------------------------------------------
     # Per-group long-term memory policy
@@ -884,6 +1011,78 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "plugin-migrations/status":
+                    try:
+                        service = self._migration_service_for(manager)
+                        bridge_status = self._plugin_bridge_status(manager)
+                        status = service.status(bridge_status=bridge_status)
+                    except (PluginStateError, MigrationError) as exc:
+                        self._json(int(getattr(exc, "http_status", 503) or 503), exc.to_public_dict())
+                        return
+                    except Exception:  # noqa: BLE001
+                        traceback.print_exc()
+                        self._json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {"ok": False, "code": "migration_internal_error", "message": "迁移状态读取失败。"},
+                        )
+                        return
+                    self._json(
+                        HTTPStatus.OK if status.get("ok") else HTTPStatus.SERVICE_UNAVAILABLE,
+                        status,
+                    )
+                    return
+                if subroute.startswith("plugin-migration-plans/"):
+                    plan_id = urllib.parse.unquote(subroute[len("plugin-migration-plans/") :]).strip("/")
+                    if not plan_id or "/" in plan_id:
+                        self._error(HTTPStatus.NOT_FOUND, "迁移计划不存在。")
+                        return
+                    self._serve_migration_result(lambda: self._migration_service_for(manager).get_plan(plan_id))
+                    return
+                if subroute.startswith("plugin-migration-operations/"):
+                    operation_id = urllib.parse.unquote(
+                        subroute[len("plugin-migration-operations/") :]
+                    ).strip("/")
+                    if not operation_id or "/" in operation_id:
+                        self._error(HTTPStatus.NOT_FOUND, "迁移操作不存在。")
+                        return
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).get_operation(operation_id)
+                    )
+                    return
+                if subroute.startswith("plugin-migration-rollback-plans/"):
+                    plan_id = urllib.parse.unquote(
+                        subroute[len("plugin-migration-rollback-plans/") :]
+                    ).strip("/")
+                    if not plan_id or "/" in plan_id:
+                        self._error(HTTPStatus.NOT_FOUND, "回滚计划不存在。")
+                        return
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).get_rollback_plan(plan_id)
+                    )
+                    return
+                if subroute == "plugin-control/status":
+                    bridge = self._plugin_bridge_status(manager)
+                    self._json(HTTPStatus.OK, {"ok": True, "bridge": bridge})
+                    return
+                if subroute == "plugin-control/methods":
+                    methods = [
+                        {
+                            "method": spec.name,
+                            "provider": spec.provider,
+                            "access": spec.access,
+                        }
+                        for name, spec in sorted(FIXED_RPC_METHODS.items())
+                    ]
+                    self._json(
+                        HTTPStatus.OK,
+                        {
+                            "ok": True,
+                            "protocol_version": 1,
+                            "methods": methods,
+                            "bridge": self._plugin_bridge_status(manager),
+                        },
+                    )
+                    return
                 if subroute == "prompts":
                     getter = getattr(manager, "get_prompt_profiles", None)
                     if not callable(getter):
@@ -1346,6 +1545,128 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "plugin-migration-plans":
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).create_plan(
+                            payload, actor="studio-admin"
+                        )
+                    )
+                    return
+                if subroute == "plugin-migration-operations":
+                    try:
+                        self._require_plugin_bridge(manager)
+                        operation_result = self._migration_service_for(manager).start_operation(
+                            payload, actor="studio-admin", run_async=True
+                        )
+                    except (PluginStateError, MigrationError) as exc:
+                        self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+                        return
+                    except Exception:  # noqa: BLE001
+                        traceback.print_exc()
+                        self._json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {
+                                "ok": False,
+                                "code": "migration_internal_error",
+                                "message": "迁移操作创建失败，详情请查看管理服务终端日志。",
+                            },
+                        )
+                        return
+                    self._json(HTTPStatus.ACCEPTED, operation_result)
+                    return
+                if subroute == "plugin-migration-rollback-plans":
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).create_rollback_plan(
+                            payload, actor="studio-admin"
+                        )
+                    )
+                    return
+                if subroute == "plugin-migration-rollback-operations":
+                    try:
+                        self._require_plugin_bridge(manager)
+                        operation_result = self._migration_service_for(manager).start_rollback(
+                            payload, actor="studio-admin", run_async=True
+                        )
+                    except (PluginStateError, MigrationError) as exc:
+                        self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+                        return
+                    except Exception:  # noqa: BLE001
+                        traceback.print_exc()
+                        self._json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {
+                                "ok": False,
+                                "code": "migration_internal_error",
+                                "message": "回滚操作创建失败，详情请查看管理服务终端日志。",
+                            },
+                        )
+                        return
+                    self._json(HTTPStatus.ACCEPTED, operation_result)
+                    return
+                if subroute.startswith("plugin-migration-operations/") and subroute.endswith("/resume"):
+                    operation_id = urllib.parse.unquote(
+                        subroute[len("plugin-migration-operations/") : -len("/resume")]
+                    ).strip("/")
+                    if not operation_id or "/" in operation_id:
+                        self._error(HTTPStatus.NOT_FOUND, "迁移操作不存在。")
+                        return
+                    force_manual = bool(payload.get("force_manual"))
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).resume_operation(
+                            operation_id, force_manual=force_manual
+                        )
+                    )
+                    return
+                if subroute == "plugin-control/calls":
+                    method = str(payload.get("method") or "").strip()
+                    if method not in FIXED_RPC_METHODS:
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {
+                                "ok": False,
+                                "code": "control_method_not_allowed",
+                                "message": "未登记的固定 RPC 方法，已拒绝。",
+                            },
+                        )
+                        return
+                    bridge_status = self._plugin_bridge_status(manager)
+                    if not bool(bridge_status.get("ready")):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "插件控制桥未就绪，固定 RPC 调用已按失败关闭。",
+                            },
+                        )
+                        return
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供固定 RPC 客户端，已按失败关闭。",
+                            },
+                        )
+                        return
+                    scope = payload.get("scope")
+                    body = payload.get("body")
+                    if body is None:
+                        body = {}
+                    if not isinstance(body, dict):
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {
+                                "ok": False,
+                                "code": "control_invalid_payload",
+                                "message": "body 必须是 JSON object。",
+                            },
+                        )
+                        return
+                    self._serve_control_result(lambda: caller(method, scope=scope, body=body))
+                    return
                 if subroute == "plugin-market/refresh":
                     refresher = getattr(manager, "refresh_plugin_market", None)
                     if not callable(refresher):

@@ -259,6 +259,8 @@ class DeployManager:
         )
         self._plugin_market_trusted_hosts = tuple(plugin_market_trusted_hosts or ())
         self._plugin_market_service: Any | None = None
+        self._plugin_migration_service: Any | None = None
+        self._plugin_control_bridge: Any | None = None
         self._lock = threading.RLock()
         self._jobs: dict[str, Job] = {}
         self._job_order: list[str] = []
@@ -2962,8 +2964,114 @@ class DeployManager:
                     lock=self._lock,
                     redact=self.redact_sensitive_text,
                     trusted_hosts=self._plugin_market_trusted_hosts,
+                    runtime_state=self._plugin_runtime_state_for_market,
                 )
             return self._plugin_market_service
+
+    def _plugin_runtime_state_for_market(self) -> dict[str, dict[str, Any]]:
+        """Best-effort runtime enabled/ready map for dependency validation.
+
+        Unknown/unavailable runtime state deliberately yields no entries, which
+        keeps required dependencies fail-closed instead of inventing readiness.
+        """
+
+        try:
+            result = self.get_plugins()
+        except Exception:  # noqa: BLE001 - unknown runtime state must block deps
+            return {}
+        if not isinstance(result, dict):
+            return {}
+        state: dict[str, dict[str, Any]] = {}
+        for record in result.get("plugins") or result.get("items") or []:
+            if not isinstance(record, dict):
+                continue
+            plugin_id = str(record.get("id") or record.get("plugin_id") or record.get("name") or "")
+            if not PLUGIN_ID_RE.fullmatch(plugin_id):
+                continue
+            enabled = record.get("enabled")
+            error = str(record.get("error") or "")
+            ready = bool(enabled) and not error
+            state[plugin_id] = {"enabled": bool(enabled), "ready": ready, "error": error}
+        return state
+
+    # ------------------------------------------------------------------
+    # S1/S2 migration owner state, transactions and scoped control bridge
+    # ------------------------------------------------------------------
+    @property
+    def plugin_migration_service(self):
+        """Lazily construct the instance-scoped crash-safe migration service."""
+
+        with self._lock:
+            if self._plugin_migration_service is None:
+                from .plugin_transactions import PluginMigrationService
+
+                self._plugin_migration_service = PluginMigrationService(
+                    self.data_dir,
+                    instance_id=self.instance_id or self.data_dir.name,
+                    lock=self._lock,
+                    redact=self.redact_sensitive_text,
+                )
+            return self._plugin_migration_service
+
+    @property
+    def plugin_control_bridge(self):
+        """Lazily construct the per-instance scoped control bridge.
+
+        The bridge is disabled unless ``QQBOT_PLUGIN_CONTROL_ENABLED`` is set.
+        It never opens a public port: the plugin-side server is container-local
+        at 127.0.0.1:6198 and the host reaches it through fixed ``docker exec``
+        transport.
+        """
+
+        with self._lock:
+            if self._plugin_control_bridge is None:
+                from .plugin_control import (
+                    ControlBridge,
+                    ControlSecretStore,
+                    DockerExecTransport,
+                    endpoint_from_env,
+                )
+
+                instance_id = self.instance_id or self.data_dir.name
+                secret_store = ControlSecretStore(self.data_dir)
+                endpoint = endpoint_from_env()
+
+                def transport_factory(_secret: bytes):
+                    return DockerExecTransport(
+                        self.astrbot_container,
+                        endpoint=endpoint,
+                    )
+
+                self._plugin_control_bridge = ControlBridge(
+                    instance_id,
+                    secret_store,
+                    actor_id="studio-admin",
+                    transport_factory=transport_factory,
+                )
+            return self._plugin_control_bridge
+
+    def plugin_control_status(self, *, probe: bool = False) -> dict[str, Any]:
+        try:
+            return self.plugin_control_bridge.status(probe=probe)
+        except Exception as exc:  # noqa: BLE001 - status must stay a safe card
+            return {
+                "ok": True,
+                "enabled": False,
+                "configured": False,
+                "ready": False,
+                "reachable": None,
+                "transport": "none",
+                "reason": exc.__class__.__name__,
+            }
+
+    def plugin_control_call(
+        self,
+        method: str,
+        *,
+        scope: Any = None,
+        body: Any = None,
+    ) -> dict[str, Any]:
+        return self.plugin_control_bridge.call(method, scope=scope, body=body)
 
     def get_plugin_market(self) -> dict[str, Any]:
         return self.plugin_market_service.market_status()
