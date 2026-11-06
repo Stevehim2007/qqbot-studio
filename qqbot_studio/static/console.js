@@ -2405,7 +2405,8 @@
     }
   }
 
-  function renderPluginMarketPanel(instance, panel, marketData, groupData) {
+  function renderPluginMarketPanel(instance, panel, marketData, groupData, options = {}) {
+    const marketOnly = options.marketOnly === true;
     panel.replaceChildren();
     panel.dataset.loaded = 'true';
     const status = makeElement('p', 'instance-v3-status plugin-market-status');
@@ -2427,7 +2428,7 @@
     groupTab.setAttribute('aria-selected', 'false');
     groupTab.setAttribute('aria-controls', `plugin-group-pane-${instance.id}`);
     tabBar.appendChild(marketTab);
-    tabBar.appendChild(groupTab);
+    if (!marketOnly) tabBar.appendChild(groupTab);
     panel.appendChild(tabBar);
     const marketPane = makeElement('div', 'plugin-market-pane');
     marketPane.id = `plugin-market-pane-${instance.id}`;
@@ -2439,9 +2440,11 @@
     const selectTab = (tab) => {
       const showGroups = tab === 'groups';
       marketTab.classList.toggle('is-active', !showGroups);
-      groupTab.classList.toggle('is-active', showGroups);
+      if (groupTab.isConnected) {
+        groupTab.classList.toggle('is-active', showGroups);
+        groupTab.setAttribute('aria-selected', showGroups ? 'true' : 'false');
+      }
       marketTab.setAttribute('aria-selected', showGroups ? 'false' : 'true');
-      groupTab.setAttribute('aria-selected', showGroups ? 'true' : 'false');
       marketPane.hidden = showGroups;
       groupPane.hidden = !showGroups;
     };
@@ -2712,10 +2715,10 @@
     }
     groupPane.appendChild(groupBlock);
     panel.appendChild(marketPane);
-    panel.appendChild(groupPane);
+    if (!marketOnly) panel.appendChild(groupPane);
   }
 
-  async function loadPluginMarketPanel(instance, panel) {
+  async function loadPluginMarketPanel(instance, panel, options = {}) {
     panel.dataset.loading = 'true';
     panel.dataset.loaded = '';
     panel.replaceChildren(makeElement('p', 'plugin-config-loading', '正在读取插件市场与分组…'));
@@ -2724,7 +2727,7 @@
         apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-market`),
         apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups`)
       ]);
-      renderPluginMarketPanel(instance, panel, asRecord(marketData), asRecord(groupData));
+      renderPluginMarketPanel(instance, panel, asRecord(marketData), asRecord(groupData), options);
     } catch (error) {
       panel.replaceChildren();
       const message = makeElement('p', 'plugin-error', formatError(error, '插件市场读取失败。'));
@@ -2791,6 +2794,30 @@
     row.appendChild(info);
     row.appendChild(control);
     return row;
+  }
+
+  function buildPluginMarketSection(instance) {
+    const section = makeElement('section', 'instance-v3-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-puzzle'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '插件市场'));
+    headingCopy.appendChild(makeElement('p', '', '安装、更新和删除独立插件；市场与插件分组分开显示。'));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+    const tools = makeElement('div', 'plugin-market-tools');
+    const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新市场');
+    refresh.type = 'button';
+    const panel = makeElement('div', 'plugin-market-panel');
+    panel.dataset.pluginMarket = 'panel';
+    refresh.addEventListener('click', () => void refreshPluginMarket(instance, panel));
+    tools.appendChild(refresh);
+    tools.appendChild(panel);
+    section.appendChild(tools);
+    void loadPluginMarketPanel(instance, panel, { marketOnly: true });
+    return section;
   }
 
   function buildPluginSection(instance) {
@@ -2891,6 +2918,7 @@
     const paneHost = makeElement('div', 'settings-panes');
     const categories = [
       { id: 'plugins', label: '插件管理', sections: [buildPluginSection(instance)] },
+      { id: 'market', label: '插件市场', sections: [buildPluginMarketSection(instance)] },
       {
         id: 'memory',
         label: '记忆',
