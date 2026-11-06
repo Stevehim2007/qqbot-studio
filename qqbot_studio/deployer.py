@@ -49,6 +49,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 QQ_ACCOUNT_RE = re.compile(r"^\d{5,12}$")
 PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
+REPLY_PLUGIN_ID = "qqbot_core_reply"
 SCHEMA_READ_ATTEMPTS = 3
 SCHEMA_READ_RETRY_DELAY_SECONDS = 0.05
 MAX_PROMPT_LENGTH = 12_000
@@ -326,7 +327,7 @@ class DeployManager:
                     tmp.unlink()
                 except OSError:
                     pass
-        if path.name == f"{ENHANCER_PLUGIN_ID}_config.json":
+        if path.name in {f"{ENHANCER_PLUGIN_ID}_config.json", f"{REPLY_PLUGIN_ID}_config.json"}:
             backup = path.with_name(path.name + ".bak")
             try:
                 DeployManager._write_private_json(backup, value)
@@ -1218,12 +1219,9 @@ class DeployManager:
 
     @classmethod
     def _merged_enhancer_config(cls, loaded: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Return schema defaults plus user values, preserving every user key."""
+        """Preserve user values; do not inject the retired 264-field schema."""
 
-        merged = cls._enhancer_schema_defaults()
-        if isinstance(loaded, dict):
-            merged.update(loaded)
-        # The schema default is authoritative only when the setting is absent.
+        merged = dict(loaded) if isinstance(loaded, dict) else {}
         merged.setdefault("memory_mode", DEFAULT_MEMORY_MODE)
         return merged
 
@@ -1233,7 +1231,7 @@ class DeployManager:
 
         config_dir = astrbot_data / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        target = config_dir / f"{ENHANCER_PLUGIN_ID}_config.json"
+        target = config_dir / f"{REPLY_PLUGIN_ID}_config.json"
         loaded = DeployManager._read_json_object(target)
         config = DeployManager._merged_enhancer_config(loaded)
         config["system_prompt"] = str(prompt or "")
@@ -1248,7 +1246,15 @@ class DeployManager:
 
     @property
     def enhancer_config_path(self) -> Path:
-        return self.astrbot_data_dir / "config" / f"{ENHANCER_PLUGIN_ID}_config.json"
+        reply_path = self.astrbot_data_dir / "config" / f"{REPLY_PLUGIN_ID}_config.json"
+        legacy_path = self.astrbot_data_dir / "config" / f"{ENHANCER_PLUGIN_ID}_config.json"
+        # Final deployments win as soon as the core plugin directory exists.
+        # Unmigrated test/fixture instances (no core plugin directory) keep
+        # reading legacy config until an explicit migration creates the owner.
+        core_plugin_dir = self.astrbot_data_dir / "plugins" / REPLY_PLUGIN_ID
+        if core_plugin_dir.is_dir():
+            return reply_path
+        return legacy_path
 
     @property
     def enhancer_config_backup_path(self) -> Path:
@@ -1367,7 +1373,7 @@ class DeployManager:
     def _migrate_enhancer_config_defaults(self) -> bool:
         """Create/fill enhancer config defaults without replacing user values."""
 
-        plugin_dir = self.astrbot_data_dir / "plugins" / ENHANCER_PLUGIN_ID
+        plugin_dir = self.astrbot_data_dir / "plugins" / REPLY_PLUGIN_ID
         config_path = self.enhancer_config_path
         if not plugin_dir.is_dir() and not config_path.exists():
             return False
@@ -1822,7 +1828,7 @@ class DeployManager:
                 client = self._memory_api_client(timeout=8)
                 if client is not None:
                     live_config = self._get_plugin_config_via_api(
-                        client, ENHANCER_PLUGIN_ID
+                        client, REPLY_PLUGIN_ID
                     )
                     if isinstance(live_config, dict):
                         # AstrBot's live config is authoritative while it is
@@ -1830,7 +1836,7 @@ class DeployManager:
                         merged = {**merged, **live_config}
                     merged["memory_mode"] = value
                     result = self._save_plugin_config_via_api(
-                        client, ENHANCER_PLUGIN_ID, merged
+                        client, REPLY_PLUGIN_ID, merged
                     )
                     applied_live = True
                     if isinstance(result, dict):
@@ -4326,7 +4332,7 @@ class DeployManager:
             try:
                 client = self._memory_api_client(timeout=6, wait_for_ready=False)
                 if client is not None:
-                    live = self._get_plugin_config_via_api(client, ENHANCER_PLUGIN_ID)
+                    live = self._get_plugin_config_via_api(client, REPLY_PLUGIN_ID)
                     if self._plugin_prompt_payload_matches(
                         live, profiles, active_id, active_prompt
                     ):
@@ -4338,7 +4344,7 @@ class DeployManager:
                         merged["prompt_profiles"] = serialized_profiles
                         merged["prompt_profile_active_id"] = active_id
                         merged["system_prompt"] = active_prompt
-                        self._save_plugin_config_via_api(client, ENHANCER_PLUGIN_ID, merged)
+                        self._save_plugin_config_via_api(client, REPLY_PLUGIN_ID, merged)
                         api_available = True
                     else:
                         raise RuntimeError("AstrBot 插件配置返回格式异常")
