@@ -21,8 +21,8 @@ sudo docker exec \
   -e HOST_GID="$HOST_GID" \
   "$CONTAINER" sh -lc '
     set -eu
-    find /AstrBot/data/config -maxdepth 1 -type f -name "qqbot_*_config.json" -print0 \
-      | while IFS= read -r -d "" file; do
+    find /AstrBot/data/config -maxdepth 1 -type f -name "qqbot_*_config.json" \
+      | while IFS= read -r file; do
           chown "$HOST_UID:$HOST_GID" "$file"
           chmod 600 "$file"
         done
