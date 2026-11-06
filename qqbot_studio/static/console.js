@@ -2649,6 +2649,56 @@
             if (ok) {
               const option = Array.from(select.options).find((item) => item.value === pluginId);
               if (option) option.remove();
+              if (!members.includes(pluginId)) members.push(pluginId);
+              let chips = card.querySelector('.plugin-group-members');
+              if (!chips) {
+                const empty = card.querySelector('.instance-v3-empty');
+                if (empty) empty.remove();
+                chips = makeElement('div', 'plugin-group-members');
+                card.insertBefore(chips, addRow);
+              }
+              const chip = makeElement('span', 'plugin-group-chip', pluginId);
+              const remove = makeElement('button', 'plugin-group-chip-remove', '×');
+              remove.type = 'button';
+              remove.title = `从分组移出 ${pluginId}`;
+              remove.addEventListener('click', async () => {
+                const removed = await applyPluginGroupActions(
+                  instance,
+                  [{ op: 'remove', group_id: groupId, plugin_id: pluginId }],
+                  panel,
+                  `确认把 ${pluginId} 移出分组“${group.name}”？不会删除插件文件。`
+                );
+                if (removed) {
+                  chip.remove();
+                  const index = members.indexOf(pluginId);
+                  if (index >= 0) members.splice(index, 1);
+                  pluginMarketSetStatus(panel, `已把 ${pluginId} 移出分组“${group.name}”。`, 'success');
+                }
+              });
+              chip.appendChild(remove);
+              chips.appendChild(chip);
+
+              // Update the already-rendered group card above without rebuilding settings.
+              const groupRecord = instance && instance.v3 && instance.v3.pluginGroups
+                ? (instance.v3.pluginGroups.groups || []).find((item) => textValue(item.id, '') === groupId)
+                : null;
+              if (groupRecord) {
+                groupRecord.plugin_ids = Array.isArray(groupRecord.plugin_ids) ? groupRecord.plugin_ids : [];
+                if (!groupRecord.plugin_ids.includes(pluginId)) groupRecord.plugin_ids.push(pluginId);
+              }
+              const section = panel.closest('.instance-v3-section');
+              const groupBody = section
+                ? Array.from(section.querySelectorAll('[data-plugin-group-body]')).find((item) => item.dataset.pluginGroupBody === groupId)
+                : null;
+              const pluginRecord = instance && instance.v3 && instance.v3.plugins
+                ? (instance.v3.plugins.items || []).find((item) => String(item.id) === String(pluginId))
+                : null;
+              if (groupBody && pluginRecord) {
+                const empty = groupBody.querySelector('.instance-v3-empty');
+                if (empty) empty.remove();
+                const groupStatus = section ? section.querySelector('[data-v3-status="plugins"]') : null;
+                groupBody.appendChild(buildPluginRow(instance, pluginRecord, groupStatus, 'ok'));
+              }
               pluginMarketSetStatus(panel, `已把 ${pluginId} 加入分组“${group.name}”。`, 'success');
             }
           });
@@ -2789,6 +2839,7 @@
         const memberIds = Array.isArray(group.plugin_ids) ? group.plugin_ids.map(String) : [];
         const groupPlugins = plugins.items.filter((plugin) => memberIds.includes(String(plugin.id)));
         const card = makeElement('div', 'plugin-group-view-card');
+        card.dataset.pluginGroupId = groupId;
         const toggle = makeElement('button', 'plugin-group-view-toggle');
         toggle.type = 'button';
         const title = makeElement('span', 'plugin-group-view-title');
@@ -2798,6 +2849,7 @@
         toggle.appendChild(title);
         toggle.appendChild(arrow);
         const body = makeElement('div', 'plugin-group-view-body');
+        body.dataset.pluginGroupBody = groupId;
         body.hidden = !expandedState[groupId];
         if (!groupPlugins.length) {
           body.appendChild(makeElement('p', 'instance-v3-empty', '该分组内暂无插件。'));
