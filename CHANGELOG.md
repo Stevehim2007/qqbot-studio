@@ -7,6 +7,18 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.0-beta.4 — 七插件最终模块化测试版
+
+- 插件仓库发布 v4.3.0-beta.4：七个自包含插件 ZIP、catalog/manifest v2、ABI v1 依赖与冲突声明。
+- `qqbot_safe_tools` 3.0.0：新增 registry/auth/confirmation/dispatcher/call_ledger/control_server/output_gate，marker 唯一解析、授权、确认、幂等与审计链完整。
+- `qqbot_stickers` 3.0.0：新增单写者 `sticker_service`（分类/资产/索引/逻辑删除/重建）与 canonical schema，修复读写锁重入死锁。
+- `qqbot_memory_commands` 4.0.0：新增 scope/authorization/backend/commands/provider/store，五 scope、会话与人格管理不依赖旧运行时。
+- `qqbot_food`、`qqbot_web_reader`、`qqbot_image_search`、`qqbot_core_reply`：ABI v1 provider、分页、安全抓取/搜索、Food 草稿确认和唯一回复管线。
+- 主项目新增 S0 盘点 `migrations/modular-v2-v3/`、owner epoch/迁移事务/固定 RPC 控制桥（S1/S2）。
+- 部署器不再复制 `qqbot_enhancer`：新实例只写 `qqbot_core_reply_config.json` 初始 system_prompt，并提示从插件市场安装七件套；`auto-update`、`post-update-test` 同步移除旧插件复制/编译。
+- 新增 `scripts/migrate_qqbot_plugins.py` 与 `plugin_final_migration.py`：dry-run/apply/retire，配置字节级备份，只移动旧代码目录，保留 config/data/会话/记忆。
+- 新增最终运行时门禁 `tests/test_no_legacy_runtime.py`：七插件集合、无旧包导入、部署脚本不复制旧插件、部署不产生旧插件目录。
+
 ## v4.3.0-beta.3 — 核心门禁测试修正
 
 - 旧主回复门禁改用 `ConfigReader.bool`，避免测试中 monkeypatch `_cfg_bool` 导致误关闭。

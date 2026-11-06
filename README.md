@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、SnowLuma（OneBot v11）、noVNC 扫码和 DeepSeek AI 聊天。
 
-当前主项目版本：**4.3.0-beta.3（测试版）**。本测试版基于正式版 `4.3.0`，目标是插件仓库、插件分组、插件安装/删除/更新和模块化拆分的测试。正式版请使用 `main` / `v4.3.0`。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**4.3.0-beta.4（测试版）**。本测试版基于正式版 `4.3.0`，目标是插件仓库、插件分组、插件安装/删除/更新和模块化拆分的测试。正式版请使用 `main` / `v4.3.0`。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > ⚠️ **测试版提示**：本分支基于正式版 4.3.0，目标是插件仓库与插件分组功能；不等同于正式版。生产实例请先备份。
 
@@ -273,9 +273,9 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 <a id="enhancer"></a>
 ### 2.2 QQ 增强插件：概率、识图、找图、表情包、唱歌、/option
 
-部署时会自动安装 `qqbot_enhancer`。插件完整说明见 [`docs/plugin-qqbot-enhancer.md`](docs/plugin-qqbot-enhancer.md)。
+最终模块化版本只保留七个独立插件：`qqbot_core_reply`（回复/人格/会话/点歌）、`qqbot_safe_tools`（唯一 marker/授权/确认/审计）、`qqbot_web_reader`、`qqbot_image_search`、`qqbot_food`、`qqbot_stickers`、`qqbot_memory_commands`。部署过程**不再**复制 `qqbot_enhancer` 或 `qqbot_core_full`；请在控制台的插件市场按依赖顺序安装这七个包。
 
-> 目录里只有一个自定义插件目录 `plugins/qqbot_enhancer/`，@必回、概率回复、识图/找图、自然语言找图、表情包、唱歌、`/option` 都在这个插件的 `main.py` 中实现，不是多个独立插件目录。部署后它会被复制到每个实例的 AstrBot 插件目录；如果实例是旧版创建的，需要更新/复制一次插件文件并重启 AstrBot。
+> 旧实例仍保留 `qqbot_enhancer` 配置、`plugin_data`、会话与记忆，升级时通过迁移脚本复制配置并停用旧代码，不删除任何实例数据。新实例的回复职责只由 `qqbot_core_reply` 承担。
 
 | 功能 | 行为/命令 | 关键配置 |
 |---|---|---|
@@ -296,7 +296,7 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 配置入口（推荐）：
 
 ```text
-QQ Bot Studio 控制台 → 实例 → 插件、记忆与资源 → QQ Bot 增强回复 → 编辑参数
+QQ Bot Studio 控制台 → 实例 → 插件、记忆与资源 → 选择对应插件（如 QQ 核心回复 / 表情 / 美食）→ 编辑参数
 ```
 
 在参数面板里搜索 `reply_probability`，修改数字或拖动滑杆后保存。AstrBot 在线时会尽量热重载；提示需要重启时，重启该实例的 AstrBot 容器后生效。
@@ -319,7 +319,7 @@ AstrBot WebUI → 插件 → QQ Bot 增强回复 → 配置
 本地点歌不放任何带版权的歌曲。把自己的授权音频放进实例的插件目录（不要使用 `../` 路径）：
 
 ```bash
-SONGS="$HOME/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugins/qqbot_enhancer/songs"
+SONGS="$HOME/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugins/qqbot_core_reply/songs"
 mkdir -p "$SONGS"
 cp "/你的授权音频.wav" "$SONGS/"
 ```

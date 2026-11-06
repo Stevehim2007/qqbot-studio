@@ -708,7 +708,7 @@ class DeployManager:
             }
         )
         self.store.save_config(config)
-        self._install_bundled_plugin(Path(artifacts["astrbot_data"]), prompt, add_log)
+        self._seed_final_reply_config(Path(artifacts["astrbot_data"]), prompt, add_log)
         _, unique_default_error = self._ensure_unique_session_default()
         if unique_default_error:
             add_log("警告：" + unique_default_error)
@@ -1091,25 +1091,27 @@ class DeployManager:
         return "未知系统"
 
     @staticmethod
-    def _install_bundled_plugin(
+    def _seed_final_reply_config(
         astrbot_data: Path,
         prompt: str,
         log: Callable[[str], None],
     ) -> None:
-        """Copy the bundled QQ enhancer and seed its persona prompt."""
+        """Seed the final reply owner config without installing retired plugins.
 
-        source = Path(__file__).resolve().parent.parent / "plugins" / "qqbot_enhancer"
-        if not source.is_dir():
-            log("未找到内置 QQ 增强插件目录，跳过插件安装。")
-            return
-        target = astrbot_data / "plugins" / "qqbot_enhancer"
+        The seven-plugin release owns reply/marker/business logic.  A fresh
+        deployment must never copy ``qqbot_enhancer`` or ``qqbot_core_full``
+        into the AstrBot plugin load directory; the operator installs the seven
+        packages from the plugin market (dependency-ordered, confirmed).
+        """
+
+        target = astrbot_data / "config" / "qqbot_core_reply_config.json"
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, target, dirs_exist_ok=True)
-            DeployManager._write_enhancer_config(astrbot_data, prompt)
-            log("已安装 QQ 增强插件：@必回 / 概率回复 / 图片理解 / 表情包。")
+            existing = DeployManager._read_json_object(target) or {}
+            existing["system_prompt"] = str(prompt or "")
+            DeployManager._write_private_json(target, existing)
         except OSError as exc:
-            log(f"安装 QQ 增强插件失败：{exc}")
+            log(f"写入核心回复初始配置失败：{exc}")
+        log("未安装 qqbot_enhancer/qqbot_core_full；请在插件市场安装七个 qqbot_* 插件。")
 
     @staticmethod
     def _enhancer_schema_defaults() -> dict[str, Any]:

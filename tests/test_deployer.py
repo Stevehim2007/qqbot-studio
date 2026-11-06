@@ -327,13 +327,15 @@ class DeployerTests(unittest.TestCase):
         self.assertNotIn("sk-test-secret", json.dumps(job, ensure_ascii=False))
         parsed_astrbot = json.loads(raw_astrbot)
         self.assertIs(parsed_astrbot["platform_settings"]["unique_session"], False)
-        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
-        self.assertTrue((plugin_dir / "main.py").exists())
-        enhancer_config = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        self.assertFalse(
+            (Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer").exists()
+        )
+        reply_config = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_core_reply_config.json"
         self.assertEqual(
-            json.loads(enhancer_config.read_text(encoding="utf-8"))["system_prompt"],
+            json.loads(reply_config.read_text(encoding="utf-8"))["system_prompt"],
             "你是测试 QQ 机器人。",
         )
+        self.assertTrue(any("插件市场" in line for line in job["logs"]))
 
         qq_config_dir = Path(self.tmp.name) / "data" / "snowluma" / "config"
         (qq_config_dir / "onebot_12345678.json").write_text("{}", encoding="utf-8")
