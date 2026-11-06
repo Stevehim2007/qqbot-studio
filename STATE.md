@@ -37,9 +37,17 @@
 - 修复迁移控制桥 request_id/nonce 用 token_urlsafe 可能以 `-`/`_` 开头导致 `_ID_RE` 偶发拒绝的问题，改为 token_hex。
 - 迁移脚本：`python3 scripts/migrate_qqbot_plugins.py --instance <instance>`（dry-run）。
 
+## QA (2026-11-06, bot-4 qa-core)
+
+- 已通过 SSH 密钥部署 v4.3.0-beta.4 七插件到 bot-4 并重启 AstrBot 4.29.3；启动无错误，插件目录只剩七包。
+- 容器内七个插件单测共 1172 项全绿；stickers 旧数据 65 分类/71 张全部保留（修复 bootstrap 分类上限崩溃）。
+- 配置迁移 dry-run/apply 在 bot-4 实测通过，旧文件已备份；9 个无目标旧键显式列出。
+- 真实网络冒烟通过：Food API 标签/餐厅、网页读取（含 SSRF 拒绝）、图片搜索 15 候选。
+- 详见 `docs/qa-report-final-modular.md`。bot-1 未改动。
+
 ## Known failures / limits
 
-- 本机没有服务器 SSH 凭据（id_ed25519 被 192.144.206.201 拒绝），QA bot-4 的实机部署与 E2E 尚未执行。
+- bot-4 无 QQ 适配器（未启动 SnowLuma，避免与生产账号冲突），QQ 消息级 E2E 未覆盖。
 - v4.3.0-beta.4 的 GitHub Release 尚未创建（无 API token），市场下载 URL 暂不可用；QA 可用本地 artifacts ZIP 解压安装。
 - `migrations/modular-v2-v3/field-map.json` 的 261 个 blocked 是相对基线插件 schema 的快照；最终 schema 已覆盖大部分字段，退出前需按最终插件重新生成一次盘点。
 - 真实 265 字段 dry-run：20 个 image_search 字段已映射到新 canonical 键；9 个旧字段在最终 schema 无对应项，脚本会列入 `unmapped_source_keys` 而不是静默丢弃：`conversation_auto_create_enabled`、`ambient_group_reply_probability`、`ai_unified_tool_protocol_enabled`、`safe_tools_max_categories`、`web_auto_fetch_{enabled,max_urls,max_chars,timeout_seconds,question_only}`。其中 web 自动抓取未列入 v2/v3 契约，属最终架构主动不保留项。
