@@ -11,3 +11,5 @@
 禁止跳过框架直接堆兼容包、复制旧插件或先上生产再补设计。
 
 详细流程见 `docs/FRAMEWORK_FIRST.md`，skill 见 `skills/framework-first/SKILL.md`。
+
+成本与上下文规则见 `skills/token-budget/SKILL.md`。默认只允许一个执行 session、一个写入 worktree，使用 `STATE.md` 做 handoff。
