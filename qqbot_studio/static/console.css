@@ -1939,3 +1939,17 @@ body.console-modal-open { overflow: hidden; }
     grid-template-columns: 1fr;
   }
 }
+
+/* Keep long memory dry-run output readable and scrollable. */
+.memory-content-preview,
+.memory-content-reflect .memory-content-preview-box {
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  padding-right: 4px;
+}
+.memory-content-preview p {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

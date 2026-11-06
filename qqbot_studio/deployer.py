@@ -3385,6 +3385,31 @@ class DeployManager:
         except OSError as exc:
             return "", f"无法保存损坏配置快照：{exc}"
 
+    def _repair_plugin_config_permissions(self, path: Path) -> None:
+        """Best-effort chown for configs created by the root AstrBot container."""
+
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        if os.access(path, os.R_OK | os.W_OK):
+            return
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        if not name or not callable(runner) or path.name in {"", ".", ".."}:
+            return
+        available, _reason = self._astrbot_container_available()
+        if not available:
+            return
+        uid = os.getuid()
+        gid = os.getgid()
+        container_path = f"/AstrBot/data/config/{path.name}"
+        try:
+            runner(name, ["chown", f"{uid}:{gid}", container_path], timeout=10)
+            runner(name, ["chmod", "600", container_path], timeout=10)
+        except Exception:
+            return
+
     def _read_local_plugin_config_with_recovery(
         self,
         plugin_id: str,
@@ -3397,6 +3422,7 @@ class DeployManager:
         """
 
         path = self._plugin_config_path(plugin_id)
+        self._repair_plugin_config_permissions(path)
         if not path.exists():
             return {}, "", False, False, "none", "", ""
         raw, read_error = self._read_json_object_with_error(path)
@@ -3872,21 +3898,23 @@ class DeployManager:
                             schema_source=schema_source,
                             schema_path=schema_path,
                         )
-                    write_whitelist = self.set_group_whitelist({
-                        "enabled": enabled_value,
-                        "group_ids": group_ids,
-                    })
-                    if not write_whitelist.get("ok"):
-                        return self._plugin_config_failure(
-                            requested_id,
-                            "群组白名单保存失败。",
-                            detail=str(write_whitelist.get("error") or ""),
-                            schema=public_schema,
-                            config_path=config_path,
-                            schema_source=schema_source,
-                            schema_path=schema_path,
-                        )
-                    whitelist_changed = True
+                    current_ids = [str(item).strip() for item in (current_whitelist.get("group_ids") or [])]
+                    if enabled_value != bool(current_whitelist.get("enabled")) or group_ids != current_ids:
+                        write_whitelist = self.set_group_whitelist({
+                            "enabled": enabled_value,
+                            "group_ids": group_ids,
+                        })
+                        if not write_whitelist.get("ok"):
+                            return self._plugin_config_failure(
+                                requested_id,
+                                "群组白名单保存失败。",
+                                detail=str(write_whitelist.get("error") or ""),
+                                schema=public_schema,
+                                config_path=config_path,
+                                schema_source=schema_source,
+                                schema_path=schema_path,
+                            )
+                        whitelist_changed = True
 
                 (
                     local_config,
