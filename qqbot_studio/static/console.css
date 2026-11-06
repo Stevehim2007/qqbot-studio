@@ -1881,3 +1881,61 @@ body.console-modal-open { overflow: hidden; }
     white-space: nowrap;
   }
 }
+
+/* Settings sizing and collapsible plugin groups. */
+.instance-settings-modal {
+  width: min(1290px, calc(100vw - 24px));
+}
+.settings-shell {
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 18px;
+}
+.settings-nav {
+  padding: 5px;
+}
+.settings-nav-item {
+  padding: 8px 8px;
+  font-size: 12px;
+}
+.plugin-group-view-card {
+  display: grid;
+  gap: 0;
+  padding: 0;
+}
+.plugin-group-view-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text, #202532);
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.plugin-group-view-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.plugin-group-view-arrow {
+  color: var(--muted, #687083);
+  font-size: 14px;
+}
+.plugin-group-view-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+.plugin-group-view-body[hidden] {
+  display: none;
+}
+@media (max-width: 720px) {
+  .settings-shell {
+    grid-template-columns: 1fr;
+  }
+}

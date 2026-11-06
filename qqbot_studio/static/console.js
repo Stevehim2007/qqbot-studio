@@ -50,6 +50,7 @@
     lastSyncedAt: 0,
     pollTimer: null,
     pluginGroupView: {},
+    pluginGroupExpanded: {},
     settingsTab: 'plugins',
     updateBusy: false,
     updateChecked: false,
@@ -2699,6 +2700,49 @@
     }
   }
 
+  function buildPluginRow(instance, plugin, statusElement, pluginStatus) {
+    const row = makeElement('div', 'plugin-item');
+    const info = makeElement('div', 'plugin-info');
+    const titleLine = makeElement('div', 'plugin-title-line');
+    titleLine.appendChild(makeElement('strong', 'plugin-name', plugin.name));
+    const sourceLabel = pluginSourceLabel(plugin.source);
+    if (sourceLabel) titleLine.appendChild(makeElement('span', 'plugin-source-badge', sourceLabel));
+    if (plugin.version) titleLine.appendChild(makeElement('span', 'plugin-version', `v${plugin.version}`));
+    info.appendChild(titleLine);
+    if (plugin.description) info.appendChild(makeElement('p', 'plugin-description', plugin.description));
+    if (plugin.error) info.appendChild(makeElement('p', 'plugin-error', plugin.error));
+
+    const control = makeElement('div', 'plugin-control');
+    const canEditConfig = Boolean(plugin.id) && plugin.configAvailable !== false;
+    if (canEditConfig) {
+      const editButton = makeElement('button', 'plugin-edit-button', '编辑参数');
+      editButton.setAttribute('type', 'button');
+      editButton.setAttribute('aria-label', `编辑插件 ${plugin.name} 的参数`);
+      editButton.addEventListener('click', () => void openPluginConfigPanel(instance, plugin, editButton));
+      control.appendChild(editButton);
+    }
+    const stateText = makeElement('span', 'plugin-state-text', pluginStateText(plugin.enabled));
+    const switchLabel = makeElement('label', 'plugin-switch');
+    const checkbox = document.createElement('input');
+    checkbox.setAttribute('type', 'checkbox');
+    checkbox.className = 'plugin-switch-input';
+    checkbox.checked = plugin.enabled === true;
+    checkbox.disabled = pluginStatus !== 'ok' || !plugin.id || plugin.enabled === undefined;
+    checkbox.setAttribute('role', 'switch');
+    checkbox.setAttribute('aria-label', `启用插件 ${plugin.name}`);
+    const track = makeElement('span', 'plugin-switch-track');
+    switchLabel.appendChild(checkbox);
+    switchLabel.appendChild(track);
+    checkbox.addEventListener('change', () => {
+      void handlePluginToggle(instance, plugin, checkbox, row, stateText, statusElement);
+    });
+    control.appendChild(stateText);
+    control.appendChild(switchLabel);
+    row.appendChild(info);
+    row.appendChild(control);
+    return row;
+  }
+
   function buildPluginSection(instance) {
     const plugins = (instance.v3 && instance.v3.plugins) || emptyPluginState();
     const section = makeElement('section', 'instance-v3-section');
@@ -2728,49 +2772,49 @@
 
     const groupState = instance && instance.v3 ? instance.v3.pluginGroups : null;
     const groups = groupState && Array.isArray(groupState.groups) ? groupState.groups : [];
-    const activeGroupId = state.pluginGroupView[instance.id] || '';
-    const activeGroup = groups.find((group) => textValue(group.id, '') === activeGroupId) || null;
-    if (activeGroupId && !activeGroup) delete state.pluginGroupView[instance.id];
     const groupedPluginIds = new Set();
     for (const group of groups) {
       for (const pluginId of Array.isArray(group.plugin_ids) ? group.plugin_ids : []) groupedPluginIds.add(String(pluginId));
     }
-    const visiblePlugins = activeGroup
-      ? plugins.items.filter((plugin) => (activeGroup.plugin_ids || []).map(String).includes(String(plugin.id)))
-      : plugins.items.filter((plugin) => !groupedPluginIds.has(String(plugin.id)));
-    if (activeGroup) {
-      const groupBar = makeElement('div', 'plugin-group-view-bar');
-      const back = makeElement('button', 'btn btn-quiet btn-small', '← 返回插件分组');
-      back.type = 'button';
-      back.addEventListener('click', () => {
-        delete state.pluginGroupView[instance.id];
-        instanceSettings.refresh();
-      });
-      groupBar.appendChild(back);
-      groupBar.appendChild(makeElement('strong', '', textValue(activeGroup.name, '未命名分组')));
-      groupBar.appendChild(makeElement('span', 'plugin-group-view-count', `${visiblePlugins.length} 个插件`));
-      section.appendChild(groupBar);
-    } else if (groups.length) {
+    const visiblePlugins = plugins.items.filter((plugin) => !groupedPluginIds.has(String(plugin.id)));
+    if (groups.length) {
       const groupHead = makeElement('div', 'plugin-group-view-head');
       groupHead.appendChild(makeElement('h5', '', '插件分组'));
-      groupHead.appendChild(makeElement('span', 'plugin-market-source', '进入分组后编辑组内插件；组外插件图标会隐藏。'));
+      groupHead.appendChild(makeElement('span', 'plugin-market-source', '分组默认折叠；展开后可编辑组内插件。'));
       section.appendChild(groupHead);
       const groupCards = makeElement('div', 'plugin-group-view-list');
+      const expandedState = state.pluginGroupExpanded[instance.id] || {};
       for (const group of groups) {
         const groupId = textValue(group.id, '');
-        const memberCount = Array.isArray(group.plugin_ids) ? group.plugin_ids.length : 0;
+        const memberIds = Array.isArray(group.plugin_ids) ? group.plugin_ids.map(String) : [];
+        const groupPlugins = plugins.items.filter((plugin) => memberIds.includes(String(plugin.id)));
         const card = makeElement('div', 'plugin-group-view-card');
-        const label = makeElement('div', 'plugin-group-view-copy');
-        label.appendChild(makeElement('strong', '', textValue(group.name, '未命名分组')));
-        label.appendChild(makeElement('span', 'plugin-market-source', `${memberCount} 个插件`));
-        const enter = makeElement('button', 'btn btn-secondary btn-small', '进入分组');
-        enter.type = 'button';
-        enter.addEventListener('click', () => {
-          state.pluginGroupView[instance.id] = groupId;
-          instanceSettings.refresh();
+        const toggle = makeElement('button', 'plugin-group-view-toggle');
+        toggle.type = 'button';
+        const title = makeElement('span', 'plugin-group-view-title');
+        title.appendChild(makeElement('strong', '', textValue(group.name, '未命名分组')));
+        title.appendChild(makeElement('span', 'plugin-market-source', `${groupPlugins.length} 个插件`));
+        const arrow = makeElement('span', 'plugin-group-view-arrow', expandedState[groupId] ? '▾' : '▸');
+        toggle.appendChild(title);
+        toggle.appendChild(arrow);
+        const body = makeElement('div', 'plugin-group-view-body');
+        body.hidden = !expandedState[groupId];
+        if (!groupPlugins.length) {
+          body.appendChild(makeElement('p', 'instance-v3-empty', '该分组内暂无插件。'));
+        } else {
+          for (const plugin of groupPlugins) body.appendChild(buildPluginRow(instance, plugin, statusElement, plugins.status));
+        }
+        toggle.setAttribute('aria-expanded', expandedState[groupId] ? 'true' : 'false');
+        toggle.addEventListener('click', () => {
+          const next = body.hidden;
+          body.hidden = !next;
+          expandedState[groupId] = next;
+          state.pluginGroupExpanded[instance.id] = expandedState;
+          toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+          arrow.textContent = next ? '▾' : '▸';
         });
-        card.appendChild(label);
-        card.appendChild(enter);
+        card.appendChild(toggle);
+        card.appendChild(body);
         groupCards.appendChild(card);
       }
       section.appendChild(groupCards);
@@ -2805,51 +2849,10 @@
 
     if (visiblePlugins.length > 0) {
       const list = makeElement('div', 'plugin-list');
-      for (const plugin of visiblePlugins) {
-        const row = makeElement('div', 'plugin-item');
-        const info = makeElement('div', 'plugin-info');
-        const titleLine = makeElement('div', 'plugin-title-line');
-        titleLine.appendChild(makeElement('strong', 'plugin-name', plugin.name));
-        const sourceLabel = pluginSourceLabel(plugin.source);
-        if (sourceLabel) titleLine.appendChild(makeElement('span', 'plugin-source-badge', sourceLabel));
-        if (plugin.version) titleLine.appendChild(makeElement('span', 'plugin-version', `v${plugin.version}`));
-        info.appendChild(titleLine);
-        if (plugin.description) info.appendChild(makeElement('p', 'plugin-description', plugin.description));
-        if (plugin.error) info.appendChild(makeElement('p', 'plugin-error', plugin.error));
-
-        const control = makeElement('div', 'plugin-control');
-        const canEditConfig = Boolean(plugin.id) && plugin.configAvailable !== false;
-        if (canEditConfig) {
-          const editButton = makeElement('button', 'plugin-edit-button', '编辑参数');
-          editButton.setAttribute('type', 'button');
-          editButton.setAttribute('aria-label', `编辑插件 ${plugin.name} 的参数`);
-          editButton.addEventListener('click', () => void openPluginConfigPanel(instance, plugin, editButton));
-          control.appendChild(editButton);
-        }
-        const stateText = makeElement('span', 'plugin-state-text', pluginStateText(plugin.enabled));
-        const switchLabel = makeElement('label', 'plugin-switch');
-        const checkbox = document.createElement('input');
-        checkbox.setAttribute('type', 'checkbox');
-        checkbox.className = 'plugin-switch-input';
-        checkbox.checked = plugin.enabled === true;
-        checkbox.disabled = plugins.status !== 'ok' || !plugin.id || plugin.enabled === undefined;
-        checkbox.setAttribute('role', 'switch');
-        checkbox.setAttribute('aria-label', `启用插件 ${plugin.name}`);
-        const track = makeElement('span', 'plugin-switch-track');
-        switchLabel.appendChild(checkbox);
-        switchLabel.appendChild(track);
-        checkbox.addEventListener('change', () => {
-          void handlePluginToggle(instance, plugin, checkbox, row, stateText, statusElement);
-        });
-        control.appendChild(stateText);
-        control.appendChild(switchLabel);
-        row.appendChild(info);
-        row.appendChild(control);
-        list.appendChild(row);
-      }
+      for (const plugin of visiblePlugins) list.appendChild(buildPluginRow(instance, plugin, statusElement, plugins.status));
       section.appendChild(list);
     } else if (plugins.status === 'ok') {
-      section.appendChild(makeElement('p', 'instance-v3-empty', activeGroup ? '该分组内暂无插件。' : '未发现未分组插件。'));
+      section.appendChild(makeElement('p', 'instance-v3-empty', '未发现未分组插件。'));
     }
     section.appendChild(statusElement);
     return section;
