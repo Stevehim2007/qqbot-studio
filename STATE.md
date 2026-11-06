@@ -48,7 +48,7 @@
 ## Known failures / limits
 
 - bot-4 无 QQ 适配器（未启动 SnowLuma，避免与生产账号冲突），QQ 消息级 E2E 未覆盖。
-- v4.3.0-beta.4 的 GitHub Release 尚未创建（无 API token），市场下载 URL 暂不可用；QA 可用本地 artifacts ZIP 解压安装。
+- v4.3.0-beta.4 的 GitHub Release 已通过 tag+Actions 发布，7 个 ZIP 均可下载且 SHA 与 catalog 一致（服务器端 7/7 HTTP 200）。
 - `migrations/modular-v2-v3/field-map.json` 的 261 个 blocked 是相对基线插件 schema 的快照；最终 schema 已覆盖大部分字段，退出前需按最终插件重新生成一次盘点。
 - 真实 265 字段 dry-run：20 个 image_search 字段已映射到新 canonical 键；9 个旧字段在最终 schema 无对应项，脚本会列入 `unmapped_source_keys` 而不是静默丢弃：`conversation_auto_create_enabled`、`ambient_group_reply_probability`、`ai_unified_tool_protocol_enabled`、`safe_tools_max_categories`、`web_auto_fetch_{enabled,max_urls,max_chars,timeout_seconds,question_only}`。其中 web 自动抓取未列入 v2/v3 契约，属最终架构主动不保留项。
 - 旧实例（bot-1）仍保留 enhancer 代码与配置，属过渡状态；最终切换需在 QA 验收后单独执行。
@@ -61,6 +61,6 @@
 
 ## Next step
 
-1. 用 GitHub token 创建 `v4.3.0-beta.4` Release 并上传 `artifacts/*.zip`（catalog/manifest 的 SHA 已固定），市场下载才会可用。
+1. Release `v4.3.0-beta.4` 已发布（含 7 个 ZIP）；如后续发新测试版，打 `v*` tag 会自动构建并发布。
 2. 如需要 QQ 消息级 E2E：在隔离测试 QQ 账号下为 bot-4 启用 SnowLuma，跑真实群/私聊回环。
 3. 生产 bot-1 切换：QA 通过后按 S8 清单执行可回滚迁移（当前未做）。
