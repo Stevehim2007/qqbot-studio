@@ -1588,7 +1588,30 @@
     head.appendChild(toggle);
     section.appendChild(head);
     const body = makeElement('div', 'plugin-config-group-fields');
-    for (const entry of entries) body.appendChild(entry.element);
+    const subgroups = new Map();
+    for (const entry of entries) {
+      const subgroup = textValue(entry.uiSubgroup, '').trim();
+      if (!subgroup) continue;
+      if (!subgroups.has(subgroup)) subgroups.set(subgroup, []);
+      subgroups.get(subgroup).push(entry);
+    }
+    if (subgroups.size) {
+      const placed = new Set();
+      for (const [title, items] of subgroups) {
+        const block = makeElement('div', 'plugin-config-subgroup');
+        block.appendChild(makeElement('h5', 'plugin-config-subgroup-title', title));
+        for (const entry of items) {
+          block.appendChild(entry.element);
+          placed.add(entry);
+        }
+        body.appendChild(block);
+      }
+      for (const entry of entries) {
+        if (!placed.has(entry)) body.appendChild(entry.element);
+      }
+    } else {
+      for (const entry of entries) body.appendChild(entry.element);
+    }
     section.appendChild(body);
     const expanded = pluginSectionExpanded(group, pluginConfigUiState());
     section.dataset.collapsed = expanded ? 'false' : 'true';

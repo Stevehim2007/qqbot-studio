@@ -127,6 +127,7 @@
         options,
         slider,
         uiGroup: sanitisePluginText(def.ui_group || def.uiGroup || def.group || def.category),
+        uiSubgroup: sanitisePluginText(def.ui_subgroup || def.uiSubgroup || def.subgroup),
         sensitive: false
       };
     }).filter(Boolean);

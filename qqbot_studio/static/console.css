@@ -1953,3 +1953,21 @@ body.console-modal-open { overflow: hidden; }
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+
+/* Nested plugin-config subgroups inside one navigation group. */
+.plugin-config-subgroup {
+  display: grid;
+  gap: 8px;
+  padding: 2px 0 8px;
+}
+.plugin-config-subgroup + .plugin-config-subgroup {
+  border-top: 1px dashed var(--line, #d9dce3);
+  padding-top: 10px;
+}
+.plugin-config-subgroup-title {
+  margin: 0;
+  color: var(--text, #202532);
+  font-size: 12px;
+  font-weight: 700;
+}
