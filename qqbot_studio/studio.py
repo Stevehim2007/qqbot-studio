@@ -677,6 +677,7 @@ class StudioManager:
             docker=docker,
             public_host=self.public_host(),
             bind_address=str(settings.get("bind_host") or DEFAULT_BIND_HOST),
+            instance_id=instance_id,
             project_name=str(meta["project_name"]),
             astrbot_container=str(meta["astrbot_container"]),
             snowluma_container=str(meta["snowluma_container"]),

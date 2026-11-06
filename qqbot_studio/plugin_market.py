@@ -63,6 +63,9 @@ SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 RESERVED_PLUGIN_IDS = frozenset({"qqbot_enhancer"})
 MARKET_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_V1_MAX_SCHEMA_VERSION = 1
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = frozenset({1, 2})
 GROUP_SCHEMA_VERSION = 1
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
@@ -152,6 +155,43 @@ class PluginNotFoundError(PluginMarketError):
 class PluginStateError(PluginMarketError):
     http_status = 503
     code = "plugin_state_unavailable"
+
+
+class PluginDependencyError(PluginMarketError):
+    """A required dependency is missing/disabled/not ready/incompatible."""
+
+    http_status = 409
+    code = "dependency_unavailable"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        graph: Mapping[str, Any] | None = None,
+        detail: str = "",
+    ) -> None:
+        super().__init__(message, detail=detail)
+        self.graph = dict(graph or {})
+
+    def to_public_dict(self) -> dict[str, Any]:
+        payload = super().to_public_dict()
+        if self.graph:
+            payload["dependency_graph"] = {
+                key: self.graph.get(key)
+                for key in (
+                    "plugin_id",
+                    "status",
+                    "missing_required",
+                    "missing_optional",
+                    "disabled_required",
+                    "not_ready_required",
+                    "incompatible",
+                    "cycles",
+                    "conflicting_installed",
+                    "install_plan",
+                )
+            }
+        return payload
 
 
 class GroupError(PluginMarketError):
@@ -474,6 +514,628 @@ def _normalise_string_list(value: Any, field: str, *, max_items: int = 100) -> l
     return result
 
 
+_CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
+
+
+def _normalise_schema_version(value: Any, *, max_schema_version: int = MANIFEST_SCHEMA_VERSION) -> int:
+    if value is None or value == "":
+        version = 1
+    elif isinstance(value, bool) or not isinstance(value, int):
+        raise ManifestError("manifest 的 schema_version 必须是正整数。")
+    else:
+        version = int(value)
+    if version < 1:
+        raise ManifestError("manifest 的 schema_version 必须是正整数。")
+    if version > int(max_schema_version):
+        raise ManifestError(
+            "manifest schema_version 高于当前客户端支持的版本，已拒绝而不是忽略新增字段。"
+        )
+    if version not in SUPPORTED_MANIFEST_SCHEMA_VERSIONS:
+        raise ManifestError("manifest schema_version 不受支持，已拒绝。")
+    return version
+
+
+def _normalise_abi_version(value: Any, field: str = "abi_version") -> int | str:
+    if isinstance(value, bool) or value is None or value == "":
+        raise ManifestError(f"manifest 的 {field} 必须提供。")
+    if isinstance(value, int):
+        if value < 1:
+            raise ManifestError(f"manifest 的 {field} 必须是正整数。")
+        return value
+    text = _normalise_text(value, field, max_len=64, required=True)
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}", text):
+        raise ManifestError(f"manifest 的 {field} 格式不合法。")
+    return text
+
+
+def _normalise_capability(value: Any, field: str = "capability") -> str:
+    text = _normalise_text(value, field, max_len=128, required=True)
+    if not _CAPABILITY_RE.fullmatch(text):
+        raise ManifestError(f"manifest 的 {field} 格式不合法。")
+    return text
+
+
+def _normalise_provides(value: Any) -> tuple[dict[str, Any], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ManifestError("manifest 的 provides 必须是数组。")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ManifestError("manifest 的 provides 条目必须是 JSON object。")
+        capability = _normalise_capability(item.get("capability"))
+        if capability in seen:
+            raise ManifestError("manifest 的 provides 包含重复 capability。")
+        seen.add(capability)
+        abi_version = _normalise_abi_version(item.get("abi_version"), "provides.abi_version")
+        result.append({"capability": capability, "abi_version": abi_version})
+    if len(result) > 100:
+        raise ManifestError("manifest 的 provides 条目过多。")
+    return tuple(result)
+
+
+def _normalise_version_range(value: Any) -> str:
+    text = str(value or "*").strip()
+    if not text:
+        return "*"
+    if len(text) > 120 or CONTROL_RE.search(text):
+        raise ManifestError("manifest 的 version_range 不合法。")
+    if not re.fullmatch(r"[<>=!~^0-9A-Za-z.*+_| ,-]+", text):
+        raise ManifestError("manifest 的 version_range 只支持固定比较表达式。")
+    return text
+
+
+def _normalise_requires(value: Any, *, schema_version: int) -> tuple[dict[str, Any], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ManifestError("manifest 的 requires 必须是数组。")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            item = {"plugin_id": item}
+        if not isinstance(item, Mapping):
+            raise ManifestError("manifest 的 requires 条目必须是对象或插件 ID。")
+        plugin_id = _normalise_plugin_id(item.get("plugin_id") or item.get("id"))
+        if plugin_id in seen:
+            raise ManifestError("manifest 的 requires 包含重复 plugin_id。")
+        seen.add(plugin_id)
+        version_range = _normalise_version_range(item.get("version_range") or item.get("version"))
+        capability = ""
+        if item.get("capability") not in {None, ""}:
+            capability = _normalise_capability(item.get("capability"))
+        abi_version = None
+        if item.get("abi_version") not in {None, ""}:
+            abi_version = _normalise_abi_version(item.get("abi_version"), "requires.abi_version")
+        optional = item.get("optional", False)
+        if not isinstance(optional, bool):
+            raise ManifestError("manifest 的 requires.optional 必须是布尔值。")
+        if capability and abi_version is None:
+            raise ManifestError("声明 requires.capability 时必须同时声明 abi_version。")
+        result.append(
+            {
+                "plugin_id": plugin_id,
+                "version_range": version_range,
+                "capability": capability,
+                "abi_version": abi_version,
+                "optional": optional,
+            }
+        )
+    if len(result) > 100:
+        raise ManifestError("manifest 的 requires 条目过多。")
+    del schema_version
+    return tuple(result)
+
+
+def _normalise_conflicts(value: Any) -> tuple[dict[str, Any], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ManifestError("manifest 的 conflicts 必须是数组。")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            item = {"plugin_id": item}
+        if not isinstance(item, Mapping):
+            raise ManifestError("manifest 的 conflicts 条目必须是对象或插件 ID。")
+        plugin_id = _normalise_plugin_id(item.get("plugin_id") or item.get("id"))
+        if plugin_id in seen:
+            raise ManifestError("manifest 的 conflicts 包含重复 plugin_id。")
+        seen.add(plugin_id)
+        result.append(
+            {
+                "plugin_id": plugin_id,
+                "version_range": _normalise_version_range(item.get("version_range") or "*"),
+            }
+        )
+    if len(result) > 100:
+        raise ManifestError("manifest 的 conflicts 条目过多。")
+    return tuple(result)
+
+
+def _normalise_schema_number(value: Any, field: str) -> int:
+    if value is None or value == "":
+        return 1
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ManifestError(f"manifest 的 {field} 必须是正整数。")
+    return int(value)
+
+
+def _version_parts(value: Any) -> tuple[Any, ...]:
+    parts: list[Any] = []
+    for item in re.split(r"[.+-]", str(value or "").strip().lower().lstrip("v")):
+        if item.isdigit():
+            parts.append((0, int(item)))
+        elif item:
+            parts.append((1, item))
+    return tuple(parts)
+
+
+def _version_compare(left: Any, right: Any) -> int:
+    a = _version_parts(left)
+    b = _version_parts(right)
+    length = max(len(a), len(b))
+    for index in range(length):
+        av = a[index] if index < len(a) else (0, 0)
+        bv = b[index] if index < len(b) else (0, 0)
+        if av < bv:
+            return -1
+        if av > bv:
+            return 1
+    return 0
+
+
+def version_satisfies(version: Any, version_range: Any) -> bool:
+    """Return whether a plugin version satisfies a bounded semver-ish range.
+
+    Supported syntax: ``*``/empty, exact ``1.2.3``, ``== >= <= > < !=``,
+    comma/space separated conjunctions, ``^1.2.3`` and ``~1.2.3``.  No
+    packaging dependency and no arbitrary code/expression evaluation.
+    """
+
+    current = str(version or "").strip()
+    spec = str(version_range or "*").strip()
+    if not spec or spec == "*":
+        return True
+    if not current:
+        return False
+    # Normalize commas to spaces, then split comparator clauses.  A bare
+    # version is an equality clause.
+    clauses = [part for part in re.split(r"[,\s]+", spec.replace("||", " ")) if part]
+    for clause in clauses:
+        if clause == "*":
+            continue
+        match = re.fullmatch(r"(>=|<=|==|!=|>|<|=|\^|~)?(.+)", clause)
+        if not match:
+            return False
+        operator = match.group(1) or "="
+        target = match.group(2)
+        if operator == "^":
+            if _version_compare(current, target) < 0:
+                return False
+            target_parts = [item for item in re.split(r"[.+-]", target.lstrip("v")) if item.isdigit()]
+            major = int(target_parts[0]) if target_parts else 0
+            if major > 0:
+                upper = f"{major + 1}.0.0"
+            else:
+                minor = int(target_parts[1]) if len(target_parts) > 1 else 0
+                upper = f"0.{minor + 1}.0"
+            if _version_compare(current, upper) >= 0:
+                return False
+            continue
+        if operator == "~":
+            if _version_compare(current, target) < 0:
+                return False
+            target_parts = [item for item in re.split(r"[.+-]", target.lstrip("v")) if item.isdigit()]
+            major = int(target_parts[0]) if target_parts else 0
+            minor = int(target_parts[1]) if len(target_parts) > 1 else 0
+            upper = f"{major}.{minor + 1}.0"
+            if _version_compare(current, upper) >= 0:
+                return False
+            continue
+        comparison = _version_compare(current, target)
+        if operator in {"=", "=="} and comparison != 0:
+            return False
+        if operator == "!=" and comparison == 0:
+            return False
+        if operator == ">" and comparison <= 0:
+            return False
+        if operator == ">=" and comparison < 0:
+            return False
+        if operator == "<" and comparison >= 0:
+            return False
+        if operator == "<=" and comparison > 0:
+            return False
+    return True
+
+
+def _manifest_requirements(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw = manifest.get("requires")
+    if isinstance(raw, (list, tuple)) and raw:
+        result = []
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            result.append(
+                {
+                    "plugin_id": str(item.get("plugin_id") or ""),
+                    "version_range": str(item.get("version_range") or "*"),
+                    "capability": str(item.get("capability") or ""),
+                    "abi_version": item.get("abi_version"),
+                    "optional": bool(item.get("optional")),
+                }
+            )
+        return result
+    # Transitional v1 compatibility: dependencies are required plugin ids with
+    # no capability/version constraint.
+    result = []
+    for item in manifest.get("dependencies") or []:
+        plugin_id = str(item or "").strip()
+        if plugin_id and PLUGIN_ID_RE.fullmatch(plugin_id):
+            result.append(
+                {
+                    "plugin_id": plugin_id,
+                    "version_range": "*",
+                    "capability": "",
+                    "abi_version": None,
+                    "optional": False,
+                }
+            )
+    return result
+
+
+def _manifest_provides(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw = manifest.get("provides")
+    if isinstance(raw, (list, tuple)):
+        return [
+            {
+                "capability": str(item.get("capability") or ""),
+                "abi_version": item.get("abi_version"),
+            }
+            for item in raw
+            if isinstance(item, Mapping)
+        ]
+    return []
+
+
+def _manifest_version(manifest: Mapping[str, Any]) -> str:
+    record_manifest = manifest.get("manifest")
+    if isinstance(record_manifest, Mapping):
+        return str(record_manifest.get("version") or manifest.get("version") or "")
+    return str(manifest.get("version") or "")
+
+
+def _manifest_for_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    nested = record.get("manifest")
+    if isinstance(nested, Mapping):
+        merged = dict(nested)
+        for key in ("id", "plugin_id", "version", "provides", "requires", "conflicts", "dependencies"):
+            if key not in merged and key in record:
+                merged[key] = record[key]
+        return merged
+    return dict(record)
+
+
+def _state_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on", "enabled", "ready"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return default
+
+
+def validate_dependency_graph(
+    target: str | Mapping[str, Any],
+    catalog: Mapping[str, Mapping[str, Any]],
+    *,
+    installed: Iterable[str] | Mapping[str, Any] | None = None,
+    enabled: Iterable[str] | Mapping[str, bool] | None = None,
+    ready: Iterable[str] | Mapping[str, bool] | None = None,
+) -> dict[str, Any]:
+    """Validate a plugin's v2 dependency graph.
+
+    Required dependencies must be installed, enabled and ready.  Optional
+    dependencies that are missing/unavailable are reported but do not block.
+    Version ranges, capability/ABI declarations, conflicts and cycles are all
+    validated.  The returned ``install_plan`` is a dependency-first topological
+    order and never includes optional dependencies.
+    """
+
+    if isinstance(target, str):
+        target_id = _normalise_plugin_id(target)
+        target_manifest = dict(catalog.get(target_id) or {})
+        if not target_manifest:
+            raise ManifestError("依赖校验目标不在 catalog 中。")
+    elif isinstance(target, Mapping):
+        target_manifest = dict(target)
+        target_id = _normalise_plugin_id(
+            target_manifest.get("plugin_id") or target_manifest.get("id")
+        )
+    else:
+        raise ManifestError("依赖校验目标不合法。")
+
+    catalog_map: dict[str, dict[str, Any]] = {}
+    for plugin_id, record in catalog.items():
+        try:
+            normalized_id = _normalise_plugin_id(plugin_id)
+        except ManifestError:
+            continue
+        if isinstance(record, Mapping):
+            catalog_map[normalized_id] = _manifest_for_record(record)
+    catalog_map[target_id] = target_manifest
+
+    installed_map: dict[str, dict[str, Any]] = {}
+    installed_ids: set[str] = set()
+    if isinstance(installed, Mapping):
+        for plugin_id, record in installed.items():
+            try:
+                normalized_id = _normalise_plugin_id(plugin_id)
+            except ManifestError:
+                continue
+            installed_ids.add(normalized_id)
+            installed_map[normalized_id] = _manifest_for_record(record) if isinstance(record, Mapping) else {}
+    elif installed is not None:
+        installed_ids = {
+            str(item) for item in installed if PLUGIN_ID_RE.fullmatch(str(item or ""))
+        }
+
+    enabled_map: dict[str, bool] = {}
+    if isinstance(enabled, Mapping):
+        enabled_map = {str(key): _state_bool(value) for key, value in enabled.items()}
+    elif enabled is not None:
+        enabled_map = {str(item): True for item in enabled}
+
+    ready_map: dict[str, bool] = {}
+    if isinstance(ready, Mapping):
+        ready_map = {str(key): _state_bool(value) for key, value in ready.items()}
+    elif ready is not None:
+        ready_map = {str(item): True for item in ready}
+
+    missing_required: list[dict[str, Any]] = []
+    missing_optional: list[dict[str, Any]] = []
+    disabled_required: list[dict[str, Any]] = []
+    not_ready_required: list[dict[str, Any]] = []
+    incompatible: list[dict[str, Any]] = []
+    cycles: list[list[str]] = []
+    conflicting_installed: list[dict[str, Any]] = []
+    required_edges: dict[str, list[str]] = {}
+    visited: set[str] = set()
+    visiting: list[str] = []
+
+    def record_requirements(plugin_id: str, manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+        return _manifest_requirements(manifest)
+
+    def visit(plugin_id: str, manifest: Mapping[str, Any], *, is_root: bool = False) -> None:
+        if plugin_id in visiting:
+            cycle = visiting[visiting.index(plugin_id) :] + [plugin_id]
+            if cycle not in cycles:
+                cycles.append(cycle)
+            return
+        if plugin_id in visited:
+            return
+        visiting.append(plugin_id)
+        dependencies = []
+        for requirement in record_requirements(plugin_id, manifest):
+            dep_id = requirement["plugin_id"]
+            if not dep_id:
+                incompatible.append({"plugin_id": plugin_id, "reason": "empty_requirement"})
+                continue
+            dependencies.append(dep_id)
+            dep_manifest = catalog_map.get(dep_id)
+            if dep_manifest is None and dep_id in installed_map:
+                dep_manifest = installed_map[dep_id]
+            if dep_manifest is None:
+                entry = {
+                    "plugin_id": dep_id,
+                    "required_by": plugin_id,
+                    "version_range": requirement["version_range"],
+                    "available": False,
+                }
+                if requirement["optional"]:
+                    missing_optional.append(entry)
+                else:
+                    missing_required.append(entry)
+                continue
+            dep_installed = dep_id in installed_ids or dep_id == target_id and False
+            if not dep_installed:
+                entry = {
+                    "plugin_id": dep_id,
+                    "required_by": plugin_id,
+                    "version_range": requirement["version_range"],
+                    "available": True,
+                }
+                if requirement["optional"]:
+                    missing_optional.append(entry)
+                else:
+                    missing_required.append(entry)
+                # Still traverse catalog metadata to detect cycles/plan order.
+                visit(dep_id, dep_manifest)
+                continue
+            if not enabled_map.get(dep_id, False):
+                entry = {
+                    "plugin_id": dep_id,
+                    "required_by": plugin_id,
+                    "version_range": requirement["version_range"],
+                }
+                if requirement["optional"]:
+                    missing_optional.append({**entry, "reason": "disabled"})
+                else:
+                    disabled_required.append(entry)
+            if not ready_map.get(dep_id, False):
+                entry = {
+                    "plugin_id": dep_id,
+                    "required_by": plugin_id,
+                    "version_range": requirement["version_range"],
+                }
+                if requirement["optional"]:
+                    missing_optional.append({**entry, "reason": "not_ready"})
+                else:
+                    not_ready_required.append(entry)
+            installed_version = _manifest_version(installed_map.get(dep_id) or {}) or str(
+                dep_manifest.get("version") or ""
+            )
+            if not version_satisfies(installed_version, requirement["version_range"]):
+                incompatible.append(
+                    {
+                        "plugin_id": dep_id,
+                        "required_by": plugin_id,
+                        "reason": "version_mismatch",
+                        "installed_version": installed_version,
+                        "version_range": requirement["version_range"],
+                    }
+                )
+            provided_capabilities = _manifest_provides(dep_manifest)
+            if requirement["capability"]:
+                matched = [
+                    item
+                    for item in provided_capabilities
+                    if item.get("capability") == requirement["capability"]
+                ]
+                if not matched:
+                    incompatible.append(
+                        {
+                            "plugin_id": dep_id,
+                            "required_by": plugin_id,
+                            "reason": "capability_missing",
+                            "capability": requirement["capability"],
+                        }
+                    )
+                elif requirement["abi_version"] not in {None, ""}:
+                    if not any(
+                        str(item.get("abi_version")) == str(requirement["abi_version"])
+                        for item in matched
+                    ):
+                        incompatible.append(
+                            {
+                                "plugin_id": dep_id,
+                                "required_by": plugin_id,
+                                "reason": "abi_mismatch",
+                                "capability": requirement["capability"],
+                                "required_abi": requirement["abi_version"],
+                                "provided_abi": [item.get("abi_version") for item in matched],
+                            }
+                        )
+            visit(dep_id, dep_manifest)
+        required_edges[plugin_id] = dependencies
+        visiting.pop()
+        visited.add(plugin_id)
+
+    visit(target_id, target_manifest, is_root=True)
+
+    for conflict in _normalise_conflicts(target_manifest.get("conflicts")):
+        dep_id = conflict["plugin_id"]
+        if dep_id in installed_ids:
+            installed_version = _manifest_version(installed_map.get(dep_id) or {})
+            if version_satisfies(installed_version, conflict["version_range"]):
+                conflicting_installed.append(
+                    {
+                        "plugin_id": dep_id,
+                        "version_range": conflict["version_range"],
+                        "installed_version": installed_version,
+                    }
+                )
+
+    # Topological install plan for required dependencies that are not yet
+    # installed.  DFS post-order gives dependencies before consumers.
+    plan: list[dict[str, Any]] = []
+    planned: set[str] = set()
+
+    def plan_visit(plugin_id: str, manifest: Mapping[str, Any]) -> None:
+        if plugin_id in planned:
+            return
+        planned.add(plugin_id)
+        for requirement in _manifest_requirements(manifest):
+            if requirement["optional"]:
+                continue
+            dep_id = requirement["plugin_id"]
+            dep_manifest = catalog_map.get(dep_id)
+            if dep_manifest is None:
+                continue
+            plan_visit(dep_id, dep_manifest)
+        already_installed = plugin_id in installed_ids
+        if not already_installed:
+            plan.append(
+                {
+                    "plugin_id": plugin_id,
+                    "version": _manifest_version(manifest),
+                    "optional": False,
+                    "action": "install",
+                }
+            )
+
+    plan_visit(target_id, target_manifest)
+
+    ok = not (
+        missing_required
+        or disabled_required
+        or not_ready_required
+        or incompatible
+        or cycles
+        or conflicting_installed
+    )
+    result = {
+        "ok": bool(ok),
+        "ready": bool(ok),
+        "status": "ready" if ok else "unavailable",
+        "plugin_id": target_id,
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "required": [
+            item["plugin_id"] for item in _manifest_requirements(target_manifest)
+        ],
+        "optional": [
+            item["plugin_id"] for item in _manifest_requirements(target_manifest) if item["optional"]
+        ],
+        "missing_required": missing_required,
+        "missing_optional": missing_optional,
+        "disabled_required": disabled_required,
+        "not_ready_required": not_ready_required,
+        "incompatible": incompatible,
+        "cycles": cycles,
+        "conflicting_installed": conflicting_installed,
+        "install_plan": plan,
+        "error": "",
+    }
+    return result
+
+
+def plan_topological_install(
+    target: str | Mapping[str, Any],
+    catalog: Mapping[str, Mapping[str, Any]],
+    *,
+    installed: Iterable[str] | Mapping[str, Any] | None = None,
+    enabled: Iterable[str] | Mapping[str, bool] | None = None,
+    ready: Iterable[str] | Mapping[str, bool] | None = None,
+) -> dict[str, Any]:
+    graph = validate_dependency_graph(
+        target,
+        catalog,
+        installed=installed,
+        enabled=enabled,
+        ready=ready,
+    )
+    return {
+        "ok": graph["ok"],
+        "ready": graph["ready"],
+        "status": graph["status"],
+        "plugin_id": graph["plugin_id"],
+        "install_plan": graph["install_plan"],
+        "missing_required": graph["missing_required"],
+        "incompatible": graph["incompatible"],
+        "cycles": graph["cycles"],
+        "error": graph["error"],
+    }
+
+
 @dataclass(frozen=True)
 class PluginManifest:
     plugin_id: str
@@ -482,11 +1144,17 @@ class PluginManifest:
     sha256: str
     download: str
     root: str
+    schema_version: int = 1
     description: str = ""
     author: str = ""
     homepage: str = ""
     astrbot: str = ""
     dependencies: tuple[str, ...] = ()
+    provides: tuple[dict[str, Any], ...] = ()
+    requires: tuple[dict[str, Any], ...] = ()
+    conflicts: tuple[dict[str, Any], ...] = ()
+    config_schema_version: int = 1
+    data_schema_version: int = 1
     recommended_groups: tuple[str, ...] = ()
     extra: Mapping[str, Any] | None = None
 
@@ -496,6 +1164,7 @@ class PluginManifest:
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
+            "schema_version": int(self.schema_version),
             "id": self.plugin_id,
             "name": self.name,
             "version": self.version,
@@ -506,7 +1175,14 @@ class PluginManifest:
             "author": self.author,
             "homepage": self.homepage,
             "astrbot": self.astrbot,
+            # Transitional key: v1 consumers still read dependencies.  v2
+            # consumers use requires/provides and must reject schema_version>2.
             "dependencies": list(self.dependencies),
+            "provides": [dict(item) for item in self.provides],
+            "requires": [dict(item) for item in self.requires],
+            "conflicts": [dict(item) for item in self.conflicts],
+            "config_schema_version": int(self.config_schema_version),
+            "data_schema_version": int(self.data_schema_version),
             "recommended_groups": list(self.recommended_groups),
         }
         if self.extra:
@@ -514,9 +1190,17 @@ class PluginManifest:
         return payload
 
 
-def _manifest_from_dict(raw: Mapping[str, Any]) -> PluginManifest:
+def _manifest_from_dict(
+    raw: Mapping[str, Any],
+    *,
+    max_schema_version: int = MANIFEST_SCHEMA_VERSION,
+) -> PluginManifest:
     if not isinstance(raw, Mapping):
         raise ManifestError("manifest 必须为 JSON object。")
+    schema_version = _normalise_schema_version(
+        raw.get("schema_version"),
+        max_schema_version=max_schema_version,
+    )
     plugin_id = _normalise_plugin_id(raw.get("id") or raw.get("plugin_id"))
     name = _normalise_text(raw.get("name") or raw.get("display_name") or plugin_id, "name", max_len=160)
     version = _normalise_version(raw.get("version"))
@@ -553,16 +1237,35 @@ def _manifest_from_dict(raw: Mapping[str, Any]) -> PluginManifest:
         "astrbot",
         max_len=200,
     )
-    dependencies = _normalise_string_list(raw.get("dependencies") or raw.get("requires"), "dependencies")
+    dependencies = _normalise_string_list(raw.get("dependencies") or [], "dependencies")
+    provides = _normalise_provides(raw.get("provides"))
+    requires = _normalise_requires(raw.get("requires"), schema_version=schema_version)
+    conflicts = _normalise_conflicts(raw.get("conflicts"))
+    # v2 requires imply the transitional dependency list, so an old consumer
+    # that somehow ignores schema_version still sees at least the required IDs.
+    if schema_version >= 2 and requires:
+        merged_dependencies = list(dependencies)
+        for requirement in requires:
+            if not requirement["optional"] and requirement["plugin_id"] not in merged_dependencies:
+                merged_dependencies.append(requirement["plugin_id"])
+        dependencies = merged_dependencies
+    config_schema_version = _normalise_schema_number(
+        raw.get("config_schema_version"), "config_schema_version"
+    )
+    data_schema_version = _normalise_schema_number(
+        raw.get("data_schema_version"), "data_schema_version"
+    )
     recommended_groups = _normalise_string_list(
         raw.get("recommended_groups") or raw.get("groups"), "recommended_groups", max_items=20
     )
     known = {
+        "schema_version",
         "id", "plugin_id", "name", "display_name", "version", "sha256", "checksum",
         "download", "download_url", "archive", "archive_url", "url", "file",
         "root", "root_dir", "description", "desc", "author", "homepage", "home",
         "astrbot", "astrbot_version", "min_astrbot_version", "dependencies",
-        "requires", "recommended_groups", "groups", "extra",
+        "provides", "requires", "conflicts", "config_schema_version",
+        "data_schema_version", "recommended_groups", "groups", "extra",
     }
     extra = {str(key): _deepcopy_json(value) for key, value in raw.items() if str(key) not in known}
     if isinstance(raw.get("extra"), Mapping):
@@ -574,25 +1277,40 @@ def _manifest_from_dict(raw: Mapping[str, Any]) -> PluginManifest:
         sha256=sha256,
         download=download,
         root=root,
+        schema_version=schema_version,
         description=description,
         author=author,
         homepage=homepage,
         astrbot=astrbot,
         dependencies=tuple(dependencies),
+        provides=provides,
+        requires=requires,
+        conflicts=conflicts,
+        config_schema_version=config_schema_version,
+        data_schema_version=data_schema_version,
         recommended_groups=tuple(recommended_groups),
         extra=extra or None,
     )
 
 
-def validate_manifest(raw: Mapping[str, Any] | PluginManifest) -> dict[str, Any]:
+def validate_manifest(
+    raw: Mapping[str, Any] | PluginManifest,
+    *,
+    max_schema_version: int = MANIFEST_SCHEMA_VERSION,
+) -> dict[str, Any]:
     """Validate and normalise one plugin manifest.
 
-    Unknown manifest keys are preserved in the returned ``extra`` object rather
-    than silently dropped.  The returned ``download`` value is not fetched; URL
-    trust is checked later by the market source resolver.
+    ``max_schema_version`` lets a v1 consumer reject a v2 manifest instead of
+    silently ignoring fields it does not understand.  Unknown non-schema
+    manifest keys are preserved in ``extra``.  The returned ``download`` value
+    is not fetched; URL trust is checked later by the market source resolver.
     """
 
-    manifest = raw if isinstance(raw, PluginManifest) else _manifest_from_dict(raw)
+    manifest = (
+        raw
+        if isinstance(raw, PluginManifest)
+        else _manifest_from_dict(raw, max_schema_version=max_schema_version)
+    )
     return manifest.to_dict()
 
 
@@ -602,11 +1320,12 @@ def load_manifest(
     local_root: Path | str | None = None,
     trusted_hosts: Iterable[str] | None = None,
     max_bytes: int = MAX_MANIFEST_BYTES,
+    max_schema_version: int = MANIFEST_SCHEMA_VERSION,
 ) -> dict[str, Any]:
     """Read and validate a manifest from a local fixed file, dict, or trusted URL."""
 
     if isinstance(source, Mapping):
-        return validate_manifest(source)
+        return validate_manifest(source, max_schema_version=max_schema_version)
     text = str(source or "").strip()
     if not text:
         raise ManifestError("manifest 来源不能为空。")
@@ -623,7 +1342,7 @@ def load_manifest(
             raise ManifestError("远程 manifest 不是合法 JSON。", detail=exc.__class__.__name__) from exc
         if not isinstance(raw, Mapping):
             raise ManifestError("远程 manifest 顶层必须是 JSON object。")
-        result = validate_manifest(raw)
+        result = validate_manifest(raw, max_schema_version=max_schema_version)
         result["_source_url"] = final_url
         return result
     if _has_parent_path_segment(text):
@@ -636,7 +1355,7 @@ def load_manifest(
     else:
         path = path.resolve()
     raw = _read_json_object(path, max_bytes=max_bytes)
-    return validate_manifest(raw)
+    return validate_manifest(raw, max_schema_version=max_schema_version)
 
 
 @dataclass(frozen=True)
@@ -1840,6 +2559,7 @@ class PluginMarket:
         lock: threading.RLock | None = None,
         redact: Callable[[str], str] | None = None,
         trusted_hosts: Iterable[str] | None = None,
+        runtime_state: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
         max_archive_bytes: int = MAX_ARCHIVE_BYTES,
         max_extracted_bytes: int = MAX_EXTRACTED_BYTES,
     ) -> None:
@@ -1856,6 +2576,7 @@ class PluginMarket:
         self._redact = redact or (lambda value: value)
         self._file_lock_path = self.state_dir / "market.lock"
         self._configured_trusted_hosts = tuple(trusted_hosts or ())
+        self._runtime_state_provider = runtime_state
         self._max_archive_bytes = max(1024, int(max_archive_bytes))
         self._max_extracted_bytes = max(1024, int(max_extracted_bytes))
         self.groups = PluginGroupStore(
@@ -2147,6 +2868,115 @@ class PluginMarket:
         records = registry.get("plugins") if isinstance(registry.get("plugins"), dict) else {}
         return {str(k): dict(v) for k, v in records.items() if isinstance(v, dict)}
 
+    def _runtime_state(self) -> dict[str, dict[str, Any]]:
+        provider = self._runtime_state_provider
+        if provider is None:
+            return {}
+        try:
+            raw = provider()
+        except Exception:  # noqa: BLE001 - unknown runtime state is fail-closed
+            return {}
+        if not isinstance(raw, Mapping):
+            return {}
+        state: dict[str, dict[str, Any]] = {}
+        for plugin_id, value in raw.items():
+            if not PLUGIN_ID_RE.fullmatch(str(plugin_id or "")):
+                continue
+            if isinstance(value, Mapping):
+                state[str(plugin_id)] = dict(value)
+            elif isinstance(value, bool):
+                state[str(plugin_id)] = {"enabled": value, "ready": value}
+        return state
+
+    @staticmethod
+    def _dependency_state_for(
+        manifest_record: Mapping[str, Any],
+        catalog: Mapping[str, Mapping[str, Any]],
+        installed: Mapping[str, Mapping[str, Any]],
+        runtime_state: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        plugin_id = str(manifest_record.get("id") or manifest_record.get("plugin_id") or "")
+        enabled: dict[str, bool] = {}
+        ready: dict[str, bool] = {}
+        for plugin_key, record in installed.items():
+            runtime = runtime_state.get(plugin_key) or {}
+            explicit_enabled = record.get("enabled") if "enabled" in record else runtime.get("enabled")
+            explicit_ready = record.get("ready") if "ready" in record else runtime.get("ready")
+            if explicit_ready is None:
+                # A plugin that is enabled and reports no failed runtime state
+                # may be considered ready; an absent runtime state is *not*
+                # ready because dependencies must be proven.
+                explicit_ready = bool(explicit_enabled) and not bool(record.get("error") or runtime.get("error"))
+            enabled[plugin_key] = bool(explicit_enabled)
+            ready[plugin_key] = bool(explicit_ready)
+        for plugin_key, runtime in runtime_state.items():
+            if plugin_key not in installed:
+                continue
+            if "enabled" in runtime:
+                enabled[plugin_key] = _state_bool(runtime.get("enabled"))
+            if "ready" in runtime:
+                ready[plugin_key] = _state_bool(runtime.get("ready"))
+        try:
+            graph = validate_dependency_graph(
+                manifest_record,
+                catalog,
+                installed=installed,
+                enabled=enabled,
+                ready=ready,
+            )
+        except ManifestError as exc:
+            return {
+                "ok": False,
+                "ready": False,
+                "status": "invalid_manifest",
+                "plugin_id": plugin_id,
+                "error": sanitize_error_text(exc.message),
+                "install_plan": [],
+                "missing_required": [],
+            }
+        return graph
+
+    def _catalog_for_dependencies(
+        self,
+        *,
+        cache: Mapping[str, Any] | None = None,
+        extra_manifest: Mapping[str, Any] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        raw = dict(cache) if isinstance(cache, Mapping) else self._read_cache()
+        catalog: dict[str, dict[str, Any]] = {}
+        for entry in raw.get("entries") or []:
+            if not isinstance(entry, Mapping):
+                continue
+            plugin_id = str(entry.get("id") or entry.get("plugin_id") or "")
+            if PLUGIN_ID_RE.fullmatch(plugin_id):
+                catalog[plugin_id] = _manifest_for_record(entry)
+        installed = self._installed_records()
+        for plugin_id, record in installed.items():
+            catalog.setdefault(plugin_id, _manifest_for_record(record))
+        if isinstance(extra_manifest, Mapping):
+            plugin_id = str(extra_manifest.get("id") or extra_manifest.get("plugin_id") or "")
+            if PLUGIN_ID_RE.fullmatch(plugin_id):
+                catalog[plugin_id] = _manifest_for_record(extra_manifest)
+        return catalog
+
+    def dependency_graph_for_manifest(
+        self,
+        manifest_record: Mapping[str, Any],
+        *,
+        cache: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Public/testable dependency graph for one catalog manifest."""
+
+        with self.lock:
+            catalog = self._catalog_for_dependencies(cache=cache, extra_manifest=manifest_record)
+            installed = self._installed_records()
+            return self._dependency_state_for(
+                manifest_record,
+                catalog,
+                installed,
+                self._runtime_state(),
+            )
+
     def market_status(self, *, cache: Mapping[str, Any] | None = None, message: str = "") -> dict[str, Any]:
         with self.lock:
             raw = dict(cache) if isinstance(cache, Mapping) else self._read_cache()
@@ -2158,6 +2988,9 @@ class PluginMarket:
             except PluginMarketError as exc:
                 group_error = sanitize_error_text(exc.message)
             entries: list[dict[str, Any]] = []
+            dependency_catalog = self._catalog_for_dependencies(cache=raw)
+            runtime_state = self._runtime_state()
+            dependency_graphs: dict[str, dict[str, Any]] = {}
             for item in raw.get("entries", []):
                 if not isinstance(item, Mapping):
                     continue
@@ -2175,6 +3008,15 @@ class PluginMarket:
                     status = "unregistered"
                 else:
                     status = "available"
+                dependency_graph = self._dependency_state_for(
+                    record,
+                    dependency_catalog,
+                    installed,
+                    runtime_state,
+                )
+                dependency_graphs[plugin_id] = dependency_graph
+                if status in {"available", "update_available", "installed"} and not dependency_graph.get("ready"):
+                    status = "dependency_unavailable"
                 record.update({
                     "plugin_id": plugin_id,
                     "installed": bool(current),
@@ -2183,6 +3025,9 @@ class PluginMarket:
                     "reserved": reserved,
                     "status": status,
                     "unregistered_directory": bool(target_exists and not current),
+                    "dependency_status": dependency_graph,
+                    "dependency_ready": bool(dependency_graph.get("ready")),
+                    "install_plan": list(dependency_graph.get("install_plan") or []),
                 })
                 entries.append(record)
             groups_for_plugins: dict[str, list[str]] = {}
@@ -2434,6 +3279,35 @@ class PluginMarket:
         if plugin_id in RESERVED_PLUGIN_IDS:
             raise PluginConflictError("qqbot_enhancer 是主回复/marker owner，插件市场不允许安装、覆盖或更新。")
         registry = self._installed_records()
+        dependency_catalog = self._catalog_for_dependencies(extra_manifest=manifest.to_dict())
+        dependency_graph = self._dependency_state_for(
+            manifest.to_dict(),
+            dependency_catalog,
+            registry,
+            self._runtime_state(),
+        )
+        if not dependency_graph.get("ready"):
+            missing = [
+                str(item.get("plugin_id") or "")
+                for item in (
+                    list(dependency_graph.get("missing_required") or [])
+                    + list(dependency_graph.get("disabled_required") or [])
+                    + list(dependency_graph.get("not_ready_required") or [])
+                    + list(dependency_graph.get("incompatible") or [])
+                )
+                if isinstance(item, Mapping)
+            ]
+            summary = "、".join(dict.fromkeys(item for item in missing if item)) or "依赖图不满足"
+            raise PluginDependencyError(
+                f"插件依赖未满足，拒绝生成安装/更新计划：{summary}。",
+                graph=dependency_graph,
+                detail="需要先按拓扑顺序安装并启用/验证必需依赖。",
+            )
+        dependency_warnings = [
+            f"可选依赖 {item.get('plugin_id')} 不可用（不会阻塞安装）。"
+            for item in dependency_graph.get("missing_optional") or []
+            if isinstance(item, Mapping)
+        ]
         target = self._plugin_target(plugin_id)
         self._assert_safe_target(target)
         registered = plugin_id in registry
@@ -2479,8 +3353,16 @@ class PluginMarket:
             "reserved": False,
             "file_count": inspection.file_count,
             "uncompressed_bytes": inspection.uncompressed_bytes,
+            "schema_version": manifest.schema_version,
+            "provides": [dict(item) for item in manifest.provides],
+            "requires": [dict(item) for item in manifest.requires],
+            "conflicts": [dict(item) for item in manifest.conflicts],
+            "config_schema_version": manifest.config_schema_version,
+            "data_schema_version": manifest.data_schema_version,
+            "dependency_graph": dependency_graph,
+            "dependency_plan": list(dependency_graph.get("install_plan") or []),
             "requires_confirmation": True,
-            "warnings": [],
+            "warnings": dependency_warnings,
             "_execution": execution,
         }
 
