@@ -2522,6 +2522,7 @@
       }
     }
     marketPane.appendChild(marketBlock);
+    const groupBlock = makeElement('section', 'plugin-market-block');
     const groupHead = makeElement('div', 'plugin-market-block-head');
     groupHead.appendChild(makeElement('h5', '', '插件分组'));
     groupHead.appendChild(makeElement('span', 'plugin-market-source', '分组只存 SQLite；删除分组不会删除插件文件。'));
