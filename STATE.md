@@ -33,7 +33,8 @@
 
 - 插件仓库：`cd .qqbot-plugins-staging && python3 -m unittest discover -s tests -p 'test_*.py' -v` → 7/7 OK（含七个插件各自单测子进程）。
 - 七个插件单测合计：core 223、safe_tools 177、web_reader 99、image_search 177、food 198、stickers 169、memory 127。
-- 主项目：`python3 -m unittest discover -s tests -p 'test_*.py' -q` → 840 tests，4 failures + 1 error，全部集中在 `tests/test_assistant_ext.py::AssistantConfigStartTests`；本沙箱把 8764-8799 端口 bind 全部返回 EADDRINUSE（ss 无监听、SO_REUSEADDR/IPv4/IPv6 均失败），属环境限制，非本次改动回归。其余 835 项通过。
+- 主项目：`python3 -m unittest discover -s tests -p 'test_*.py' -q` → 841 tests，4 failures + 1 error，全部集中在 `tests/test_assistant_ext.py::AssistantConfigStartTests`；本沙箱把 8764-8799 端口 bind 全部返回 EADDRINUSE（ss 无监听、SO_REUSEADDR/IPv4/IPv6 均失败），属环境限制，非本次改动回归。其余 836 项通过。
+- 修复迁移控制桥 request_id/nonce 用 token_urlsafe 可能以 `-`/`_` 开头导致 `_ID_RE` 偶发拒绝的问题，改为 token_hex。
 - 迁移脚本：`python3 scripts/migrate_qqbot_plugins.py --instance <instance>`（dry-run）。
 
 ## Known failures / limits

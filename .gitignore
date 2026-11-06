@@ -19,3 +19,4 @@ runtime/
 workbuddy-local/
 release-assets/
 PROJECT_CODE_GUIDE.md
+.dsh-test-run.log

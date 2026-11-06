@@ -423,10 +423,10 @@ def build_request(
     scopes = _normalise_scope(scope)
     body_value = _bounded_json(dict(body or {}), where="body")
     now = int((clock or time.time)())
-    nonce_value = str(nonce or secrets.token_urlsafe(24)).strip()
+    nonce_value = str(nonce or secrets.token_hex(16)).strip()
     if not _NONCE_RE.fullmatch(nonce_value):
         raise ControlPayloadError("nonce 不合法。")
-    request_value = str(request_id or secrets.token_urlsafe(18)).strip()
+    request_value = str(request_id or secrets.token_hex(16)).strip()
     if not _ID_RE.fullmatch(request_value):
         raise ControlPayloadError("request_id 不合法。")
     request: dict[str, Any] = {
@@ -1082,8 +1082,8 @@ class ControlClient:
         self.allowed_scopes = frozenset(_normalise_scope(allowed_scopes or BUSINESS_SCOPES))
         self.clock = clock or time.time
         self.max_age_seconds = max(1, int(max_age_seconds))
-        self._nonce_factory = nonce_factory or (lambda: secrets.token_urlsafe(24))
-        self._request_id_factory = request_id_factory or (lambda: secrets.token_urlsafe(18))
+        self._nonce_factory = nonce_factory or (lambda: secrets.token_hex(16))
+        self._request_id_factory = request_id_factory or (lambda: secrets.token_hex(16))
 
     def call(
         self,

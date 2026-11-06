@@ -1,3 +1,5 @@
+> ⚠️ **已退役（仅历史参考）**：最终模块化版本不再部署或加载 `qqbot_enhancer` / `qqbot_core_full`。七个替代插件见 `README.md` 的插件章节与 `.qqbot-plugins-staging` 发布仓库；本文仅用于理解旧实例的配置与迁移来源。
+
 # QQ Bot 增强插件（qqbot_enhancer）
 
 本文档对应 `plugins/qqbot_enhancer/`。插件目标版本是 **AstrBot v4.29**，接口核对基于 AstrBot 官方仓库标签 `v4.29.3`（v4.29 系列最新补丁）的源码与官方中文文档。插件不使用 AstrBot WebUI/数据库私有接口，不修改 `qqbot_studio` 代码，也没有硬编码任何第三方 API Key。
