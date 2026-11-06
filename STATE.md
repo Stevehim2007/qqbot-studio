@@ -53,7 +53,14 @@
 - 真实 265 字段 dry-run：20 个 image_search 字段已映射到新 canonical 键；9 个旧字段在最终 schema 无对应项，脚本会列入 `unmapped_source_keys` 而不是静默丢弃：`conversation_auto_create_enabled`、`ambient_group_reply_probability`、`ai_unified_tool_protocol_enabled`、`safe_tools_max_categories`、`web_auto_fetch_{enabled,max_urls,max_chars,timeout_seconds,question_only}`。其中 web 自动抓取未列入 v2/v3 契约，属最终架构主动不保留项。
 - 旧实例（bot-1）仍保留 enhancer 代码与配置，属过渡状态；最终切换需在 QA 验收后单独执行。
 
+## Commits / branches
+
+- 主项目：`feat/plugin-repository-4.3` 已推送到 `github.com:Stevehim2007/qqbot-studio`（main 未动）。
+- 插件仓库：`feat/final-modular-4.3` 已推送到 `github.com:Stevehim2007/qqbot-plugins`（main 未动）。
+- 服务器：Studio 代码已更新到 4.3.0-beta.4（`~/qqbot-studio`，备份 `qqbot-studio-code-backup-*`）；bot-4 已部署七插件并完成 QA；bot-1 未改。
+
 ## Next step
 
-1. 提供服务器 SSH 访问后：把七个 ZIP 解压到 bot-4 实例 `data/astrbot/plugins/`，用迁移脚本 dry-run/apply 生成配置，重启 AstrBot，跑 E7/E8 隔离 E2E。
-2. QA 通过后：发布 v4.3.0-beta.4 Release（七个 ZIP），再按 S8 清单对 bot-1 做可回滚切换。
+1. 用 GitHub token 创建 `v4.3.0-beta.4` Release 并上传 `artifacts/*.zip`（catalog/manifest 的 SHA 已固定），市场下载才会可用。
+2. 如需要 QQ 消息级 E2E：在隔离测试 QQ 账号下为 bot-4 启用 SnowLuma，跑真实群/私聊回环。
+3. 生产 bot-1 切换：QA 通过后按 S8 清单执行可回滚迁移（当前未做）。
