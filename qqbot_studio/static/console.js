@@ -2891,7 +2891,6 @@
     const paneHost = makeElement('div', 'settings-panes');
     const categories = [
       { id: 'plugins', label: '插件管理', sections: [buildPluginSection(instance)] },
-      { id: 'whitelist', label: '群组白名单', sections: [buildGroupWhitelistSection(instance)] },
       {
         id: 'memory',
         label: '记忆',

@@ -3658,6 +3658,24 @@ class DeployManager:
                     merged.update(live_config)
                 public_schema = _public_plugin_schema(schema)
                 public_values = _public_plugin_values(merged, schema)
+                if requested_id == "qqbot_core_reply":
+                    whitelist = self.get_group_whitelist()
+                    public_schema["group_whitelist_enabled"] = {
+                        "description": "启用 AstrBot 群组白名单；启用后只有名单内的群允许机器人发言。",
+                        "type": "bool",
+                        "default": False,
+                        "ui_group": "群组白名单",
+                    }
+                    public_schema["group_whitelist_ids"] = {
+                        "description": "每行一个 QQ 群号；私聊不受此白名单影响。",
+                        "type": "text",
+                        "default": "",
+                        "ui_group": "群组白名单",
+                    }
+                    public_values["group_whitelist_enabled"] = bool(whitelist.get("enabled"))
+                    public_values["group_whitelist_ids"] = "\n".join(
+                        str(item) for item in (whitelist.get("group_ids") or [])
+                    )
                 source = "astrbot" if api_available else ("local" if local_exists else "schema")
                 message = (
                     "已从 AstrBot 在线接口读取插件配置，并合并本地值。"
@@ -3741,6 +3759,13 @@ class DeployManager:
                         schema_source=schema_source,
                         schema_path=schema_path,
                     )
+                values = dict(values)
+                whitelist_values: dict[str, Any] = {}
+                whitelist_changed = False
+                if requested_id == "qqbot_core_reply":
+                    for field in ("group_whitelist_enabled", "group_whitelist_ids"):
+                        if field in values:
+                            whitelist_values[field] = values.pop(field)
                 if len(values) > PLUGIN_CONFIG_MAX_FIELDS:
                     return self._plugin_config_failure(
                         requested_id,
@@ -3816,6 +3841,53 @@ class DeployManager:
                             schema_path=schema_path,
                         )
 
+                if whitelist_values:
+                    current_whitelist = self.get_group_whitelist()
+                    enabled_value = whitelist_values.get(
+                        "group_whitelist_enabled", current_whitelist.get("enabled", False)
+                    )
+                    if not isinstance(enabled_value, bool):
+                        return self._plugin_config_failure(
+                            requested_id,
+                            "群组白名单 enabled 必须是布尔值。",
+                            schema=public_schema,
+                            config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
+                        )
+                    ids_value = whitelist_values.get(
+                        "group_whitelist_ids",
+                        "\n".join(str(item) for item in (current_whitelist.get("group_ids") or [])),
+                    )
+                    if isinstance(ids_value, str):
+                        group_ids = [item.strip() for item in ids_value.splitlines() if item.strip()]
+                    elif isinstance(ids_value, list):
+                        group_ids = [str(item).strip() for item in ids_value if str(item).strip()]
+                    else:
+                        return self._plugin_config_failure(
+                            requested_id,
+                            "群组白名单 group_ids 必须是文本或数组。",
+                            schema=public_schema,
+                            config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
+                        )
+                    write_whitelist = self.set_group_whitelist({
+                        "enabled": enabled_value,
+                        "group_ids": group_ids,
+                    })
+                    if not write_whitelist.get("ok"):
+                        return self._plugin_config_failure(
+                            requested_id,
+                            "群组白名单保存失败。",
+                            detail=str(write_whitelist.get("error") or ""),
+                            schema=public_schema,
+                            config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
+                        )
+                    whitelist_changed = True
+
                 (
                     local_config,
                     local_error,
@@ -3881,7 +3953,7 @@ class DeployManager:
                         )
 
                 public_values = _public_plugin_values(final_config, schema)
-                restart_required = bool(not api_available or restart)
+                restart_required = bool(not api_available or restart or whitelist_changed)
                 source = "astrbot" if api_available else "local"
                 if api_available:
                     message = (
@@ -3897,8 +3969,16 @@ class DeployManager:
                     )
                     if api_error:
                         message += " 在线接口警告：" + api_error
+                if whitelist_changed:
+                    current_whitelist = self.get_group_whitelist()
+                    public_values["group_whitelist_enabled"] = bool(current_whitelist.get("enabled"))
+                    public_values["group_whitelist_ids"] = "\n".join(
+                        str(item) for item in (current_whitelist.get("group_ids") or [])
+                    )
                 if recovered_local:
                     message += " 已原子修复损坏的主配置，并保留原始损坏文件/快照。"
+                if whitelist_changed:
+                    message += " 群组白名单已保存；重启 AstrBot 后生效。"
                 if schema_warning:
                     message += " " + schema_warning
                 combined_warning = " ".join(
