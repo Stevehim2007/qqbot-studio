@@ -36,7 +36,6 @@
   const pluginInputText = pluginConfigService.pluginInputText;
   const pluginDefaultText = pluginConfigService.pluginDefaultText;
 
-  const lastKnownAiToolsValues = new Map();
   const lastKnownMemoryModes = new Map();
 
   const state = {
@@ -50,6 +49,8 @@
     deletingInstanceId: '',
     lastSyncedAt: 0,
     pollTimer: null,
+    pluginGroupView: {},
+    settingsTab: 'plugins',
     updateBusy: false,
     updateChecked: false,
     updateArmed: false,
@@ -122,15 +123,7 @@
   }
   const instanceSettings = instanceSettingsNamespace.createInstanceSettings({
     getInstance: (id) => state.instances.find((item) => item.id === id),
-    renderSections: (instance) => [
-      buildPluginSection(instance),
-      buildGroupWhitelistSection(instance),
-      buildPromptManagerSection(instance),
-      buildMemorySection(instance),
-      buildMemoryPolicySection(instance),
-      buildMemoryContentSection(instance),
-      buildStatsSection(instance)
-    ],
+    renderSections: (instance) => [buildSettingsShell(instance)],
     subtitleText: (instance) => `实例 ${instance.name || instance.id} · ID ${instance.id || '缺失'} · ${v3SummaryText(instance)}`,
     findTrigger: (id) => {
       const card = findInstanceCard(id);
@@ -1415,14 +1408,24 @@
     }
   }
 
+  async function loadPluginGroupsForInstance(instance) {
+    try {
+      const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups`));
+      return data.ok === false ? { ok: false, groups: [], error: textValue(data.error, '插件分组读取失败。') } : data;
+    } catch (error) {
+      return { ok: false, groups: [], error: formatError(error, '插件分组读取失败。') };
+    }
+  }
+
   async function loadV3ForInstance(instance) {
-    const [plugins, memory, memoryPolicy, stats] = await Promise.all([
+    const [plugins, memory, memoryPolicy, stats, pluginGroups] = await Promise.all([
       loadPluginsForInstance(instance),
       loadMemoryForInstance(instance),
       loadMemoryPolicyForInstance(instance),
-      loadStatsForInstance(instance)
+      loadStatsForInstance(instance),
+      loadPluginGroupsForInstance(instance)
     ]);
-    return { ...instance, v3: { plugins, memory, memoryPolicy, stats } };
+    return { ...instance, v3: { plugins, memory, memoryPolicy, stats, pluginGroups } };
   }
 
   function setV3Status(element, message, tone = 'info') {
@@ -2642,7 +2645,11 @@
               '',
               { skipConfirm: true }
             );
-            if (ok) await loadPluginMarketPanel(instance, panel);
+            if (ok) {
+              const option = Array.from(select.options).find((item) => item.value === pluginId);
+              if (option) option.remove();
+              pluginMarketSetStatus(panel, `已把 ${pluginId} 加入分组“${group.name}”。`, 'success');
+            }
           });
           addRow.appendChild(select);
           addRow.appendChild(addButton);
@@ -2719,6 +2726,56 @@
       setV3Status(statusElement, '插件配置已变更，请重启 AstrBot 生效。', 'warning');
     }
 
+    const groupState = instance && instance.v3 ? instance.v3.pluginGroups : null;
+    const groups = groupState && Array.isArray(groupState.groups) ? groupState.groups : [];
+    const activeGroupId = state.pluginGroupView[instance.id] || '';
+    const activeGroup = groups.find((group) => textValue(group.id, '') === activeGroupId) || null;
+    if (activeGroupId && !activeGroup) delete state.pluginGroupView[instance.id];
+    const groupedPluginIds = new Set();
+    for (const group of groups) {
+      for (const pluginId of Array.isArray(group.plugin_ids) ? group.plugin_ids : []) groupedPluginIds.add(String(pluginId));
+    }
+    const visiblePlugins = activeGroup
+      ? plugins.items.filter((plugin) => (activeGroup.plugin_ids || []).map(String).includes(String(plugin.id)))
+      : plugins.items.filter((plugin) => !groupedPluginIds.has(String(plugin.id)));
+    if (activeGroup) {
+      const groupBar = makeElement('div', 'plugin-group-view-bar');
+      const back = makeElement('button', 'btn btn-quiet btn-small', '← 返回插件分组');
+      back.type = 'button';
+      back.addEventListener('click', () => {
+        delete state.pluginGroupView[instance.id];
+        instanceSettings.refresh();
+      });
+      groupBar.appendChild(back);
+      groupBar.appendChild(makeElement('strong', '', textValue(activeGroup.name, '未命名分组')));
+      groupBar.appendChild(makeElement('span', 'plugin-group-view-count', `${visiblePlugins.length} 个插件`));
+      section.appendChild(groupBar);
+    } else if (groups.length) {
+      const groupHead = makeElement('div', 'plugin-group-view-head');
+      groupHead.appendChild(makeElement('h5', '', '插件分组'));
+      groupHead.appendChild(makeElement('span', 'plugin-market-source', '进入分组后编辑组内插件；组外插件图标会隐藏。'));
+      section.appendChild(groupHead);
+      const groupCards = makeElement('div', 'plugin-group-view-list');
+      for (const group of groups) {
+        const groupId = textValue(group.id, '');
+        const memberCount = Array.isArray(group.plugin_ids) ? group.plugin_ids.length : 0;
+        const card = makeElement('div', 'plugin-group-view-card');
+        const label = makeElement('div', 'plugin-group-view-copy');
+        label.appendChild(makeElement('strong', '', textValue(group.name, '未命名分组')));
+        label.appendChild(makeElement('span', 'plugin-market-source', `${memberCount} 个插件`));
+        const enter = makeElement('button', 'btn btn-secondary btn-small', '进入分组');
+        enter.type = 'button';
+        enter.addEventListener('click', () => {
+          state.pluginGroupView[instance.id] = groupId;
+          instanceSettings.refresh();
+        });
+        card.appendChild(label);
+        card.appendChild(enter);
+        groupCards.appendChild(card);
+      }
+      section.appendChild(groupCards);
+    }
+
     const marketTools = makeElement('div', 'plugin-market-tools');
     const marketToggle = makeElement('button', 'btn btn-secondary btn-small', '插件市场与分组');
     marketToggle.type = 'button';
@@ -2746,9 +2803,9 @@
     marketTools.appendChild(marketPanel);
     section.appendChild(marketTools);
 
-    if (plugins.items.length > 0) {
+    if (visiblePlugins.length > 0) {
       const list = makeElement('div', 'plugin-list');
-      for (const plugin of plugins.items) {
+      for (const plugin of visiblePlugins) {
         const row = makeElement('div', 'plugin-item');
         const info = makeElement('div', 'plugin-info');
         const titleLine = makeElement('div', 'plugin-title-line');
@@ -2792,10 +2849,61 @@
       }
       section.appendChild(list);
     } else if (plugins.status === 'ok') {
-      section.appendChild(makeElement('p', 'instance-v3-empty', plugins.hasList ? '未发现可管理的插件。' : '服务端没有返回插件列表数据。'));
+      section.appendChild(makeElement('p', 'instance-v3-empty', activeGroup ? '该分组内暂无插件。' : '未发现未分组插件。'));
     }
     section.appendChild(statusElement);
     return section;
+  }
+
+  function buildSettingsShell(instance) {
+    const shell = makeElement('div', 'settings-shell');
+    const nav = makeElement('nav', 'settings-nav');
+    nav.setAttribute('aria-label', '实例设置菜单');
+    const paneHost = makeElement('div', 'settings-panes');
+    const categories = [
+      { id: 'plugins', label: '插件管理', sections: [buildPluginSection(instance)] },
+      { id: 'whitelist', label: '群组白名单', sections: [buildGroupWhitelistSection(instance)] },
+      {
+        id: 'memory',
+        label: '记忆',
+        sections: [
+          buildMemorySection(instance),
+          buildMemoryPolicySection(instance),
+          buildMemoryContentSection(instance)
+        ]
+      },
+      { id: 'prompts', label: '提示词', sections: [buildPromptManagerSection(instance)] },
+      { id: 'stats', label: '运行状态', sections: [buildStatsSection(instance)] }
+    ];
+    const buttons = new Map();
+    const panes = new Map();
+    const select = (id) => {
+      for (const [key, button] of buttons) {
+        const active = key === id;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+      }
+      for (const [key, pane] of panes) pane.hidden = key !== id;
+      state.settingsTab = id;
+    };
+    for (const category of categories) {
+      const button = makeElement('button', 'settings-nav-item', category.label);
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.addEventListener('click', () => select(category.id));
+      buttons.set(category.id, button);
+      nav.appendChild(button);
+      const pane = makeElement('section', 'settings-pane');
+      pane.dataset.settingsPane = category.id;
+      for (const section of category.sections) if (section) pane.appendChild(section);
+      panes.set(category.id, pane);
+      paneHost.appendChild(pane);
+    }
+    shell.appendChild(nav);
+    shell.appendChild(paneHost);
+    const initial = buttons.has(state.settingsTab) ? state.settingsTab : 'plugins';
+    select(initial);
+    return shell;
   }
 
   function buildGroupWhitelistSection(instance) {

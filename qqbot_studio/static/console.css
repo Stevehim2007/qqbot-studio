@@ -1792,3 +1792,92 @@ body.console-modal-open { overflow: hidden; }
   display: flex;
   justify-content: flex-end;
 }
+
+/* Tabbed instance settings shell. */
+.settings-shell {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.24fr) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 420px;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: start;
+  padding: 6px;
+  border: 1px solid var(--line, #d9dce3);
+  border-radius: 10px;
+  background: var(--surface-soft, #f7f8fa);
+}
+.settings-nav-item {
+  width: 100%;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted, #687083);
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.settings-nav-item:hover,
+.settings-nav-item.is-active {
+  background: var(--surface, #fff);
+  color: var(--text, #202532);
+  font-weight: 600;
+}
+.settings-panes {
+  min-width: 0;
+}
+.settings-pane {
+  display: grid;
+  gap: 14px;
+}
+.settings-pane[hidden] {
+  display: none;
+}
+.plugin-group-view-head,
+.plugin-group-view-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 8px;
+}
+.plugin-group-view-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.plugin-group-view-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #d9dce3);
+  border-radius: 9px;
+  background: var(--surface, #fff);
+}
+.plugin-group-view-copy {
+  display: grid;
+  gap: 3px;
+}
+.plugin-group-view-count {
+  color: var(--muted, #687083);
+  font-size: 12px;
+}
+@media (max-width: 720px) {
+  .settings-shell {
+    grid-template-columns: 1fr;
+  }
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .settings-nav-item {
+    width: auto;
+    white-space: nowrap;
+  }
+}
