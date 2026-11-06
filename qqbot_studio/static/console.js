@@ -124,7 +124,6 @@
     getInstance: (id) => state.instances.find((item) => item.id === id),
     renderSections: (instance) => [
       buildPluginSection(instance),
-      buildAiToolsSection(instance),
       buildPromptManagerSection(instance),
       buildMemorySection(instance),
       buildMemoryPolicySection(instance),
