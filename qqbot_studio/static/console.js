@@ -2872,32 +2872,6 @@
       section.appendChild(groupCards);
     }
 
-    const marketTools = makeElement('div', 'plugin-market-tools');
-    const marketToggle = makeElement('button', 'btn btn-secondary btn-small', '插件市场与分组');
-    marketToggle.type = 'button';
-    marketToggle.setAttribute('aria-expanded', 'false');
-    marketToggle.setAttribute('aria-controls', `plugin-market-panel-${instance.id}`);
-    const marketRefresh = makeElement('button', 'btn btn-quiet btn-small', '刷新市场');
-    marketRefresh.type = 'button';
-    marketRefresh.hidden = true;
-    const marketPanel = makeElement('div', 'plugin-market-panel');
-    marketPanel.id = `plugin-market-panel-${instance.id}`;
-    marketPanel.hidden = true;
-    marketPanel.dataset.pluginMarket = 'panel';
-    marketToggle.addEventListener('click', () => {
-      const opening = marketPanel.hidden;
-      marketPanel.hidden = !opening;
-      marketToggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
-      marketRefresh.hidden = !opening;
-      if (opening && !marketPanel.dataset.loaded && !marketPanel.dataset.loading) {
-        void loadPluginMarketPanel(instance, marketPanel);
-      }
-    });
-    marketRefresh.addEventListener('click', () => void refreshPluginMarket(instance, marketPanel));
-    marketTools.appendChild(marketToggle);
-    marketTools.appendChild(marketRefresh);
-    marketTools.appendChild(marketPanel);
-    section.appendChild(marketTools);
 
     if (visiblePlugins.length > 0) {
       const list = makeElement('div', 'plugin-list');
