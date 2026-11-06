@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "staging_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+  "packages": {
+    "qqbot_enhancer": {
+      "source_path": "plugins/qqbot_enhancer",
+      "package_kind": "legacy",
+      "version_file": "",
+      "metadata_version": "2.9.0",
+      "file_count": 31,
+      "text_file_count": 23,
+      "python_file_count": 18,
+      "text_line_count": 17176,
+      "python_line_count": 14636,
+      "total_bytes": 650407,
+      "tree_sha256": "f95589ad7e2a0152373b3b871ab10dc99beba4f4ef1365105d698ffdca773512",
+      "main_py": {
+        "present": true,
+        "lines": 8937,
+        "bytes": 350314,
+        "sha256": "f70d4ec156d1397bd310408be048ae97193afd52f859ee9ae2e9b24a0aa84ec8"
+      },
+      "conf_schema": {
+        "present": true,
+        "lines": 1956,
+        "bytes": 58313,
+        "sha256": "18015b4817b70b99f8d5cb52c423ffb02624be631f39a79eae16cf55b2ab6eda",
+        "entries": 265
+      },
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 42940,
+          "lines": 498,
+          "sha256": "4665c31895719b9c8e6c6c380a0aff06db9b49b81e60c555cd5f0de592c2d9c2"
+        },
+        {
+          "path": "__init__.py",
+          "bytes": 46,
+          "lines": 1,
+          "sha256": "8cb54d2106eb3ccb4e8cf492ef1eba18488b0dcc3cb4cc260e957b0113591c0e"
+        },
+        {
+          "path": "_conf_schema.json",
+          "bytes": 58313,
+          "lines": 1956,
+          "sha256": "18015b4817b70b99f8d5cb52c423ffb02624be631f39a79eae16cf55b2ab6eda"
+        },
+        {
+          "path": "config.py",
+          "bytes": 19226,
+          "lines": 403,
+          "sha256": "d4eb38a9e98489db2ce44b94313cf3d56e3b51e111479f8df7e31ec93fc83243"
+        },
+        {
+          "path": "conversations.py",
+          "bytes": 2620,
+          "lines": 90,
+          "sha256": "54f9bb8068b4beee2c260afd15c9ba2e54c50177ef9dccd95020d0a7d4e9f7c3"
+        },
+        {
+          "path": "food.py",
+          "bytes": 31512,
+          "lines": 1073,
+          "sha256": "f651e6d2f46c3fada8ef92341be9ffe38a04aa73b7991c4fcbf68f96fa025213"
+        },
+        {
+          "path": "image_search.py",
+          "bytes": 5209,
+          "lines": 171,
+          "sha256": "c08678ec6af86c9d0869249862851bbe4cc74be22738ffd34609cad00accdcdd"
+        },
+        {
+          "path": "interfaces.py",
+          "bytes": 2728,
+          "lines": 120,
+          "sha256": "4a48f5a7e588cac87f8ff78db938849ffccda5b695daa298c08568eaf3e2f281"
+        },
+        {
+          "path": "llm.py",
+          "bytes": 2459,
+          "lines": 81,
+          "sha256": "e208c789f9589684256179af5f1650057d74d1fe60a58456dcef15c37ba7b5f4"
+        },
+        {
+          "path": "main.py",
+          "bytes": 350314,
+          "lines": 8937,
+          "sha256": "f70d4ec156d1397bd310408be048ae97193afd52f859ee9ae2e9b24a0aa84ec8"
+        },
+        {
+          "path": "media.py",
+          "bytes": 7113,
+          "lines": 230,
+          "sha256": "200e695c4b99ff9a71971470f3c67d8406abcde4259861a93dc94821b73709e2"
+        },
+        {
+          "path": "memory_commands.py",
+          "bytes": 21207,
+          "lines": 555,
+          "sha256": "e164c6f3d99f7bc2032e4aaed1c9579922ad946e5826815d43f30769c6d755cd"
+        },
+        {
+          "path": "metadata.yaml",
+          "bytes": 380,
+          "lines": 10,
+          "sha256": "0350d1efb3239e48a679e67b0ab988522c8747163f7589eadc8694308bb78367"
+        },
+        {
+          "path": "persona_bridge.py",
+          "bytes": 12360,
+          "lines": 333,
+          "sha256": "0d0f6329c162ab3e20bcc99c6a0ea30484b4f3235b4b107f93dd8dc99f8c569b"
+        },
+        {
+          "path": "personas.py",
+          "bytes": 9650,
+          "lines": 322,
+          "sha256": "efe236fdd22e794c11b7f36bb7e00751600cac38655957694806a8a073b97286"
+        },
+        {
+          "path": "safe_tools.py",
+          "bytes": 12957,
+          "lines": 361,
+          "sha256": "f53b8835182fe751057decfe31867bfcbc8e7fb92b85ef432531704686143823"
+        },
+        {
+          "path": "songs.py",
+          "bytes": 2314,
+          "lines": 80,
+          "sha256": "368818e3bfb97ef4c7657347847ea27b4aa8345de75bb71d0080c4e642ed6159"
+        },
+        {
+          "path": "songs/README.md",
+          "bytes": 907,
+          "lines": 22,
+          "sha256": "81315778f911f80d0192125322446c03104381abe4885a13067634d9929ee878"
+        },
+        {
+          "path": "sticker_intent.py",
+          "bytes": 3908,
+          "lines": 115,
+          "sha256": "51cd4cba3a78f37319f14c11d82795077fd733d8be02732cb84bd964f8de5721"
+        },
+        {
+          "path": "sticker_reclassify.py",
+          "bytes": 8179,
+          "lines": 247,
+          "sha256": "57a90a77544acfa843b8a5460928cee06252fefe902a88ced3d39b5c194f9a95"
+        },
+        {
+          "path": "sticker_store.py",
+          "bytes": 30417,
+          "lines": 865,
+          "sha256": "17d4c019ecddaafd84765c9cdbc2e52aad2745c3f43bf95e8df9f40951fa5032"
+        },
+        {
+          "path": "stickers/angry.png",
+          "bytes": 630,
+          "lines": null,
+          "sha256": "7ff5f5fe3bad2f61382aa28c4120b475cbcca58a41a6fe562bbadc5a26fad9c0"
+        },
+        {
+          "path": "stickers/cool.png",
+          "bytes": 506,
+          "lines": null,
+          "sha256": "91cc021b88f3a344dc7c2d2e8f96eaa843b68a180ffc8a488df1ff8ecf7bd3e2"
+        },
+        {
+          "path": "stickers/happy.png",
+          "bytes": 596,
+          "lines": null,
+          "sha256": "87d8b461108fcf9ff855a2d99303eb6ed057727b2500091d8525ea3cdce9b0b8"
+        },
+        {
+          "path": "stickers/love.png",
+          "bytes": 573,
+          "lines": null,
+          "sha256": "ae10d6ef08dcab41305c3a32d6580eae16d729f5bf2176c63ef8e207f9c5fe5c"
+        },
+        {
+          "path": "stickers/sad.png",
+          "bytes": 591,
+          "lines": null,
+          "sha256": "002023debbfe6cc372cf3db868e96739e6bbcb6212789e7850fae4067910cd01"
+        },
+        {
+          "path": "stickers/sleepy.png",
+          "bytes": 526,
+          "lines": null,
+          "sha256": "14b122e569ed3039dd086d2ecee5f46bd4a24a5ec780f947521b9e6235f0a0eb"
+        },
+        {
+          "path": "stickers/sticker_rules.json",
+          "bytes": 1558,
+          "lines": 54,
+          "sha256": "f3797c861d11714fae03de10394cf73b0c5a6cfb87d541133d48cf0206f8a20a"
+        },
+        {
+          "path": "stickers/surprised.png",
+          "bytes": 534,
+          "lines": null,
+          "sha256": "f62c5cea86b002d5697d0610b427015bf825670c2046449cb65406056af0c773"
+        },
+        {
+          "path": "stickers/thinking.png",
+          "bytes": 618,
+          "lines": null,
+          "sha256": "995ef656c087837efacccab474795aef77940dd11f7c4815d9a8b60d442d6f9b"
+        },
+        {
+          "path": "web_fetch.py",
+          "bytes": 19516,
+          "lines": 652,
+          "sha256": "39f86e546569a06bdb1cca4376d8e672f3230bfdfca3b87d393c7246352d7ddd"
+        }
+      ]
+    },
+    "qqbot_core_full": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_core_full@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "legacy",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    },
+    "qqbot_core_reply": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_core_reply@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "minimal_v1_v2_v3",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    },
+    "qqbot_safe_tools": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_safe_tools@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "minimal_v1_v2_v3",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    },
+    "qqbot_web_reader": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_web_reader@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "minimal_v1_v2_v3",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    },
+    "qqbot_image_search": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_image_search@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "minimal_v1_v2_v3",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    },
+    "qqbot_food": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_food@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "minimal_v1_v2_v3",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    },
+    "qqbot_stickers": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_stickers@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "minimal_v1_v2_v3",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    },
+    "qqbot_memory_commands": {
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_memory_commands@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "package_kind": "minimal_v1_v2_v3",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "files": []
+    }
+  }
+}

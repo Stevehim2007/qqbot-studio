@@ -1,0 +1,1172 @@
+{
+  "schema_version": 1,
+  "description": "Offline command/alias inventory; names are extracted from AstrBot filter.command decorators, never invented.",
+  "counts": {
+    "spellings": 23,
+    "canonical_commands": 14,
+    "alias_spellings": 9,
+    "unique_operations": 14,
+    "legacy_spellings": 23,
+    "minimal_spellings": 0
+  },
+  "matching_contract": {
+    "source": "real AstrBot filter.command decorators in every package main.py",
+    "duplicate_behavior": "if two packages are loaded, AstrBot may register both handlers for the same spelling; the final manifest must load exactly one owner",
+    "no_private_matcher": "this inventory does not invent a second command parser"
+  },
+  "contract_operations": {
+    "web.read": {
+      "canonical": "/网页读取 URL",
+      "aliases": [
+        "/网页",
+        "/web",
+        "/读网页"
+      ],
+      "plugin": "qqbot_web_reader",
+      "implemented": [
+        "/网页",
+        "/读网页"
+      ]
+    },
+    "image.search": {
+      "canonical": "/找图 QUERY",
+      "aliases": [
+        "/搜图",
+        "/image",
+        "/图片搜索",
+        "/搜图片",
+        "/找图"
+      ],
+      "plugin": "qqbot_image_search",
+      "implemented": [
+        "/图片搜索",
+        "/搜图片",
+        "/找图",
+        "/搜图"
+      ]
+    },
+    "food.query": {
+      "canonical": "/food 查询",
+      "aliases": [
+        "/美食为根别名",
+        "/吃什么",
+        "/饭店"
+      ],
+      "plugin": "qqbot_food",
+      "implemented": [
+        "/food",
+        "/吃什么",
+        "/饭店"
+      ]
+    },
+    "sticker.collect": {
+      "canonical": "/表情 收藏",
+      "aliases": [
+        "/贴纸",
+        "/stickers",
+        "/收藏表情"
+      ],
+      "plugin": "qqbot_stickers",
+      "implemented": [
+        "/收藏表情"
+      ]
+    },
+    "tool.catalog": {
+      "canonical": "/工具 状态",
+      "aliases": [
+        "/tools",
+        "/工具协议"
+      ],
+      "plugin": "qqbot_safe_tools",
+      "implemented": [
+        "/工具协议"
+      ]
+    },
+    "memory.command": {
+      "canonical": "/记忆 查看|搜索|添加|预览清空|确认|取消",
+      "aliases": [
+        "/memory",
+        "/记忆管理"
+      ],
+      "plugin": "qqbot_memory_commands",
+      "implemented": [
+        "/记忆",
+        "/记忆管理"
+      ]
+    },
+    "session.list": {
+      "canonical": "/会话 状态",
+      "aliases": [
+        "/session",
+        "/会话列表"
+      ],
+      "plugin": "qqbot_memory_commands",
+      "implemented": [
+        "/会话列表"
+      ]
+    },
+    "session.switch": {
+      "canonical": "/会话 切换",
+      "aliases": [
+        "/切换会话"
+      ],
+      "plugin": "qqbot_memory_commands",
+      "implemented": [
+        "/会话",
+        "/切换会话"
+      ]
+    },
+    "session.new": {
+      "canonical": "/会话 新建",
+      "aliases": [
+        "/新会话"
+      ],
+      "plugin": "qqbot_memory_commands",
+      "implemented": [
+        "/新会话"
+      ]
+    },
+    "session.delete": {
+      "canonical": "/会话 重置",
+      "aliases": [
+        "/删除会话",
+        "/会话删除"
+      ],
+      "plugin": "qqbot_memory_commands",
+      "implemented": [
+        "/删除会话",
+        "/会话删除"
+      ]
+    },
+    "core_reply.reply_status": {
+      "canonical": "/回复 状态",
+      "aliases": [
+        "/reply",
+        "/option",
+        "/插件用法",
+        "/用法"
+      ],
+      "plugin": "qqbot_core_reply",
+      "implemented": [
+        "/option",
+        "/插件用法",
+        "/用法"
+      ]
+    },
+    "core_reply.legacy_song_play": {
+      "canonical": "(unassigned legacy capability)",
+      "aliases": [
+        "/唱歌",
+        "/点歌"
+      ],
+      "plugin": "qqbot_core_reply",
+      "implemented": [
+        "/唱歌",
+        "/点歌"
+      ]
+    }
+  },
+  "operations": {
+    "core_reply.legacy_song_play": {
+      "operation_id": "core_reply.legacy_song_play",
+      "target_plugin": "qqbot_core_reply",
+      "target_handler": "qqbot_core_reply:local_song_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "唱歌",
+        "点歌"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "blocked",
+      "test_case": "core.song.play",
+      "contract": {
+        "canonical": "(unassigned legacy capability)",
+        "aliases": [
+          "/唱歌",
+          "/点歌"
+        ],
+        "plugin": "qqbot_core_reply",
+        "implemented": [
+          "/唱歌",
+          "/点歌"
+        ]
+      },
+      "blocked_reason": "song ownership not confirmed by the final contract (§18.1.7)"
+    },
+    "core_reply.reply_status": {
+      "operation_id": "core_reply.reply_status",
+      "target_plugin": "qqbot_core_reply",
+      "target_handler": "qqbot_core_reply:option_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "option",
+        "插件用法",
+        "用法"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "core.reply.option",
+      "contract": {
+        "canonical": "/回复 状态",
+        "aliases": [
+          "/reply",
+          "/option",
+          "/插件用法",
+          "/用法"
+        ],
+        "plugin": "qqbot_core_reply",
+        "implemented": [
+          "/option",
+          "/插件用法",
+          "/用法"
+        ]
+      }
+    },
+    "food.query": {
+      "operation_id": "food.query",
+      "target_plugin": "qqbot_food",
+      "target_handler": "qqbot_food:food_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "food",
+        "吃什么",
+        "饭店"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "food.query.basic",
+      "contract": {
+        "canonical": "/food 查询",
+        "aliases": [
+          "/美食为根别名",
+          "/吃什么",
+          "/饭店"
+        ],
+        "plugin": "qqbot_food",
+        "implemented": [
+          "/food",
+          "/吃什么",
+          "/饭店"
+        ]
+      }
+    },
+    "image.search": {
+      "operation_id": "image.search",
+      "target_plugin": "qqbot_image_search",
+      "target_handler": "qqbot_image_search:search_images (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "找图",
+        "搜图"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "image.search.basic",
+      "contract": {
+        "canonical": "/找图 QUERY",
+        "aliases": [
+          "/搜图",
+          "/image",
+          "/图片搜索",
+          "/搜图片",
+          "/找图"
+        ],
+        "plugin": "qqbot_image_search",
+        "implemented": [
+          "/图片搜索",
+          "/搜图片",
+          "/找图",
+          "/搜图"
+        ]
+      }
+    },
+    "memory.command": {
+      "operation_id": "memory.command",
+      "target_plugin": "qqbot_memory_commands",
+      "target_handler": "qqbot_memory_commands:memory_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "记忆"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "memory.scope.matrix",
+      "contract": {
+        "canonical": "/记忆 查看|搜索|添加|预览清空|确认|取消",
+        "aliases": [
+          "/memory",
+          "/记忆管理"
+        ],
+        "plugin": "qqbot_memory_commands",
+        "implemented": [
+          "/记忆",
+          "/记忆管理"
+        ]
+      }
+    },
+    "session.delete": {
+      "operation_id": "session.delete",
+      "target_plugin": "qqbot_memory_commands",
+      "target_handler": "qqbot_memory_commands:<contract session.reset not implemented in current source>",
+      "implemented_in_source": false,
+      "spellings": [
+        "会话删除",
+        "删除会话"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "blocked",
+      "test_case": "memory.session.switch",
+      "contract": {
+        "canonical": "/会话 重置",
+        "aliases": [
+          "/删除会话",
+          "/会话删除"
+        ],
+        "plugin": "qqbot_memory_commands",
+        "implemented": [
+          "/删除会话",
+          "/会话删除"
+        ]
+      },
+      "blocked_reason": "qqbot_memory_commands does not expose session.reset yet"
+    },
+    "session.list": {
+      "operation_id": "session.list",
+      "target_plugin": "qqbot_memory_commands",
+      "target_handler": "qqbot_memory_commands:<contract session.read not implemented in current source>",
+      "implemented_in_source": false,
+      "spellings": [
+        "会话列表"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "blocked",
+      "test_case": "memory.session.switch",
+      "contract": {
+        "canonical": "/会话 状态",
+        "aliases": [
+          "/session",
+          "/会话列表"
+        ],
+        "plugin": "qqbot_memory_commands",
+        "implemented": [
+          "/会话列表"
+        ]
+      },
+      "blocked_reason": "qqbot_memory_commands does not expose session.list/session.read yet"
+    },
+    "session.new": {
+      "operation_id": "session.new",
+      "target_plugin": "qqbot_memory_commands",
+      "target_handler": "qqbot_memory_commands:<contract session.open not implemented in current source>",
+      "implemented_in_source": false,
+      "spellings": [
+        "新会话"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "blocked",
+      "test_case": "memory.session.switch",
+      "contract": {
+        "canonical": "/会话 新建",
+        "aliases": [
+          "/新会话"
+        ],
+        "plugin": "qqbot_memory_commands",
+        "implemented": [
+          "/新会话"
+        ]
+      },
+      "blocked_reason": "qqbot_memory_commands does not expose session.open yet"
+    },
+    "session.switch": {
+      "operation_id": "session.switch",
+      "target_plugin": "qqbot_memory_commands",
+      "target_handler": "qqbot_memory_commands:<contract session.switch not implemented in current source>",
+      "implemented_in_source": false,
+      "spellings": [
+        "会话",
+        "切换会话"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "blocked",
+      "test_case": "memory.session.switch",
+      "contract": {
+        "canonical": "/会话 切换",
+        "aliases": [
+          "/切换会话"
+        ],
+        "plugin": "qqbot_memory_commands",
+        "implemented": [
+          "/会话",
+          "/切换会话"
+        ]
+      },
+      "blocked_reason": "qqbot_memory_commands does not expose session.switch yet"
+    },
+    "sticker.category.list": {
+      "operation_id": "sticker.category.list",
+      "target_plugin": "qqbot_stickers",
+      "target_handler": "qqbot_stickers:sticker_categories_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "表情分类"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "stickers.category.list",
+      "contract": null
+    },
+    "sticker.collect": {
+      "operation_id": "sticker.collect",
+      "target_plugin": "qqbot_stickers",
+      "target_handler": "qqbot_stickers:collect_sticker_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "收藏表情"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "stickers.collect.idempotent",
+      "contract": {
+        "canonical": "/表情 收藏",
+        "aliases": [
+          "/贴纸",
+          "/stickers",
+          "/收藏表情"
+        ],
+        "plugin": "qqbot_stickers",
+        "implemented": [
+          "/收藏表情"
+        ]
+      }
+    },
+    "sticker.list": {
+      "operation_id": "sticker.list",
+      "target_plugin": "qqbot_stickers",
+      "target_handler": "qqbot_stickers:sticker_list_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "表情列表"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "stickers.list",
+      "contract": null
+    },
+    "sticker.send": {
+      "operation_id": "sticker.send",
+      "target_plugin": "qqbot_stickers",
+      "target_handler": "qqbot_stickers:send_sticker_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "发表情"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "stickers.send.once",
+      "contract": null
+    },
+    "sticker.status": {
+      "operation_id": "sticker.status",
+      "target_plugin": "qqbot_stickers",
+      "target_handler": "qqbot_stickers:sticker_status_command (not found)",
+      "implemented_in_source": true,
+      "spellings": [
+        "表情状态",
+        "表情诊断"
+      ],
+      "packages": [
+        "qqbot_enhancer"
+      ],
+      "status": "implemented_or_transitional",
+      "test_case": "stickers.status",
+      "contract": null
+    }
+  },
+  "aliases": [
+    {
+      "alias_id": "ALIAS-ENH-find_image_command-找图",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "找图",
+      "spelling_with_prefix": "/找图",
+      "canonical_command": "找图",
+      "alias_kind": "canonical",
+      "operation_id": "image.search",
+      "target_plugin": "qqbot_image_search",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "找图",
+        "declared_aliases": [
+          "搜图"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only network search",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:find_image_command:719",
+      "new_handler": "qqbot_image_search:search_images (not found)",
+      "new_handler_implemented": true,
+      "test_case": "image.search.basic",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-find_image_command-搜图",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "搜图",
+      "spelling_with_prefix": "/搜图",
+      "canonical_command": "找图",
+      "alias_kind": "alias",
+      "operation_id": "image.search",
+      "target_plugin": "qqbot_image_search",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "找图",
+        "declared_aliases": [
+          "搜图"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only network search",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:find_image_command:719",
+      "new_handler": "qqbot_image_search:search_images (not found)",
+      "new_handler_implemented": true,
+      "test_case": "image.search.basic",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-local_song_command-唱歌",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "唱歌",
+      "spelling_with_prefix": "/唱歌",
+      "canonical_command": "唱歌",
+      "alias_kind": "canonical",
+      "operation_id": "core_reply.legacy_song_play",
+      "target_plugin": "qqbot_core_reply",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "唱歌",
+        "declared_aliases": [
+          "点歌"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; local song directory read",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:local_song_command:774",
+      "new_handler": "qqbot_core_reply:local_song_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "core.song.play",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-local_song_command-点歌",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "点歌",
+      "spelling_with_prefix": "/点歌",
+      "canonical_command": "唱歌",
+      "alias_kind": "alias",
+      "operation_id": "core_reply.legacy_song_play",
+      "target_plugin": "qqbot_core_reply",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "唱歌",
+        "declared_aliases": [
+          "点歌"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; local song directory read",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:local_song_command:774",
+      "new_handler": "qqbot_core_reply:local_song_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "core.song.play",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-food_command-food",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "food",
+      "spelling_with_prefix": "/food",
+      "canonical_command": "food",
+      "alias_kind": "canonical",
+      "operation_id": "food.query",
+      "target_plugin": "qqbot_food",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "food",
+        "declared_aliases": [
+          "吃什么",
+          "饭店"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:food_command:860",
+      "new_handler": "qqbot_food:food_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "food.query.basic",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-food_command-吃什么",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "吃什么",
+      "spelling_with_prefix": "/吃什么",
+      "canonical_command": "food",
+      "alias_kind": "alias",
+      "operation_id": "food.query",
+      "target_plugin": "qqbot_food",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "food",
+        "declared_aliases": [
+          "吃什么",
+          "饭店"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:food_command:860",
+      "new_handler": "qqbot_food:food_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "food.query.basic",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-food_command-饭店",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "饭店",
+      "spelling_with_prefix": "/饭店",
+      "canonical_command": "food",
+      "alias_kind": "alias",
+      "operation_id": "food.query",
+      "target_plugin": "qqbot_food",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "food",
+        "declared_aliases": [
+          "吃什么",
+          "饭店"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:food_command:860",
+      "new_handler": "qqbot_food:food_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "food.query.basic",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-conversation_list_command-会话列表",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "会话列表",
+      "spelling_with_prefix": "/会话列表",
+      "canonical_command": "会话列表",
+      "alias_kind": "canonical",
+      "operation_id": "session.list",
+      "target_plugin": "qqbot_memory_commands",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "会话列表",
+        "declared_aliases": [],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; group conversation only",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:conversation_list_command:2616",
+      "new_handler": "qqbot_memory_commands:<contract session.read not implemented in current source>",
+      "new_handler_implemented": false,
+      "test_case": "memory.session.switch",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-conversation_switch_command-会话",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "会话",
+      "spelling_with_prefix": "/会话",
+      "canonical_command": "会话",
+      "alias_kind": "canonical",
+      "operation_id": "session.switch",
+      "target_plugin": "qqbot_memory_commands",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "会话",
+        "declared_aliases": [
+          "切换会话"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; group conversation only",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:conversation_switch_command:2682",
+      "new_handler": "qqbot_memory_commands:<contract session.switch not implemented in current source>",
+      "new_handler_implemented": false,
+      "test_case": "memory.session.switch",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-conversation_switch_command-切换会话",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "切换会话",
+      "spelling_with_prefix": "/切换会话",
+      "canonical_command": "会话",
+      "alias_kind": "alias",
+      "operation_id": "session.switch",
+      "target_plugin": "qqbot_memory_commands",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "会话",
+        "declared_aliases": [
+          "切换会话"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; group conversation only",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:conversation_switch_command:2682",
+      "new_handler": "qqbot_memory_commands:<contract session.switch not implemented in current source>",
+      "new_handler_implemented": false,
+      "test_case": "memory.session.switch",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-conversation_new_command-新会话",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "新会话",
+      "spelling_with_prefix": "/新会话",
+      "canonical_command": "新会话",
+      "alias_kind": "canonical",
+      "operation_id": "session.new",
+      "target_plugin": "qqbot_memory_commands",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "新会话",
+        "declared_aliases": [],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; group conversation only",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:conversation_new_command:2756",
+      "new_handler": "qqbot_memory_commands:<contract session.open not implemented in current source>",
+      "new_handler_implemented": false,
+      "test_case": "memory.session.switch",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-conversation_delete_command-删除会话",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "删除会话",
+      "spelling_with_prefix": "/删除会话",
+      "canonical_command": "删除会话",
+      "alias_kind": "canonical",
+      "operation_id": "session.delete",
+      "target_plugin": "qqbot_memory_commands",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "删除会话",
+        "declared_aliases": [
+          "会话删除"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; group conversation only; AstrBot ConversationManager delete API required",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:conversation_delete_command:2850",
+      "new_handler": "qqbot_memory_commands:<contract session.reset not implemented in current source>",
+      "new_handler_implemented": false,
+      "test_case": "memory.session.switch",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-conversation_delete_command-会话删除",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "会话删除",
+      "spelling_with_prefix": "/会话删除",
+      "canonical_command": "删除会话",
+      "alias_kind": "alias",
+      "operation_id": "session.delete",
+      "target_plugin": "qqbot_memory_commands",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "删除会话",
+        "declared_aliases": [
+          "会话删除"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; group conversation only; AstrBot ConversationManager delete API required",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:conversation_delete_command:2850",
+      "new_handler": "qqbot_memory_commands:<contract session.reset not implemented in current source>",
+      "new_handler_implemented": false,
+      "test_case": "memory.session.switch",
+      "status": "legacy_active_target_blocked",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-option_command-option",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "option",
+      "spelling_with_prefix": "/option",
+      "canonical_command": "option",
+      "alias_kind": "canonical",
+      "operation_id": "core_reply.reply_status",
+      "target_plugin": "qqbot_core_reply",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "option",
+        "declared_aliases": [
+          "插件用法",
+          "用法"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only plugin usage",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:option_command:2976",
+      "new_handler": "qqbot_core_reply:option_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "core.reply.option",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-option_command-插件用法",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "插件用法",
+      "spelling_with_prefix": "/插件用法",
+      "canonical_command": "option",
+      "alias_kind": "alias",
+      "operation_id": "core_reply.reply_status",
+      "target_plugin": "qqbot_core_reply",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "option",
+        "declared_aliases": [
+          "插件用法",
+          "用法"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only plugin usage",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:option_command:2976",
+      "new_handler": "qqbot_core_reply:option_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "core.reply.option",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-option_command-用法",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "用法",
+      "spelling_with_prefix": "/用法",
+      "canonical_command": "option",
+      "alias_kind": "alias",
+      "operation_id": "core_reply.reply_status",
+      "target_plugin": "qqbot_core_reply",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "option",
+        "declared_aliases": [
+          "插件用法",
+          "用法"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only plugin usage",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:option_command:2976",
+      "new_handler": "qqbot_core_reply:option_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "core.reply.option",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-memory_command-记忆",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "记忆",
+      "spelling_with_prefix": "/记忆",
+      "canonical_command": "记忆",
+      "alias_kind": "canonical",
+      "operation_id": "memory.command",
+      "target_plugin": "qqbot_memory_commands",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "记忆",
+        "declared_aliases": [],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authorized_actor: AstrBot admin / group owner/admin / allow_user_ids; destructive verbs additionally require destructive_enabled; scope-bound",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:memory_command:3004",
+      "new_handler": "qqbot_memory_commands:memory_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "memory.scope.matrix",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-collect_sticker_command-收藏表情",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "收藏表情",
+      "spelling_with_prefix": "/收藏表情",
+      "canonical_command": "收藏表情",
+      "alias_kind": "canonical",
+      "operation_id": "sticker.collect",
+      "target_plugin": "qqbot_stickers",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "收藏表情",
+        "declared_aliases": [],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; sticker store writable; explicit collect command",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:collect_sticker_command:3051",
+      "new_handler": "qqbot_stickers:collect_sticker_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "stickers.collect.idempotent",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-sticker_status_command-表情状态",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "表情状态",
+      "spelling_with_prefix": "/表情状态",
+      "canonical_command": "表情状态",
+      "alias_kind": "canonical",
+      "operation_id": "sticker.status",
+      "target_plugin": "qqbot_stickers",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "表情状态",
+        "declared_aliases": [
+          "表情诊断"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; diagnostic read",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:sticker_status_command:3110",
+      "new_handler": "qqbot_stickers:sticker_status_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "stickers.status",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-sticker_status_command-表情诊断",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "表情诊断",
+      "spelling_with_prefix": "/表情诊断",
+      "canonical_command": "表情状态",
+      "alias_kind": "alias",
+      "operation_id": "sticker.status",
+      "target_plugin": "qqbot_stickers",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "表情状态",
+        "declared_aliases": [
+          "表情诊断"
+        ],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; diagnostic read",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:sticker_status_command:3110",
+      "new_handler": "qqbot_stickers:sticker_status_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "stickers.status",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-collected_categories_command-表情分类",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "表情分类",
+      "spelling_with_prefix": "/表情分类",
+      "canonical_command": "表情分类",
+      "alias_kind": "canonical",
+      "operation_id": "sticker.category.list",
+      "target_plugin": "qqbot_stickers",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "表情分类",
+        "declared_aliases": [],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only list",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:collected_categories_command:3213",
+      "new_handler": "qqbot_stickers:sticker_categories_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "stickers.category.list",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-collected_list_command-表情列表",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "表情列表",
+      "spelling_with_prefix": "/表情列表",
+      "canonical_command": "表情列表",
+      "alias_kind": "canonical",
+      "operation_id": "sticker.list",
+      "target_plugin": "qqbot_stickers",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "表情列表",
+        "declared_aliases": [],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; read-only list",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:collected_list_command:3273",
+      "new_handler": "qqbot_stickers:sticker_list_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "stickers.list",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    },
+    {
+      "alias_id": "ALIAS-ENH-send_collected_sticker_command-发表情",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "spelling": "发表情",
+      "spelling_with_prefix": "/发表情",
+      "canonical_command": "发表情",
+      "alias_kind": "canonical",
+      "operation_id": "sticker.send",
+      "target_plugin": "qqbot_stickers",
+      "matching": {
+        "engine": "astrbot_filter.command",
+        "declared_name": "发表情",
+        "declared_aliases": [],
+        "exact_command_token": true,
+        "argument_parsing": "handler-specific; see old_handler",
+        "wake_prefix": "AstrBot configured global wake prefix; no private matching engine"
+      },
+      "permission": "authenticated_actor; collected sticker store readable",
+      "old_handler": "qqbot_enhancer:plugins/qqbot_enhancer/main.py:send_collected_sticker_command:3374",
+      "new_handler": "qqbot_stickers:send_sticker_command (not found)",
+      "new_handler_implemented": true,
+      "test_case": "stickers.send.once",
+      "status": "legacy_active_target_ready",
+      "registration_conflicts": [],
+      "documented": true
+    }
+  ]
+}
