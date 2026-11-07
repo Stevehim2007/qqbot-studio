@@ -49,6 +49,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 QQ_ACCOUNT_RE = re.compile(r"^\d{5,12}$")
 PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
+REPLY_PLUGIN_ID = "qqbot_core_reply"
 SCHEMA_READ_ATTEMPTS = 3
 SCHEMA_READ_RETRY_DELAY_SECONDS = 0.05
 MAX_PROMPT_LENGTH = 12_000
@@ -224,6 +225,7 @@ class DeployManager:
         astrbot_container: str = "qqbot-astrbot",
         snowluma_container: str = "qqbot-snowluma",
         network_name: str = "qqbot-studio-net",
+        plugin_market_trusted_hosts: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         self.store = store or Store(data_dir or default_data_dir())
         # Additive migration: old config.json files gain optional fields while
@@ -256,6 +258,10 @@ class DeployManager:
         self._api_client_factory = api_client_factory or (
             lambda base_url, username, password: AstrBotClient(base_url, username, password)
         )
+        self._plugin_market_trusted_hosts = tuple(plugin_market_trusted_hosts or ())
+        self._plugin_market_service: Any | None = None
+        self._plugin_migration_service: Any | None = None
+        self._plugin_control_bridge: Any | None = None
         self._lock = threading.RLock()
         self._jobs: dict[str, Job] = {}
         self._job_order: list[str] = []
@@ -321,7 +327,7 @@ class DeployManager:
                     tmp.unlink()
                 except OSError:
                     pass
-        if path.name == f"{ENHANCER_PLUGIN_ID}_config.json":
+        if path.name in {f"{ENHANCER_PLUGIN_ID}_config.json", f"{REPLY_PLUGIN_ID}_config.json"}:
             backup = path.with_name(path.name + ".bak")
             try:
                 DeployManager._write_private_json(backup, value)
@@ -703,7 +709,7 @@ class DeployManager:
             }
         )
         self.store.save_config(config)
-        self._install_bundled_plugin(Path(artifacts["astrbot_data"]), prompt, add_log)
+        self._seed_final_reply_config(Path(artifacts["astrbot_data"]), prompt, add_log)
         _, unique_default_error = self._ensure_unique_session_default()
         if unique_default_error:
             add_log("警告：" + unique_default_error)
@@ -1086,25 +1092,27 @@ class DeployManager:
         return "未知系统"
 
     @staticmethod
-    def _install_bundled_plugin(
+    def _seed_final_reply_config(
         astrbot_data: Path,
         prompt: str,
         log: Callable[[str], None],
     ) -> None:
-        """Copy the bundled QQ enhancer and seed its persona prompt."""
+        """Seed the final reply owner config without installing retired plugins.
 
-        source = Path(__file__).resolve().parent.parent / "plugins" / "qqbot_enhancer"
-        if not source.is_dir():
-            log("未找到内置 QQ 增强插件目录，跳过插件安装。")
-            return
-        target = astrbot_data / "plugins" / "qqbot_enhancer"
+        The seven-plugin release owns reply/marker/business logic.  A fresh
+        deployment must never copy ``qqbot_enhancer`` or ``qqbot_core_full``
+        into the AstrBot plugin load directory; the operator installs the seven
+        packages from the plugin market (dependency-ordered, confirmed).
+        """
+
+        target = astrbot_data / "config" / "qqbot_core_reply_config.json"
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, target, dirs_exist_ok=True)
-            DeployManager._write_enhancer_config(astrbot_data, prompt)
-            log("已安装 QQ 增强插件：@必回 / 概率回复 / 图片理解 / 表情包。")
+            existing = DeployManager._read_json_object(target) or {}
+            existing["system_prompt"] = str(prompt or "")
+            DeployManager._write_private_json(target, existing)
         except OSError as exc:
-            log(f"安装 QQ 增强插件失败：{exc}")
+            log(f"写入核心回复初始配置失败：{exc}")
+        log("未安装 qqbot_enhancer/qqbot_core_full；请在插件市场安装七个 qqbot_* 插件。")
 
     @staticmethod
     def _enhancer_schema_defaults() -> dict[str, Any]:
@@ -1211,12 +1219,9 @@ class DeployManager:
 
     @classmethod
     def _merged_enhancer_config(cls, loaded: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Return schema defaults plus user values, preserving every user key."""
+        """Preserve user values; do not inject the retired 264-field schema."""
 
-        merged = cls._enhancer_schema_defaults()
-        if isinstance(loaded, dict):
-            merged.update(loaded)
-        # The schema default is authoritative only when the setting is absent.
+        merged = dict(loaded) if isinstance(loaded, dict) else {}
         merged.setdefault("memory_mode", DEFAULT_MEMORY_MODE)
         return merged
 
@@ -1226,7 +1231,7 @@ class DeployManager:
 
         config_dir = astrbot_data / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        target = config_dir / f"{ENHANCER_PLUGIN_ID}_config.json"
+        target = config_dir / f"{REPLY_PLUGIN_ID}_config.json"
         loaded = DeployManager._read_json_object(target)
         config = DeployManager._merged_enhancer_config(loaded)
         config["system_prompt"] = str(prompt or "")
@@ -1241,7 +1246,15 @@ class DeployManager:
 
     @property
     def enhancer_config_path(self) -> Path:
-        return self.astrbot_data_dir / "config" / f"{ENHANCER_PLUGIN_ID}_config.json"
+        reply_path = self.astrbot_data_dir / "config" / f"{REPLY_PLUGIN_ID}_config.json"
+        legacy_path = self.astrbot_data_dir / "config" / f"{ENHANCER_PLUGIN_ID}_config.json"
+        # Final deployments win as soon as the core plugin directory exists.
+        # Unmigrated test/fixture instances (no core plugin directory) keep
+        # reading legacy config until an explicit migration creates the owner.
+        core_plugin_dir = self.astrbot_data_dir / "plugins" / REPLY_PLUGIN_ID
+        if reply_path.exists() or core_plugin_dir.is_dir():
+            return reply_path
+        return legacy_path
 
     @property
     def enhancer_config_backup_path(self) -> Path:
@@ -1360,7 +1373,7 @@ class DeployManager:
     def _migrate_enhancer_config_defaults(self) -> bool:
         """Create/fill enhancer config defaults without replacing user values."""
 
-        plugin_dir = self.astrbot_data_dir / "plugins" / ENHANCER_PLUGIN_ID
+        plugin_dir = self.astrbot_data_dir / "plugins" / REPLY_PLUGIN_ID
         config_path = self.enhancer_config_path
         if not plugin_dir.is_dir() and not config_path.exists():
             return False
@@ -1815,7 +1828,7 @@ class DeployManager:
                 client = self._memory_api_client(timeout=8)
                 if client is not None:
                     live_config = self._get_plugin_config_via_api(
-                        client, ENHANCER_PLUGIN_ID
+                        client, REPLY_PLUGIN_ID
                     )
                     if isinstance(live_config, dict):
                         # AstrBot's live config is authoritative while it is
@@ -1823,7 +1836,7 @@ class DeployManager:
                         merged = {**merged, **live_config}
                     merged["memory_mode"] = value
                     result = self._save_plugin_config_via_api(
-                        client, ENHANCER_PLUGIN_ID, merged
+                        client, REPLY_PLUGIN_ID, merged
                     )
                     applied_live = True
                     if isinstance(result, dict):
@@ -2938,6 +2951,242 @@ class DeployManager:
         }
 
     # ------------------------------------------------------------------
+    # Plugin market and grouping (v4.3 beta; additive API)
+    # ------------------------------------------------------------------
+    @property
+    def plugin_market_service(self):
+        """Lazily construct the instance-scoped plugin market service.
+
+        The service intentionally shares this manager's ``RLock`` and uses the
+        manager's instance data directory.  It never touches site-packages,
+        Docker, AstrBot credentials, or the bundled enhancer source tree.
+        """
+
+        with self._lock:
+            if self._plugin_market_service is None:
+                from .plugin_market import PluginMarket
+
+                self._plugin_market_service = PluginMarket(
+                    self.data_dir,
+                    plugin_root=self.astrbot_data_dir / "plugins",
+                    lock=self._lock,
+                    redact=self.redact_sensitive_text,
+                    trusted_hosts=self._plugin_market_trusted_hosts,
+                    runtime_state=self._plugin_runtime_state_for_market,
+                )
+            return self._plugin_market_service
+
+    def _plugin_runtime_state_for_market(self) -> dict[str, dict[str, Any]]:
+        """Best-effort runtime enabled/ready map for dependency validation.
+
+        Unknown/unavailable runtime state deliberately yields no entries, which
+        keeps required dependencies fail-closed instead of inventing readiness.
+        """
+
+        try:
+            result = self.get_plugins()
+        except Exception:  # noqa: BLE001 - unknown runtime state must block deps
+            return {}
+        if not isinstance(result, dict):
+            return {}
+        state: dict[str, dict[str, Any]] = {}
+        for record in result.get("plugins") or result.get("items") or []:
+            if not isinstance(record, dict):
+                continue
+            plugin_id = str(record.get("id") or record.get("plugin_id") or record.get("name") or "")
+            if not PLUGIN_ID_RE.fullmatch(plugin_id):
+                continue
+            enabled = record.get("enabled")
+            error = str(record.get("error") or "")
+            ready = bool(enabled) and not error
+            state[plugin_id] = {"enabled": bool(enabled), "ready": ready, "error": error}
+        return state
+
+    # ------------------------------------------------------------------
+    # S1/S2 migration owner state, transactions and scoped control bridge
+    # ------------------------------------------------------------------
+    @property
+    def plugin_migration_service(self):
+        """Lazily construct the instance-scoped crash-safe migration service."""
+
+        with self._lock:
+            if self._plugin_migration_service is None:
+                from .plugin_transactions import PluginMigrationService
+
+                self._plugin_migration_service = PluginMigrationService(
+                    self.data_dir,
+                    instance_id=self.instance_id or self.data_dir.name,
+                    lock=self._lock,
+                    redact=self.redact_sensitive_text,
+                )
+            return self._plugin_migration_service
+
+    @property
+    def plugin_control_bridge(self):
+        """Lazily construct the per-instance scoped control bridge.
+
+        The bridge is disabled unless ``QQBOT_PLUGIN_CONTROL_ENABLED`` is set.
+        It never opens a public port: the plugin-side server is container-local
+        at 127.0.0.1:6198 and the host reaches it through fixed ``docker exec``
+        transport.
+        """
+
+        with self._lock:
+            if self._plugin_control_bridge is None:
+                from .plugin_control import (
+                    ControlBridge,
+                    ControlSecretStore,
+                    DockerExecTransport,
+                    endpoint_from_env,
+                )
+
+                instance_id = self.instance_id or self.data_dir.name
+                secret_store = ControlSecretStore(self.data_dir)
+                endpoint = endpoint_from_env()
+
+                def transport_factory(_secret: bytes):
+                    return DockerExecTransport(
+                        self.astrbot_container,
+                        endpoint=endpoint,
+                    )
+
+                self._plugin_control_bridge = ControlBridge(
+                    instance_id,
+                    secret_store,
+                    actor_id="studio-admin",
+                    transport_factory=transport_factory,
+                )
+            return self._plugin_control_bridge
+
+    def plugin_control_status(self, *, probe: bool = False) -> dict[str, Any]:
+        try:
+            return self.plugin_control_bridge.status(probe=probe)
+        except Exception as exc:  # noqa: BLE001 - status must stay a safe card
+            return {
+                "ok": True,
+                "enabled": False,
+                "configured": False,
+                "ready": False,
+                "reachable": None,
+                "transport": "none",
+                "reason": exc.__class__.__name__,
+            }
+
+    def plugin_control_call(
+        self,
+        method: str,
+        *,
+        scope: Any = None,
+        body: Any = None,
+    ) -> dict[str, Any]:
+        return self.plugin_control_bridge.call(method, scope=scope, body=body)
+
+    def get_group_whitelist(self) -> dict[str, Any]:
+        """Read AstrBot's group-id whitelist from cmd_config.json."""
+
+        data, error, channel = self._read_astrbot_config()
+        if error:
+            return {"ok": False, "enabled": False, "group_ids": [], "channel": channel, "error": error}
+        platform = data.get("platform_settings") if isinstance(data, dict) else None
+        if not isinstance(platform, dict):
+            return {"ok": False, "enabled": False, "group_ids": [], "channel": channel, "error": "cmd_config.json 缺少 platform_settings。"}
+        enabled = platform.get("enable_id_white_list", False)
+        if not isinstance(enabled, bool):
+            return {"ok": False, "enabled": False, "group_ids": [], "channel": channel, "error": "enable_id_white_list 必须是布尔值。"}
+        raw = platform.get("id_whitelist", [])
+        if not isinstance(raw, list):
+            return {"ok": False, "enabled": enabled, "group_ids": [], "channel": channel, "error": "id_whitelist 必须是数组。"}
+        groups: list[str] = []
+        for item in raw[:1000]:
+            if isinstance(item, (str, int)) and str(item).strip():
+                groups.append(str(item).strip())
+        return {"ok": True, "enabled": enabled, "group_ids": groups, "channel": channel, "error": ""}
+
+    def set_group_whitelist(self, payload: Any) -> dict[str, Any]:
+        """Persist AstrBot's group-id whitelist; restart is required to apply."""
+
+        if not isinstance(payload, dict):
+            raise ValueError("群组白名单参数必须是对象。")
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled 必须是布尔值。")
+        raw = payload.get("group_ids")
+        if not isinstance(raw, list):
+            raise ValueError("group_ids 必须是数组。")
+        group_ids: list[str] = []
+        seen: set[str] = set()
+        for item in raw[:1000]:
+            value = str(item).strip() if isinstance(item, (str, int)) else ""
+            if not value:
+                continue
+            if len(value) > 128 or any(ch.isspace() for ch in value):
+                raise ValueError("群号不能包含空白且长度不能超过 128。")
+            if value not in seen:
+                seen.add(value)
+                group_ids.append(value)
+        data, error, channel = self._read_astrbot_config()
+        if error:
+            return {"ok": False, "error": error, "channel": channel}
+        platform = data.get("platform_settings") if isinstance(data, dict) else None
+        if not isinstance(platform, dict):
+            platform = {}
+            data["platform_settings"] = platform
+        platform["enable_id_white_list"] = enabled
+        platform["id_whitelist"] = group_ids
+        write_channel, write_error = self._write_astrbot_config(data)
+        if write_error:
+            return {"ok": False, "error": write_error, "channel": channel}
+        return {
+            "ok": True,
+            "enabled": enabled,
+            "group_ids": group_ids,
+            "channel": write_channel or channel,
+            "restart_required": True,
+            "message": "群组白名单已保存；重启 AstrBot 后生效。",
+        }
+
+    def get_plugin_market(self) -> dict[str, Any]:
+        return self.plugin_market_service.market_status()
+
+    def refresh_plugin_market(self, source: Any = None) -> dict[str, Any]:
+        return self.plugin_market_service.refresh_market(source)
+
+    def get_plugin_groups(self) -> dict[str, Any]:
+        return self.plugin_market_service.list_plugin_groups()
+
+    def preview_plugin_groups(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.preview_plugin_groups(payload)
+
+    def apply_plugin_groups(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.apply_plugin_groups(payload)
+
+    def execute_plugin_group_action(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.execute_plugin_group_action(payload)
+
+    def preview_plugin_operation(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.preview_operation(payload)
+
+    def execute_plugin_operation(self, payload: Any) -> dict[str, Any]:
+        return self.plugin_market_service.execute_operation(payload)
+
+    def get_plugin_operation(self, operation_id: str) -> dict[str, Any]:
+        return self.plugin_market_service.get_operation(operation_id)
+
+    # Conventional aliases used by server adapters and tests.
+    get_market = get_plugin_market
+    refresh_market = refresh_plugin_market
+    list_plugin_groups = get_plugin_groups
+    preview_plugin_group_change = preview_plugin_groups
+    apply_plugin_group_change = apply_plugin_groups
+    preview_groups = preview_plugin_groups
+    apply_groups = apply_plugin_groups
+    preview_market_operation = preview_plugin_operation
+    preview_plugin_market_operation = preview_plugin_operation
+    run_plugin_operation = execute_plugin_operation
+    execute_market_operation = execute_plugin_operation
+    get_market_operation = get_plugin_operation
+
+    # ------------------------------------------------------------------
     # Plugin parameter get/set
     # ------------------------------------------------------------------
     def _plugin_schema_path(self, plugin_id: str) -> Path:
@@ -3142,6 +3391,31 @@ class DeployManager:
         except OSError as exc:
             return "", f"无法保存损坏配置快照：{exc}"
 
+    def _repair_plugin_config_permissions(self, path: Path) -> None:
+        """Best-effort chown for configs created by the root AstrBot container."""
+
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        if os.access(path, os.R_OK | os.W_OK):
+            return
+        name = str(getattr(self.docker, "ASTRBOT_CONTAINER", "") or "")
+        runner = getattr(self.docker, "exec_in_container", None)
+        if not name or not callable(runner) or path.name in {"", ".", ".."}:
+            return
+        available, _reason = self._astrbot_container_available()
+        if not available:
+            return
+        uid = os.getuid()
+        gid = os.getgid()
+        container_path = f"/AstrBot/data/config/{path.name}"
+        try:
+            runner(name, ["chown", f"{uid}:{gid}", container_path], timeout=10)
+            runner(name, ["chmod", "600", container_path], timeout=10)
+        except Exception:
+            return
+
     def _read_local_plugin_config_with_recovery(
         self,
         plugin_id: str,
@@ -3154,6 +3428,7 @@ class DeployManager:
         """
 
         path = self._plugin_config_path(plugin_id)
+        self._repair_plugin_config_permissions(path)
         if not path.exists():
             return {}, "", False, False, "none", "", ""
         raw, read_error = self._read_json_object_with_error(path)
@@ -3415,6 +3690,24 @@ class DeployManager:
                     merged.update(live_config)
                 public_schema = _public_plugin_schema(schema)
                 public_values = _public_plugin_values(merged, schema)
+                if requested_id == "qqbot_core_reply":
+                    whitelist = self.get_group_whitelist()
+                    public_schema["group_whitelist_enabled"] = {
+                        "description": "启用 AstrBot 群组白名单；启用后只有名单内的群允许机器人发言。",
+                        "type": "bool",
+                        "default": False,
+                        "ui_group": "群组白名单",
+                    }
+                    public_schema["group_whitelist_ids"] = {
+                        "description": "每行一个 QQ 群号；私聊不受此白名单影响。",
+                        "type": "text",
+                        "default": "",
+                        "ui_group": "群组白名单",
+                    }
+                    public_values["group_whitelist_enabled"] = bool(whitelist.get("enabled"))
+                    public_values["group_whitelist_ids"] = "\n".join(
+                        str(item) for item in (whitelist.get("group_ids") or [])
+                    )
                 source = "astrbot" if api_available else ("local" if local_exists else "schema")
                 message = (
                     "已从 AstrBot 在线接口读取插件配置，并合并本地值。"
@@ -3498,6 +3791,13 @@ class DeployManager:
                         schema_source=schema_source,
                         schema_path=schema_path,
                     )
+                values = dict(values)
+                whitelist_values: dict[str, Any] = {}
+                whitelist_changed = False
+                if requested_id == "qqbot_core_reply":
+                    for field in ("group_whitelist_enabled", "group_whitelist_ids"):
+                        if field in values:
+                            whitelist_values[field] = values.pop(field)
                 if len(values) > PLUGIN_CONFIG_MAX_FIELDS:
                     return self._plugin_config_failure(
                         requested_id,
@@ -3573,6 +3873,55 @@ class DeployManager:
                             schema_path=schema_path,
                         )
 
+                if whitelist_values:
+                    current_whitelist = self.get_group_whitelist()
+                    enabled_value = whitelist_values.get(
+                        "group_whitelist_enabled", current_whitelist.get("enabled", False)
+                    )
+                    if not isinstance(enabled_value, bool):
+                        return self._plugin_config_failure(
+                            requested_id,
+                            "群组白名单 enabled 必须是布尔值。",
+                            schema=public_schema,
+                            config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
+                        )
+                    ids_value = whitelist_values.get(
+                        "group_whitelist_ids",
+                        "\n".join(str(item) for item in (current_whitelist.get("group_ids") or [])),
+                    )
+                    if isinstance(ids_value, str):
+                        group_ids = [item.strip() for item in ids_value.splitlines() if item.strip()]
+                    elif isinstance(ids_value, list):
+                        group_ids = [str(item).strip() for item in ids_value if str(item).strip()]
+                    else:
+                        return self._plugin_config_failure(
+                            requested_id,
+                            "群组白名单 group_ids 必须是文本或数组。",
+                            schema=public_schema,
+                            config_path=config_path,
+                            schema_source=schema_source,
+                            schema_path=schema_path,
+                        )
+                    current_ids = [str(item).strip() for item in (current_whitelist.get("group_ids") or [])]
+                    if enabled_value != bool(current_whitelist.get("enabled")) or group_ids != current_ids:
+                        write_whitelist = self.set_group_whitelist({
+                            "enabled": enabled_value,
+                            "group_ids": group_ids,
+                        })
+                        if not write_whitelist.get("ok"):
+                            return self._plugin_config_failure(
+                                requested_id,
+                                "群组白名单保存失败。",
+                                detail=str(write_whitelist.get("error") or ""),
+                                schema=public_schema,
+                                config_path=config_path,
+                                schema_source=schema_source,
+                                schema_path=schema_path,
+                            )
+                        whitelist_changed = True
+
                 (
                     local_config,
                     local_error,
@@ -3638,7 +3987,7 @@ class DeployManager:
                         )
 
                 public_values = _public_plugin_values(final_config, schema)
-                restart_required = bool(not api_available or restart)
+                restart_required = bool(not api_available or restart or whitelist_changed)
                 source = "astrbot" if api_available else "local"
                 if api_available:
                     message = (
@@ -3654,8 +4003,16 @@ class DeployManager:
                     )
                     if api_error:
                         message += " 在线接口警告：" + api_error
+                if whitelist_changed:
+                    current_whitelist = self.get_group_whitelist()
+                    public_values["group_whitelist_enabled"] = bool(current_whitelist.get("enabled"))
+                    public_values["group_whitelist_ids"] = "\n".join(
+                        str(item) for item in (current_whitelist.get("group_ids") or [])
+                    )
                 if recovered_local:
                     message += " 已原子修复损坏的主配置，并保留原始损坏文件/快照。"
+                if whitelist_changed:
+                    message += " 群组白名单已保存；重启 AstrBot 后生效。"
                 if schema_warning:
                     message += " " + schema_warning
                 combined_warning = " ".join(
@@ -3975,7 +4332,7 @@ class DeployManager:
             try:
                 client = self._memory_api_client(timeout=6, wait_for_ready=False)
                 if client is not None:
-                    live = self._get_plugin_config_via_api(client, ENHANCER_PLUGIN_ID)
+                    live = self._get_plugin_config_via_api(client, REPLY_PLUGIN_ID)
                     if self._plugin_prompt_payload_matches(
                         live, profiles, active_id, active_prompt
                     ):
@@ -3987,7 +4344,7 @@ class DeployManager:
                         merged["prompt_profiles"] = serialized_profiles
                         merged["prompt_profile_active_id"] = active_id
                         merged["system_prompt"] = active_prompt
-                        self._save_plugin_config_via_api(client, ENHANCER_PLUGIN_ID, merged)
+                        self._save_plugin_config_via_api(client, REPLY_PLUGIN_ID, merged)
                         api_available = True
                     else:
                         raise RuntimeError("AstrBot 插件配置返回格式异常")

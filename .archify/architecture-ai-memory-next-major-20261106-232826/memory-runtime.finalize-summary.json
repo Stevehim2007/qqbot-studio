@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "skipped",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/candidate.json",
+    "sha256": "bef8300de0a40095dd7047c3ca032a20cc5f06f460953314a1779920dd22c691",
+    "bytes": 11257
+  },
+  "artifact": {
+    "path": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+    "sha256": "4d966828bcad15fd934ca9e054c974d73cab06d5af41ff06fdc01cfe6906a684",
+    "bytes": 798078
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "skipped"
+  },
+  "failedStage": "browser-check",
+  "diagnostics": [
+    {
+      "code": "viewer/chrome-unavailable",
+      "severity": "warning",
+      "message": "Chrome or Chromium is unavailable. Set ARCHIFY_CHROME to its executable path.",
+      "subject": {
+        "artifact": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html"
+      },
+      "evidence": {
+        "executable": null
+      },
+      "supportedFixes": [
+        "set ARCHIFY_CHROME to a Chrome or Chromium executable and rerun browser-check"
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.finalize.json",
+    "summaryReceipt": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.finalize-summary.json",
+    "browserCheckReceipt": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.browser-check.json"
+  },
+  "update": {
+    "status": "unavailable",
+    "installedVersion": null,
+    "availableVersion": null,
+    "releaseNotes": null,
+    "checkedAt": null,
+    "source": null,
+    "noticeRequired": false,
+    "noticeText": null,
+    "reason": "cache-unavailable"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2201
+}

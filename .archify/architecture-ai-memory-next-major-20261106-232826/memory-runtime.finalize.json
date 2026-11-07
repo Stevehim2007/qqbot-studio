@@ -1,0 +1,432 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "skipped",
+  "type": "architecture",
+  "quality": "showcase",
+  "startedAt": "2026-11-06T15:29:10.971Z",
+  "specification": {
+    "path": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/candidate.json",
+    "sha256": "bef8300de0a40095dd7047c3ca032a20cc5f06f460953314a1779920dd22c691",
+    "bytes": 11257
+  },
+  "artifact": {
+    "path": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+    "sha256": "4d966828bcad15fd934ca9e054c974d73cab06d5af41ff06fdc01cfe6906a684",
+    "bytes": 798078
+  },
+  "stages": {
+    "validate": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": null,
+      "execution": "embedded-in-deliver",
+      "command": [
+        "/usr/bin/node",
+        "/home/stevehim/.dsh/profiles/web/node_modules/@tt-a1i/archify-dsh/skills/archify/bin/archify.mjs",
+        "deliver",
+        "architecture",
+        "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/candidate.json",
+        "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+        "--quality",
+        "showcase",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": true,
+        "command": "validate",
+        "specification": {
+          "sha256": "bef8300de0a40095dd7047c3ca032a20cc5f06f460953314a1779920dd22c691",
+          "bytes": 11257
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        }
+      }
+    },
+    "deliver": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 942,
+      "command": [
+        "/usr/bin/node",
+        "/home/stevehim/.dsh/profiles/web/node_modules/@tt-a1i/archify-dsh/skills/archify/bin/archify.mjs",
+        "deliver",
+        "architecture",
+        "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/candidate.json",
+        "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+        "--quality",
+        "showcase",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "4151c706-eead-4a5b-a116-17efd26d0be1",
+        "ok": true,
+        "command": "deliver",
+        "type": "architecture",
+        "input": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/candidate.json",
+        "output": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+        "specification": {
+          "sha256": "bef8300de0a40095dd7047c3ca032a20cc5f06f460953314a1779920dd22c691",
+          "bytes": 11257
+        },
+        "artifact": {
+          "sha256": "4d966828bcad15fd934ca9e054c974d73cab06d5af41ff06fdc01cfe6906a684",
+          "bytes": 798078
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        },
+        "update": {
+          "status": "unavailable",
+          "installedVersion": null,
+          "availableVersion": null,
+          "releaseNotes": null,
+          "checkedAt": null,
+          "source": null,
+          "noticeRequired": false,
+          "noticeText": null,
+          "reason": "disabled"
+        }
+      }
+    },
+    "check": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 308,
+      "command": [
+        "/usr/bin/node",
+        "/home/stevehim/.dsh/profiles/web/node_modules/@tt-a1i/archify-dsh/skills/archify/bin/archify.mjs",
+        "check",
+        "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+        "--require-provenance"
+      ],
+      "receipt": {
+        "ok": true,
+        "file": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+        "artifact": {
+          "sha256": "4d966828bcad15fd934ca9e054c974d73cab06d5af41ff06fdc01cfe6906a684",
+          "bytes": 798078
+        },
+        "checks": [
+          {
+            "name": "single_svg",
+            "ok": true,
+            "details": [
+              "found 1 <svg> block(s)"
+            ]
+          },
+          {
+            "name": "finite_svg",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "orthogonal_arrows",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "label_route_clearance",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "relationship_crossings",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "relationship_corridors",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "container_border_runs",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "route_rhythm",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "legend_clearance",
+            "ok": true,
+            "details": []
+          }
+        ],
+        "composition": {
+          "schemaVersion": 1,
+          "profile": "showcase",
+          "status": "pass",
+          "summary": {
+            "errors": 0,
+            "warnings": 0
+          },
+          "metrics": {
+            "properCrossings": 0,
+            "resolvedCrossovers": 1,
+            "ambiguousCorridors": 0,
+            "arrowheadCollisions": 0,
+            "containerBorderRuns": 0,
+            "labelRouteClearanceIssues": 0,
+            "labelCanvasOverflowIssues": 0,
+            "minLabelRouteClearance": 11,
+            "desktopReadabilityIssues": 0,
+            "viewportHeightIssues": 0,
+            "minProjectedNodeTextPx": 6.056242969628796,
+            "maxBends": 4,
+            "routesOverSuggestedBends": 3,
+            "maxStretch": 1.241,
+            "routesOverSuggestedStretch": 0,
+            "minSegmentPx": 23,
+            "minInteriorSegmentPx": 23,
+            "shortSegmentCount": 0,
+            "shortEndpointSegmentCount": 0,
+            "shortInteriorSegmentCount": 0,
+            "microSegmentCount": 0
+          },
+          "suggestedLimits": {
+            "bendsPerRelationship": 2,
+            "stretch": 1.35,
+            "segmentPx": 16,
+            "microSegmentPx": 8
+          },
+          "routeReview": {
+            "crossings": [
+              {
+                "left": {
+                  "id": "identity-to-orchestrator",
+                  "from": "identity",
+                  "to": "orchestrator",
+                  "label": "构建上下文",
+                  "collectionIndex": 3,
+                  "artifactIndex": 4
+                },
+                "right": {
+                  "id": "budget-to-orchestrator",
+                  "from": "budget",
+                  "to": "orchestrator",
+                  "label": "硬预算",
+                  "collectionIndex": 10,
+                  "artifactIndex": 11
+                },
+                "point": [
+                  724,
+                  344
+                ],
+                "sharedNode": "orchestrator"
+              }
+            ],
+            "detours": [
+              {
+                "relationship": {
+                  "id": "identity-to-orchestrator",
+                  "from": "identity",
+                  "to": "orchestrator",
+                  "label": "构建上下文",
+                  "collectionIndex": 3,
+                  "artifactIndex": 4
+                },
+                "bends": 3,
+                "stretch": 1.241
+              },
+              {
+                "relationship": {
+                  "id": "recent-to-orchestrator",
+                  "from": "recent",
+                  "to": "orchestrator",
+                  "label": "最近 N 条",
+                  "collectionIndex": 9,
+                  "artifactIndex": 10
+                },
+                "bends": 3,
+                "stretch": 1
+              },
+              {
+                "relationship": {
+                  "id": "runtime-to-retrieval",
+                  "from": "runtime",
+                  "to": "retrieval",
+                  "label": "scope 查询",
+                  "collectionIndex": 14,
+                  "artifactIndex": 15
+                },
+                "bends": 4,
+                "stretch": 1
+              }
+            ]
+          },
+          "leadingSpace": {
+            "measured": true,
+            "emptyTopPx": 73,
+            "emptyTopRatio": 0.072,
+            "occupiedTop": 73,
+            "viewBoxTop": 0,
+            "canvasHeight": 1008,
+            "typicalNodeHeight": 70,
+            "reviewSuggested": false
+          },
+          "desktopReadability": {
+            "budgetBasis": "recognized-declared-wide",
+            "readerContract": "declared-wide-v1",
+            "availableDiagramWidth": 1346,
+            "actualBudgetPx": 1346,
+            "actualReaderWidth": 1376,
+            "desiredReaderWidth": 1696.875,
+            "viewportCap": 1376,
+            "limit": "viewport-cap",
+            "requestedTargetPx": 7.5,
+            "requestedTargetMet": false,
+            "hardFloorPx": 6,
+            "hardFloorMet": true,
+            "minimumOwner": {
+              "kind": "edge",
+              "id": "qq-to-core",
+              "from": "qq",
+              "to": "core"
+            },
+            "minimumSourceTextPx": 8,
+            "minimumProjectedTextPx": 6.056242969628796,
+            "semanticTextCount": 69
+          },
+          "issues": []
+        },
+        "provenance": "current",
+        "deliveryReceiptId": "4151c706-eead-4a5b-a116-17efd26d0be1"
+      }
+    },
+    "browser-check": {
+      "status": "skipped",
+      "exitCode": 2,
+      "durationMs": 64,
+      "command": [
+        "/usr/bin/node",
+        "/home/stevehim/.dsh/profiles/web/node_modules/@tt-a1i/archify-dsh/skills/archify/bin/archify.mjs",
+        "browser-check",
+        "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+        "--json",
+        "--require-provenance"
+      ],
+      "execution": "in-process",
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": false,
+        "command": "browser-check",
+        "evidenceKind": "automated-browser",
+        "status": "skipped",
+        "visualReview": "not-requested",
+        "provenance": "current",
+        "deliveryReceiptId": "4151c706-eead-4a5b-a116-17efd26d0be1",
+        "artifact": {
+          "path": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+          "sha256": "4d966828bcad15fd934ca9e054c974d73cab06d5af41ff06fdc01cfe6906a684",
+          "bytes": 798078
+        },
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "chrome": {
+          "status": "unavailable",
+          "executable": null
+        },
+        "diagnostics": [
+          {
+            "code": "viewer/chrome-unavailable",
+            "severity": "warning",
+            "message": "Chrome or Chromium is unavailable. Set ARCHIFY_CHROME to its executable path.",
+            "subject": {
+              "artifact": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html"
+            },
+            "evidence": {
+              "executable": null
+            },
+            "supportedFixes": [
+              "set ARCHIFY_CHROME to a Chrome or Chromium executable and rerun browser-check"
+            ]
+          }
+        ],
+        "containment": {
+          "status": "skipped",
+          "policy": "fit-or-reader-declared-readable-vertical-scroll",
+          "viewports": []
+        },
+        "themeStates": {
+          "status": "skipped",
+          "viewports": []
+        },
+        "readability": {
+          "status": "skipped",
+          "minimumProjectedNodeTextPx": 6,
+          "viewports": []
+        },
+        "viewerChrome": {
+          "status": "skipped",
+          "viewports": []
+        },
+        "captures": {
+          "status": "not-requested",
+          "screenshots": [],
+          "contactSheet": null
+        },
+        "sidecars": {
+          "receipt": "memory-runtime.browser-check.json",
+          "files": []
+        },
+        "error": "Chrome or Chromium is unavailable. Set ARCHIFY_CHROME to its executable path."
+      }
+    }
+  },
+  "diagnostics": [
+    {
+      "code": "viewer/chrome-unavailable",
+      "severity": "warning",
+      "message": "Chrome or Chromium is unavailable. Set ARCHIFY_CHROME to its executable path.",
+      "subject": {
+        "artifact": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.html"
+      },
+      "evidence": {
+        "executable": null
+      },
+      "supportedFixes": [
+        "set ARCHIFY_CHROME to a Chrome or Chromium executable and rerun browser-check"
+      ]
+    }
+  ],
+  "evidence": {
+    "receipt": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.finalize.json",
+    "summaryReceipt": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.finalize-summary.json",
+    "browserCheckReceipt": "/home/stevehim/QQ Ai bot/.archify/architecture-ai-memory-next-major-20261106-232826/memory-runtime.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "failedStage": "browser-check",
+  "finishedAt": "2026-11-06T15:29:13.173Z",
+  "durationMs": 2201,
+  "update": {
+    "status": "unavailable",
+    "installedVersion": null,
+    "availableVersion": null,
+    "releaseNotes": null,
+    "checkedAt": null,
+    "source": null,
+    "noticeRequired": false,
+    "noticeText": null,
+    "reason": "cache-unavailable"
+  }
+}

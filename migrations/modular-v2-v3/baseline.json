@@ -1,0 +1,449 @@
+{
+  "schema_version": 1,
+  "generated_by": "migrations/modular-v2-v3/tools/generate_inventory.py",
+  "offline_only": true,
+  "never_loaded_as_plugin": true,
+  "baseline": {
+    "studio_release": "4.3.0",
+    "branch": "feat/final-s0",
+    "base_commit": "6885ae3",
+    "astrbot_target": {
+      "version": "4.29.3",
+      "commit": "f61a7f4",
+      "compatibility_range": ">=4.29,<5",
+      "runtime_verification": "not_performed_s0_offline",
+      "source": "integrations/astrbot-memory/README.md (pinned upstream)"
+    },
+    "source_commit_staging": "673820405f0d24c1b932ccc7ca6a7223f3aad37f"
+  },
+  "legacy_packages": {
+    "qqbot_enhancer": {
+      "package_id": "qqbot_enhancer",
+      "package_kind": "legacy",
+      "source_path": "plugins/qqbot_enhancer",
+      "source_commit": "6885ae3351dbccda27eb1f62d6c271d12115b29e",
+      "version": "2.9.0",
+      "version_file": "",
+      "metadata_version": "2.9.0",
+      "file_count": 31,
+      "text_file_count": 23,
+      "python_file_count": 18,
+      "text_line_count": 17176,
+      "python_line_count": 14636,
+      "total_bytes": 650407,
+      "tree_sha256": "f95589ad7e2a0152373b3b871ab10dc99beba4f4ef1365105d698ffdca773512",
+      "main_py": {
+        "present": true,
+        "lines": 8937,
+        "bytes": 350314,
+        "sha256": "f70d4ec156d1397bd310408be048ae97193afd52f859ee9ae2e9b24a0aa84ec8"
+      },
+      "conf_schema": {
+        "present": true,
+        "lines": 1956,
+        "bytes": 58313,
+        "sha256": "18015b4817b70b99f8d5cb52c423ffb02624be631f39a79eae16cf55b2ab6eda",
+        "entries": 265
+      },
+      "source_manifest_sha256": "b360f111fbf6359c70a89214ae758ff83f22ae2cea7fdcbb5a773da72a0a0237"
+    },
+    "qqbot_core_full": {
+      "package_id": "qqbot_core_full",
+      "package_kind": "legacy",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_core_full@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "18f3e914784ec9ff7e6fdf7fa83533b71cf05aa4559a1ab6f957ba0f23c92110"
+    }
+  },
+  "minimal_packages": {
+    "qqbot_core_reply": {
+      "package_id": "qqbot_core_reply",
+      "package_kind": "minimal_v1_v2_v3",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_core_reply@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "c8124492dc773e078295ce3ab0f46942573ddc3ab29ed7e429595e46bb0f992e"
+    },
+    "qqbot_safe_tools": {
+      "package_id": "qqbot_safe_tools",
+      "package_kind": "minimal_v1_v2_v3",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_safe_tools@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "9d6af75962b61c955769c479937dd390ab2e1f1c1b04e5c8406d4960f3731e54"
+    },
+    "qqbot_web_reader": {
+      "package_id": "qqbot_web_reader",
+      "package_kind": "minimal_v1_v2_v3",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_web_reader@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "9adef551c13b2200d783f2666b57f61201378236fee931ba43d58d3f33ca5053"
+    },
+    "qqbot_image_search": {
+      "package_id": "qqbot_image_search",
+      "package_kind": "minimal_v1_v2_v3",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_image_search@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "0c9323eb65a67131e2369b91e2af86e0b216ecf0764bf40a1ed39d3781f4905e"
+    },
+    "qqbot_food": {
+      "package_id": "qqbot_food",
+      "package_kind": "minimal_v1_v2_v3",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_food@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "698efdcf2711a58e0a4c50e5a60b3fe28785a63bed2a35a17c28a40da9ee42fa"
+    },
+    "qqbot_stickers": {
+      "package_id": "qqbot_stickers",
+      "package_kind": "minimal_v1_v2_v3",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_stickers@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "0bc025ac865b0a9ff38a2e5bde3d64e688669154b6904b3bd52dffff6998b7aa"
+    },
+    "qqbot_memory_commands": {
+      "package_id": "qqbot_memory_commands",
+      "package_kind": "minimal_v1_v2_v3",
+      "source_path": ".qqbot-plugins-staging/plugins/qqbot_memory_commands@673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "source_commit": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+      "version": "",
+      "version_file": "",
+      "metadata_version": "",
+      "file_count": 0,
+      "text_file_count": 0,
+      "python_file_count": 0,
+      "text_line_count": 0,
+      "python_line_count": 0,
+      "total_bytes": 0,
+      "tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "main_py": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": ""
+      },
+      "conf_schema": {
+        "present": false,
+        "lines": 0,
+        "bytes": 0,
+        "sha256": "",
+        "entries": 0
+      },
+      "source_manifest_sha256": "0ab2a430ee0b23bb05f26ff965c5ac74b3b30af1e06ab42ee008cb8d7d634371"
+    }
+  },
+  "release": {
+    "catalog_schema_version": 2,
+    "catalog_id": "qqbot-plugins",
+    "catalog_state": "working-tree release metadata",
+    "manifest_state": "working-tree release metadata",
+    "packages": {
+      "qqbot_core_reply": {
+        "id": "qqbot_core_reply",
+        "version": "4.0.0",
+        "source_version": "",
+        "version_matches_source": false,
+        "sha256": "55d2b3a34995b395885868d146481e9619a0735b8192fcd0eb47e6dfa0341bd8",
+        "size": 59766,
+        "artifact": "artifacts/qqbot_core_reply-4.0.0.zip",
+        "artifact_present_in_release_root": true,
+        "artifact_sha256_on_disk": "55d2b3a34995b395885868d146481e9619a0735b8192fcd0eb47e6dfa0341bd8",
+        "download": "https://github.com/Stevehim2007/qqbot-plugins/releases/download/v4.3.0-beta.4/qqbot_core_reply-4.0.0.zip",
+        "dependencies": [
+          "qqbot_safe_tools",
+          "qqbot_memory_commands"
+        ]
+      },
+      "qqbot_safe_tools": {
+        "id": "qqbot_safe_tools",
+        "version": "3.0.0",
+        "source_version": "",
+        "version_matches_source": false,
+        "sha256": "75a71ab826c7d6b049486207337d4d8094018f5a9a41c20646ded465cd4ef692",
+        "size": 49594,
+        "artifact": "artifacts/qqbot_safe_tools-3.0.0.zip",
+        "artifact_present_in_release_root": true,
+        "artifact_sha256_on_disk": "75a71ab826c7d6b049486207337d4d8094018f5a9a41c20646ded465cd4ef692",
+        "download": "https://github.com/Stevehim2007/qqbot-plugins/releases/download/v4.3.0-beta.4/qqbot_safe_tools-3.0.0.zip",
+        "dependencies": []
+      },
+      "qqbot_web_reader": {
+        "id": "qqbot_web_reader",
+        "version": "2.0.0",
+        "source_version": "",
+        "version_matches_source": false,
+        "sha256": "62d22f9a627df6496750716b39aad62d5c47a2b20734ae166eaaeb06e9b177fa",
+        "size": 21548,
+        "artifact": "artifacts/qqbot_web_reader-2.0.0.zip",
+        "artifact_present_in_release_root": true,
+        "artifact_sha256_on_disk": "62d22f9a627df6496750716b39aad62d5c47a2b20734ae166eaaeb06e9b177fa",
+        "download": "https://github.com/Stevehim2007/qqbot-plugins/releases/download/v4.3.0-beta.4/qqbot_web_reader-2.0.0.zip",
+        "dependencies": [
+          "qqbot_safe_tools"
+        ]
+      },
+      "qqbot_image_search": {
+        "id": "qqbot_image_search",
+        "version": "2.0.0",
+        "source_version": "",
+        "version_matches_source": false,
+        "sha256": "2794066c2ab1bfe9b7d9b58b71cedf6871e663e8e101c649895901417617e4be",
+        "size": 36417,
+        "artifact": "artifacts/qqbot_image_search-2.0.0.zip",
+        "artifact_present_in_release_root": true,
+        "artifact_sha256_on_disk": "2794066c2ab1bfe9b7d9b58b71cedf6871e663e8e101c649895901417617e4be",
+        "download": "https://github.com/Stevehim2007/qqbot-plugins/releases/download/v4.3.0-beta.4/qqbot_image_search-2.0.0.zip",
+        "dependencies": [
+          "qqbot_safe_tools"
+        ]
+      },
+      "qqbot_food": {
+        "id": "qqbot_food",
+        "version": "3.0.0",
+        "source_version": "",
+        "version_matches_source": false,
+        "sha256": "dd996315a48f80cbbbd16088b483c4a315ddbc528a4ef79e114491fef8fe9ce9",
+        "size": 57935,
+        "artifact": "artifacts/qqbot_food-3.0.0.zip",
+        "artifact_present_in_release_root": true,
+        "artifact_sha256_on_disk": "dd996315a48f80cbbbd16088b483c4a315ddbc528a4ef79e114491fef8fe9ce9",
+        "download": "https://github.com/Stevehim2007/qqbot-plugins/releases/download/v4.3.0-beta.4/qqbot_food-3.0.0.zip",
+        "dependencies": [
+          "qqbot_safe_tools"
+        ]
+      },
+      "qqbot_stickers": {
+        "id": "qqbot_stickers",
+        "version": "3.0.0",
+        "source_version": "",
+        "version_matches_source": false,
+        "sha256": "9fffc34b1d16276cf3fd6fb9fe692a0bfd9bda66b200611ce0b56d705e426bab",
+        "size": 68509,
+        "artifact": "artifacts/qqbot_stickers-3.0.0.zip",
+        "artifact_present_in_release_root": true,
+        "artifact_sha256_on_disk": "9fffc34b1d16276cf3fd6fb9fe692a0bfd9bda66b200611ce0b56d705e426bab",
+        "download": "https://github.com/Stevehim2007/qqbot-plugins/releases/download/v4.3.0-beta.4/qqbot_stickers-3.0.0.zip",
+        "dependencies": [
+          "qqbot_safe_tools"
+        ]
+      },
+      "qqbot_memory_commands": {
+        "id": "qqbot_memory_commands",
+        "version": "4.0.0",
+        "source_version": "",
+        "version_matches_source": false,
+        "sha256": "44287bad8f919afa282c918e3309b320357ec46c1f4a63a681209afea00c2de0",
+        "size": 26899,
+        "artifact": "artifacts/qqbot_memory_commands-4.0.0.zip",
+        "artifact_present_in_release_root": true,
+        "artifact_sha256_on_disk": "44287bad8f919afa282c918e3309b320357ec46c1f4a63a681209afea00c2de0",
+        "download": "https://github.com/Stevehim2007/qqbot-plugins/releases/download/v4.3.0-beta.4/qqbot_memory_commands-4.0.0.zip",
+        "dependencies": [
+          "qqbot_safe_tools"
+        ]
+      }
+    },
+    "retained_rollback_artifacts": []
+  },
+  "schema_count_reconciliation": {
+    "contract_claimed_count": 264,
+    "actual_schema_count": 265,
+    "actual_defaults_count": 265,
+    "difference": 1,
+    "contract_count_scope": "business schema before the v3 legacy cutover gate",
+    "actual_count_scope": "current schema including migration cutover control",
+    "added_after_contract": [
+      {
+        "key": "legacy_core_reply_enabled",
+        "commit": "bb8d391c686a4507435a2dd2d96e58348547ee24",
+        "commit_subject": "feat(core): add legacy main-reply cutover gate",
+        "date": "2026-11-05T22:02:18+08:00",
+        "purpose": "v3 cutover gate; does not represent a legacy user-facing business capability",
+        "schema_lines_added": 6,
+        "config_defaults_lines_added": 1,
+        "main_py_gate_lines_added": 6
+      }
+    ],
+    "verification": {
+      "pre_cutover_schema_count": 264,
+      "pre_cutover_schema_sha256": "006a93d9e99d046afadacbc6dcdeaa9c38c7c4a2b4ca0768098849fd47a91215",
+      "current_schema_count": 265,
+      "current_schema_sha256": "18015b4817b70b99f8d5cb52c423ffb02624be631f39a79eae16cf55b2ab6eda",
+      "defaults_equal_schema_keys": true,
+      "command": "git show bb8d391^:plugins/qqbot_enhancer/_conf_schema.json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'"
+    },
+    "conclusion": "field-map.json covers the 265 actual current keys one-to-one; 264 is the frozen business-schema count before bb8d391, not a contradictory count and not a reason to drop legacy_core_reply_enabled."
+  },
+  "counts": {
+    "legacy_package_count": 2,
+    "minimal_package_count": 7,
+    "schema_entries": 265,
+    "schema_entries_contract_business": 264,
+    "schema_entries_migration_control": 1
+  },
+  "known_registration_conflicts": [],
+  "notes": [
+    "qqbot_core_full is a byte-identical copy of qqbot_enhancer main.py/config.py/_conf_schema.json at this baseline; only metadata.yaml, VERSION and README differ.",
+    "Loading qqbot_enhancer and qqbot_core_full together registers duplicate reply, marker, command and writer entrypoints.",
+    "The staging source snapshot is commit 673820405f0d24c1b932ccc7ca6a7223f3aad37f; catalog/manifest and release ZIPs were captured from the staging working tree and are recorded separately.",
+    "AstrBot 4.29.3 runtime behaviour was not executed in S0; runtime_verification is deliberately not_performed_s0_offline."
+  ]
+}

@@ -27,7 +27,7 @@ run_step "repository unittest suite" \
   python3 -m unittest discover -s tests -q
 
 run_step "python syntax" \
-  python3 -m py_compile qqbot_studio/*.py plugins/qqbot_enhancer/*.py
+  python3 -m py_compile qqbot_studio/*.py
 
 run_step "console javascript syntax" \
   node --check qqbot_studio/static/console.js

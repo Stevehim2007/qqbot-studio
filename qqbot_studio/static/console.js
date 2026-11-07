@@ -36,7 +36,6 @@
   const pluginInputText = pluginConfigService.pluginInputText;
   const pluginDefaultText = pluginConfigService.pluginDefaultText;
 
-  const lastKnownAiToolsValues = new Map();
   const lastKnownMemoryModes = new Map();
 
   const state = {
@@ -50,6 +49,9 @@
     deletingInstanceId: '',
     lastSyncedAt: 0,
     pollTimer: null,
+    pluginGroupView: {},
+    pluginGroupExpanded: {},
+    settingsTab: 'plugins',
     updateBusy: false,
     updateChecked: false,
     updateArmed: false,
@@ -122,15 +124,7 @@
   }
   const instanceSettings = instanceSettingsNamespace.createInstanceSettings({
     getInstance: (id) => state.instances.find((item) => item.id === id),
-    renderSections: (instance) => [
-      buildPluginSection(instance),
-      buildAiToolsSection(instance),
-      buildPromptManagerSection(instance),
-      buildMemorySection(instance),
-      buildMemoryPolicySection(instance),
-      buildMemoryContentSection(instance),
-      buildStatsSection(instance)
-    ],
+    renderSections: (instance) => [buildSettingsShell(instance)],
     subtitleText: (instance) => `实例 ${instance.name || instance.id} · ID ${instance.id || '缺失'} · ${v3SummaryText(instance)}`,
     findTrigger: (id) => {
       const card = findInstanceCard(id);
@@ -1415,14 +1409,24 @@
     }
   }
 
+  async function loadPluginGroupsForInstance(instance) {
+    try {
+      const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups`));
+      return data.ok === false ? { ok: false, groups: [], error: textValue(data.error, '插件分组读取失败。') } : data;
+    } catch (error) {
+      return { ok: false, groups: [], error: formatError(error, '插件分组读取失败。') };
+    }
+  }
+
   async function loadV3ForInstance(instance) {
-    const [plugins, memory, memoryPolicy, stats] = await Promise.all([
+    const [plugins, memory, memoryPolicy, stats, pluginGroups] = await Promise.all([
       loadPluginsForInstance(instance),
       loadMemoryForInstance(instance),
       loadMemoryPolicyForInstance(instance),
-      loadStatsForInstance(instance)
+      loadStatsForInstance(instance),
+      loadPluginGroupsForInstance(instance)
     ]);
-    return { ...instance, v3: { plugins, memory, memoryPolicy, stats } };
+    return { ...instance, v3: { plugins, memory, memoryPolicy, stats, pluginGroups } };
   }
 
   function setV3Status(element, message, tone = 'info') {
@@ -1584,7 +1588,30 @@
     head.appendChild(toggle);
     section.appendChild(head);
     const body = makeElement('div', 'plugin-config-group-fields');
-    for (const entry of entries) body.appendChild(entry.element);
+    const subgroups = new Map();
+    for (const entry of entries) {
+      const subgroup = textValue(entry.uiSubgroup, '').trim();
+      if (!subgroup) continue;
+      if (!subgroups.has(subgroup)) subgroups.set(subgroup, []);
+      subgroups.get(subgroup).push(entry);
+    }
+    if (subgroups.size) {
+      const placed = new Set();
+      for (const [title, items] of subgroups) {
+        const block = makeElement('div', 'plugin-config-subgroup');
+        block.appendChild(makeElement('h5', 'plugin-config-subgroup-title', title));
+        for (const entry of items) {
+          block.appendChild(entry.element);
+          placed.add(entry);
+        }
+        body.appendChild(block);
+      }
+      for (const entry of entries) {
+        if (!placed.has(entry)) body.appendChild(entry.element);
+      }
+    } else {
+      for (const entry of entries) body.appendChild(entry.element);
+    }
     section.appendChild(body);
     const expanded = pluginSectionExpanded(group, pluginConfigUiState());
     section.dataset.collapsed = expanded ? 'false' : 'true';
@@ -2219,6 +2246,603 @@
     return plugin ? { instance, plugin, status } : null;
   }
 
+  function pluginMarketActionLabel(entry) {
+    const status = textValue(entry.status, '');
+    if (status === 'available') return '安装';
+    if (status === 'update_available') return '更新';
+    if (status === 'reserved') return '主插件保留';
+    if (status === 'unregistered') return '目录未登记';
+    return '已安装';
+  }
+
+  function pluginMarketActionEnabled(entry) {
+    return textValue(entry.status, '') === 'available' || textValue(entry.status, '') === 'update_available';
+  }
+
+  function pluginMarketStatusText(entry) {
+    const status = textValue(entry.status, '');
+    if (status === 'available') return '可安装';
+    if (status === 'update_available') return '可更新';
+    if (status === 'reserved') return '保留';
+    if (status === 'unregistered') return '未登记目录';
+    return '已安装';
+  }
+
+  function pluginMarketIdempotencyKey(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
+  function pluginMarketAskConfirm(panel, message) {
+    return new Promise((resolve) => {
+      const previous = panel.querySelector('[data-plugin-market-confirm]');
+      if (previous) previous.remove();
+      const box = makeElement('div', 'plugin-market-confirm');
+      box.dataset.pluginMarketConfirm = 'true';
+      box.setAttribute('role', 'alertdialog');
+      box.setAttribute('aria-label', '确认插件市场操作');
+      const copy = makeElement('p', 'plugin-market-confirm-copy', message);
+      const actions = makeElement('div', 'plugin-market-confirm-actions');
+      const cancel = makeElement('button', 'btn btn-small btn-quiet', '取消');
+      cancel.type = 'button';
+      const accept = makeElement('button', 'btn btn-small btn-primary', '确认');
+      accept.type = 'button';
+      const finish = (value) => {
+        box.remove();
+        resolve(value);
+      };
+      cancel.addEventListener('click', () => finish(false));
+      accept.addEventListener('click', () => finish(true));
+      actions.appendChild(cancel);
+      actions.appendChild(accept);
+      box.appendChild(copy);
+      box.appendChild(actions);
+      panel.prepend(box);
+      cancel.focus();
+    });
+  }
+
+  function pluginMarketAskText(panel, titleText, defaultValue) {
+    return new Promise((resolve) => {
+      const previous = panel.querySelector('[data-plugin-market-confirm]');
+      if (previous) previous.remove();
+      const box = makeElement('div', 'plugin-market-confirm');
+      box.dataset.pluginMarketConfirm = 'true';
+      box.setAttribute('role', 'dialog');
+      box.setAttribute('aria-label', titleText);
+      const label = makeElement('label', 'plugin-market-confirm-label', titleText);
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 80;
+      input.value = textValue(defaultValue, '');
+      const actions = makeElement('div', 'plugin-market-confirm-actions');
+      const cancel = makeElement('button', 'btn btn-small btn-quiet', '取消');
+      cancel.type = 'button';
+      const accept = makeElement('button', 'btn btn-small btn-primary', '确定');
+      accept.type = 'button';
+      const finish = (value) => {
+        box.remove();
+        resolve(value);
+      };
+      cancel.addEventListener('click', () => finish(null));
+      accept.addEventListener('click', () => finish(input.value));
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          finish(input.value);
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(null);
+        }
+      });
+      label.appendChild(input);
+      actions.appendChild(cancel);
+      actions.appendChild(accept);
+      box.appendChild(label);
+      box.appendChild(actions);
+      panel.prepend(box);
+      input.focus();
+      input.select();
+    });
+  }
+
+  function pluginMarketSetStatus(panel, message, tone = 'info') {
+    const target = panel.querySelector('[data-plugin-market-status]');
+    if (target) setV3Status(target, message, tone);
+  }
+
+  function pluginMarketInstalledChoices(instance, marketData) {
+    const choices = new Map();
+    for (const item of Array.isArray(marketData && marketData.installed) ? marketData.installed : []) {
+      const id = textValue(item.plugin_id || item.id, '');
+      if (id) choices.set(id, textValue(item.name || id, id));
+    }
+    const plugins = instance && instance.v3 && instance.v3.plugins ? instance.v3.plugins.items : [];
+    for (const item of Array.isArray(plugins) ? plugins : []) {
+      const id = textValue(item.id, '');
+      if (id) choices.set(id, textValue(item.name || id, id));
+    }
+    return choices;
+  }
+
+  async function applyPluginGroupActions(instance, actions, panel, confirmText, options = {}) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    if (!options.skipConfirm && !(await pluginMarketAskConfirm(panel, confirmText || '确认应用这些插件分组变更？不会删除任何插件文件。'))) return false;
+    pluginMarketSetStatus(panel, '正在生成分组预览…', 'info');
+    try {
+      const preview = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups/preview`, {
+        method: 'POST',
+        body: { actions }
+      });
+      const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups/apply`, {
+        method: 'POST',
+        body: {
+          preview_token: preview.preview_token,
+          actions,
+          confirm: true,
+          idempotency_key: pluginMarketIdempotencyKey(`group-${instance.id}`)
+        }
+      });
+      pluginMarketSetStatus(panel, textValue(result.message, '分组已更新。'), 'success');
+      return true;
+    } catch (error) {
+      pluginMarketSetStatus(panel, formatError(error, '插件分组更新失败。'), 'error');
+      return false;
+    }
+  }
+
+  async function startPluginOperation(instance, entry, operation, panel) {
+    if (operation !== 'delete' && !pluginMarketActionEnabled(entry)) return;
+    const pluginId = textValue(entry.plugin_id || entry.id, '');
+    if (!pluginId) return;
+    const verb = operation === 'delete' ? '删除' : operation === 'update' ? '更新' : '安装';
+    const version = textValue(entry.version, '');
+    const sha = textValue(entry.sha256, '');
+    const confirmMessage = operation === 'delete'
+      ? `确认删除插件 ${pluginId} 的代码目录？\n只删除市场登记的代码目录；配置、plugin_data、数据库和会话都会保留，分组关系会清理。`
+      : `确认${verb}插件 ${pluginId}${version ? ` v${version}` : ''}？\nSHA256：${sha}\n插件代码会写入实例插件目录，配置/plugin_data/数据库/会话不会被删除。`;
+    if (!(await pluginMarketAskConfirm(panel, confirmMessage))) return;
+    pluginMarketSetStatus(panel, `正在生成${verb}预览…`, 'info');
+    try {
+      const preview = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-operations/preview`, {
+        method: 'POST',
+        body: { operation, plugin_id: pluginId }
+      });
+      pluginMarketSetStatus(panel, `正在${verb}插件…`, 'info');
+      const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-operations`, {
+        method: 'POST',
+        body: {
+          operation,
+          plugin_id: pluginId,
+          preview_token: preview.preview_token,
+          confirm: true,
+          idempotency_key: pluginMarketIdempotencyKey(`operation-${instance.id}`)
+        }
+      });
+      pluginMarketSetStatus(panel, textValue(result.message, `插件已${verb}。`), 'success');
+      if (instance.v3) instance.v3.plugins = await loadPluginsForInstance(instance);
+      updateV3Summary(instance);
+      if (instanceSettings.isOpenFor(instance.id)) instanceSettings.refresh();
+    } catch (error) {
+      pluginMarketSetStatus(panel, formatError(error, `插件${verb}失败。`), 'error');
+    }
+  }
+
+  function renderPluginMarketPanel(instance, panel, marketData, groupData, options = {}) {
+    const marketOnly = options.marketOnly === true;
+    panel.replaceChildren();
+    panel.dataset.loaded = 'true';
+    const status = makeElement('p', 'instance-v3-status plugin-market-status');
+    status.dataset.pluginMarketStatus = 'status';
+    status.setAttribute('role', 'status');
+    status.hidden = true;
+    panel.appendChild(status);
+
+    const tabBar = makeElement('div', 'plugin-market-tabs');
+    tabBar.setAttribute('role', 'tablist');
+    const marketTab = makeElement('button', 'plugin-market-tab is-active', '独立插件市场');
+    marketTab.type = 'button';
+    marketTab.setAttribute('role', 'tab');
+    marketTab.setAttribute('aria-selected', 'true');
+    marketTab.setAttribute('aria-controls', `plugin-market-pane-${instance.id}`);
+    const groupTab = makeElement('button', 'plugin-market-tab', '插件分组');
+    groupTab.type = 'button';
+    groupTab.setAttribute('role', 'tab');
+    groupTab.setAttribute('aria-selected', 'false');
+    groupTab.setAttribute('aria-controls', `plugin-group-pane-${instance.id}`);
+    tabBar.appendChild(marketTab);
+    if (!marketOnly) tabBar.appendChild(groupTab);
+    panel.appendChild(tabBar);
+    const marketPane = makeElement('div', 'plugin-market-pane');
+    marketPane.id = `plugin-market-pane-${instance.id}`;
+    marketPane.setAttribute('role', 'tabpanel');
+    const groupPane = makeElement('div', 'plugin-market-pane');
+    groupPane.id = `plugin-group-pane-${instance.id}`;
+    groupPane.setAttribute('role', 'tabpanel');
+    groupPane.hidden = true;
+    const selectTab = (tab) => {
+      const showGroups = tab === 'groups';
+      marketTab.classList.toggle('is-active', !showGroups);
+      if (groupTab.isConnected) {
+        groupTab.classList.toggle('is-active', showGroups);
+        groupTab.setAttribute('aria-selected', showGroups ? 'true' : 'false');
+      }
+      marketTab.setAttribute('aria-selected', showGroups ? 'false' : 'true');
+      marketPane.hidden = showGroups;
+      groupPane.hidden = !showGroups;
+    };
+    marketTab.addEventListener('click', () => selectTab('market'));
+    groupTab.addEventListener('click', () => selectTab('groups'));
+
+    const marketBlock = makeElement('section', 'plugin-market-block');
+    const marketHead = makeElement('div', 'plugin-market-block-head');
+    marketHead.appendChild(makeElement('h5', '', '独立插件市场'));
+    const sourceBits = [];
+    if (marketData && marketData.source && marketData.source.name) sourceBits.push(`来源：${marketData.source.name}`);
+    if (marketData && marketData.refreshed_at) sourceBits.push(`刷新：${marketData.refreshed_at}`);
+    marketHead.appendChild(makeElement('span', 'plugin-market-source', sourceBits.join(' · ') || '尚未刷新'));
+    marketBlock.appendChild(marketHead);
+    const entries = marketData && Array.isArray(marketData.entries) ? marketData.entries : [];
+    if (!entries.length) {
+      marketBlock.appendChild(makeElement('p', 'instance-v3-empty', '市场暂无条目。请把 catalog.json 放入实例 studio-plugins/market，或配置受信 URL 后刷新。'));
+    } else {
+      const pageSize = 5;
+      const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
+      let page = Number(panel.dataset.marketPage || '1');
+      if (!Number.isFinite(page) || page < 1 || page > totalPages) page = 1;
+      panel.dataset.marketPage = String(page);
+      const pageEntries = entries.slice((page - 1) * pageSize, page * pageSize);
+      const list = makeElement('div', 'plugin-market-list');
+      for (const entry of pageEntries) {
+        const row = makeElement('div', 'plugin-market-entry');
+        const info = makeElement('div', 'plugin-info');
+        const title = makeElement('div', 'plugin-title-line');
+        title.appendChild(makeElement('strong', 'plugin-name', textValue(entry.name || entry.id, entry.id)));
+        title.appendChild(makeElement('span', 'plugin-source-badge', pluginMarketStatusText(entry)));
+        if (entry.version) title.appendChild(makeElement('span', 'plugin-version', `v${entry.version}`));
+        info.appendChild(title);
+        if (entry.description) info.appendChild(makeElement('p', 'plugin-description', entry.description));
+        if (entry.installed_version && entry.installed_version !== entry.version) {
+          info.appendChild(makeElement('p', 'plugin-market-meta', `当前版本：${entry.installed_version}`));
+        }
+        if (entry.error) info.appendChild(makeElement('p', 'plugin-error', entry.error));
+        row.appendChild(info);
+        const control = makeElement('div', 'plugin-market-entry-control');
+        if (pluginMarketActionEnabled(entry)) {
+          const operation = textValue(entry.status, '') === 'update_available' ? 'update' : 'install';
+          const button = makeElement('button', 'btn btn-secondary btn-small', pluginMarketActionLabel(entry));
+          button.type = 'button';
+          button.addEventListener('click', () => void startPluginOperation(instance, entry, operation, panel));
+          control.appendChild(button);
+        }
+        if (entry.installed === true && entry.reserved !== true) {
+          const removeButton = makeElement('button', 'btn btn-small btn-quiet plugin-danger-action', '删除插件');
+          removeButton.type = 'button';
+          removeButton.addEventListener('click', () => void startPluginOperation(instance, entry, 'delete', panel));
+          control.appendChild(removeButton);
+        } else if (!pluginMarketActionEnabled(entry)) {
+          const state = makeElement('span', 'plugin-state-text', pluginMarketActionLabel(entry));
+          control.appendChild(state);
+        }
+        row.appendChild(control);
+        list.appendChild(row);
+      }
+      marketBlock.appendChild(list);
+      if (totalPages > 1) {
+        const pager = makeElement('div', 'plugin-market-pager');
+        const prev = makeElement('button', 'btn btn-quiet btn-small', '上一页');
+        prev.type = 'button';
+        prev.disabled = page <= 1;
+        prev.addEventListener('click', () => {
+          panel.dataset.marketPage = String(page - 1);
+          renderPluginMarketPanel(instance, panel, marketData, groupData);
+        });
+        const label = makeElement('span', 'plugin-market-page-label', `第 ${page} / ${totalPages} 页`);
+        const next = makeElement('button', 'btn btn-quiet btn-small', '下一页');
+        next.type = 'button';
+        next.disabled = page >= totalPages;
+        next.addEventListener('click', () => {
+          panel.dataset.marketPage = String(page + 1);
+          renderPluginMarketPanel(instance, panel, marketData, groupData);
+        });
+        pager.appendChild(prev);
+        pager.appendChild(label);
+        pager.appendChild(next);
+        marketBlock.appendChild(pager);
+      }
+    }
+    marketPane.appendChild(marketBlock);
+    const groupBlock = makeElement('section', 'plugin-market-block');
+    const groupHead = makeElement('div', 'plugin-market-block-head');
+    groupHead.appendChild(makeElement('h5', '', '插件分组'));
+    groupHead.appendChild(makeElement('span', 'plugin-market-source', '分组只存 SQLite；删除分组不会删除插件文件。'));
+    groupBlock.appendChild(groupHead);
+
+    const createRow = makeElement('div', 'plugin-group-create');
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.maxLength = 80;
+    nameInput.placeholder = '新分组名称';
+    nameInput.setAttribute('aria-label', '新分组名称');
+    const createButton = makeElement('button', 'btn btn-small btn-secondary', '创建分组');
+    createButton.type = 'button';
+    createButton.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        pluginMarketSetStatus(panel, '请输入分组名称。', 'warning');
+        return;
+      }
+      const ok = await applyPluginGroupActions(
+        instance,
+        [{ op: 'create', name }],
+        panel,
+        `确认创建分组“${name}”？`
+      );
+      if (ok) await loadPluginMarketPanel(instance, panel);
+    });
+    createRow.appendChild(nameInput);
+    createRow.appendChild(createButton);
+    groupBlock.appendChild(createRow);
+
+    const groups = groupData && Array.isArray(groupData.groups) ? groupData.groups : [];
+    if (!groups.length) {
+      groupBlock.appendChild(makeElement('p', 'instance-v3-empty', '尚未创建分组。'));
+    } else {
+      const choices = pluginMarketInstalledChoices(instance, marketData);
+      const groupList = makeElement('div', 'plugin-group-list');
+      for (const group of groups) {
+        const groupId = textValue(group.id, '');
+        const card = makeElement('div', 'plugin-group-card');
+        const groupHeadRow = makeElement('div', 'plugin-group-head');
+        groupHeadRow.appendChild(makeElement('strong', 'plugin-group-name', textValue(group.name, '未命名分组')));
+        const rename = makeElement('button', 'btn btn-small btn-quiet', '改名');
+        rename.type = 'button';
+        rename.addEventListener('click', async () => {
+          const nextName = await pluginMarketAskText(panel, '新的分组名称', textValue(group.name, ''));
+          if (!nextName || !nextName.trim() || nextName.trim() === group.name) return;
+          const ok = await applyPluginGroupActions(
+            instance,
+            [{ op: 'rename', group_id: groupId, name: nextName.trim() }],
+            panel,
+            `确认将分组改名为“${nextName.trim()}”？`
+          );
+          if (ok) await loadPluginMarketPanel(instance, panel);
+        });
+        const removeGroup = makeElement('button', 'btn btn-small btn-quiet plugin-danger-action', '删除分组');
+        removeGroup.type = 'button';
+        removeGroup.addEventListener('click', async () => {
+          const ok = await applyPluginGroupActions(
+            instance,
+            [{ op: 'delete', group_id: groupId }],
+            panel,
+            `确认删除分组“${group.name}”？只删除分组元数据，不删除任何插件文件或配置。`
+          );
+          if (ok) await loadPluginMarketPanel(instance, panel);
+        });
+        groupHeadRow.appendChild(rename);
+        groupHeadRow.appendChild(removeGroup);
+        card.appendChild(groupHeadRow);
+
+        const members = Array.isArray(group.plugin_ids) ? group.plugin_ids : [];
+        if (members.length) {
+          const chips = makeElement('div', 'plugin-group-members');
+          for (const pluginId of members) {
+            const chip = makeElement('span', 'plugin-group-chip', pluginId);
+            const remove = makeElement('button', 'plugin-group-chip-remove', '×');
+            remove.type = 'button';
+            remove.title = `从分组移出 ${pluginId}`;
+            remove.setAttribute('aria-label', `从分组移出 ${pluginId}`);
+            remove.addEventListener('click', async () => {
+              const ok = await applyPluginGroupActions(
+                instance,
+                [{ op: 'remove', group_id: groupId, plugin_id: pluginId }],
+                panel,
+                `确认把 ${pluginId} 移出分组“${group.name}”？不会删除插件文件。`
+              );
+              if (ok) await loadPluginMarketPanel(instance, panel);
+            });
+            chip.appendChild(remove);
+            chips.appendChild(chip);
+          }
+          card.appendChild(chips);
+        } else {
+          card.appendChild(makeElement('p', 'instance-v3-empty', '分组内暂无插件。'));
+        }
+
+        const available = Array.from(choices.entries()).filter(([pluginId]) => !members.includes(pluginId));
+        if (available.length) {
+          const addRow = makeElement('div', 'plugin-group-add');
+          const select = document.createElement('select');
+          select.setAttribute('aria-label', `选择加入分组 ${group.name} 的插件`);
+          for (const [pluginId, label] of available) {
+            const option = document.createElement('option');
+            option.value = pluginId;
+            option.textContent = `${label} (${pluginId})`;
+            select.appendChild(option);
+          }
+          const addButton = makeElement('button', 'btn btn-small btn-secondary', '加入分组');
+          addButton.type = 'button';
+          addButton.addEventListener('click', async () => {
+            const pluginId = select.value;
+            if (!pluginId) return;
+            const ok = await applyPluginGroupActions(
+              instance,
+              [{ op: 'add', group_id: groupId, plugin_id: pluginId }],
+              panel,
+              '',
+              { skipConfirm: true }
+            );
+            if (ok) {
+              const option = Array.from(select.options).find((item) => item.value === pluginId);
+              if (option) option.remove();
+              if (!members.includes(pluginId)) members.push(pluginId);
+              let chips = card.querySelector('.plugin-group-members');
+              if (!chips) {
+                const empty = card.querySelector('.instance-v3-empty');
+                if (empty) empty.remove();
+                chips = makeElement('div', 'plugin-group-members');
+                card.insertBefore(chips, addRow);
+              }
+              const chip = makeElement('span', 'plugin-group-chip', pluginId);
+              const remove = makeElement('button', 'plugin-group-chip-remove', '×');
+              remove.type = 'button';
+              remove.title = `从分组移出 ${pluginId}`;
+              remove.addEventListener('click', async () => {
+                const removed = await applyPluginGroupActions(
+                  instance,
+                  [{ op: 'remove', group_id: groupId, plugin_id: pluginId }],
+                  panel,
+                  `确认把 ${pluginId} 移出分组“${group.name}”？不会删除插件文件。`
+                );
+                if (removed) {
+                  chip.remove();
+                  const index = members.indexOf(pluginId);
+                  if (index >= 0) members.splice(index, 1);
+                  pluginMarketSetStatus(panel, `已把 ${pluginId} 移出分组“${group.name}”。`, 'success');
+                }
+              });
+              chip.appendChild(remove);
+              chips.appendChild(chip);
+
+              // Update the already-rendered group card above without rebuilding settings.
+              const groupRecord = instance && instance.v3 && instance.v3.pluginGroups
+                ? (instance.v3.pluginGroups.groups || []).find((item) => textValue(item.id, '') === groupId)
+                : null;
+              if (groupRecord) {
+                groupRecord.plugin_ids = Array.isArray(groupRecord.plugin_ids) ? groupRecord.plugin_ids : [];
+                if (!groupRecord.plugin_ids.includes(pluginId)) groupRecord.plugin_ids.push(pluginId);
+              }
+              const section = panel.closest('.instance-v3-section');
+              const groupBody = section
+                ? Array.from(section.querySelectorAll('[data-plugin-group-body]')).find((item) => item.dataset.pluginGroupBody === groupId)
+                : null;
+              const pluginRecord = instance && instance.v3 && instance.v3.plugins
+                ? (instance.v3.plugins.items || []).find((item) => String(item.id) === String(pluginId))
+                : null;
+              if (groupBody && pluginRecord) {
+                const empty = groupBody.querySelector('.instance-v3-empty');
+                if (empty) empty.remove();
+                const groupStatus = section ? section.querySelector('[data-v3-status="plugins"]') : null;
+                groupBody.appendChild(buildPluginRow(instance, pluginRecord, groupStatus, 'ok'));
+              }
+              pluginMarketSetStatus(panel, `已把 ${pluginId} 加入分组“${group.name}”。`, 'success');
+            }
+          });
+          addRow.appendChild(select);
+          addRow.appendChild(addButton);
+          card.appendChild(addRow);
+        }
+        groupList.appendChild(card);
+      }
+      groupBlock.appendChild(groupList);
+    }
+    groupPane.appendChild(groupBlock);
+    panel.appendChild(marketPane);
+    if (!marketOnly) panel.appendChild(groupPane);
+  }
+
+  async function loadPluginMarketPanel(instance, panel, options = {}) {
+    panel.dataset.loading = 'true';
+    panel.dataset.loaded = '';
+    panel.replaceChildren(makeElement('p', 'plugin-config-loading', '正在读取插件市场与分组…'));
+    try {
+      const [marketData, groupData] = await Promise.all([
+        apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-market`),
+        apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-groups`)
+      ]);
+      renderPluginMarketPanel(instance, panel, asRecord(marketData), asRecord(groupData), options);
+    } catch (error) {
+      panel.replaceChildren();
+      const message = makeElement('p', 'plugin-error', formatError(error, '插件市场读取失败。'));
+      message.setAttribute('role', 'alert');
+      panel.appendChild(message);
+      panel.dataset.loaded = 'true';
+    } finally {
+      panel.dataset.loading = '';
+    }
+  }
+
+  async function refreshPluginMarket(instance, panel) {
+    pluginMarketSetStatus(panel, '正在刷新市场清单…', 'info');
+    try {
+      const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-market/refresh`, {
+        method: 'POST',
+        body: {}
+      });
+      await loadPluginMarketPanel(instance, panel);
+      pluginMarketSetStatus(panel, textValue(result.message, '插件市场已刷新。'), 'success');
+    } catch (error) {
+      pluginMarketSetStatus(panel, formatError(error, '插件市场刷新失败。'), 'error');
+    }
+  }
+
+  function buildPluginRow(instance, plugin, statusElement, pluginStatus) {
+    const row = makeElement('div', 'plugin-item');
+    const info = makeElement('div', 'plugin-info');
+    const titleLine = makeElement('div', 'plugin-title-line');
+    titleLine.appendChild(makeElement('strong', 'plugin-name', plugin.name));
+    const sourceLabel = pluginSourceLabel(plugin.source);
+    if (sourceLabel) titleLine.appendChild(makeElement('span', 'plugin-source-badge', sourceLabel));
+    if (plugin.version) titleLine.appendChild(makeElement('span', 'plugin-version', `v${plugin.version}`));
+    info.appendChild(titleLine);
+    if (plugin.description) info.appendChild(makeElement('p', 'plugin-description', plugin.description));
+    if (plugin.error) info.appendChild(makeElement('p', 'plugin-error', plugin.error));
+
+    const control = makeElement('div', 'plugin-control');
+    const canEditConfig = Boolean(plugin.id) && plugin.configAvailable !== false;
+    if (canEditConfig) {
+      const editButton = makeElement('button', 'plugin-edit-button', '编辑参数');
+      editButton.setAttribute('type', 'button');
+      editButton.setAttribute('aria-label', `编辑插件 ${plugin.name} 的参数`);
+      editButton.addEventListener('click', () => void openPluginConfigPanel(instance, plugin, editButton));
+      control.appendChild(editButton);
+    }
+    const stateText = makeElement('span', 'plugin-state-text', pluginStateText(plugin.enabled));
+    const switchLabel = makeElement('label', 'plugin-switch');
+    const checkbox = document.createElement('input');
+    checkbox.setAttribute('type', 'checkbox');
+    checkbox.className = 'plugin-switch-input';
+    checkbox.checked = plugin.enabled === true;
+    checkbox.disabled = pluginStatus !== 'ok' || !plugin.id || plugin.enabled === undefined;
+    checkbox.setAttribute('role', 'switch');
+    checkbox.setAttribute('aria-label', `启用插件 ${plugin.name}`);
+    const track = makeElement('span', 'plugin-switch-track');
+    switchLabel.appendChild(checkbox);
+    switchLabel.appendChild(track);
+    checkbox.addEventListener('change', () => {
+      void handlePluginToggle(instance, plugin, checkbox, row, stateText, statusElement);
+    });
+    control.appendChild(stateText);
+    control.appendChild(switchLabel);
+    row.appendChild(info);
+    row.appendChild(control);
+    return row;
+  }
+
+  function buildPluginMarketSection(instance) {
+    const section = makeElement('section', 'instance-v3-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-puzzle'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '插件市场'));
+    headingCopy.appendChild(makeElement('p', '', '安装、更新和删除独立插件；市场与插件分组分开显示。'));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+    const tools = makeElement('div', 'plugin-market-tools');
+    const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新市场');
+    refresh.type = 'button';
+    const panel = makeElement('div', 'plugin-market-panel');
+    panel.dataset.pluginMarket = 'panel';
+    refresh.addEventListener('click', () => void refreshPluginMarket(instance, panel));
+    tools.appendChild(refresh);
+    tools.appendChild(panel);
+    section.appendChild(tools);
+    void loadPluginMarketPanel(instance, panel, { marketOnly: true });
+    return section;
+  }
+
   function buildPluginSection(instance) {
     const plugins = (instance.v3 && instance.v3.plugins) || emptyPluginState();
     const section = makeElement('section', 'instance-v3-section');
@@ -2246,644 +2870,216 @@
       setV3Status(statusElement, '插件配置已变更，请重启 AstrBot 生效。', 'warning');
     }
 
-    if (plugins.items.length > 0) {
-      const list = makeElement('div', 'plugin-list');
-      for (const plugin of plugins.items) {
-        const row = makeElement('div', 'plugin-item');
-        const info = makeElement('div', 'plugin-info');
-        const titleLine = makeElement('div', 'plugin-title-line');
-        titleLine.appendChild(makeElement('strong', 'plugin-name', plugin.name));
-        const sourceLabel = pluginSourceLabel(plugin.source);
-        if (sourceLabel) titleLine.appendChild(makeElement('span', 'plugin-source-badge', sourceLabel));
-        if (plugin.version) titleLine.appendChild(makeElement('span', 'plugin-version', `v${plugin.version}`));
-        info.appendChild(titleLine);
-        if (plugin.description) info.appendChild(makeElement('p', 'plugin-description', plugin.description));
-        if (plugin.error) info.appendChild(makeElement('p', 'plugin-error', plugin.error));
-
-        const control = makeElement('div', 'plugin-control');
-        const canEditConfig = Boolean(plugin.id) && plugin.configAvailable !== false;
-        if (canEditConfig) {
-          const editButton = makeElement('button', 'plugin-edit-button', '编辑参数');
-          editButton.setAttribute('type', 'button');
-          editButton.setAttribute('aria-label', `编辑插件 ${plugin.name} 的参数`);
-          editButton.addEventListener('click', () => void openPluginConfigPanel(instance, plugin, editButton));
-          control.appendChild(editButton);
+    const groupState = instance && instance.v3 ? instance.v3.pluginGroups : null;
+    const groups = groupState && Array.isArray(groupState.groups) ? groupState.groups : [];
+    const groupedPluginIds = new Set();
+    for (const group of groups) {
+      for (const pluginId of Array.isArray(group.plugin_ids) ? group.plugin_ids : []) groupedPluginIds.add(String(pluginId));
+    }
+    const visiblePlugins = plugins.items.filter((plugin) => !groupedPluginIds.has(String(plugin.id)));
+    if (groups.length) {
+      const groupHead = makeElement('div', 'plugin-group-view-head');
+      groupHead.appendChild(makeElement('h5', '', '插件分组'));
+      groupHead.appendChild(makeElement('span', 'plugin-market-source', '分组默认折叠；展开后可编辑组内插件。'));
+      section.appendChild(groupHead);
+      const groupCards = makeElement('div', 'plugin-group-view-list');
+      const expandedState = state.pluginGroupExpanded[instance.id] || {};
+      for (const group of groups) {
+        const groupId = textValue(group.id, '');
+        const memberIds = Array.isArray(group.plugin_ids) ? group.plugin_ids.map(String) : [];
+        const groupPlugins = plugins.items.filter((plugin) => memberIds.includes(String(plugin.id)));
+        const card = makeElement('div', 'plugin-group-view-card');
+        card.dataset.pluginGroupId = groupId;
+        const toggle = makeElement('button', 'plugin-group-view-toggle');
+        toggle.type = 'button';
+        const title = makeElement('span', 'plugin-group-view-title');
+        title.appendChild(makeElement('strong', '', textValue(group.name, '未命名分组')));
+        title.appendChild(makeElement('span', 'plugin-market-source', `${groupPlugins.length} 个插件`));
+        const arrow = makeElement('span', 'plugin-group-view-arrow', expandedState[groupId] ? '▾' : '▸');
+        toggle.appendChild(title);
+        toggle.appendChild(arrow);
+        const body = makeElement('div', 'plugin-group-view-body');
+        body.dataset.pluginGroupBody = groupId;
+        body.hidden = !expandedState[groupId];
+        if (!groupPlugins.length) {
+          body.appendChild(makeElement('p', 'instance-v3-empty', '该分组内暂无插件。'));
+        } else {
+          for (const plugin of groupPlugins) body.appendChild(buildPluginRow(instance, plugin, statusElement, plugins.status));
         }
-        const stateText = makeElement('span', 'plugin-state-text', pluginStateText(plugin.enabled));
-        const switchLabel = makeElement('label', 'plugin-switch');
-        const checkbox = document.createElement('input');
-        checkbox.setAttribute('type', 'checkbox');
-        checkbox.className = 'plugin-switch-input';
-        checkbox.checked = plugin.enabled === true;
-        checkbox.disabled = plugins.status !== 'ok' || !plugin.id || plugin.enabled === undefined;
-        checkbox.setAttribute('role', 'switch');
-        checkbox.setAttribute('aria-label', `启用插件 ${plugin.name}`);
-        const track = makeElement('span', 'plugin-switch-track');
-        switchLabel.appendChild(checkbox);
-        switchLabel.appendChild(track);
-        checkbox.addEventListener('change', () => {
-          void handlePluginToggle(instance, plugin, checkbox, row, stateText, statusElement);
+        toggle.setAttribute('aria-expanded', expandedState[groupId] ? 'true' : 'false');
+        toggle.addEventListener('click', () => {
+          const next = body.hidden;
+          body.hidden = !next;
+          expandedState[groupId] = next;
+          state.pluginGroupExpanded[instance.id] = expandedState;
+          toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+          arrow.textContent = next ? '▾' : '▸';
         });
-        control.appendChild(stateText);
-        control.appendChild(switchLabel);
-        row.appendChild(info);
-        row.appendChild(control);
-        list.appendChild(row);
+        card.appendChild(toggle);
+        card.appendChild(body);
+        groupCards.appendChild(card);
       }
+      section.appendChild(groupCards);
+    }
+
+
+    if (visiblePlugins.length > 0) {
+      const list = makeElement('div', 'plugin-list');
+      for (const plugin of visiblePlugins) list.appendChild(buildPluginRow(instance, plugin, statusElement, plugins.status));
       section.appendChild(list);
     } else if (plugins.status === 'ok') {
-      section.appendChild(makeElement('p', 'instance-v3-empty', plugins.hasList ? '未发现可管理的插件。' : '服务端没有返回插件列表数据。'));
+      section.appendChild(makeElement('p', 'instance-v3-empty', '未发现未分组插件。'));
     }
     section.appendChild(statusElement);
     return section;
   }
 
-  const AI_TOOL_PERMISSIONS = [
-    {
-      key: 'safe_tools_enabled',
-      label: '允许机器人自己调用插件能力',
-      description: '总开关。仅开放下列白名单能力，不会开放电脑控制、终端或任意文件访问。',
-      master: true
-    },
-    {
-      key: 'safe_tools_allow_search_images',
-      label: '搜索图片',
-      description: '允许机器人在需要配图时搜索图片。仅白名单；无电脑控制、终端或任意文件访问。'
-    },
-    {
-      key: 'safe_tools_allow_send_sticker',
-      label: '发送表情',
-      description: '允许机器人从本地表情库选择并发送表情。仅白名单；无电脑控制、终端或任意文件访问。'
-    },
-    {
-      key: 'safe_tools_allow_collect_sticker',
-      label: '收藏表情',
-      description: '允许机器人把聊天中的图片或表情收藏到本地表情库。仅白名单；无电脑控制、终端或任意文件访问。'
-    },
-    {
-      key: 'safe_tools_allow_list_categories',
-      label: '查询表情分类',
-      description: '允许机器人查询本地表情分类名称。仅白名单；无电脑控制、终端或任意文件访问。'
-    },
-    {
-      key: 'safe_tools_allow_fetch_webpage',
-      label: '读取公开网页',
-      description: '允许 fetch_webpage 读取公开 HTTP(S) 网页；有 SSRF/大小/超时/重定向限制。'
-    },
-    {
-      key: 'web_auto_fetch_enabled',
-      label: '自动读取消息里的 URL',
-      description: '消息含 URL 且处于阅读/提问语境时自动抓取网页正文；裸链接不触发。'
-    },
-    {
-      key: 'web_auto_fetch_question_only',
-      label: '仅提问语境自动读取',
-      description: '只有“怎么安装/这篇文章讲了什么”等阅读语境才自动抓取，普通闲聊不抓。'
-    },
-    {
-      key: 'safe_tools_allow_search_food_restaurants',
-      label: '搜索饭店',
-      description: '允许 search_food_restaurants 按名称/标签/位置查询饭店。'
-    },
-    {
-      key: 'safe_tools_allow_submit_food_review',
-      label: '提交饭店评价',
-      description: '允许 submit_food_review 在明确添加意图下提交评价；不泄露发送者 QQ。'
-    },
-    {
-      key: 'food_enabled',
-      label: 'Food 功能总开关',
-      description: '允许插件处理 Food 相关命令和自然语言请求。'
-    },
-    {
-      key: 'food_search_enabled',
-      label: 'Food 自然语言搜索',
-      description: '允许自然语言搜索饭店；与手动工具开关独立。'
-    }
-  ];
-
-  const AI_STICKER_SWITCHES = [
-    {
-      key: 'sticker_enabled',
-      label: '启用自动表情',
-      description: '总开关。允许插件在回复中附带本地表情，不会执行电脑控制、终端或任意文件操作。',
-      master: true
-    },
-    {
-      key: 'sticker_ai_select_enabled',
-      id: 'ai-sticker-ai-select-enabled',
-      label: '允许 AI 主动选择表情',
-      description: '由 AI 按语境从本地表情库选择；仅白名单本地资源，无电脑控制。'
-    },
-    {
-      key: 'sticker_ai_marker_enabled',
-      id: 'ai-sticker-ai-marker-enabled',
-      label: '启用安全表情 marker',
-      description: 'direct 模式下由插件给模型提供安全 marker，模型只能引用允许的表情；无文件/终端访问。'
-    },
-    {
-      key: 'collected_sticker_enabled',
-      id: 'ai-sticker-collected-enabled',
-      label: '使用已收藏表情',
-      description: '允许从本实例已收藏的表情中选择；不访问任意文件路径。'
-    }
-  ];
-  const AI_STICKER_NUMBERS = [
-    { key: 'sticker_ai_select_probability', id: 'ai-sticker-ai-select-probability', label: 'AI 主动选择表情概率', min: 0, max: 1, step: 0.01, defaultValue: 0.6 },
-    { key: 'sticker_probability', id: 'ai-sticker-probability', label: '自动带表情概率', min: 0, max: 1, step: 0.01, defaultValue: 0.3 },
-    { key: 'sticker_cooldown_seconds', id: 'ai-sticker-cooldown-seconds', label: '表情冷却时间（秒）', min: 0, max: 86400, step: 1, defaultValue: 0, integer: true }
-  ];
-  const AI_STICKER_KEYS = [
-    ...AI_STICKER_SWITCHES.map((item) => item.key),
-    ...AI_STICKER_NUMBERS.map((item) => item.key)
-  ];
-  const AI_ALL_CONFIG_KEYS = [
-    ...AI_TOOL_PERMISSIONS.map((item) => item.key),
-    ...AI_STICKER_KEYS
-  ];
-
-  function aiStickerNumberValue(snapshot, field) {
-    const values = snapshot ? asRecord(snapshot.values) : {};
-    if (Object.prototype.hasOwnProperty.call(values, field.key)) {
-      const value = pluginConfigService.pluginInputText(values[field.key]);
-      if (value !== '') return value;
-    }
-    const schemaField = snapshot && Array.isArray(snapshot.schema)
-      ? snapshot.schema.find((item) => item.key === field.key)
-      : null;
-    if (schemaField && schemaField.hasDefault) {
-      const value = pluginConfigService.pluginInputText(schemaField.default);
-      if (value !== '') return value;
-    }
-    return String(field.defaultValue);
-  }
-
-  function aiToolPluginRecord(instance) {
-    const status = instance && instance.v3 && instance.v3.plugins ? instance.v3.plugins : null;
-    const items = status && Array.isArray(status.items) ? status.items : [];
-    return items.find((plugin) => plugin.id === 'qqbot_enhancer') || null;
-  }
-
-  function aiToolValue(snapshot, key) {
-    if (!snapshot) return false;
-    const values = asRecord(snapshot.values);
-    if (Object.prototype.hasOwnProperty.call(values, key)) return boolOrUndefined(values[key]) === true;
-    const field = (snapshot.schema || []).find((item) => item.key === key);
-    return Boolean(field && field.hasDefault && boolOrUndefined(field.default) === true);
-  }
-
-  function setAiToolsStatus(ui, message, tone = 'info') {
-    if (!ui || !ui.status) return;
-    ui.status.textContent = sanitisePluginText(message) || '';
-    ui.status.className = `ai-tools-status${tone ? ` is-${tone}` : ''}`;
-    ui.status.hidden = !message;
-  }
-
-  function setAiToolsError(ui, message) {
-    if (!ui || !ui.error) return;
-    ui.error.textContent = sanitisePluginText(message) || '';
-    ui.error.hidden = !message;
-  }
-
-  function updateAiToolsHint(ui) {
-    if (!ui || !ui.hint) return;
-    if (ui.loadingConfig && !ui.unsupportedReason) {
-      ui.hint.textContent = '正在读取 AI 工具权限与自动表情参数…';
-      return;
-    }
-    if (!ui.supported) {
-      ui.hint.textContent = ui.unsupportedReason || '当前后端不支持 AI 工具权限。';
-      return;
-    }
-    if (!ui.pluginEnabled) {
-      ui.hint.textContent = 'QQ 增强插件当前已禁用。请先在插件管理中启用插件，再调整 AI 工具权限；当前开关不可操作。';
-      return;
-    }
-    const safeMaster = ui.inputs.safe_tools_enabled ? ui.inputs.safe_tools_enabled.checked : false;
-    const stickerMaster = ui.inputs.sticker_enabled ? ui.inputs.sticker_enabled.checked : false;
-    ui.hint.textContent = `仅开放白名单插件能力和本地表情库；无电脑控制、终端、Shell 或任意文件访问。当前安全工具总开关：${safeMaster ? '开' : '关'}；自动表情总开关：${stickerMaster ? '开' : '关'}。`;
-  }
-
-  function syncAiToolsControlState(ui) {
-    if (!ui) return;
-    const safeMaster = ui.inputs.safe_tools_enabled ? ui.inputs.safe_tools_enabled.checked : false;
-    const stickerMaster = ui.inputs.sticker_enabled ? ui.inputs.sticker_enabled.checked : false;
-    const disabledBase = !ui.supported || !ui.pluginEnabled || ui.loadingConfig || ui.saving;
-    for (const permission of AI_TOOL_PERMISSIONS) {
-      const input = ui.inputs[permission.key];
-      if (!input) continue;
-      input.disabled = disabledBase || (!permission.master && permission.key.startsWith('safe_tools_allow_') && !safeMaster);
-      const option = input.closest('.ai-tool-option');
-      if (option) option.classList.toggle('is-disabled', input.disabled);
-    }
-    for (const permission of AI_STICKER_SWITCHES) {
-      const input = ui.inputs[permission.key];
-      if (!input) continue;
-      input.disabled = disabledBase || (!permission.master && !stickerMaster);
-      const option = input.closest('.ai-tool-option');
-      if (option) option.classList.toggle('is-disabled', input.disabled);
-    }
-    for (const field of AI_STICKER_NUMBERS) {
-      const input = ui.numberInputs[field.key];
-      if (!input) continue;
-      input.disabled = disabledBase || !stickerMaster;
-      const wrapper = input.closest('.ai-sticker-number-field');
-      if (wrapper) wrapper.classList.toggle('is-disabled', input.disabled);
-    }
-    for (const [key, status] of Object.entries(ui.moduleStatuses || {})) {
-      if (!status) continue;
-      let enabled = false;
-      if (key === 'safe-tools') enabled = Boolean(ui.inputs.safe_tools_enabled && ui.inputs.safe_tools_enabled.checked);
-      else if (key === 'sticker') enabled = Boolean(ui.inputs.sticker_enabled && ui.inputs.sticker_enabled.checked);
-      else {
-        const moduleKeys = key === 'web-search'
-          ? ['safe_tools_allow_fetch_webpage', 'web_auto_fetch_enabled', 'web_auto_fetch_question_only']
-          : ['safe_tools_allow_search_food_restaurants', 'safe_tools_allow_submit_food_review', 'food_enabled', 'food_search_enabled'];
-        const count = moduleKeys.filter((item) => ui.inputs[item] && ui.inputs[item].checked).length;
-        enabled = count > 0;
-        status.textContent = count > 0 ? `已开启 ${count} 项` : '未开启';
-        status.className = `ai-tools-module-status is-${enabled ? 'enabled' : 'disabled'}`;
-        continue;
+  function buildSettingsShell(instance) {
+    const shell = makeElement('div', 'settings-shell');
+    const nav = makeElement('nav', 'settings-nav');
+    nav.setAttribute('aria-label', '实例设置菜单');
+    const paneHost = makeElement('div', 'settings-panes');
+    const categories = [
+      { id: 'plugins', label: '插件管理', sections: [buildPluginSection(instance)] },
+      { id: 'market', label: '插件市场', sections: [buildPluginMarketSection(instance)] },
+      {
+        id: 'memory',
+        label: '记忆',
+        sections: [
+          buildMemorySection(instance),
+          buildMemoryPolicySection(instance),
+          buildMemoryContentSection(instance)
+        ]
+      },
+      { id: 'prompts', label: '提示词', sections: [buildPromptManagerSection(instance)] },
+      { id: 'stats', label: '运行状态', sections: [buildStatsSection(instance)] }
+    ];
+    const buttons = new Map();
+    const panes = new Map();
+    const select = (id) => {
+      for (const [key, button] of buttons) {
+        const active = key === id;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
       }
-      status.textContent = enabled ? '已开启' : '已关闭';
-      status.className = `ai-tools-module-status is-${enabled ? 'enabled' : 'disabled'}`;
+      for (const [key, pane] of panes) pane.hidden = key !== id;
+      state.settingsTab = id;
+    };
+    for (const category of categories) {
+      const button = makeElement('button', 'settings-nav-item', category.label);
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.addEventListener('click', () => select(category.id));
+      buttons.set(category.id, button);
+      nav.appendChild(button);
+      const pane = makeElement('section', 'settings-pane');
+      pane.dataset.settingsPane = category.id;
+      for (const section of category.sections) if (section) pane.appendChild(section);
+      panes.set(category.id, pane);
+      paneHost.appendChild(pane);
     }
-    if (ui.saveButton) ui.saveButton.disabled = disabledBase;
-    if (ui.controls) ui.controls.hidden = !ui.supported;
-    if (ui.actions) ui.actions.hidden = !ui.supported;
-    if (ui.retryButton) ui.retryButton.hidden = !(ui.loadFailed || ui.unsupportedReason);
-    if (ui.section) {
-      ui.section.classList.toggle('is-plugin-disabled', !ui.pluginEnabled);
-      ui.section.classList.toggle('is-busy', Boolean(ui.loadingConfig || ui.saving));
-    }
-    updateAiToolsHint(ui);
+    shell.appendChild(nav);
+    shell.appendChild(paneHost);
+    const initial = buttons.has(state.settingsTab) ? state.settingsTab : 'plugins';
+    select(initial);
+    return shell;
   }
 
-  function buildAiToolsSection(instance) {
-    const section = makeElement('section', 'instance-v3-section ai-tools-section');
-    section.dataset.aiToolsInstanceId = instance.id;
+  function buildGroupWhitelistSection(instance) {
+    const section = makeElement('section', 'instance-v3-section group-whitelist-section');
     const heading = makeElement('div', 'instance-v3-section-heading');
     const icon = makeElement('span', 'instance-v3-section-icon');
     icon.appendChild(makeIcon('c-i-shield'));
     heading.appendChild(icon);
     const headingCopy = makeElement('div', 'instance-v3-section-copy');
-    headingCopy.appendChild(makeElement('h4', '', 'AI 工具权限'));
-    headingCopy.appendChild(makeElement('p', '', '控制 qqbot_enhancer 的白名单 AI 工具与自动表情；默认不开放系统控制能力。'));
+    headingCopy.appendChild(makeElement('h4', '', '群组白名单'));
+    headingCopy.appendChild(makeElement('p', '', '控制 AstrBot 是否只处理白名单中的 QQ 群；私聊不受此项影响。'));
     heading.appendChild(headingCopy);
     section.appendChild(heading);
 
-    const plugin = aiToolPluginRecord(instance);
-    const pluginEnabled = Boolean(plugin && plugin.enabled === true);
-    const pluginState = makeElement('span', 'ai-tools-plugin-state', pluginEnabled ? '插件已启用' : '插件未启用');
-    pluginState.className = `ai-tools-plugin-state is-${pluginEnabled ? 'enabled' : 'disabled'}`;
-    const pluginRow = makeElement('div', 'ai-tools-plugin-row');
-    pluginRow.appendChild(makeElement('span', 'ai-tools-plugin-label', 'QQ 增强插件'));
-    pluginRow.appendChild(pluginState);
-    section.appendChild(pluginRow);
-    const hint = makeElement('p', 'ai-tools-hint');
-    hint.setAttribute('id', 'ai-tools-hint');
-    section.appendChild(hint);
-    const loading = makeElement('p', 'ai-tools-loading', '正在读取 AI 工具权限…');
-    loading.setAttribute('id', 'ai-tools-loading');
-    loading.setAttribute('role', 'status');
-    section.appendChild(loading);
-
-    const controls = makeElement('div', 'ai-tools-controls');
-    controls.setAttribute('id', 'ai-tools-controls');
-    controls.hidden = true;
-    const inputs = {};
-    const numberInputs = {};
-    const moduleStatuses = {};
-
-    function makeCheckboxOption(permission, master = false) {
-      const option = makeElement('label', master ? 'ai-tool-option is-master' : 'ai-tool-option');
-      const input = document.createElement('input');
-      input.setAttribute('type', 'checkbox');
-      input.id = master
-        ? (permission.key === 'safe_tools_enabled' ? 'ai-tools-enabled' : 'ai-sticker-enabled')
-        : (permission.id || `ai-tools-${permission.key.replace(/_/g, '-')}`);
-      if (master) input.dataset.aiToolKey = permission.key;
-      else input.dataset.aiToolKey = permission.key;
-      inputs[permission.key] = input;
-      const copy = makeElement('span', 'ai-tool-copy');
-      copy.appendChild(makeElement('strong', '', permission.label));
-      copy.appendChild(makeElement('small', '', permission.description));
-      option.appendChild(input);
-      option.appendChild(copy);
-      input.addEventListener('change', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-        syncAiToolsControlState(ui);
-      });
-      return option;
-    }
-
-    function makeNumberOption(field) {
-      const wrapper = makeElement('label', 'ai-sticker-number-field');
-      wrapper.appendChild(makeElement('strong', '', field.label));
-      const input = document.createElement('input');
-      input.setAttribute('type', 'number');
-      input.setAttribute('inputmode', 'decimal');
-      input.setAttribute('min', String(field.min));
-      input.setAttribute('max', String(field.max));
-      input.setAttribute('step', String(field.step));
-      input.id = field.id || `ai-sticker-${field.key.replace(/^sticker_/, '').replace(/_/g, '-')}`;
-      input.dataset.aiStickerKey = field.key;
-      input.value = String(field.defaultValue);
-      numberInputs[field.key] = input;
-      wrapper.appendChild(input);
-      wrapper.appendChild(makeElement('small', '', field.key === 'sticker_cooldown_seconds'
-        ? '两次自动表情之间的最小间隔；0 表示不增加额外冷却。'
-        : `0–1 之间的概率；默认 ${field.defaultValue}。`));
-      input.addEventListener('input', () => {
-        setAiToolsError(ui, '');
-        setAiToolsStatus(ui, '', '');
-      });
-      return wrapper;
-    }
-
-    function makeModule(key, title, description, options, masterKey, numberFields = []) {
-      const module = makeElement('div', 'ai-tools-module');
-      module.dataset.aiToolsModule = key;
-      module.classList.toggle('is-open', key === 'safe-tools');
-      const summary = makeElement('button', 'ai-tools-module-summary');
-      summary.type = 'button';
-      summary.setAttribute('aria-expanded', key === 'safe-tools' ? 'true' : 'false');
-      const copy = makeElement('span', 'ai-tools-module-copy');
-      copy.appendChild(makeElement('strong', '', title));
-      copy.appendChild(makeElement('small', '', description));
-      const status = makeElement('span', 'ai-tools-module-status', '读取中');
-      summary.appendChild(copy);
-      summary.appendChild(status);
-      moduleStatuses[key] = status;
-
-      const body = makeElement('div', 'ai-tools-module-body');
-      body.hidden = key !== 'safe-tools';
-      summary.addEventListener('click', () => {
-        body.hidden = !body.hidden;
-        module.classList.toggle('is-open', !body.hidden);
-        summary.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
-      });
-      const master = AI_TOOL_PERMISSIONS.find((item) => item.key === masterKey)
-        || AI_STICKER_SWITCHES.find((item) => item.key === masterKey);
-      if (master) body.appendChild(makeCheckboxOption(master, true));
-      const grid = makeElement('div', 'ai-tools-grid');
-      for (const permission of options) grid.appendChild(makeCheckboxOption(permission, false));
-      body.appendChild(grid);
-      if (numberFields.length) {
-        const numberGrid = makeElement('div', 'ai-sticker-number-grid');
-        for (const field of numberFields) numberGrid.appendChild(makeNumberOption(field));
-        body.appendChild(numberGrid);
-      }
-      module.appendChild(summary);
-      module.appendChild(body);
-      controls.appendChild(module);
-    }
-
-    makeModule(
-      'safe-tools',
-      '安全工具',
-      '只开放白名单插件能力；无电脑控制、终端、Shell 或任意文件访问。',
-      ['safe_tools_allow_search_images', 'safe_tools_allow_send_sticker', 'safe_tools_allow_collect_sticker', 'safe_tools_allow_list_categories']
-        .map((key) => AI_TOOL_PERMISSIONS.find((item) => item.key === key))
-        .filter(Boolean),
-      'safe_tools_enabled'
-    );
-    makeModule(
-      'web-search',
-      '搜索与网页',
-      '网页读取、URL 自动阅读和搜索相关能力；受安全工具总开关和插件超时/大小限制约束。',
-      [
-        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_fetch_webpage'),
-        AI_TOOL_PERMISSIONS.find((item) => item.key === 'web_auto_fetch_enabled'),
-        AI_TOOL_PERMISSIONS.find((item) => item.key === 'web_auto_fetch_question_only'),
-      ].filter(Boolean),
-      null
-    );
-    makeModule(
-      'food-tools',
-      'Food 工具',
-      '饭店搜索与评价提交；评论只写 food.dlsz.top，密码仍由插件内部注入，不进入模型。',
-      [
-        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_search_food_restaurants'),
-        AI_TOOL_PERMISSIONS.find((item) => item.key === 'safe_tools_allow_submit_food_review'),
-        AI_TOOL_PERMISSIONS.find((item) => item.key === 'food_enabled'),
-        AI_TOOL_PERMISSIONS.find((item) => item.key === 'food_search_enabled'),
-      ].filter(Boolean),
-      null
-    );
-    makeModule(
-      'sticker',
-      'AI 自动表情',
-      '从本实例本地表情库选择；direct 模式由插件给模型提供安全表情 marker；memory/astrbot 模式使用本地情绪或分类匹配；不会读取任意文件或执行系统命令。',
-      AI_STICKER_SWITCHES.slice(1),
-      'sticker_enabled',
-      AI_STICKER_NUMBERS
-    );
-    section.appendChild(controls);
-
-    const fullConfigHint = makeElement(
-      'p',
-      'ai-tools-full-config-hint',
-      '这里是安全快捷面板；完整参数仍在「插件管理 → qqbot_enhancer」中维护。'
-    );
-    section.appendChild(fullConfigHint);
-
-
-    const actions = makeElement('div', 'ai-tools-actions');
-    const saveButton = makeElement('button', 'btn btn-primary btn-small', '保存 AI 工具与表情设置');
-    saveButton.type = 'button';
-    saveButton.setAttribute('id', 'ai-tools-save');
-    actions.appendChild(saveButton);
-    const restartButton = makeElement('button', 'btn btn-secondary btn-small', '重启 AstrBot');
-    restartButton.type = 'button';
-    restartButton.setAttribute('id', 'ai-tools-restart');
-    restartButton.addEventListener('click', () => {
-      void restartAstrBotForSettings(instance, (message, tone) => setAiToolsStatus(ui, message, tone), restartButton);
-    });
-    actions.appendChild(restartButton);
-    section.appendChild(actions);
-    const status = makeElement('p', 'ai-tools-status');
-    status.setAttribute('id', 'ai-tools-status');
+    const status = makeElement('p', 'instance-v3-status');
     status.setAttribute('role', 'status');
-    status.hidden = true;
     section.appendChild(status);
-    const error = makeElement('p', 'ai-tools-error');
-    error.setAttribute('id', 'ai-tools-error');
-    error.setAttribute('role', 'alert');
-    error.hidden = true;
-    section.appendChild(error);
-    const retryButton = makeElement('button', 'btn btn-quiet btn-small ai-tools-retry', '刷新重试');
-    retryButton.type = 'button';
-    retryButton.setAttribute('id', 'ai-tools-retry');
-    retryButton.hidden = true;
-    section.appendChild(retryButton);
-    const cachedValues = lastKnownAiToolsValues.get(instance.id) || null;
-    if (cachedValues) {
-      for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
-        if (inputs[permission.key]) inputs[permission.key].checked = boolOrUndefined(cachedValues[permission.key]) === true;
-      }
-      for (const field of AI_STICKER_NUMBERS) {
-        if (numberInputs[field.key] && cachedValues[field.key] !== undefined) {
-          numberInputs[field.key].value = pluginConfigService.pluginInputText(cachedValues[field.key]);
-        }
-      }
-    }
+    const form = makeElement('div', 'group-whitelist-form');
+    const toggleLabel = makeElement('label', 'group-whitelist-toggle');
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabled.setAttribute('aria-label', '启用群组白名单');
+    const toggleCopy = makeElement('span', '', '启用后只有名单中的群允许机器人发言');
+    toggleLabel.appendChild(enabled);
+    toggleLabel.appendChild(toggleCopy);
+    form.appendChild(toggleLabel);
 
-    const ui = {
-      section,
-      controls,
-      actions,
-      saveButton,
-      status,
-      error,
-      retryButton,
-      hint,
-      loading,
-      pluginState,
-      inputs,
-      numberInputs,
-      moduleStatuses,
-      supported: Boolean(cachedValues),
-      unsupportedReason: '',
-      loadFailed: false,
-      pluginEnabled,
-      loadingConfig: true,
-      saving: false
+    const idLabel = makeElement('label', 'group-whitelist-label', 'QQ 群号（每行一个）');
+    const ids = document.createElement('textarea');
+    ids.rows = 5;
+    ids.placeholder = '例如：\n123456789\n987654321';
+    ids.setAttribute('aria-label', 'QQ 群号列表');
+    ids.className = 'group-whitelist-ids';
+    idLabel.appendChild(ids);
+    form.appendChild(idLabel);
+
+    const actions = makeElement('div', 'group-whitelist-actions');
+    const saveButton = makeElement('button', 'btn btn-secondary btn-small', '保存并重启生效');
+    saveButton.type = 'button';
+    actions.appendChild(saveButton);
+    form.appendChild(actions);
+    section.appendChild(form);
+
+    let busy = false;
+    const setStatus = (message, tone = 'info') => {
+      status.textContent = message || '';
+      status.className = `instance-v3-status${tone ? ` is-${tone}` : ''}`;
+      status.hidden = !message;
     };
-    saveButton.addEventListener('click', () => void saveAiToolsConfig(instance, ui));
-    retryButton.addEventListener('click', () => void loadAiToolsConfig(instance, ui));
-    syncAiToolsControlState(ui);
-    void loadAiToolsConfig(instance, ui);
+    const syncDisabled = () => {
+      ids.disabled = busy || !enabled.checked;
+      saveButton.disabled = busy;
+    };
+    enabled.addEventListener('change', syncDisabled);
+
+    const load = async () => {
+      busy = true;
+      syncDisabled();
+      setStatus('正在读取 AstrBot 群组白名单…', 'info');
+      try {
+        const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-whitelist`));
+        if (data.ok === false) throw new ApiError(textValue(data.error, '读取群组白名单失败。'));
+        enabled.checked = data.enabled === true;
+        ids.value = Array.isArray(data.group_ids) ? data.group_ids.join('\n') : '';
+        busy = false;
+        syncDisabled();
+        setStatus(data.enabled ? '白名单已启用。' : '白名单当前未启用。', data.enabled ? 'success' : 'info');
+      } catch (error) {
+        busy = false;
+        syncDisabled();
+        setStatus(formatError(error, '群组白名单读取失败。'), 'error');
+      }
+    };
+
+    saveButton.addEventListener('click', async () => {
+      if (busy) return;
+      const groupIds = ids.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+      busy = true;
+      syncDisabled();
+      setStatus('正在保存群组白名单…', 'info');
+      try {
+        const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-whitelist`, {
+          method: 'POST',
+          body: { enabled: enabled.checked, group_ids: groupIds }
+        }));
+        if (data.ok === false) throw new ApiError(textValue(data.error, '保存群组白名单失败。'));
+        setStatus(textValue(data.message, '群组白名单已保存；重启 AstrBot 后生效。'), 'success');
+      } catch (error) {
+        setStatus(formatError(error, '群组白名单保存失败。'), 'error');
+      } finally {
+        busy = false;
+        syncDisabled();
+      }
+    });
+
+    void load();
     return section;
-  }
-
-  async function loadAiToolsConfig(instance, ui) {
-    ui.loadingConfig = true;
-    ui.loadFailed = false;
-    ui.supported = Boolean(lastKnownAiToolsValues.get(instance.id));
-    ui.unsupportedReason = '';
-    ui.loading.hidden = false;
-    setAiToolsError(ui, '');
-    setAiToolsStatus(ui, '', '');
-    syncAiToolsControlState(ui);
-    try {
-      const result = await pluginConfigService.load(instance.id, 'qqbot_enhancer');
-      if (!ui.section.isConnected) return;
-      const snapshot = result.snapshot;
-      const availableKeys = new Set((snapshot.schema || []).map((field) => field.key));
-      const missing = AI_ALL_CONFIG_KEYS.filter((key) => !availableKeys.has(key));
-      if (!availableKeys.size) {
-        ui.loadFailed = true;
-        ui.supported = false;
-        ui.unsupportedReason = '当前插件版本没有可用的 AI 工具参数，请先更新 qqbot_enhancer 插件。';
-        ui.loadingConfig = false;
-        ui.loading.hidden = true;
-        setAiToolsError(ui, ui.unsupportedReason);
-        syncAiToolsControlState(ui);
-        return;
-      }
-      if (missing.length > 0) {
-        ui.schemaWarning = `当前插件未提供部分参数：${missing.join(', ')}；已隐藏/禁用这些项，其余仍可保存。`;
-      }
-      for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
-        const input = ui.inputs[permission.key];
-        if (input) input.checked = aiToolValue(snapshot, permission.key);
-      }
-      for (const field of AI_STICKER_NUMBERS) {
-        const input = ui.numberInputs[field.key];
-        if (input) input.value = aiStickerNumberValue(snapshot, field);
-      }
-      const cachedValues = {};
-      for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
-        if (ui.inputs[permission.key]) cachedValues[permission.key] = Boolean(ui.inputs[permission.key].checked);
-      }
-      for (const field of AI_STICKER_NUMBERS) {
-        const input = ui.numberInputs[field.key];
-        if (input) cachedValues[field.key] = Number(input.value);
-      }
-      lastKnownAiToolsValues.set(instance.id, cachedValues);
-      ui.supported = true;
-      ui.loadFailed = false;
-      ui.loadingConfig = false;
-      ui.loading.hidden = true;
-      if (ui.schemaWarning) {
-        setAiToolsStatus(ui, ui.schemaWarning, 'warning');
-      }
-      if (!snapshot.apiAvailable) {
-        setAiToolsStatus(ui, 'AstrBot 当前离线；保存会写入本地配置，可能需要启动或重启 AstrBot 后生效。', 'warning');
-      }
-      syncAiToolsControlState(ui);
-    } catch (error) {
-      if (!ui.section.isConnected) return;
-      ui.loadingConfig = false;
-      ui.loading.hidden = true;
-      const unsupported = isMissingEndpointError(error)
-        || pluginConfigUnsupportedMessage(error instanceof ApiError ? error.message : '');
-      ui.loadFailed = true;
-      ui.supported = Boolean(lastKnownAiToolsValues.get(instance.id));
-      ui.unsupportedReason = unsupported
-        ? '当前后端不支持 AI 工具权限。'
-        : formatError(error, 'AI 工具权限读取失败。');
-      setAiToolsError(ui, ui.unsupportedReason);
-      syncAiToolsControlState(ui);
-    }
-  }
-
-  async function saveAiToolsConfig(instance, ui) {
-    if (!ui.supported || !ui.pluginEnabled || ui.loadingConfig || ui.saving) return;
-    const values = {};
-    for (const permission of [...AI_TOOL_PERMISSIONS, ...AI_STICKER_SWITCHES]) {
-      const input = ui.inputs[permission.key];
-      if (input) values[permission.key] = Boolean(input.checked);
-    }
-    for (const field of AI_STICKER_NUMBERS) {
-      const input = ui.numberInputs[field.key];
-      const raw = input ? input.value.trim() : '';
-      const number = Number(raw);
-      if (raw === '' || !Number.isFinite(number) || number < field.min || number > field.max || (field.integer && !Number.isInteger(number))) {
-        setAiToolsError(ui, `请输入有效的${field.label}（${field.min}–${field.max}）。`);
-        if (input) input.focus({ preventScroll: true });
-        return;
-      }
-      values[field.key] = number;
-    }
-    ui.saving = true;
-    setAiToolsError(ui, '');
-    setAiToolsStatus(ui, '正在保存 AI 工具与表情设置…', 'info');
-    const settingsBusy = instanceSettings.isOpenFor(instance.id);
-    if (settingsBusy) instanceSettings.beginBusy();
-    syncAiToolsControlState(ui);
-    try {
-      const data = await pluginConfigService.save(instance.id, 'qqbot_enhancer', values);
-      if (!ui.section.isConnected) return;
-      const response = asRecord(data);
-      const restart = boolOrUndefined(response.restart_required) === true;
-      const apiAvailable = boolOrUndefined(response.api_available) !== false;
-      lastKnownAiToolsValues.set(instance.id, { ...values });
-      const outcome = restart
-        ? '已保存；AstrBot 需要重启后生效。'
-        : apiAvailable
-          ? '已保存；AstrBot 已热重载。'
-          : '已保存；AstrBot 热重载不可用，请重启后生效。';
-      const detail = sanitisePluginText(response.message || response.error);
-      setAiToolsStatus(ui, detail ? `${outcome} ${detail}` : outcome, restart || !apiAvailable ? 'warning' : 'success');
-      setAiToolsError(ui, '');
-    } catch (error) {
-      if (!ui.section.isConnected) return;
-      const message = formatError(error, 'AI 工具与表情设置保存失败。');
-      const unsupported = isMissingEndpointError(error) || pluginConfigUnsupportedMessage(message);
-      if (unsupported) {
-        ui.supported = false;
-        ui.unsupportedReason = '当前后端不支持 AI 工具权限。';
-      }
-      setAiToolsError(ui, unsupported ? ui.unsupportedReason : message);
-      setAiToolsStatus(ui, '', '');
-    } finally {
-      ui.saving = false;
-      if (settingsBusy) instanceSettings.endBusy();
-      syncAiToolsControlState(ui);
-    }
   }
 
   const PROMPT_NAME_MAX_LENGTH = 80;
@@ -5570,7 +5766,7 @@
     return card;
   }
 
-  function renderInstances() {
+  function renderInstances(options = {}) {
     const grid = $('instances-grid');
     const loading = $('instances-loading');
     const empty = $('instances-empty');
@@ -5583,7 +5779,7 @@
     if (empty) empty.hidden = state.instances.length !== 0;
     grid.hidden = state.instances.length === 0;
     setStats(state.instances);
-    instanceSettings.refresh();
+    if (options.refreshSettings !== false) instanceSettings.refresh();
   }
 
   async function loadConsole(options = {}) {
@@ -5695,7 +5891,7 @@
             : 'unknown';
       state.globalResourceError = statsError ? statsError.error || '' : '';
       state.globalResourcePartial = Boolean(successfulStats) && statsEntries.some((entry) => entry.status !== 'ok');
-      renderInstances();
+      renderInstances({ refreshSettings: !silent });
       renderGlobalResourceSummary();
       renderSettings();
       setConsoleError('');
@@ -5711,7 +5907,7 @@
       setConsoleError(message);
       if (!state.loadedOnce) {
         state.instances = [];
-        renderInstances();
+        renderInstances({ refreshSettings: !silent });
         const empty = $('instances-empty');
         if (empty) empty.hidden = true;
       }

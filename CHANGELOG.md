@@ -7,6 +7,18 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.1（正式版）— 插件市场、七插件运行时与通用工具调用
+
+- 主项目合并插件市场、插件分组、安装/更新/删除、SHA-256 与 ZIP 安全校验、原子替换和操作预览/确认。
+- 七个自包含插件：`qqbot_core_reply`、`qqbot_safe_tools`、`qqbot_food`、`qqbot_stickers`、`qqbot_memory_commands`、`qqbot_web_reader`、`qqbot_image_search`；不再依赖 `qqbot_enhancer` 运行时。
+- `qqbot_core_reply` 4.0.3：memory 模式注入 safe_tools 目录；修复工具回复后 turn 未释放导致的会话锁死；`help me ...` 不再被误识别为 `/help`。
+- `qqbot_safe_tools` 3.1.1：manifest `tools.json` 自动聚合、marker 与 `qqbot_safe_tool` native bridge；provider registry 路由修复。
+- `qqbot_food` 3.0.3：`长春` 可匹配 `长春市`，优先城市级地点；保留歧义与单字保护。
+- `qqbot_stickers` 3.0.2：删除死配置 `sticker_probability` 与旧迁移开关，装饰概率只读 `sticker_decorate_probability`。
+- `qqbot_memory_commands` 4.0.1：移除旧 `memory_commands_*` 配置 fallback，只读 canonical 键。
+- 插件仓库正式发布 `v4.3.1`；主项目版本提升为 `4.3.1`。
+- 合并后全仓 `841 tests OK`。
+
 ## v4.3.0（正式版）— 长期记忆与记忆管理
 
 - 正式合并长期记忆、按群策略、记忆内容管理、记忆聊天命令、reflection、LLM 抽取、语义检索、群内说话人 scope。
@@ -19,7 +31,12 @@
 - 插件字段保存上限从 256 提升到 2048，适配当前 264 字段 schema。
 - 更新/回滚确认框移动到弹窗上方并保持可见。
 
-## v4.2.3-beta.1 — 测试版：长期记忆、美食智能与按群策略
+## v4.3.0-beta.4 — 七插件最终模块化测试版
+
+- 插件仓库发布 beta 系列：七个自包含插件 ZIP、catalog/manifest v2、ABI v1 依赖与冲突声明；safe_tools 3.0.0、stickers 3.0.0、memory_commands 4.0.0 完成。
+- 主项目新增 S0 盘点、owner epoch/迁移事务/固定 RPC 控制桥；部署器不再复制 `qqbot_enhancer`，新实例提示从插件市场安装七件套。
+- 新增 `scripts/migrate_qqbot_plugins.py` 与 `plugin_final_migration.py`：dry-run/apply/retire，配置字节级备份，只移动旧代码目录，保留 config/data/会话/记忆。
+- 新增最终运行时门禁 `tests/test_no_legacy_runtime.py`：七插件集合、无旧包导入、部署脚本不复制旧插件、部署不产生旧插件目录。
 
 - 记忆策略增加 `data/astrbot/memory_policy.json` 持久化 sidecar；AstrBot 重启重写 `cmd_config.json` 后策略不再丢失，面板读取 sidecar 优先。
 

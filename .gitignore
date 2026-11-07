@@ -9,3 +9,17 @@ runtime/
 
 # Generated for the current machine by scripts/install-desktop-entry.sh
 /QQ机器人一键部署.desktop
+
+# Local multi-agent/worktree scratch (separate git repos)
+.agent-teams/
+.idea/
+.qqbot-plugin-worktrees/
+.qqbot-plugins-staging/
+.studio-worktrees/
+workbuddy-local/
+release-assets/
+PROJECT_CODE_GUIDE.md
+.dsh-test-run.log
+
+.ssh-pass
+.ssh-askpass

@@ -41,6 +41,23 @@ from .memory_admin import (
     MemoryConflict,
     MemoryRecordNotFound,
 )
+from .plugin_control import ControlError, ControlMethodError, ControlUnavailable, FIXED_RPC_METHODS
+from .plugin_market import PluginMarketError, sanitize_error_text
+from .plugin_state import (
+    PluginRevisionConflict,
+    PluginStateCorruptError,
+    PluginStateError,
+    StaleOwnerEpochError,
+)
+from .plugin_transactions import (
+    MigrationBridgeUnavailable,
+    MigrationConflict,
+    MigrationError,
+    MigrationManualRecovery,
+    MigrationNotFound,
+    MigrationPlanError,
+    MigrationStateError,
+)
 from .store import default_data_dir
 from .studio import DEFAULT_BIND_HOST, DEFAULT_BIND_PORT, StudioManager
 from .updater import (
@@ -381,6 +398,177 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             "message": "插件配置接口暂不可用；主控制台和其它插件不受影响。",
             "error": detail,
         }
+
+    def _serve_plugin_api_result(self, operation) -> None:
+        """Run one optional plugin-market call and map errors safely.
+
+        Plugin errors carry a deliberate public code/message.  Unexpected
+        exceptions are logged server-side, while the HTTP response contains only
+        a generic message so filesystem paths, remote URLs and credentials are
+        not reflected back to the browser.
+        """
+
+        try:
+            result = operation()
+        except PluginMarketError as exc:
+            self._json(exc.http_status, exc.to_public_dict())
+            return
+        except ValueError as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {
+                    "ok": False,
+                    "code": "invalid_request",
+                    "message": sanitize_error_text(exc),
+                },
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - isolate optional plugin surface
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {
+                    "ok": False,
+                    "code": "plugin_internal_error",
+                    "message": "插件市场操作失败，详情请查看管理服务终端日志。",
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {
+                    "ok": False,
+                    "code": "plugin_invalid_response",
+                    "message": "插件市场接口返回格式异常。",
+                },
+            )
+            return
+        self._json(HTTPStatus.OK, result)
+
+    @staticmethod
+    def _plugin_group_route_action(payload: dict[str, Any]) -> str:
+        return str(payload.get("action") or payload.get("op") or "").strip().lower()
+
+    @staticmethod
+    def _plugin_market_source(payload: dict[str, Any]) -> Any:
+        if "source" in payload:
+            return payload.get("source")
+        for key in ("catalog", "url", "path", "file"):
+            if payload.get(key) not in {None, ""}:
+                return payload.get(key)
+        return None
+
+    @staticmethod
+    def _migration_service_for(manager: Any) -> Any:
+        service = getattr(manager, "plugin_migration_service", None)
+        if service is not None:
+            return service
+        data_dir = getattr(manager, "data_dir", None)
+        if data_dir is None:
+            raise MigrationStateError("当前后端未提供迁移服务。")
+        from .plugin_transactions import PluginMigrationService
+
+        return PluginMigrationService(data_dir)
+
+    @staticmethod
+    def _plugin_bridge_status(manager: Any) -> dict[str, Any]:
+        value = getattr(manager, "plugin_control_status", None)
+        if callable(value):
+            try:
+                result = value()
+            except Exception:  # noqa: BLE001 - bridge status is a safe card
+                result = None
+            if isinstance(result, dict):
+                return result
+        if isinstance(value, dict):
+            return dict(value)
+        return {
+            "ok": True,
+            "enabled": False,
+            "configured": False,
+            "ready": False,
+            "reachable": None,
+            "transport": "none",
+            "reason": "bridge_disabled",
+        }
+
+    @classmethod
+    def _require_plugin_bridge(cls, manager: Any) -> dict[str, Any]:
+        status = cls._plugin_bridge_status(manager)
+        if not bool(status.get("ready")):
+            raise MigrationBridgeUnavailable(
+                "插件控制桥未就绪，迁移/控制操作已按失败关闭（bridge_unavailable）。"
+            )
+        return status
+
+    def _serve_migration_result(self, operation) -> None:
+        try:
+            result = operation()
+        except (PluginStateError, MigrationError) as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except ControlError as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except ValueError as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "code": "invalid_request", "message": sanitize_error_text(exc)},
+            )
+            return
+        except Exception:  # noqa: BLE001 - isolate optional migration surface
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {
+                    "ok": False,
+                    "code": "migration_internal_error",
+                    "message": "迁移控制服务处理失败，详情请查看管理服务终端日志。",
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"ok": False, "code": "migration_invalid_response", "message": "迁移服务返回格式异常。"},
+            )
+            return
+        self._json(HTTPStatus.OK, result)
+
+    def _serve_control_result(self, operation) -> None:
+        try:
+            result = operation()
+        except ControlError as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except (PluginStateError, MigrationError) as exc:
+            self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+            return
+        except ValueError as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "code": "invalid_request", "message": sanitize_error_text(exc)},
+            )
+            return
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "code": "bridge_unavailable",
+                    "message": "插件控制桥不可用，操作已按失败关闭。",
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            self._json(
+                HTTPStatus.BAD_GATEWAY,
+                {"ok": False, "code": "control_invalid_response", "message": "插件控制桥返回格式异常。"},
+            )
+            return
+        self._json(HTTPStatus.OK, result)
 
     # ------------------------------------------------------------------
     # Per-group long-term memory policy
@@ -823,6 +1011,78 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "plugin-migrations/status":
+                    try:
+                        service = self._migration_service_for(manager)
+                        bridge_status = self._plugin_bridge_status(manager)
+                        status = service.status(bridge_status=bridge_status)
+                    except (PluginStateError, MigrationError) as exc:
+                        self._json(int(getattr(exc, "http_status", 503) or 503), exc.to_public_dict())
+                        return
+                    except Exception:  # noqa: BLE001
+                        traceback.print_exc()
+                        self._json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {"ok": False, "code": "migration_internal_error", "message": "迁移状态读取失败。"},
+                        )
+                        return
+                    self._json(
+                        HTTPStatus.OK if status.get("ok") else HTTPStatus.SERVICE_UNAVAILABLE,
+                        status,
+                    )
+                    return
+                if subroute.startswith("plugin-migration-plans/"):
+                    plan_id = urllib.parse.unquote(subroute[len("plugin-migration-plans/") :]).strip("/")
+                    if not plan_id or "/" in plan_id:
+                        self._error(HTTPStatus.NOT_FOUND, "迁移计划不存在。")
+                        return
+                    self._serve_migration_result(lambda: self._migration_service_for(manager).get_plan(plan_id))
+                    return
+                if subroute.startswith("plugin-migration-operations/"):
+                    operation_id = urllib.parse.unquote(
+                        subroute[len("plugin-migration-operations/") :]
+                    ).strip("/")
+                    if not operation_id or "/" in operation_id:
+                        self._error(HTTPStatus.NOT_FOUND, "迁移操作不存在。")
+                        return
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).get_operation(operation_id)
+                    )
+                    return
+                if subroute.startswith("plugin-migration-rollback-plans/"):
+                    plan_id = urllib.parse.unquote(
+                        subroute[len("plugin-migration-rollback-plans/") :]
+                    ).strip("/")
+                    if not plan_id or "/" in plan_id:
+                        self._error(HTTPStatus.NOT_FOUND, "回滚计划不存在。")
+                        return
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).get_rollback_plan(plan_id)
+                    )
+                    return
+                if subroute == "plugin-control/status":
+                    bridge = self._plugin_bridge_status(manager)
+                    self._json(HTTPStatus.OK, {"ok": True, "bridge": bridge})
+                    return
+                if subroute == "plugin-control/methods":
+                    methods = [
+                        {
+                            "method": spec.name,
+                            "provider": spec.provider,
+                            "access": spec.access,
+                        }
+                        for name, spec in sorted(FIXED_RPC_METHODS.items())
+                    ]
+                    self._json(
+                        HTTPStatus.OK,
+                        {
+                            "ok": True,
+                            "protocol_version": 1,
+                            "methods": methods,
+                            "bridge": self._plugin_bridge_status(manager),
+                        },
+                    )
+                    return
                 if subroute == "prompts":
                     getter = getattr(manager, "get_prompt_profiles", None)
                     if not callable(getter):
@@ -884,12 +1144,53 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._json(HTTPStatus.OK, getter())
                     return
+                if subroute == "plugin-market":
+                    getter = getattr(manager, "get_plugin_market", None)
+                    if not callable(getter):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件市场接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: getter())
+                    return
+                if subroute == "plugin-groups":
+                    getter = getattr(manager, "get_plugin_groups", None)
+                    if not callable(getter):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件分组接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: getter())
+                    return
+                if subroute.startswith("plugin-operations/"):
+                    operation_id = subroute[len("plugin-operations/") :].strip("/")
+                    if not operation_id or "/" in operation_id:
+                        self._error(HTTPStatus.NOT_FOUND, "插件操作不存在。")
+                        return
+                    getter = getattr(manager, "get_plugin_operation", None)
+                    if not callable(getter):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件操作查询接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: getter(operation_id))
+                    return
                 memory_route = self._memory_admin_route(subroute)
                 if memory_route is not None:
                     self._serve_memory_admin(manager, memory_route, method="GET", query=query)
                     return
                 if subroute == "memory-policy":
                     self._serve_memory_policy(manager, read_only=True)
+                    return
+                if subroute == "group-whitelist":
+                    getter = getattr(manager, "get_group_whitelist", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供群组白名单接口。")
+                        return
+                    self._json(HTTPStatus.OK, getter())
                     return
                 if subroute == "memory":
                     getter = getattr(manager, "get_memory_mode", None)
@@ -1111,12 +1412,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             )
         )
         payload = self._read_json_body(
-            allow_empty=path in {
-                "/api/assistant/install",
-                "/api/assistant/update",
-                "/api/assistant/start",
-                "/api/assistant/stop",
-            },
+            allow_empty=(
+                path in {
+                    "/api/assistant/install",
+                    "/api/assistant/update",
+                    "/api/assistant/start",
+                    "/api/assistant/stop",
+                }
+                or stripped_path.endswith("/plugin-market/refresh")
+            ),
             max_bytes=(
                 PROMPT_PROFILES_MAX_REQUEST_BYTES
                 if large_prompt_payload
@@ -1248,6 +1552,195 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "plugin-migration-plans":
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).create_plan(
+                            payload, actor="studio-admin"
+                        )
+                    )
+                    return
+                if subroute == "plugin-migration-operations":
+                    try:
+                        self._require_plugin_bridge(manager)
+                        operation_result = self._migration_service_for(manager).start_operation(
+                            payload, actor="studio-admin", run_async=True
+                        )
+                    except (PluginStateError, MigrationError) as exc:
+                        self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+                        return
+                    except Exception:  # noqa: BLE001
+                        traceback.print_exc()
+                        self._json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {
+                                "ok": False,
+                                "code": "migration_internal_error",
+                                "message": "迁移操作创建失败，详情请查看管理服务终端日志。",
+                            },
+                        )
+                        return
+                    self._json(HTTPStatus.ACCEPTED, operation_result)
+                    return
+                if subroute == "plugin-migration-rollback-plans":
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).create_rollback_plan(
+                            payload, actor="studio-admin"
+                        )
+                    )
+                    return
+                if subroute == "plugin-migration-rollback-operations":
+                    try:
+                        self._require_plugin_bridge(manager)
+                        operation_result = self._migration_service_for(manager).start_rollback(
+                            payload, actor="studio-admin", run_async=True
+                        )
+                    except (PluginStateError, MigrationError) as exc:
+                        self._json(int(getattr(exc, "http_status", 400) or 400), exc.to_public_dict())
+                        return
+                    except Exception:  # noqa: BLE001
+                        traceback.print_exc()
+                        self._json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {
+                                "ok": False,
+                                "code": "migration_internal_error",
+                                "message": "回滚操作创建失败，详情请查看管理服务终端日志。",
+                            },
+                        )
+                        return
+                    self._json(HTTPStatus.ACCEPTED, operation_result)
+                    return
+                if subroute.startswith("plugin-migration-operations/") and subroute.endswith("/resume"):
+                    operation_id = urllib.parse.unquote(
+                        subroute[len("plugin-migration-operations/") : -len("/resume")]
+                    ).strip("/")
+                    if not operation_id or "/" in operation_id:
+                        self._error(HTTPStatus.NOT_FOUND, "迁移操作不存在。")
+                        return
+                    force_manual = bool(payload.get("force_manual"))
+                    self._serve_migration_result(
+                        lambda: self._migration_service_for(manager).resume_operation(
+                            operation_id, force_manual=force_manual
+                        )
+                    )
+                    return
+                if subroute == "plugin-control/calls":
+                    method = str(payload.get("method") or "").strip()
+                    if method not in FIXED_RPC_METHODS:
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {
+                                "ok": False,
+                                "code": "control_method_not_allowed",
+                                "message": "未登记的固定 RPC 方法，已拒绝。",
+                            },
+                        )
+                        return
+                    bridge_status = self._plugin_bridge_status(manager)
+                    if not bool(bridge_status.get("ready")):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "插件控制桥未就绪，固定 RPC 调用已按失败关闭。",
+                            },
+                        )
+                        return
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供固定 RPC 客户端，已按失败关闭。",
+                            },
+                        )
+                        return
+                    scope = payload.get("scope")
+                    body = payload.get("body")
+                    if body is None:
+                        body = {}
+                    if not isinstance(body, dict):
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {
+                                "ok": False,
+                                "code": "control_invalid_payload",
+                                "message": "body 必须是 JSON object。",
+                            },
+                        )
+                        return
+                    self._serve_control_result(lambda: caller(method, scope=scope, body=body))
+                    return
+                if subroute == "plugin-market/refresh":
+                    refresher = getattr(manager, "refresh_plugin_market", None)
+                    if not callable(refresher):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件市场刷新接口。",
+                        )
+                        return
+                    source = self._plugin_market_source(payload)
+                    self._serve_plugin_api_result(lambda: refresher(source))
+                    return
+                if subroute == "plugin-groups/preview":
+                    previewer = getattr(manager, "preview_plugin_groups", None)
+                    if not callable(previewer):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件分组预览接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: previewer(payload))
+                    return
+                if subroute == "plugin-groups/apply":
+                    applier = getattr(manager, "apply_plugin_groups", None)
+                    if not callable(applier):
+                        self._error(
+                            HTTPStatus.NOT_IMPLEMENTED,
+                            "当前后端未提供插件分组应用接口。",
+                        )
+                        return
+                    self._serve_plugin_api_result(lambda: applier(payload))
+                    return
+                if subroute == "plugin-groups":
+                    action = self._plugin_group_route_action(payload)
+                    if action == "preview":
+                        previewer = getattr(manager, "preview_plugin_groups", None)
+                        if not callable(previewer):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件分组预览接口。")
+                            return
+                        self._serve_plugin_api_result(lambda: previewer(payload))
+                        return
+                    if action == "apply" or payload.get("preview_token"):
+                        applier = getattr(manager, "apply_plugin_groups", None)
+                        if not callable(applier):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件分组应用接口。")
+                            return
+                        self._serve_plugin_api_result(lambda: applier(payload))
+                        return
+                    executor = getattr(manager, "execute_plugin_group_action", None)
+                    if not callable(executor):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件分组写入接口。")
+                        return
+                    self._serve_plugin_api_result(lambda: executor(payload))
+                    return
+                if subroute == "plugin-operations/preview":
+                    previewer = getattr(manager, "preview_plugin_operation", None)
+                    if not callable(previewer):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件操作预览接口。")
+                        return
+                    self._serve_plugin_api_result(lambda: previewer(payload))
+                    return
+                if subroute == "plugin-operations":
+                    executor = getattr(manager, "execute_plugin_operation", None)
+                    if not callable(executor):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供插件操作接口。")
+                        return
+                    self._serve_plugin_api_result(lambda: executor(payload))
+                    return
                 memory_route = self._memory_admin_route(subroute)
                 if memory_route is not None:
                     self._serve_memory_admin(
@@ -1332,6 +1825,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         HTTPStatus.OK,
                         setter(plugin_id, bool(payload["enabled"])),
                     )
+                    return
+                if subroute == "group-whitelist":
+                    setter = getattr(manager, "set_group_whitelist", None)
+                    if not callable(setter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供群组白名单接口。")
+                        return
+                    self._json(HTTPStatus.OK, setter(payload))
                     return
                 if subroute == "memory":
                     mode = str(payload.get("mode") or payload.get("memory_mode") or "").strip()

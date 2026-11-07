@@ -39,17 +39,9 @@ else
   echo "=== post-update tests disabled by QQBOT_STUDIO_AUTO_TEST=0 ==="
 fi
 
-# Keep the bundled enhancer updated for existing v2 instances. AstrBot will
-# load the new files after its container is restarted.
-if [ -d "$DATA_DIR/instances" ]; then
-  for instance_dir in "$DATA_DIR"/instances/*; do
-    [ -d "$instance_dir" ] || continue
-    plugin_root="$instance_dir/data/astrbot/plugins"
-    [ -d "$plugin_root" ] || continue
-    mkdir -p "$plugin_root/qqbot_enhancer"
-    cp -a "$ROOT_DIR/plugins/qqbot_enhancer/." "$plugin_root/qqbot_enhancer/"
-  done
-fi
+# Final modular release: never copy qqbot_enhancer/qqbot_core_full into an
+# instance.  The seven standalone plugins are installed and updated from the
+# plugin market with dependency ordering and confirmation.
 
 # Best-effort: restart existing AstrBot containers so plugin files and packaged
 # code updates are loaded. If Docker is only accessible through sudo, leave the

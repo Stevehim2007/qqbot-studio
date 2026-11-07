@@ -784,7 +784,8 @@ class ConsolePanelStaticTests(unittest.TestCase):
             "memoryContentDelete",
         ):
             self.assertIn(token, self.js)
-        self.assertIn("buildMemoryPolicySection(instance),\n      buildMemoryContentSection(instance),", self.js)
+        self.assertIn("id: 'memory'", self.js)
+        self.assertIn("buildMemoryContentSection(instance)", self.js)
 
     def test_panel_calls_only_admin_endpoints(self) -> None:
         for tail in ("'stats'", "'records'", "'forget'", "'export'", "'import'", "'reflect'"):

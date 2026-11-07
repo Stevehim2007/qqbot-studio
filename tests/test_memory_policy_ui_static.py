@@ -178,7 +178,7 @@ class MemoryPolicyStaticContractTests(unittest.TestCase):
         # The policy panel is additive: the plugin-config overlay and the
         # existing memory-mode section keep their own APIs.
         self.assertTrue("buildMemorySection(instance)," in self.console_js)
-        self.assertTrue("buildPluginSection(instance)," in self.console_js)
+        self.assertTrue("buildPluginSection(instance)]" in self.console_js)
         self.assertTrue("'/api/memory'" in self.console_js or "/api/memory`" in self.console_js)
 
 

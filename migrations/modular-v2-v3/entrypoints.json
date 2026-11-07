@@ -1,0 +1,2997 @@
+{
+  "schema_version": 1,
+  "description": "Offline entrypoint inventory; this directory is never loaded as an AstrBot plugin.",
+  "source_commit_staging": "673820405f0d24c1b932ccc7ca6a7223f3aad37f",
+  "entry_status_vocabulary": {
+    "active_legacy_target_ready": "legacy handler is active and the mapped seven-plugin target currently has an equivalent implementation",
+    "active_legacy_target_blocked": "legacy handler is active but the mapped target does not yet implement the capability",
+    "active_legacy_clone_target_ready": "qqbot_core_full duplicate handler is active and target-equivalent code exists",
+    "active_legacy_clone_target_blocked": "qqbot_core_full duplicate handler is active and target capability is missing",
+    "active_legacy_noop": "legacy lifecycle callback exists but has no side effect",
+    "active_legacy_management": "Studio/deployer still directly reads, writes, installs or protects the legacy package",
+    "implemented_transitional": "seven-plugin transitional handler exists but final ABI/E2E is not proven",
+    "blocked_owner_missing": "handler exists in the wrong package or the contract owner does not implement the operation",
+    "blocked_owner_unconfirmed": "active legacy capability has no confirmed final owner",
+    "blocked_capability_missing": "target package lacks the active legacy capability",
+    "blocked_runtime_verification": "requires AstrBot 4.29.3 runtime verification before it can be marked ready",
+    "offline_tool_ready": "offline inventory helper; never loaded at runtime",
+    "missing_from_branch": "management helper was observed outside this branch and is not part of the committed baseline"
+  },
+  "counts": {
+    "total": 78,
+    "by_package": {
+      "qqbot_enhancer": 60,
+      "qqbot_studio": 18
+    },
+    "by_entry_kind": {
+      "command": 14,
+      "event_listener": 1,
+      "hook": 3,
+      "inline_branch": 13,
+      "lifecycle": 2,
+      "management": 18,
+      "provider_helper": 27
+    },
+    "by_status": {
+      "active_legacy_management": 14,
+      "active_legacy_noop": 1,
+      "active_legacy_target_blocked": 13,
+      "active_legacy_target_ready": 46,
+      "missing_from_branch": 2,
+      "offline_tool_ready": 2
+    },
+    "by_source_kind": {
+      "legacy": 60,
+      "studio": 18
+    },
+    "by_managed_legacy_package": {
+      "qqbot_core_full": 6,
+      "qqbot_enhancer": 12
+    }
+  },
+  "lifecycle_summary": {
+    "qqbot_enhancer": {
+      "constructor": true,
+      "initialize": false,
+      "terminate": true,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_core_full": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_core_reply": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_safe_tools": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_web_reader": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_image_search": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_food": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_stickers": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    },
+    "qqbot_memory_commands": {
+      "constructor": false,
+      "initialize": false,
+      "terminate": false,
+      "task_calls": [],
+      "scheduler_or_task_side_effects": false
+    }
+  },
+  "known_registration_conflicts": [],
+  "entrypoints": [
+    {
+      "entry_id": "LIFE-ENH-constructor",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "__init__",
+      "line": 198,
+      "end_line": 267,
+      "registration": "AstrBot Star construction (AstrBot instantiates the plugin class)",
+      "trigger": {
+        "type": "plugin_construction"
+      },
+      "capability": "sticker.asset_init",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "side_effects_observed": [
+          "_load_sticker_entries reads bundled stickers/sticker_rules.json",
+          "_resolve_collected_sticker_root creates/chmods plugin_data/qqbot_enhancer/collected_stickers and repairs permissions",
+          "_load_collected_sticker_index reads plugin_data index.json; malformed index is treated as empty"
+        ]
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove constructor/initialize side effects and data creation",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.builtin_assets",
+      "status": "active_legacy_target_blocked",
+      "side_effects": [
+        "read_bundled_assets",
+        "create_data_dir",
+        "chmod_data_dir",
+        "read_index",
+        "migrate_permissions"
+      ],
+      "note": "target qqbot_stickers materializes its store and imports legacy collected stickers, but ships no built-in sticker PNG/rules asset set",
+      "entry_kind": "lifecycle"
+    },
+    {
+      "entry_id": "EVT-ENH-on_qq_message",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 315,
+      "end_line": 710,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=100) | filter.event_message_type(filter.EventMessageType.ALL, priority=100)",
+      "trigger": {
+        "type": "event_message",
+        "event": "filter.event_message_type(filter.EventMessageType.ALL, priority=100)",
+        "priority": 100,
+        "platform": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=100)"
+      },
+      "capability": "reply.turn_run",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": false,
+        "gate": "legacy_core_reply_enabled",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.at_private_probability",
+      "status": "active_legacy_target_ready",
+      "priority": 100,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=100)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "event_message_type",
+          "raw": "filter.event_message_type(filter.EventMessageType.ALL, priority=100)",
+          "category": "event_listener",
+          "priority": 100
+        }
+      ],
+      "entry_kind": "event_listener"
+    },
+    {
+      "entry_id": "BR-ENH-auto-collect-ai",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 365,
+      "end_line": 365,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "auto-collect-ai",
+        "marker": "_maybe_ai_auto_collect_user_sticker"
+      },
+      "capability": "sticker.auto_collect.ai",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "sticker_ai_auto_collect_enabled"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.auto_collect",
+      "status": "active_legacy_target_blocked",
+      "branch": "auto-collect-ai",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-food-nl",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 382,
+      "end_line": 382,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "food-nl",
+        "marker": "_food_nl_decide"
+      },
+      "capability": "food.nl_decide",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "food_nl_enabled",
+          "food_nl_probability",
+          "food_nl_image_enabled",
+          "food_nl_image_probability"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_food",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "food.nl.decide",
+      "status": "active_legacy_target_blocked",
+      "branch": "food-nl",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-ambient",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 400,
+      "end_line": 400,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "ambient",
+        "marker": "_ambient_group_should_participate"
+      },
+      "capability": "reply.ambient",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "ambient_group_chat_enabled",
+          "ambient_group_keywords",
+          "ambient_group_keyword_probability"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.ambient",
+      "status": "active_legacy_target_ready",
+      "branch": "ambient",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-sticker-reclassify",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 436,
+      "end_line": 436,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "sticker-reclassify",
+        "marker": "detect_reclassify_request"
+      },
+      "capability": "sticker.categorize",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "sticker_natural_language_reclassify_enabled"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.natural_language",
+      "status": "active_legacy_target_ready",
+      "branch": "sticker-reclassify",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-sticker-collect-nl",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 469,
+      "end_line": 469,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "sticker-collect-nl",
+        "marker": "_detect_natural_language_collect_intent"
+      },
+      "capability": "sticker.collect.nl",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "auto_collect_user_sticker_enabled"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.collect.idempotent",
+      "status": "active_legacy_target_ready",
+      "branch": "sticker-collect-nl",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-sticker-send-nl",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 495,
+      "end_line": 495,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "sticker-send-nl",
+        "marker": "_detect_natural_language_sticker_intent"
+      },
+      "capability": "sticker.send.nl",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "sticker_natural_language_enabled"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.natural_language",
+      "status": "active_legacy_target_ready",
+      "branch": "sticker-send-nl",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-auto-collect-local",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 514,
+      "end_line": 514,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "auto-collect-local",
+        "marker": "auto_collect_user_sticker_enabled"
+      },
+      "capability": "sticker.auto_collect.local",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "auto_collect_user_sticker_enabled",
+          "auto_collect_sticker_reply_enabled"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.auto_collect",
+      "status": "active_legacy_target_ready",
+      "branch": "auto-collect-local",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-image-reaction",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 549,
+      "end_line": 549,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "image-reaction",
+        "marker": "_pick_user_sticker_reaction_reply"
+      },
+      "capability": "reply.image_reaction",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "user_sticker_reaction_enabled",
+          "user_sticker_reaction_probability",
+          "user_sticker_reaction_attach_sticker"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.image_reaction",
+      "status": "active_legacy_target_ready",
+      "branch": "image-reaction",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-image-search-nl",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 570,
+      "end_line": 570,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "image-search-nl",
+        "marker": "_detect_natural_language_image_search"
+      },
+      "capability": "image.search",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "image_search_natural_language_enabled",
+          "image_search_enabled"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_image_search",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "image.search.basic",
+      "status": "active_legacy_target_ready",
+      "branch": "image-search-nl",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-food-confirm",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 599,
+      "end_line": 599,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "food-confirm",
+        "marker": "_handle_food_submit_confirmation"
+      },
+      "capability": "food.confirm",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "food_submit_enabled",
+          "safe_tools_allow_submit_food_review"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_food",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "food.submit.confirm_once",
+      "status": "active_legacy_target_ready",
+      "branch": "food-confirm",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-memory-handoff",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 632,
+      "end_line": 632,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "memory-handoff",
+        "marker": "qqbot_enhancer_memory_reply"
+      },
+      "capability": "reply.memory_mode",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "memory_mode",
+          "group_identity_context_enabled"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.memory_mode",
+      "status": "active_legacy_target_blocked",
+      "branch": "memory-handoff",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-llm-reply",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 650,
+      "end_line": 650,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "llm-reply",
+        "marker": "self._generate_reply("
+      },
+      "capability": "reply.turn_run",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "reply_probability",
+          "group_cooldown_seconds",
+          "user_cooldown_seconds"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.at_private_probability",
+      "status": "active_legacy_target_ready",
+      "branch": "llm-reply",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "BR-ENH-tool-route",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "on_qq_message",
+      "line": 660,
+      "end_line": 660,
+      "registration": "inline branch inside filter.event_message_type(ALL, priority=100) + platform_adapter_type",
+      "trigger": {
+        "type": "inline_branch",
+        "parent_symbol": "on_qq_message",
+        "branch": "tool-route",
+        "marker": "_route_safe_tool"
+      },
+      "capability": "tool.process_model_output",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled",
+          "safe_tools_max_actions_per_reply"
+        ],
+        "evaluation": "branch marker located inside the real on_qq_message function; flags come from adjacent source conditions"
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove listener registration; do not rely on a function-body if",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "safe.marker.single_parse",
+      "status": "active_legacy_target_ready",
+      "branch": "tool-route",
+      "entry_kind": "inline_branch"
+    },
+    {
+      "entry_id": "CMD-ENH-find_image_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "find_image_command",
+      "line": 719,
+      "end_line": 765,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('找图', alias={'搜图'}, priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "找图",
+        "aliases": [
+          "搜图"
+        ],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "image.search",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_image_search",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "image.search.basic",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('找图', alias={'搜图'}, priority=110)",
+          "category": "command",
+          "command": "找图",
+          "aliases": [
+            "搜图"
+          ],
+          "priority": 110
+        }
+      ],
+      "aliases": [
+        "搜图"
+      ],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-local_song_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "local_song_command",
+      "line": 774,
+      "end_line": 851,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('唱歌', alias={'点歌'}, priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "唱歌",
+        "aliases": [
+          "点歌"
+        ],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "core_reply.legacy_song_play",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.song.play",
+      "status": "active_legacy_target_blocked",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('唱歌', alias={'点歌'}, priority=110)",
+          "category": "command",
+          "command": "唱歌",
+          "aliases": [
+            "点歌"
+          ],
+          "priority": 110
+        }
+      ],
+      "aliases": [
+        "点歌"
+      ],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-food_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "food_command",
+      "line": 860,
+      "end_line": 902,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('food', alias={'吃什么', '饭店'}, priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "food",
+        "aliases": [
+          "吃什么",
+          "饭店"
+        ],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "food.query",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_food",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "food.query.basic",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('food', alias={'吃什么', '饭店'}, priority=110)",
+          "category": "command",
+          "command": "food",
+          "aliases": [
+            "吃什么",
+            "饭店"
+          ],
+          "priority": 110
+        }
+      ],
+      "aliases": [
+        "吃什么",
+        "饭店"
+      ],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "HELP-ENH-_perform_food_submit",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_perform_food_submit",
+      "line": 1621,
+      "end_line": 1806,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_perform_food_submit"
+      },
+      "capability": "food.submit",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_food",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "food.submit.confirm_once",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_execute_food_submit",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_food_submit",
+      "line": 1808,
+      "end_line": 1888,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_execute_food_submit"
+      },
+      "capability": "food.submit",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_food",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "food.submit.confirm_once",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_execute_search_food_restaurants",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_search_food_restaurants",
+      "line": 2030,
+      "end_line": 2195,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_execute_search_food_restaurants"
+      },
+      "capability": "food.query",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_food",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "food.query.basic",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "CMD-ENH-conversation_list_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "conversation_list_command",
+      "line": 2616,
+      "end_line": 2673,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('会话列表', priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "会话列表",
+        "aliases": [],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "session.list",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_memory_commands",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "memory.session.switch",
+      "status": "active_legacy_target_blocked",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('会话列表', priority=110)",
+          "category": "command",
+          "command": "会话列表",
+          "aliases": [],
+          "priority": 110
+        }
+      ],
+      "aliases": [],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-conversation_switch_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "conversation_switch_command",
+      "line": 2682,
+      "end_line": 2747,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('会话', alias={'切换会话'}, priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "会话",
+        "aliases": [
+          "切换会话"
+        ],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "session.switch",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_memory_commands",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "memory.session.switch",
+      "status": "active_legacy_target_blocked",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('会话', alias={'切换会话'}, priority=110)",
+          "category": "command",
+          "command": "会话",
+          "aliases": [
+            "切换会话"
+          ],
+          "priority": 110
+        }
+      ],
+      "aliases": [
+        "切换会话"
+      ],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-conversation_new_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "conversation_new_command",
+      "line": 2756,
+      "end_line": 2841,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('新会话', priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "新会话",
+        "aliases": [],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "session.new",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_memory_commands",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "memory.session.switch",
+      "status": "active_legacy_target_blocked",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('新会话', priority=110)",
+          "category": "command",
+          "command": "新会话",
+          "aliases": [],
+          "priority": 110
+        }
+      ],
+      "aliases": [],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-conversation_delete_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "conversation_delete_command",
+      "line": 2850,
+      "end_line": 2967,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('删除会话', alias={'会话删除'}, priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "删除会话",
+        "aliases": [
+          "会话删除"
+        ],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "session.delete",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_memory_commands",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "memory.session.switch",
+      "status": "active_legacy_target_blocked",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('删除会话', alias={'会话删除'}, priority=110)",
+          "category": "command",
+          "command": "删除会话",
+          "aliases": [
+            "会话删除"
+          ],
+          "priority": 110
+        }
+      ],
+      "aliases": [
+        "会话删除"
+      ],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-option_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "option_command",
+      "line": 2976,
+      "end_line": 2995,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('option', alias={'插件用法', '用法'}, priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "option",
+        "aliases": [
+          "插件用法",
+          "用法"
+        ],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "core_reply.reply_status",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.option",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('option', alias={'插件用法', '用法'}, priority=110)",
+          "category": "command",
+          "command": "option",
+          "aliases": [
+            "插件用法",
+            "用法"
+          ],
+          "priority": 110
+        }
+      ],
+      "aliases": [
+        "插件用法",
+        "用法"
+      ],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-memory_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "memory_command",
+      "line": 3004,
+      "end_line": 3042,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('记忆', priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "记忆",
+        "aliases": [],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "memory.command",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_memory_commands",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "memory.scope.matrix",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('记忆', priority=110)",
+          "category": "command",
+          "command": "记忆",
+          "aliases": [],
+          "priority": 110
+        }
+      ],
+      "aliases": [],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-collect_sticker_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "collect_sticker_command",
+      "line": 3051,
+      "end_line": 3101,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('收藏表情', priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "收藏表情",
+        "aliases": [],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "sticker.collect",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.collect.idempotent",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('收藏表情', priority=110)",
+          "category": "command",
+          "command": "收藏表情",
+          "aliases": [],
+          "priority": 110
+        }
+      ],
+      "aliases": [],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-sticker_status_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "sticker_status_command",
+      "line": 3110,
+      "end_line": 3204,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('表情状态', alias={'表情诊断'}, priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "表情状态",
+        "aliases": [
+          "表情诊断"
+        ],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "sticker.status",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.status",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('表情状态', alias={'表情诊断'}, priority=110)",
+          "category": "command",
+          "command": "表情状态",
+          "aliases": [
+            "表情诊断"
+          ],
+          "priority": 110
+        }
+      ],
+      "aliases": [
+        "表情诊断"
+      ],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-collected_categories_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "collected_categories_command",
+      "line": 3213,
+      "end_line": 3264,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('表情分类', priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "表情分类",
+        "aliases": [],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "sticker.category.list",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.category.list",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('表情分类', priority=110)",
+          "category": "command",
+          "command": "表情分类",
+          "aliases": [],
+          "priority": 110
+        }
+      ],
+      "aliases": [],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-collected_list_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "collected_list_command",
+      "line": 3273,
+      "end_line": 3365,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('表情列表', priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "表情列表",
+        "aliases": [],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "sticker.list",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.list",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('表情列表', priority=110)",
+          "category": "command",
+          "command": "表情列表",
+          "aliases": [],
+          "priority": 110
+        }
+      ],
+      "aliases": [],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "CMD-ENH-send_collected_sticker_command",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "send_collected_sticker_command",
+      "line": 3374,
+      "end_line": 3469,
+      "registration": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110) | filter.command('发表情', priority=110)",
+      "trigger": {
+        "type": "command",
+        "canonical": "发表情",
+        "aliases": [],
+        "match": "AstrBot filter.command token match"
+      },
+      "capability": "sticker.send",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": true,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove @filter.command registration at load time",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.send.once",
+      "status": "active_legacy_target_ready",
+      "priority": 110,
+      "decorators": [
+        {
+          "name": "platform_adapter_type",
+          "raw": "filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP | filter.PlatformAdapterType.QQOFFICIAL | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK, priority=110)",
+          "category": "platform_condition"
+        },
+        {
+          "name": "command",
+          "raw": "filter.command('发表情', priority=110)",
+          "category": "command",
+          "command": "发表情",
+          "aliases": [],
+          "priority": 110
+        }
+      ],
+      "aliases": [],
+      "entry_kind": "command"
+    },
+    {
+      "entry_id": "HOOK-ENH-attach_memory_mode_sticker",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "attach_memory_mode_sticker",
+      "line": 3472,
+      "end_line": 3559,
+      "registration": "filter.on_decorating_result()",
+      "trigger": {
+        "type": "decorating_result",
+        "priority": null
+      },
+      "capability": "sticker.decorate",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": false,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove on_decorating_result registration",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.decorate_once",
+      "status": "active_legacy_target_ready",
+      "priority": null,
+      "decorators": [
+        {
+          "name": "on_decorating_result",
+          "raw": "filter.on_decorating_result()",
+          "category": "result_hook",
+          "priority": null
+        }
+      ],
+      "entry_kind": "hook"
+    },
+    {
+      "entry_id": "HELP-ENH-_build_image_search_result",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_build_image_search_result",
+      "line": 5119,
+      "end_line": 5189,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_build_image_search_result"
+      },
+      "capability": "image.search",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_image_search",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "image.search.basic",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_load_sticker_entries",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_load_sticker_entries",
+      "line": 5676,
+      "end_line": 5746,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_load_sticker_entries"
+      },
+      "capability": "sticker.asset_init",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.builtin_assets",
+      "status": "active_legacy_target_blocked",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_read_prompt_profile_state_from_disk",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_read_prompt_profile_state_from_disk",
+      "line": 5984,
+      "end_line": 6042,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_read_prompt_profile_state_from_disk"
+      },
+      "capability": "reply.prompt_profiles",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "core.reply.at_private_probability",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_agent_group_persona_target",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_agent_group_persona_target",
+      "line": 6114,
+      "end_line": 6157,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_agent_group_persona_target"
+      },
+      "capability": "reply.persona_context",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "core.reply.persona_identity",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HOOK-ENH-inject_agent_group_persona_prompt",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "inject_agent_group_persona_prompt",
+      "line": 6191,
+      "end_line": 6216,
+      "registration": "filter.on_llm_request()",
+      "trigger": {
+        "type": "llm_request"
+      },
+      "capability": "reply.persona_context",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": false,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove on_llm_request registration",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.persona_identity",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "hook"
+    },
+    {
+      "entry_id": "HOOK-ENH-inject_agent_current_sender_identity",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "inject_agent_current_sender_identity",
+      "line": 6219,
+      "end_line": 6311,
+      "registration": "filter.on_llm_request()",
+      "trigger": {
+        "type": "llm_request"
+      },
+      "capability": "reply.identity_context",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "decorator_registered": false,
+        "gate": "",
+        "config_keys_read_by_handler": [],
+        "evaluation": "AST string-literal scan of the handler function body; not a branch truth table"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove on_llm_request registration",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.persona_identity",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "hook"
+    },
+    {
+      "entry_id": "HELP-ENH-_select_sticker_from_pool",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_select_sticker_from_pool",
+      "line": 6416,
+      "end_line": 6491,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_select_sticker_from_pool"
+      },
+      "capability": "sticker.decorate",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.decorate_once",
+      "status": "active_legacy_target_blocked",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_fetch_webpage_text",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_fetch_webpage_text",
+      "line": 7239,
+      "end_line": 7251,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_fetch_webpage_text"
+      },
+      "capability": "web.read",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_web_reader",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "web.read.public",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_build_web_auto_fetch_context",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_build_web_auto_fetch_context",
+      "line": 7341,
+      "end_line": 7369,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_build_web_auto_fetch_context"
+      },
+      "capability": "reply.web_auto_fetch",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "core.reply.web_auto_fetch",
+      "status": "active_legacy_target_blocked",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_execute_safe_tool",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7388,
+      "end_line": 7593,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_execute_safe_tool"
+      },
+      "capability": "tool.dispatch",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "safe.marker.single_parse",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-tool-search_images",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7395,
+      "end_line": 7395,
+      "registration": "fixed whitelist branch in the legacy marker executor",
+      "trigger": {
+        "type": "internal_helper",
+        "tool": "search_images"
+      },
+      "capability": "image.search",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_gate": "safe_tools_enabled and tool-specific safe_tools_allow_* flag",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled"
+        ]
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove the legacy _execute_safe_tool branch and route the same intent through qqbot_safe_tools.dispatch",
+        "final": "do_not_load_package",
+        "mechanism": "legacy package absent; only qqbot_safe_tools tool dispatcher remains",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "image.search.basic",
+      "status": "active_legacy_target_ready",
+      "tool": "search_images",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-tool-send_sticker",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7447,
+      "end_line": 7447,
+      "registration": "fixed whitelist branch in the legacy marker executor",
+      "trigger": {
+        "type": "internal_helper",
+        "tool": "send_sticker"
+      },
+      "capability": "sticker.send",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_gate": "safe_tools_enabled and tool-specific safe_tools_allow_* flag",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled"
+        ]
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove the legacy _execute_safe_tool branch and route the same intent through qqbot_safe_tools.dispatch",
+        "final": "do_not_load_package",
+        "mechanism": "legacy package absent; only qqbot_safe_tools tool dispatcher remains",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.send.once",
+      "status": "active_legacy_target_ready",
+      "tool": "send_sticker",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-tool-collect_sticker",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7464,
+      "end_line": 7464,
+      "registration": "fixed whitelist branch in the legacy marker executor",
+      "trigger": {
+        "type": "internal_helper",
+        "tool": "collect_sticker"
+      },
+      "capability": "sticker.collect",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_gate": "safe_tools_enabled and tool-specific safe_tools_allow_* flag",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled"
+        ]
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove the legacy _execute_safe_tool branch and route the same intent through qqbot_safe_tools.dispatch",
+        "final": "do_not_load_package",
+        "mechanism": "legacy package absent; only qqbot_safe_tools tool dispatcher remains",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.collect.idempotent",
+      "status": "active_legacy_target_ready",
+      "tool": "collect_sticker",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-tool-search_food_restaurants",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7505,
+      "end_line": 7505,
+      "registration": "fixed whitelist branch in the legacy marker executor",
+      "trigger": {
+        "type": "internal_helper",
+        "tool": "search_food_restaurants"
+      },
+      "capability": "food.query",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_gate": "safe_tools_enabled and tool-specific safe_tools_allow_* flag",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled"
+        ]
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove the legacy _execute_safe_tool branch and route the same intent through qqbot_safe_tools.dispatch",
+        "final": "do_not_load_package",
+        "mechanism": "legacy package absent; only qqbot_safe_tools tool dispatcher remains",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "food.query.basic",
+      "status": "active_legacy_target_ready",
+      "tool": "search_food_restaurants",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-tool-submit_food_review",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7510,
+      "end_line": 7510,
+      "registration": "fixed whitelist branch in the legacy marker executor",
+      "trigger": {
+        "type": "internal_helper",
+        "tool": "submit_food_review"
+      },
+      "capability": "food.submit",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_gate": "safe_tools_enabled and tool-specific safe_tools_allow_* flag",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled"
+        ]
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove the legacy _execute_safe_tool branch and route the same intent through qqbot_safe_tools.dispatch",
+        "final": "do_not_load_package",
+        "mechanism": "legacy package absent; only qqbot_safe_tools tool dispatcher remains",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "food.submit.confirm_once",
+      "status": "active_legacy_target_ready",
+      "tool": "submit_food_review",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-tool-fetch_webpage",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7513,
+      "end_line": 7513,
+      "registration": "fixed whitelist branch in the legacy marker executor",
+      "trigger": {
+        "type": "internal_helper",
+        "tool": "fetch_webpage"
+      },
+      "capability": "web.read",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_gate": "safe_tools_enabled and tool-specific safe_tools_allow_* flag",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled"
+        ]
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove the legacy _execute_safe_tool branch and route the same intent through qqbot_safe_tools.dispatch",
+        "final": "do_not_load_package",
+        "mechanism": "legacy package absent; only qqbot_safe_tools tool dispatcher remains",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "web.read.public",
+      "status": "active_legacy_target_ready",
+      "tool": "fetch_webpage",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-tool-list_sticker_categories",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_execute_safe_tool",
+      "line": 7566,
+      "end_line": 7566,
+      "registration": "fixed whitelist branch in the legacy marker executor",
+      "trigger": {
+        "type": "internal_helper",
+        "tool": "list_sticker_categories"
+      },
+      "capability": "sticker.category.list",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_gate": "safe_tools_enabled and tool-specific safe_tools_allow_* flag",
+        "observed_config_flags": [
+          "safe_tools_enabled",
+          "safe_tools_marker_enabled"
+        ]
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove the legacy _execute_safe_tool branch and route the same intent through qqbot_safe_tools.dispatch",
+        "final": "do_not_load_package",
+        "mechanism": "legacy package absent; only qqbot_safe_tools tool dispatcher remains",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "stickers.category.list",
+      "status": "active_legacy_target_ready",
+      "tool": "list_sticker_categories",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_route_safe_tool",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_route_safe_tool",
+      "line": 7595,
+      "end_line": 7706,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_route_safe_tool"
+      },
+      "capability": "tool.process_model_output",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_safe_tools",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "safe.marker.single_parse",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_maybe_pick_sticker",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_maybe_pick_sticker",
+      "line": 7848,
+      "end_line": 7909,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_maybe_pick_sticker"
+      },
+      "capability": "sticker.decorate",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.decorate_once",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_resolve_collected_sticker_root",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_resolve_collected_sticker_root",
+      "line": 7995,
+      "end_line": 8054,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_resolve_collected_sticker_root"
+      },
+      "capability": "sticker.store.init",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "core.reply.at_private_probability",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_save_collected_sticker_index",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_save_collected_sticker_index",
+      "line": 8064,
+      "end_line": 8068,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_save_collected_sticker_index"
+      },
+      "capability": "sticker.index.write",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "core.reply.at_private_probability",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_load_collected_sticker_index",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_load_collected_sticker_index",
+      "line": 8152,
+      "end_line": 8163,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_load_collected_sticker_index"
+      },
+      "capability": "sticker.index.read",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "core.reply.at_private_probability",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_maybe_ai_auto_collect_user_sticker",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_maybe_ai_auto_collect_user_sticker",
+      "line": 8495,
+      "end_line": 8608,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_maybe_ai_auto_collect_user_sticker"
+      },
+      "capability": "sticker.auto_collect.ai",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.auto_collect",
+      "status": "active_legacy_target_blocked",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_save_collected_payload",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_save_collected_payload",
+      "line": 8610,
+      "end_line": 8764,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_save_collected_payload"
+      },
+      "capability": "sticker.collect",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.collect.idempotent",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_collect_user_sticker",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_collect_user_sticker",
+      "line": 8766,
+      "end_line": 8792,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_collect_user_sticker"
+      },
+      "capability": "sticker.collect",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.collect.idempotent",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "HELP-ENH-_maybe_auto_collect_user_sticker",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "_maybe_auto_collect_user_sticker",
+      "line": 8794,
+      "end_line": 8835,
+      "registration": "internal helper called by the legacy listener/hook/command path",
+      "trigger": {
+        "type": "internal_helper",
+        "symbol": "_maybe_auto_collect_user_sticker"
+      },
+      "capability": "sticker.auto_collect.local",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "legacy_cutover_gate": "legacy_core_reply_enabled for listener callers"
+      },
+      "new_owner": "qqbot_stickers",
+      "disable_method": {
+        "transition": "remove helper call sites and route through the final provider",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "stickers.auto_collect",
+      "status": "active_legacy_target_ready",
+      "entry_kind": "provider_helper"
+    },
+    {
+      "entry_id": "LIFE-ENH-terminate",
+      "package": "qqbot_enhancer",
+      "source_kind": "legacy",
+      "file": "plugins/qqbot_enhancer/main.py",
+      "symbol": "terminate",
+      "line": 8935,
+      "end_line": 8936,
+      "registration": "AstrBot Star lifecycle terminate hook",
+      "trigger": {
+        "type": "plugin_terminate"
+      },
+      "capability": "lifecycle.terminate",
+      "enabled_condition": {
+        "plugin_loaded": true,
+        "body": "docstring only"
+      },
+      "new_owner": "qqbot_core_reply",
+      "disable_method": {
+        "transition": "remove constructor/initialize side effects and data creation",
+        "final": "do_not_load_package",
+        "mechanism": "package absent from the AstrBot plugin load path; no runtime import or fallback",
+        "function_body_gate_insufficient": false
+      },
+      "test_case": "core.handoff.cutover_gate",
+      "status": "active_legacy_noop",
+      "side_effects": [],
+      "entry_kind": "lifecycle"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-final-migration-qqbot_core_full",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/plugin_final_migration.py",
+      "symbol": "retire_legacy_plugin_code",
+      "line": 0,
+      "end_line": 0,
+      "registration": "external untracked final config/code migration helper observed in the main worktree",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "external untracked final config/code migration helper observed in the main worktree",
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "capability": "management.final_migration",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "commit a reviewed S1 transaction helper or omit it; do not rely on an untracked file",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.crash_recovery",
+      "status": "missing_from_branch",
+      "managed_legacy_package": "qqbot_core_full",
+      "file_exists_in_worktree": false,
+      "notes": "File existed as an untracked main-worktree file during S0 but is not present on feat/final-s0; it is not part of the committed baseline.",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-final-migration-qqbot_enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/plugin_final_migration.py",
+      "symbol": "retire_legacy_plugin_code",
+      "line": 0,
+      "end_line": 0,
+      "registration": "external untracked final config/code migration helper observed in the main worktree",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "external untracked final config/code migration helper observed in the main worktree",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.final_migration",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "commit a reviewed S1 transaction helper or omit it; do not rely on an untracked file",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.crash_recovery",
+      "status": "missing_from_branch",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": false,
+      "notes": "File existed as an untracked main-worktree file during S0 but is not present on feat/final-s0; it is not part of the committed baseline.",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-SCRIPT-auto-update-copy-enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "scripts/auto-update.sh",
+      "symbol": "shell-copy",
+      "line": 50,
+      "end_line": 50,
+      "registration": "auto-update copies plugins/qqbot_enhancer into the live plugin root",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "auto-update copies plugins/qqbot_enhancer into the live plugin root",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.legacy_update",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove enhancer copy; update only the seven repository releases",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.no_legacy_runtime",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-MARKET-reserved-enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/plugin_market.py",
+      "symbol": "RESERVED_PLUGIN_IDS",
+      "line": 64,
+      "end_line": 64,
+      "registration": "market reserves qqbot_enhancer and rejects install/update/delete",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "market reserves qqbot_enhancer and rejects install/update/delete",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.market.reserved_legacy",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove the reserved legacy special case after the enhancer is unloaded; market owns only seven releases",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.market_no_legacy",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-field-map-preview-qqbot_core_full",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/plugin_config_migration.py",
+      "symbol": "preview_config_migration",
+      "line": 326,
+      "end_line": 326,
+      "registration": "offline read-only field-map preview helper",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "offline read-only field-map preview helper",
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "capability": "management.field_map.preview",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "keep offline; no runtime writer",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.field_map_preview",
+      "status": "offline_tool_ready",
+      "managed_legacy_package": "qqbot_core_full",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-field-map-preview-qqbot_enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/plugin_config_migration.py",
+      "symbol": "preview_config_migration",
+      "line": 326,
+      "end_line": 326,
+      "registration": "offline read-only field-map preview helper",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "offline read-only field-map preview helper",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.field_map.preview",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "keep offline; no runtime writer",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.field_map_preview",
+      "status": "offline_tool_ready",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-get-instance-config-qqbot_core_full",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_GET",
+      "line": 910,
+      "end_line": 910,
+      "registration": "GET /api/instances/{instance_id}/plugins/{plugin_id}/config",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "GET /api/instances/{instance_id}/plugins/{plugin_id}/config",
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "capability": "management.plugin_config.read",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "replace direct local config fallback with fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_core_full",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-get-instance-config-qqbot_enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_GET",
+      "line": 910,
+      "end_line": 910,
+      "registration": "GET /api/instances/{instance_id}/plugins/{plugin_id}/config",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "GET /api/instances/{instance_id}/plugins/{plugin_id}/config",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.plugin_config.read",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "replace direct local config fallback with fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-get-legacy-config-qqbot_core_full",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_GET",
+      "line": 1028,
+      "end_line": 1028,
+      "registration": "GET /api/plugins/config?instance={instance_id}&plugin_id={plugin_id}",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "GET /api/plugins/config?instance={instance_id}&plugin_id={plugin_id}",
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "capability": "management.plugin_config.read",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove legacy query endpoint or route it through fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_core_full",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-get-legacy-config-qqbot_enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_GET",
+      "line": 1028,
+      "end_line": 1028,
+      "registration": "GET /api/plugins/config?instance={instance_id}&plugin_id={plugin_id}",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "GET /api/plugins/config?instance={instance_id}&plugin_id={plugin_id}",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.plugin_config.read",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove legacy query endpoint or route it through fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-DEPLOY-install-bundled-enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/deployer.py",
+      "symbol": "_install_bundled_plugin",
+      "line": 1092,
+      "end_line": 1092,
+      "registration": "deploy-time copytree plugins/qqbot_enhancer -> data/astrbot/plugins/qqbot_enhancer",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "deploy-time copytree plugins/qqbot_enhancer -> data/astrbot/plugins/qqbot_enhancer",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.legacy_install",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove bundled enhancer installation and all automatic fallback",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.no_legacy_runtime",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-post-legacy-config-qqbot_core_full",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_POST",
+      "line": 1204,
+      "end_line": 1204,
+      "registration": "POST /api/plugins/config",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "POST /api/plugins/config",
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "capability": "management.plugin_config.write",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove legacy write endpoint or route it through fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_core_full",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-post-legacy-config-qqbot_enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_POST",
+      "line": 1204,
+      "end_line": 1204,
+      "registration": "POST /api/plugins/config",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "POST /api/plugins/config",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.plugin_config.write",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove legacy write endpoint or route it through fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-DEPLOY-write-enhancer-config",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/deployer.py",
+      "symbol": "_write_enhancer_config",
+      "line": 1227,
+      "end_line": 1227,
+      "registration": "write data/astrbot/config/qqbot_enhancer_config.json",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "write data/astrbot/config/qqbot_enhancer_config.json",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.legacy_config.write",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove direct legacy config writer; migrate through field-map owner targets",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.field_map_preview",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-post-instance-config-qqbot_core_full",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_POST",
+      "line": 1448,
+      "end_line": 1448,
+      "registration": "POST /api/instances/{instance_id}/plugins/{plugin_id}/config",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "POST /api/instances/{instance_id}/plugins/{plugin_id}/config",
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "capability": "management.plugin_config.write",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_core_full"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "replace direct local/AstrBot config save with fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_core_full",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-STUDIO-post-instance-config-qqbot_enhancer",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/server.py",
+      "symbol": "do_POST",
+      "line": 1448,
+      "end_line": 1448,
+      "registration": "POST /api/instances/{instance_id}/plugins/{plugin_id}/config",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "POST /api/instances/{instance_id}/plugins/{plugin_id}/config",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.plugin_config.write",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "replace direct local/AstrBot config save with fixed owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.control_bridge_auth",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-MARKET-delete-plugin",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/plugin_market.py",
+      "symbol": "delete_plugin",
+      "line": 3135,
+      "end_line": 3135,
+      "registration": "market deletion path preserves config/plugin_data/db/sessions",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "market deletion path preserves config/plugin_data/db/sessions",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.market.delete",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "remove enhancer-specific conflict text and legacy id handling; keep data-preservation semantics for the seven packages",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "migration.market_no_legacy",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    },
+    {
+      "entry_id": "MGMT-DEPLOY-sync-prompt-profiles",
+      "package": "qqbot_studio",
+      "source_kind": "studio",
+      "file": "qqbot_studio/deployer.py",
+      "symbol": "_sync_prompt_profiles_to_plugin",
+      "line": 3999,
+      "end_line": 3999,
+      "registration": "write prompt_profiles/system_prompt into legacy enhancer config and AstrBot live config",
+      "trigger": {
+        "type": "management_route_or_helper",
+        "route_or_helper": "write prompt_profiles/system_prompt into legacy enhancer config and AstrBot live config",
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "capability": "management.legacy_prompt_sync",
+      "enabled_condition": {
+        "studio_authenticated": true,
+        "managed_legacy_package": "qqbot_enhancer"
+      },
+      "new_owner": "qqbot_studio control bridge",
+      "disable_method": {
+        "transition": "move prompt/persona writes into the core_reply/memory_commands owner RPC",
+        "final": "fixed authenticated control-bridge RPC; no direct legacy file/database/plugin installation path",
+        "mechanism": "remove route/helper; owner plugin handles the operation through its provider ABI",
+        "function_body_gate_insufficient": true
+      },
+      "test_case": "core.reply.prompt_profiles",
+      "status": "active_legacy_management",
+      "managed_legacy_package": "qqbot_enhancer",
+      "file_exists_in_worktree": true,
+      "notes": "",
+      "entry_kind": "management"
+    }
+  ]
+}

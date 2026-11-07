@@ -342,7 +342,7 @@ class PromptPreviewAndRoundTripTests(unittest.TestCase):
             astrbot_data = Path(tmp) / "data" / "astrbot"
             prompt = "角色设定\n\n- 规则一\n- 规则二\n"
             DeployManager._write_enhancer_config(astrbot_data, prompt)
-            path = astrbot_data / "config" / "qqbot_enhancer_config.json"
+            path = astrbot_data / "config" / "qqbot_core_reply_config.json"
             saved = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(saved["system_prompt"], prompt)
 

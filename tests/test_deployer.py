@@ -128,12 +128,15 @@ class FakePluginApi(FakeApi):
                 "data": [dict(item) for item in self.plugins],
             }
         if method == "GET" and path.startswith("/api/v1/plugins/config?"):
+            plugin_id = "qqbot_enhancer"
+            if "qqbot_core_reply" in path:
+                plugin_id = "qqbot_core_reply"
             return {
                 "status": "ok",
-                "data": {"plugin_name": "qqbot_enhancer", "config": dict(self.plugin_config)},
+                "data": {"plugin_name": plugin_id, "config": dict(self.plugin_config)},
             }
         if method == "PUT" and path == "/api/v1/plugins/config":
-            assert payload["plugin_id"] == "qqbot_enhancer"
+            assert payload["plugin_id"] in {"qqbot_enhancer", "qqbot_core_reply"}
             self.plugin_config = dict(payload["config"])
             self.updated_configs.append(dict(payload["config"]))
             return {"status": "ok", "message": "插件配置已保存并热重载。", "data": {}}
@@ -327,13 +330,15 @@ class DeployerTests(unittest.TestCase):
         self.assertNotIn("sk-test-secret", json.dumps(job, ensure_ascii=False))
         parsed_astrbot = json.loads(raw_astrbot)
         self.assertIs(parsed_astrbot["platform_settings"]["unique_session"], False)
-        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
-        self.assertTrue((plugin_dir / "main.py").exists())
-        enhancer_config = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        self.assertFalse(
+            (Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer").exists()
+        )
+        reply_config = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_core_reply_config.json"
         self.assertEqual(
-            json.loads(enhancer_config.read_text(encoding="utf-8"))["system_prompt"],
+            json.loads(reply_config.read_text(encoding="utf-8"))["system_prompt"],
             "你是测试 QQ 机器人。",
         )
+        self.assertTrue(any("插件市场" in line for line in job["logs"]))
 
         qq_config_dir = Path(self.tmp.name) / "data" / "snowluma" / "config"
         (qq_config_dir / "onebot_12345678.json").write_text("{}", encoding="utf-8")
@@ -545,7 +550,7 @@ class DeployerTests(unittest.TestCase):
 
     def test_memory_mode_preserves_user_values_and_migrates_group_session(self):
         self._mark_deployed()
-        plugin_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        plugin_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_core_reply_config.json"
         plugin_path.parent.mkdir(parents=True, exist_ok=True)
         plugin_path.write_text(
             json.dumps(
@@ -594,15 +599,16 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(fake_api.plugin_config["memory_mode"], "direct")
         self.assertEqual(fake_api.plugin_config["custom_user_value"], "must-stay")
 
-    def test_old_enhancer_config_defaults_are_added_without_overwrite(self):
-        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_enhancer"
+    def test_core_reply_config_preserves_unknown_values_without_legacy_defaults(self):
+        plugin_dir = Path(self.tmp.name) / "data" / "astrbot" / "plugins" / "qqbot_core_reply"
         plugin_dir.mkdir(parents=True, exist_ok=True)
-        config_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+        config_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_core_reply_config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
             json.dumps({"memory_mode": "direct", "custom_user_value": "keep-me"}),
             encoding="utf-8",
         )
+        config_path.chmod(0o600)
         DeployManager(
             store=Store(self.tmp.name),
             docker=self.docker,
@@ -611,12 +617,12 @@ class DeployerTests(unittest.TestCase):
         migrated = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual(migrated["memory_mode"], "direct")
         self.assertEqual(migrated["custom_user_value"], "keep-me")
-        self.assertIn("reply_probability", migrated)
-        self.assertIn("system_prompt", migrated)
+        self.assertNotIn("reply_probability", migrated)
+        self.assertNotIn("system_prompt", migrated)
         self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
 
-    def test_memory_mode_default_is_direct_for_old_configs(self):
-        plugin_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_enhancer_config.json"
+    def test_memory_mode_default_is_direct_for_empty_core_configs(self):
+        plugin_path = Path(self.tmp.name) / "data" / "astrbot" / "config" / "qqbot_core_reply_config.json"
         plugin_path.parent.mkdir(parents=True, exist_ok=True)
         original = {"reply_probability": 0.2, "custom_user_value": "old"}
         plugin_path.write_text(json.dumps(original), encoding="utf-8")

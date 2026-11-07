@@ -1,0 +1,543 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "下一大版本：AI 记忆运行架构",
+    "locale": "zh-CN",
+    "output": ".archify/architecture-ai-memory-next-major-architecture-ai-memory-next-major-20261106-232826/memory-runtime.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "qq",
+      "type": "external",
+      "label": "QQ 消息入口",
+      "sublabel": "群聊 / 私聊 / @",
+      "tag": "OneBot v11",
+      "pos": [
+        30,
+        320
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "qqbot_core_reply",
+      "sublabel": "唯一聊天控制器",
+      "tag": "single owner",
+      "pos": [
+        260,
+        320
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "identity",
+      "type": "backend",
+      "label": "会话与人格解析",
+      "sublabel": "群 / 用户 / 会话 / persona",
+      "pos": [
+        520,
+        320
+      ],
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "orchestrator",
+      "type": "backend",
+      "label": "Prompt 编排器",
+      "sublabel": "稳定前缀 + 动态上下文",
+      "pos": [
+        790,
+        320
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "model",
+      "type": "backend",
+      "label": "Model Gateway",
+      "sublabel": "provider / 路由 / 重试",
+      "pos": [
+        1100,
+        320
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "cloud",
+      "label": "LLM Provider",
+      "sublabel": "chat completion",
+      "pos": [
+        1400,
+        320
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "reply",
+      "type": "external",
+      "label": "QQ 回复",
+      "sublabel": "文本 / 分段",
+      "pos": [
+        1618,
+        320
+      ],
+      "size": [
+        120,
+        64
+      ]
+    },
+    {
+      "id": "commands",
+      "type": "external",
+      "label": "qqbot_memory_commands",
+      "sublabel": "命令 / scope 读写",
+      "tag": "不调用模型",
+      "pos": [
+        30,
+        100
+      ],
+      "size": [
+        170,
+        68
+      ]
+    },
+    {
+      "id": "budget",
+      "type": "security",
+      "label": "Context Budget",
+      "sublabel": "token 硬上限",
+      "tag": "hard cap",
+      "pos": [
+        450,
+        100
+      ],
+      "size": [
+        170,
+        68
+      ]
+    },
+    {
+      "id": "persona",
+      "type": "database",
+      "label": "Persona Cache",
+      "sublabel": "core / style / lore / rules",
+      "tag": "revision key",
+      "pos": [
+        760,
+        100
+      ],
+      "size": [
+        190,
+        78
+      ]
+    },
+    {
+      "id": "summary",
+      "type": "database",
+      "label": "Session Summary",
+      "sublabel": "阶段摘要 / 低频更新",
+      "pos": [
+        990,
+        100
+      ],
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "recent",
+      "type": "database",
+      "label": "Recent Window",
+      "sublabel": "最近 N 条原文",
+      "pos": [
+        1220,
+        100
+      ],
+      "size": [
+        170,
+        68
+      ]
+    },
+    {
+      "id": "native",
+      "type": "database",
+      "label": "AstrBot 会话",
+      "sublabel": "原生短期上下文",
+      "pos": [
+        520,
+        520
+      ],
+      "size": [
+        180,
+        68
+      ]
+    },
+    {
+      "id": "retrieval",
+      "type": "backend",
+      "label": "Memory Retrieval",
+      "sublabel": "scope + hybrid + rerank",
+      "pos": [
+        790,
+        520
+      ],
+      "size": [
+        190,
+        74
+      ]
+    },
+    {
+      "id": "cache",
+      "type": "database",
+      "label": "Prompt Cache",
+      "sublabel": "provider prefix cache",
+      "tag": "prefix stable",
+      "pos": [
+        1400,
+        520
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "studio",
+      "type": "external",
+      "label": "Studio 记忆控制台",
+      "sublabel": "policy / records / 导入导出",
+      "pos": [
+        30,
+        560
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "SurfCore Memory Runtime",
+      "sublabel": "active / archive cards",
+      "tag": "next major",
+      "pos": [
+        350,
+        680
+      ],
+      "size": [
+        210,
+        76
+      ]
+    },
+    {
+      "id": "index",
+      "type": "database",
+      "label": "Hybrid Index",
+      "sublabel": "BM25 + vector",
+      "pos": [
+        680,
+        680
+      ],
+      "size": [
+        170,
+        68
+      ]
+    },
+    {
+      "id": "active",
+      "type": "database",
+      "label": "Active Cards",
+      "sublabel": "工作记忆 / 高优先级",
+      "pos": [
+        80,
+        850
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "archive",
+      "type": "database",
+      "label": "Archive Cards",
+      "sublabel": "长期记忆 / 衰减",
+      "pos": [
+        360,
+        850
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "consolidator",
+      "type": "messagebus",
+      "label": "Consolidation Worker",
+      "sublabel": "抽取 / 合并 / 衰减",
+      "pos": [
+        680,
+        850
+      ],
+      "size": [
+        190,
+        70
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Prompt 组装 / 可缓存前缀",
+      "wraps": [
+        "budget",
+        "persona",
+        "summary",
+        "recent",
+        "orchestrator"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "SurfCore 分层记忆",
+      "wraps": [
+        "runtime",
+        "active",
+        "archive",
+        "index",
+        "consolidator"
+      ],
+      "pad": 20
+    }
+  ],
+  "connections": [
+    {
+      "id": "qq-to-core",
+      "from": "qq",
+      "to": "core",
+      "label": "消息 / 事件",
+      "variant": "emphasis"
+    },
+    {
+      "id": "commands-to-core",
+      "from": "commands",
+      "to": "core",
+      "label": "命令",
+      "variant": "dashed"
+    },
+    {
+      "id": "core-to-identity",
+      "from": "core",
+      "to": "identity",
+      "label": "解析作用域",
+      "variant": "emphasis"
+    },
+    {
+      "id": "identity-to-orchestrator",
+      "from": "identity",
+      "to": "orchestrator",
+      "label": "构建上下文",
+      "variant": "emphasis"
+    },
+    {
+      "id": "orchestrator-to-model",
+      "from": "orchestrator",
+      "to": "model",
+      "label": "结构化 Prompt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "model-to-llm",
+      "from": "model",
+      "to": "llm",
+      "label": "completion",
+      "variant": "emphasis"
+    },
+    {
+      "id": "llm-to-reply",
+      "from": "llm",
+      "to": "reply",
+      "label": "生成回复",
+      "variant": "emphasis"
+    },
+    {
+      "id": "persona-to-orchestrator",
+      "from": "persona",
+      "to": "orchestrator",
+      "label": "稳定前缀"
+    },
+    {
+      "id": "summary-to-orchestrator",
+      "from": "summary",
+      "to": "orchestrator",
+      "label": "阶段摘要"
+    },
+    {
+      "id": "recent-to-orchestrator",
+      "from": "recent",
+      "to": "orchestrator",
+      "label": "最近 N 条"
+    },
+    {
+      "id": "budget-to-orchestrator",
+      "from": "budget",
+      "to": "orchestrator",
+      "label": "硬预算",
+      "variant": "security"
+    },
+    {
+      "id": "native-from-identity",
+      "from": "identity",
+      "to": "native",
+      "label": "原生会话"
+    },
+    {
+      "id": "native-to-orchestrator",
+      "from": "native",
+      "to": "orchestrator",
+      "label": "短期上下文"
+    },
+    {
+      "id": "retrieval-to-orchestrator",
+      "from": "retrieval",
+      "to": "orchestrator",
+      "label": "按需召回"
+    },
+    {
+      "id": "runtime-to-retrieval",
+      "from": "runtime",
+      "to": "retrieval",
+      "label": "scope 查询"
+    },
+    {
+      "id": "model-to-cache",
+      "from": "model",
+      "to": "cache",
+      "label": "stable prefix",
+      "variant": "dashed"
+    },
+    {
+      "id": "core-to-runtime",
+      "from": "core",
+      "to": "runtime",
+      "label": "post-reply 写回",
+      "variant": "dashed"
+    },
+    {
+      "id": "studio-to-runtime",
+      "from": "studio",
+      "to": "runtime",
+      "label": "策略 / 记录",
+      "variant": "dashed"
+    },
+    {
+      "id": "runtime-to-active",
+      "from": "runtime",
+      "to": "active",
+      "label": "读写"
+    },
+    {
+      "id": "runtime-to-archive",
+      "from": "runtime",
+      "to": "archive",
+      "label": "检索 / 写回"
+    },
+    {
+      "id": "runtime-to-index",
+      "from": "runtime",
+      "to": "index",
+      "label": "建索引"
+    },
+    {
+      "id": "retrieval-to-index",
+      "from": "retrieval",
+      "to": "index",
+      "label": "hybrid search"
+    },
+    {
+      "id": "active-to-archive",
+      "from": "active",
+      "to": "archive",
+      "label": "晋升",
+      "variant": "dashed"
+    },
+    {
+      "id": "consolidator-to-archive",
+      "from": "consolidator",
+      "to": "archive",
+      "label": "合并 / 衰减",
+      "variant": "dashed"
+    },
+    {
+      "id": "consolidator-to-index",
+      "from": "consolidator",
+      "to": "index",
+      "label": "重建索引",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "请求主链",
+      "items": [
+        "qqbot_core_reply 是唯一聊天控制器，负责接收消息、决定是否回复并组织上下文",
+        "qqbot_memory_commands 只处理 /记忆 命令和 scope 读写，不启动聊天模型",
+        "会话与人格解析先确定群、用户、会话和 persona，再进入 Prompt 编排"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "稳定前缀",
+      "items": [
+        "persona_core 常驻，style / lore / rules 按需注入，完整人格不默认全量拼入",
+        "Persona Cache 以 persona_id + revision + platform + bot_id 为键，人格未变时前缀字节级稳定",
+        "前缀中禁止时间戳、随机数和实时状态；provider prompt cache 负责复用"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "SurfCore 分层记忆",
+      "items": [
+        "Active Cards 承载当前工作记忆，Archive Cards 承载长期记忆，Hybrid Index 提供 BM25 + vector 召回",
+        "Memory Retrieval 按 scope 检索并 rerank，Context Budget 对条数和 token 设硬预算",
+        "Consolidation Worker 负责抽取、合并、晋升、衰减和索引重建"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "运行与反馈",
+      "items": [
+        "回复后由 core_reply 将对话、抽取结果和记忆写回 SurfCore，不覆盖其他 scope",
+        "Studio 管理 memory-policy、记忆记录和导入导出；短期会话仍由 AstrBot 原生上下文承接",
+        "观测 persona_cache_hit/miss、rendered_persona_chars、prompt_prefix_chars、retrieved_memory_items 和 estimated_input_tokens"
+      ]
+    }
+  ]
+}
