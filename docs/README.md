@@ -20,6 +20,8 @@
 | [`memory-policy.md`](memory-policy.md) | 控制台「记忆策略」面板：按群长期记忆 `memory.policy` 结构、`/api/instances/<id>/memory-policy` 契约、校验规则、限制与隐私边界 |
 | [`plugin-market-v1.md`](plugin-market-v1.md) | 测试版插件市场 v1：manifest/SHA256/ZIP 安全边界、安装更新删除、SQLite 分组、预览/确认/幂等 API 与配置迁移 field-map 预览 |
 | [`memory-admin-api.md`](memory-admin-api.md) | 控制台「记忆内容」面板：按 scope 查看/编辑/删除/忘记/导出/导入/整理记忆，`/api/instances/<id>/memory/...` 契约、确认字段、状态码、隐私与已知限制 |
+| [`memory-system.md`](memory-system.md) | 记忆系统完整说明：五 scope、BM25/FTS5 与回退、可选语义检索、启发式抽取、Reflection、按群策略，以及下一版 SurfCore 活跃/归档记忆卡设计 |
+| [`group-plugin-config.md`](group-plugin-config.md) | 分群插件启用与分群参数设计：数据模型、字段级覆盖、优先级、运行时快照、Studio/API、审计与双群验收 |
 | [`update-rollback.md`](update-rollback.md) | 更新通道（稳定/测试）、同大版本任意回滚、备份与失败恢复、schema 兼容、历史与 `/api/update/*` 契约 |
 | [`integration-research.md`](integration-research.md) | AstrBot / SnowLuma / OneBot / DeepSeek 集成字段调研与来源 |
 | [`../plugins/qqbot_enhancer/README.md`](../plugins/qqbot_enhancer/README.md) | 插件开发者/高级用户的文件结构、安装、搜索、点歌与 `/option` 说明 |
