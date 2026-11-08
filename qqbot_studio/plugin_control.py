@@ -105,6 +105,21 @@ _REQUEST_FIELDS = frozenset(
         "signature",
     }
 )
+_PLUGIN_REQUEST_FIELDS = frozenset(
+    {
+        "version",
+        "instance_id",
+        "actor_id",
+        "scope",
+        "method",
+        "request_id",
+        "nonce",
+        "timestamp",
+        "body",
+        "digest",
+        "hmac",
+    }
+)
 
 
 class ControlError(RuntimeError):
@@ -437,19 +452,22 @@ def build_request(
     request_value = str(request_id or secrets.token_hex(16)).strip()
     if not _ID_RE.fullmatch(request_value):
         raise ControlPayloadError("request_id 不合法。")
+    # The plugin-side control server accepts one scope token per request.
+    # Prefer admin for write methods, otherwise the first requested scope.
+    scope_value = "global" if "global" in scopes else scopes[0]
     request: dict[str, Any] = {
         "version": CONTROL_PROTOCOL_VERSION,
         "instance_id": instance,
         "actor_id": actor,
-        "scope": list(scopes),
+        "scope": scope_value,
         "method": method,
         "request_id": request_value,
         "nonce": nonce_value,
         "timestamp": now,
         "body": body_value,
-        "body_digest": _normalise_body_digest(body_value),
+        "digest": _normalise_body_digest(body_value),
     }
-    request["signature"] = _sign(secret, request)
+    request["hmac"] = _sign(secret, request)
     return request
 
 
@@ -529,6 +547,65 @@ def verify_request_fields(
     )
 
 
+def _verify_plugin_request(
+    secret: str | bytes,
+    request: Mapping[str, Any],
+    *,
+    clock: Callable[[], float] | None = None,
+    max_age_seconds: int = CONTROL_DEFAULT_MAX_AGE_SECONDS,
+) -> VerifiedControlRequest:
+    if not isinstance(request, Mapping) or set(request) != _PLUGIN_REQUEST_FIELDS:
+        raise ControlPayloadError("控制桥请求包含未知或缺失字段，已拒绝。")
+    version = request.get("version")
+    if version != CONTROL_PROTOCOL_VERSION:
+        raise ControlPayloadError("控制桥协议版本不受支持。")
+    instance_id = _bounded_string(request.get("instance_id"), "instance_id")
+    actor_id = _bounded_string(request.get("actor_id"), "actor_id")
+    scope = _normalise_scope(request.get("scope"))
+    method = _bounded_string(request.get("method"), "method", max_len=128)
+    if method not in FIXED_RPC_METHODS:
+        raise ControlMethodError("未登记的固定 RPC 方法，已拒绝。")
+    request_id = _bounded_string(request.get("request_id"), "request_id")
+    nonce = _bounded_string(request.get("nonce"), "nonce", max_len=128)
+    if not _NONCE_RE.fullmatch(nonce):
+        raise ControlPayloadError("nonce 不合法。")
+    timestamp = request.get("timestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+        raise ControlExpiredError("控制桥请求时间戳不合法。")
+    now = float((clock or time.time)())
+    max_age = max(1, int(max_age_seconds))
+    if timestamp < int(now - max_age) or timestamp > int(now + CONTROL_MAX_CLOCK_SKEW_SECONDS):
+        raise ControlExpiredError("控制桥请求已过期或时间戳超前，已拒绝。")
+    body = request.get("body")
+    if not isinstance(body, Mapping):
+        raise ControlPayloadError("控制桥 body 必须是 JSON object。")
+    body_value = _bounded_json(dict(body), where="body")
+    digest = str(request.get("digest") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ControlPayloadError("控制桥 digest 不合法。")
+    if not hmac.compare_digest(digest, _normalise_body_digest(body_value)):
+        raise ControlAuthError("控制桥 body digest 不匹配，已拒绝。")
+    supplied_hmac = str(request.get("hmac") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", supplied_hmac):
+        raise ControlAuthError("控制桥签名格式不合法。")
+    unsigned = {key: value for key, value in request.items() if key != "hmac"}
+    expected = _sign(secret, unsigned)
+    if not hmac.compare_digest(expected, supplied_hmac):
+        raise ControlAuthError("控制桥签名校验失败，已拒绝。")
+    return VerifiedControlRequest(
+        version=CONTROL_PROTOCOL_VERSION,
+        instance_id=instance_id,
+        actor_id=actor_id,
+        scope=scope,
+        method=method,
+        request_id=request_id,
+        nonce=nonce,
+        timestamp=int(timestamp),
+        body=body_value,
+        raw={str(key): value for key, value in request.items()},
+    )
+
+
 def verify_request_signature(
     secret: str | bytes,
     request: Mapping[str, Any],
@@ -536,6 +613,8 @@ def verify_request_signature(
     clock: Callable[[], float] | None = None,
     max_age_seconds: int = CONTROL_DEFAULT_MAX_AGE_SECONDS,
 ) -> VerifiedControlRequest:
+    if "hmac" in request:
+        return _verify_plugin_request(secret, request, clock=clock, max_age_seconds=max_age_seconds)
     verified = verify_request_fields(request, clock=clock, max_age_seconds=max_age_seconds)
     without_signature = {key: value for key, value in request.items() if key != "signature"}
     expected = _sign(secret, without_signature)
@@ -1132,6 +1211,17 @@ class ControlClient:
     def _verify_response(self, response: Mapping[str, Any], request_id: str) -> dict[str, Any]:
         if not isinstance(response, Mapping):
             raise ControlResponseError("控制桥响应格式异常。")
+        if "result" in response and "ok" in response and "signature" not in response:
+            if str(response.get("request_id") or "") != str(request_id):
+                raise ControlResponseError("控制桥响应 request_id 不匹配。")
+            if not bool(response.get("ok")):
+                code = str(response.get("error") or response.get("code") or "control_remote_error")
+                message = str(response.get("message") or code)
+                raise _remote_error(code, message)
+            result = response.get("result")
+            if not isinstance(result, Mapping):
+                raise ControlResponseError("控制桥响应 result 必须是 JSON object。")
+            return dict(result)
         if response.get("version") != CONTROL_PROTOCOL_VERSION:
             raise ControlResponseError("控制桥响应协议版本不受支持。")
         if str(response.get("request_id") or "") != str(request_id):

@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.3（测试版）— 对齐插件控制桥 RPC 协议
+
+- Studio 控制桥请求改为 safe_tools 实际使用的 `digest`/`hmac`/单 scope 协议，响应解析支持插件的 `{ok, request_id, result}`。
+- 保留本地模拟控制服务器的签名响应解析，测试覆盖两种响应。
+- 生产实连验证：`/aux-budget`、`/aux-budget/usage`、`/plugin-policy` 均返回 200；预算写入与读取正常。
+
 ## v4.4.0-beta.2（测试版）— 修复控制桥 RPC 路径
 
 - 修复 Studio 控制桥默认端点从 `/control` 改为插件实际监听的 `/rpc`，解决 `/aux-budget`、`/plugin-policy` 全部 503 的问题。
