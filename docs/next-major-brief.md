@@ -229,6 +229,8 @@ estimated_input_tokens
 
 ## 10. 已拍板决策（2026-11-08）
 
+> 逐项解释见 [`next-major-decisions.md`](next-major-decisions.md)。
+
 1. **插件拆分采用 2 个业务状态插件 + 1 个词汇库**：
    - `qqbot_social_state`：好感度 + 关系网（同一套群/人格/用户实体与隐私边界）。
    - `qqbot_expression_state`：情绪 + 风格（同一份“怎么说话”的注入块，内部分 emotion/style 两个子模块；后续需要独立预算时可再拆）。
