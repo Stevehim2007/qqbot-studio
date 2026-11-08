@@ -3375,6 +3375,10 @@
         if (meta.description) card.appendChild(makeElement('p', 'group-policy-plugin-desc', String(meta.description)));
         const rawParams = raw.params || {};
         const effectiveParams = effective.params || {};
+        const policyDefaults = data.defaults && data.defaults[pluginId] ? data.defaults[pluginId] : {};
+        const inheritedValue = (name) => (
+          effectiveParams[name] !== undefined ? effectiveParams[name] : policyDefaults[name]
+        );
         for (const [name, spec] of Object.entries(schema)) {
           if (!spec.group_overridable || spec.sensitive) continue;
           const paramMeta = groupPolicyParamMeta(name, spec);
@@ -3385,12 +3389,12 @@
           if (spec.kind === 'boolean') {
             field = document.createElement('input');
             field.type = 'checkbox';
-            field.checked = rawParams[name] !== undefined ? Boolean(rawParams[name]) : Boolean(effectiveParams[name]);
+            field.checked = rawParams[name] !== undefined ? Boolean(rawParams[name]) : Boolean(inheritedValue(name));
           } else if (spec.kind === 'enum') {
             field = document.createElement('select');
             const empty = document.createElement('option');
             empty.value = '';
-            empty.textContent = `默认${effectiveParams[name] !== undefined ? `（${effectiveParams[name]}）` : ''}`;
+            empty.textContent = `默认${inheritedValue(name) !== undefined ? `（${inheritedValue(name)}）` : ''}`;
             field.appendChild(empty);
             (spec.enum || []).forEach((value) => {
               const option = document.createElement('option');
@@ -3405,12 +3409,12 @@
             if (spec.minimum !== null && spec.minimum !== undefined) field.min = spec.minimum;
             if (spec.maximum !== null && spec.maximum !== undefined) field.max = spec.maximum;
             field.value = rawParams[name] !== undefined ? String(rawParams[name]) : '';
-            field.placeholder = effectiveParams[name] !== undefined ? String(effectiveParams[name]) : '默认';
+            field.placeholder = inheritedValue(name) !== undefined ? String(inheritedValue(name)) : '默认';
           }
           field.dataset.policyParam = name;
           field.setAttribute('aria-label', `${paramMeta.label}（${name}）`);
           label.appendChild(field);
-          const defaultValue = effectiveParams[name];
+          const defaultValue = inheritedValue(name);
           label.appendChild(makeElement(
             'small',
             'group-policy-field-meta',
