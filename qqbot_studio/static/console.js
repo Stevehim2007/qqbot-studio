@@ -2934,6 +2934,198 @@
     return section;
   }
 
+  function buildAuxBudgetSection(instance) {
+    const section = makeElement('section', 'instance-v3-section aux-budget-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-database'));
+    heading.appendChild(icon);
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '辅助模型预算'));
+    headingCopy.appendChild(makeElement(
+      'p',
+      '',
+      '只限制后台可选的记忆整理、摘要、风格刷新、模糊关系判断等辅助调用；不限制主聊天、命令和工具。'
+    ));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+
+    const status = makeElement('p', 'instance-v3-status');
+    status.setAttribute('role', 'status');
+    section.appendChild(status);
+
+    const toolbar = makeElement('div', 'aux-budget-toolbar');
+    const tierLabel = makeElement('label', 'aux-budget-tier-label', '预算档位');
+    const tierSelect = document.createElement('select');
+    tierSelect.className = 'aux-budget-tier';
+    for (const [value, label] of [
+      ['off', '关闭（0 元/月）'],
+      ['light', '轻量（10 元/月）'],
+      ['standard', '标准（20 元/月）'],
+      ['advanced', '进阶（50 元/月）'],
+      ['full', '完整（100 元/月）']
+    ]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      tierSelect.appendChild(option);
+    }
+    tierLabel.appendChild(tierSelect);
+    toolbar.appendChild(tierLabel);
+    const saveButton = makeElement('button', 'btn btn-secondary btn-small', '保存档位');
+    saveButton.type = 'button';
+    toolbar.appendChild(saveButton);
+    section.appendChild(toolbar);
+
+    const summary = makeElement('div', 'aux-budget-summary');
+    section.appendChild(summary);
+
+    const featureHint = makeElement('p', 'aux-budget-hint', '单项辅助能力开关；关闭后不会产生该功能的辅助调用。');
+    section.appendChild(featureHint);
+    const featureList = makeElement('div', 'aux-budget-features');
+    section.appendChild(featureList);
+
+    let busy = false;
+    let current = null;
+    const setBusy = (value) => {
+      busy = value;
+      tierSelect.disabled = value;
+      saveButton.disabled = value;
+      for (const input of Array.from(featureList.querySelectorAll('input'))) input.disabled = value;
+    };
+    const setStatus = (message, tone = 'info') => {
+      status.textContent = message || '';
+      status.className = `instance-v3-status${tone ? ` is-${tone}` : ''}`;
+      status.hidden = !message;
+    };
+    const money = (value) => `¥${Number(value || 0).toFixed(2)}`;
+    const stateText = (value) => ({
+      normal: '正常',
+      warning: '接近上限（已降级）',
+      stopped: '已停止辅助调用',
+      unknown: '账本异常，已关闭辅助调用'
+    }[value] || value || '未知');
+
+    const renderSummary = () => {
+      if (!current) return;
+      const statusValue = asRecord(current.status);
+      const configValue = asRecord(current.config);
+      const usageValue = asRecord(current.usage);
+      summary.replaceChildren();
+      const items = [
+        ['本月周期', textValue(statusValue.cycle, '—')],
+        ['已用 / 上限', `${money(statusValue.spent_cny)} / ${money(statusValue.limit_cny)}`],
+        ['预占', money(statusValue.reserved_cny)],
+        ['状态', stateText(textValue(statusValue.state, ''))],
+        ['调用次数', String((Array.isArray(usageValue.features) ? usageValue.features : []).reduce((sum, item) => sum + Number(item.calls || 0), 0))]
+      ];
+      for (const [label, value] of items) {
+        const cell = makeElement('div', 'aux-budget-summary-item');
+        cell.appendChild(makeElement('span', '', label));
+        cell.appendChild(makeElement('strong', '', value));
+        summary.appendChild(cell);
+      }
+      if (configValue.degraded === true || statusValue.degraded === true) {
+        setStatus('预算账本异常，所有辅助调用已关闭；请检查 data/aux_budget.json 与 aux_ledger.db。', 'error');
+      }
+    };
+
+    const renderFeatures = () => {
+      featureList.replaceChildren();
+      if (!current) return;
+      const configValue = asRecord(current.config);
+      const features = asRecord(configValue.features);
+      const catalog = Array.isArray(configValue.feature_catalog) ? configValue.feature_catalog : [];
+      for (const item of catalog) {
+        const id = textValue(item.feature_id, '');
+        if (!id) continue;
+        const row = makeElement('label', 'aux-budget-feature');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = asRecord(features[id]).enabled === true;
+        input.addEventListener('change', async () => {
+          setBusy(true);
+          setStatus(`正在保存 ${textValue(item.label, id)}…`, 'info');
+          try {
+            const result = asRecord(await apiRequest(
+              `/api/instances/${encodeURIComponent(instance.id)}/aux-budget/features/${encodeURIComponent(id)}`,
+              { method: 'POST', body: { enabled: input.checked, expected_revision: asRecord(current.status).revision } }
+            ));
+            if (result.ok === false) throw new ApiError(textValue(result.message || result.error, '保存失败。'));
+            await load();
+            setStatus('辅助能力开关已保存。', 'success');
+          } catch (error) {
+            input.checked = !input.checked;
+            setBusy(false);
+            setStatus(formatError(error, '保存辅助能力开关失败。'), 'error');
+          }
+        });
+        row.appendChild(input);
+        const copy = makeElement('span', 'aux-budget-feature-copy');
+        copy.appendChild(makeElement('strong', '', textValue(item.label, id)));
+        copy.appendChild(makeElement('small', '', id));
+        row.appendChild(copy);
+        featureList.appendChild(row);
+      }
+      if (!catalog.length) featureList.appendChild(makeElement('p', 'aux-budget-hint', '当前没有可显示的辅助能力。'));
+    };
+
+    async function load() {
+      setBusy(true);
+      setStatus('正在读取辅助模型预算…', 'info');
+      try {
+        const [data, usage] = await Promise.all([
+          apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/aux-budget`),
+          apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/aux-budget/usage`)
+        ]);
+        const dataValue = asRecord(data);
+        if (dataValue.ok === false && dataValue.degraded !== true) {
+          throw new ApiError(textValue(dataValue.message || dataValue.error, '读取辅助模型预算失败。'));
+        }
+        current = {
+          status: asRecord(dataValue.status),
+          config: asRecord(dataValue.config),
+          usage: asRecord(usage)
+        };
+        const tier = textValue(current.status.tier, 'standard');
+        if (!tierSelect.querySelector(`option[value="${tier}"]`)) {
+          const option = document.createElement('option');
+          option.value = tier;
+          option.textContent = `当前值：${tier}`;
+          tierSelect.appendChild(option);
+        }
+        tierSelect.value = tier;
+        renderSummary();
+        renderFeatures();
+        setStatus(dataValue.degraded === true ? '预算账本异常，辅助调用已关闭。' : '辅助模型预算已读取。', dataValue.degraded === true ? 'error' : 'success');
+      } catch (error) {
+        setStatus(formatError(error, '辅助模型预算读取失败。'), 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    saveButton.addEventListener('click', async () => {
+      setBusy(true);
+      setStatus('正在保存预算档位…', 'info');
+      try {
+        const result = asRecord(await apiRequest(
+          `/api/instances/${encodeURIComponent(instance.id)}/aux-budget`,
+          { method: 'POST', body: { tier: tierSelect.value, expected_revision: asRecord(current && current.status).revision } }
+        ));
+        if (result.ok === false) throw new ApiError(textValue(result.message || result.error, '保存预算档位失败。'));
+        await load();
+        setStatus('预算档位已保存。', 'success');
+      } catch (error) {
+        setBusy(false);
+        setStatus(formatError(error, '保存预算档位失败。'), 'error');
+      }
+    });
+
+    load();
+    return section;
+  }
+
   function buildSettingsShell(instance) {
     const shell = makeElement('div', 'settings-shell');
     const nav = makeElement('nav', 'settings-nav');
@@ -2952,6 +3144,7 @@
         ]
       },
       { id: 'prompts', label: '提示词', sections: [buildPromptManagerSection(instance)] },
+      { id: 'aux', label: '辅助模型', sections: [buildAuxBudgetSection(instance)] },
       { id: 'stats', label: '运行状态', sections: [buildStatsSection(instance)] }
     ];
     const buttons = new Map();

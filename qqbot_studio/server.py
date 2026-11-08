@@ -1202,6 +1202,78 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         )
                     )
                     return
+                if subroute in {"aux-budget", "aux-budget/features", "aux-budget/usage"}:
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    if subroute == "aux-budget":
+                        self._serve_control_result(
+                            lambda: caller(
+                                "aux_budget.get",
+                                scope=("admin", "global"),
+                                body={},
+                            )
+                        )
+                        return
+                    if subroute == "aux-budget/features":
+                        def _features():
+                            result = caller(
+                                "aux_budget.get",
+                                scope=("admin", "global"),
+                                body={},
+                            )
+                            if not isinstance(result, dict):
+                                return result
+                            config = result.get("config")
+                            features = config.get("features") if isinstance(config, dict) else None
+                            return {
+                                "ok": result.get("ok", False),
+                                "degraded": result.get("degraded", False),
+                                "features": features or {},
+                            }
+
+                        self._serve_control_result(_features)
+                        return
+                    cycle_values = query.get("cycle") or []
+                    body = {}
+                    if cycle_values and str(cycle_values[0]).strip():
+                        body["cycle"] = str(cycle_values[0]).strip()
+                    self._serve_control_result(
+                        lambda: caller(
+                            "aux_budget.usage",
+                            scope=("admin", "global"),
+                            body=body,
+                        )
+                    )
+                    return
+                if subroute == "auxiliary-llm":
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    self._serve_control_result(
+                        lambda: caller(
+                            "auxiliary_llm.get",
+                            scope=("admin", "global"),
+                            body={},
+                        )
+                    )
+                    return
                 if subroute == "memory-policy":
                     self._serve_memory_policy(manager, read_only=True)
                     return
@@ -1765,6 +1837,152 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 if memory_route is not None:
                     self._serve_memory_admin(
                         manager, memory_route, method="POST", payload=payload, query=query
+                    )
+                    return
+                if subroute == "aux-budget":
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    body = {}
+                    if "tier" in payload:
+                        tier = str(payload.get("tier") or "").strip()
+                        if tier not in {"off", "light", "standard", "advanced", "full"}:
+                            self._json(
+                                HTTPStatus.BAD_REQUEST,
+                                {"ok": False, "code": "invalid_tier", "message": "tier 不合法。"},
+                            )
+                            return
+                        body["tier"] = tier
+                    if "enabled" in payload:
+                        if not isinstance(payload["enabled"], bool):
+                            self._json(
+                                HTTPStatus.BAD_REQUEST,
+                                {"ok": False, "code": "invalid_enabled", "message": "enabled 必须是布尔值。"},
+                            )
+                            return
+                        body["enabled"] = payload["enabled"]
+                    if not body:
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "code": "invalid_args", "message": "tier 或 enabled 至少提供一个。"},
+                        )
+                        return
+                    if "expected_revision" in payload:
+                        body["expected_revision"] = payload["expected_revision"]
+                    self._serve_control_result(
+                        lambda: caller(
+                            "aux_budget.set",
+                            scope=("admin", "global"),
+                            body=body,
+                        )
+                    )
+                    return
+                if subroute.startswith("aux-budget/features/"):
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    feature_id = subroute[len("aux-budget/features/") :].strip("/")
+                    if not feature_id or "/" in feature_id:
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "code": "invalid_feature", "message": "feature_id 不合法。"},
+                        )
+                        return
+                    if not isinstance(payload.get("enabled"), bool):
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "code": "invalid_enabled", "message": "enabled 必须是布尔值。"},
+                        )
+                        return
+                    body = {"feature_id": feature_id, "enabled": payload["enabled"]}
+                    if "group_allowlist" in payload:
+                        allowlist = payload["group_allowlist"]
+                        if not isinstance(allowlist, list) or not all(
+                            isinstance(item, str) for item in allowlist
+                        ):
+                            self._json(
+                                HTTPStatus.BAD_REQUEST,
+                                {"ok": False, "code": "invalid_allowlist", "message": "group_allowlist 必须是字符串数组。"},
+                            )
+                            return
+                        body["group_allowlist"] = allowlist
+                    if "expected_revision" in payload:
+                        body["expected_revision"] = payload["expected_revision"]
+                    self._serve_control_result(
+                        lambda: caller(
+                            "aux_budget.feature_set",
+                            scope=("admin", "global"),
+                            body=body,
+                        )
+                    )
+                    return
+                if subroute == "aux-budget/cycle/reset":
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    body = {}
+                    if "expected_revision" in payload:
+                        body["expected_revision"] = payload["expected_revision"]
+                    self._serve_control_result(
+                        lambda: caller(
+                            "aux_budget.cycle_reset",
+                            scope=("admin", "global"),
+                            body=body,
+                        )
+                    )
+                    return
+                if subroute == "auxiliary-llm":
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    tier = str(payload.get("tier") or "").strip()
+                    if tier not in {"off", "light", "standard", "advanced", "full"}:
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "code": "invalid_tier", "message": "tier 不合法。"},
+                        )
+                        return
+                    body = {"tier": tier}
+                    if "expected_revision" in payload:
+                        body["expected_revision"] = payload["expected_revision"]
+                    self._serve_control_result(
+                        lambda: caller(
+                            "auxiliary_llm.set",
+                            scope=("admin", "global"),
+                            body=body,
+                        )
                     )
                     return
                 if subroute == "plugin-policy":

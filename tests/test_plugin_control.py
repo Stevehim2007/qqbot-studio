@@ -65,6 +65,14 @@ class PluginControlTests(unittest.TestCase):
         self.assertIn("food.query", FIXED_RPC_METHODS)
         self.assertIn("confirmation.confirm", FIXED_RPC_METHODS)
         self.assertIn("memory.confirm_clear", FIXED_RPC_METHODS)
+        for method in (
+            "aux_budget.get",
+            "aux_budget.set",
+            "aux_budget.usage",
+            "aux_budget.feature_set",
+            "aux_budget.cycle_reset",
+        ):
+            self.assertIn(method, FIXED_RPC_METHODS)
         # No generic escape hatches are registered.
         for forbidden in ("exec", "shell", "sql", "eval", "request", "control.call", "../tool.catalog"):
             self.assertNotIn(forbidden, FIXED_RPC_METHODS)
