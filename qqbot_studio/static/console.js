@@ -2871,6 +2871,28 @@
     }
 
     const groupState = instance && instance.v3 ? instance.v3.pluginGroups : null;
+    const groupError = groupState && groupState.error ? String(groupState.error) : '';
+    if (!groupState || groupError) {
+      const groupNote = makeElement('p', 'plugin-group-load-note', groupError || '正在加载插件分组…');
+      section.appendChild(groupNote);
+      const retryGroups = makeElement('button', 'btn btn-secondary btn-small', '重新加载分组');
+      retryGroups.type = 'button';
+      retryGroups.addEventListener('click', async () => {
+        retryGroups.disabled = true;
+        groupNote.textContent = '正在重新加载插件分组…';
+        const data = await loadPluginGroupsForInstance(instance);
+        instance.v3 = { ...(instance.v3 || {}), pluginGroups: data };
+        section.replaceWith(buildPluginSection(instance));
+      });
+      section.appendChild(retryGroups);
+      if (!groupState) {
+        void (async () => {
+          const data = await loadPluginGroupsForInstance(instance);
+          instance.v3 = { ...(instance.v3 || {}), pluginGroups: data };
+          section.replaceWith(buildPluginSection(instance));
+        })();
+      }
+    }
     const groups = groupState && Array.isArray(groupState.groups) ? groupState.groups : [];
     const groupedPluginIds = new Set();
     for (const group of groups) {
@@ -3126,6 +3148,48 @@
     return section;
   }
 
+  const GROUP_POLICY_PARAM_META = {
+    'participation.reply_probability': ['非 @ 接话概率', '群聊里没有 @ 机器人时，按这个概率随机参与；0 表示不主动接话。'],
+    'participation.timezone': ['时区', '分群时间段判断使用的 IANA 时区，例如 Asia/Shanghai。'],
+    'context.max_chars': ['上下文长度', '送入模型的上下文/输入最大字符数；过大增加成本。'],
+    'persona.profile_id': ['人格 Profile', '该群绑定的人格 Profile ID；留空使用实例默认。'],
+    'tool_allowlist': ['工具白名单', '该群允许模型调用的工具；敏感项仅 Studio 可改。'],
+    'tool_cooldown_seconds': ['工具冷却', '同一工具在该群的最小调用间隔（秒）。'],
+    'require_confirm': ['工具确认', '写操作是否需要二次确认；敏感项仅 Studio 可改。'],
+    'default_city': ['默认城市', '群里没有显式地点时，Food 搜索使用的兜底城市。'],
+    'max_results': ['最大结果数', '单次查询最多返回多少条结果。'],
+    'sort': ['默认排序', 'Food 搜索结果的默认排序维度。'],
+    'allow_submit_review': ['允许提交评价', '该群是否允许通过 Food 工具提交新评价。'],
+    'decoration_probability': ['装饰概率', 'AI 未启用时，回复后追加本地表情的触发概率。'],
+    'ai_decoration_enabled': ['AI 自动装饰', '是否允许 AI 从本地表情中选择一张追加到回复。'],
+    'ai_decoration_probability': ['AI 装饰概率', 'AI 自动装饰的触发概率。'],
+    'candidate_count': ['候选表情数', '交给 AI 选择的表情候选数量。'],
+    'collect_enabled': ['允许收藏', '该群是否允许收藏用户表情。'],
+    'allow_write': ['允许写入', '该群是否允许通过 /记忆 写入长期记忆。'],
+    'visible_scopes': ['可见 scope', '该群可读取的记忆 scope；敏感项仅 Studio 可改。'],
+    'favorability.half_life_days': ['好感半衰期', '好感度衰减到一半所需天数。'],
+    'relationship.enabled': ['关系网', '是否启用群成员关系网。'],
+    'relationship.min_evidence': ['关系最低证据', '建立关系边所需的最少证据数。'],
+    'emotion.half_life_minutes': ['情绪半衰期', '情绪强度衰减到一半所需分钟数。'],
+    'style.enabled': ['风格画像', '是否启用按用户/群调整表达风格。'],
+    'style.refresh_hours': ['风格刷新间隔', '风格画像后台刷新的最小间隔（小时）。'],
+    'inject.max_entries': ['词汇注入条数', '每轮最多注入多少条词汇库条目。'],
+    'inject.max_chars': ['词汇注入字符数', '每轮最多注入多少字符的词汇说明。'],
+    'help_command_enabled': ['/help 开关', '是否允许 AstrBot 内置 /help 命令；不影响普通聊天。']
+  };
+
+  function groupPolicyParamMeta(name, spec) {
+    const known = GROUP_POLICY_PARAM_META[name];
+    const label = known ? known[0] : name;
+    const details = [];
+    if (known) details.push(known[1]);
+    if (spec && spec.kind) details.push(`类型：${spec.kind}`);
+    if (spec && spec.minimum !== null && spec.minimum !== undefined) details.push(`最小：${spec.minimum}`);
+    if (spec && spec.maximum !== null && spec.maximum !== undefined) details.push(`最大：${spec.maximum}`);
+    if (spec && spec.enum && spec.enum.length) details.push(`可选：${spec.enum.join(' / ')}`);
+    return { label, title: `${label}（${name}）\n${details.join('；')}` };
+  }
+
   function buildGroupPolicySection(instance) {
     const section = makeElement('section', 'instance-v3-section group-policy-section');
     const heading = makeElement('div', 'instance-v3-section-heading');
@@ -3134,7 +3198,7 @@
     heading.appendChild(icon);
     const copy = makeElement('div', 'instance-v3-section-copy');
     copy.appendChild(makeElement('h4', '', '分群策略'));
-    copy.appendChild(makeElement('p', '', '按群或私聊覆盖插件开关与允许参数；作用于下一条消息。'));
+    copy.appendChild(makeElement('p', '', '按群或私聊覆盖插件开关与允许参数；只显示已安装插件中经过安全筛选、且运行时真正读取的参数。'));
     heading.appendChild(copy);
     section.appendChild(heading);
 
@@ -3156,7 +3220,7 @@
     scopeInput.className = 'group-policy-scope-id';
     scopeInput.placeholder = '群号或用户 QQ 号';
     scopeInput.autocomplete = 'off';
-    const loadButton = makeElement('button', 'button-secondary', '加载策略');
+    const loadButton = makeElement('button', 'btn btn-secondary btn-small', '加载策略');
     loadButton.type = 'button';
     toolbar.append(scopeSelect, scopeInput, loadButton);
     section.appendChild(toolbar);
@@ -3239,7 +3303,7 @@
       });
       templateSelect.value = textValue(data.template, '');
       templateRow.appendChild(templateSelect);
-      const applyTemplate = makeElement('button', 'button-secondary', '应用模板');
+      const applyTemplate = makeElement('button', 'btn btn-secondary btn-small', '应用模板');
       applyTemplate.type = 'button';
       applyTemplate.addEventListener('click', async () => {
         if (!templateSelect.value) return;
@@ -3256,7 +3320,7 @@
         }
       });
       templateRow.appendChild(applyTemplate);
-      const resetAll = makeElement('button', 'button-danger', '重置整群');
+      const resetAll = makeElement('button', 'btn btn-danger btn-small', '重置整群');
       resetAll.type = 'button';
       resetAll.addEventListener('click', async () => {
         setStatus('正在重置…');
@@ -3272,26 +3336,39 @@
       content.appendChild(templateRow);
 
       const pluginGrid = makeElement('div', 'group-policy-grid');
-      for (const pluginId of data.available_plugins || []) {
+      const pluginMeta = new Map(
+        (((instance.v3 || {}).plugins || {}).items || []).map((plugin) => [String(plugin.id || plugin.plugin_id || ''), plugin])
+      );
+      const availablePlugins = (data.available_plugins || []).filter((pluginId) => (
+        pluginMeta.has(String(pluginId)) || Boolean(data.plugins && data.plugins[pluginId])
+      ));
+      for (const pluginId of availablePlugins) {
         const raw = data.plugins && data.plugins[pluginId] ? data.plugins[pluginId] : {};
         const effective = data.effective && data.effective[pluginId] ? data.effective[pluginId] : {};
         const schema = data.schemas && data.schemas[pluginId] ? data.schemas[pluginId] : {};
+        const meta = pluginMeta.get(String(pluginId)) || {};
         const card = makeElement('div', 'group-policy-card');
         const cardHead = makeElement('div', 'group-policy-card-head');
+        const title = makeElement('div', 'group-policy-card-title');
+        title.appendChild(makeElement('strong', '', textValue(meta.name, pluginId)));
+        title.appendChild(makeElement('code', 'group-policy-plugin-id', pluginId));
         const enabledLabel = makeElement('label', 'group-policy-enabled');
         const enabled = document.createElement('input');
         enabled.type = 'checkbox';
         enabled.checked = raw.enabled !== undefined ? Boolean(raw.enabled) : Boolean(effective.enabled !== false);
         enabledLabel.append(enabled, document.createTextNode(' 启用'));
-        cardHead.appendChild(makeElement('strong', '', pluginId));
+        cardHead.appendChild(title);
         cardHead.appendChild(enabledLabel);
         card.appendChild(cardHead);
+        if (meta.description) card.appendChild(makeElement('p', 'group-policy-plugin-desc', String(meta.description)));
         const rawParams = raw.params || {};
         const effectiveParams = effective.params || {};
         for (const [name, spec] of Object.entries(schema)) {
           if (!spec.group_overridable || spec.sensitive) continue;
+          const paramMeta = groupPolicyParamMeta(name, spec);
           const label = makeElement('label', 'group-policy-field');
-          label.appendChild(makeElement('span', '', name));
+          label.title = paramMeta.title;
+          label.appendChild(makeElement('span', 'group-policy-field-label', paramMeta.label));
           let field;
           if (spec.kind === 'boolean') {
             field = document.createElement('input');
@@ -3319,11 +3396,18 @@
             field.placeholder = effectiveParams[name] !== undefined ? String(effectiveParams[name]) : '默认';
           }
           field.dataset.policyParam = name;
+          field.setAttribute('aria-label', `${paramMeta.label}（${name}）`);
           label.appendChild(field);
+          const defaultValue = effectiveParams[name];
+          label.appendChild(makeElement(
+            'small',
+            'group-policy-field-meta',
+            defaultValue !== undefined ? `默认：${String(defaultValue)}` : '默认：未设置'
+          ));
           card.appendChild(label);
         }
         const actions = makeElement('div', 'group-policy-actions');
-        const save = makeElement('button', 'button-primary', '保存');
+        const save = makeElement('button', 'btn btn-primary btn-small', '保存');
         save.type = 'button';
         save.addEventListener('click', async () => {
           setStatus('正在保存…');
@@ -3338,7 +3422,7 @@
             setStatus(formatError(error, '保存失败。'), 'error');
           }
         });
-        const reset = makeElement('button', 'button-secondary', '重置');
+        const reset = makeElement('button', 'btn btn-secondary btn-small', '重置');
         reset.type = 'button';
         reset.addEventListener('click', async () => {
           setStatus('正在重置…');
@@ -3404,7 +3488,7 @@
     idInput.type = 'text';
     idInput.placeholder = '模板 ID，例如 standard';
     idInput.autocomplete = 'off';
-    const loadButton = makeElement('button', 'button-secondary', '加载');
+    const loadButton = makeElement('button', 'btn btn-secondary btn-small', '加载');
     loadButton.type = 'button';
     toolbar.append(idInput, loadButton);
     section.appendChild(toolbar);
@@ -3414,9 +3498,9 @@
     editor.placeholder = '{"qqbot_food":{"enabled":true,"params":{"default_city":"长春市"}}}';
     section.appendChild(editor);
     const actions = makeElement('div', 'group-policy-actions');
-    const save = makeElement('button', 'button-primary', '保存模板');
+    const save = makeElement('button', 'btn btn-primary btn-small', '保存模板');
     save.type = 'button';
-    const remove = makeElement('button', 'button-danger', '删除模板');
+    const remove = makeElement('button', 'btn btn-danger btn-small', '删除模板');
     remove.type = 'button';
     actions.append(save, remove);
     section.appendChild(actions);
@@ -6413,7 +6497,8 @@
               plugins: { ...existing.plugins, status: 'error', error: message },
               memory: { ...existing.memory, status: 'error', error: message },
               memoryPolicy: existing.memoryPolicy || { ...emptyMemoryPolicyState(), status: 'error', error: message },
-              stats: { ...existing.stats, status: 'error', error: message }
+              stats: { ...existing.stats, status: 'error', error: message },
+              pluginGroups: { ok: false, groups: [], error: message }
             }
           };
         }

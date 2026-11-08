@@ -7,6 +7,16 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.6（测试版）— 群策略体验与权限修复
+
+- 修复首次打开设置时插件分组偶发不显示：分组加载失败会保留错误状态、显示重试按钮，并在缺失时自动重试一次。
+- 群策略页增加插件名称/ID/说明、参数中文标签与悬停说明；只展示已安装插件和经过安全筛选的可覆盖参数。
+- 美化群策略按钮、输入框、模板 JSON 编辑器和 focus/hover 状态。
+- 新增 `qqbot_core_reply.help_command_enabled`（默认 true），可在实例或群策略中关闭 `/help` 响应；裸 `help ...` 仍按普通聊天处理。
+- 修复 `/分群` 权限误判：支持 sender role 为对象/字典、AstrBot 实例管理员 `admins_id`，并新增 `group_admin_allow_bot_admin`（默认 true）。
+- 新增本地文档 `docs/default-off-parameters.md`，说明默认关闭参数与群策略安全白名单边界。
+- 插件版本：core_reply 4.0.6、safe_tools 3.2.2；主项目测试 848 tests OK。
+
 ## v4.4.0-beta.5（测试版）— 修复 V2 群策略 RPC 白名单
 
 - 将 `policy.scope`、`policy.audit`、`policy.templates`、`policy.param_schema`、`policy.scope_reset`、`policy.template_set/delete/apply` 加入 Studio 固定 RPC 方法白名单，修复群策略页 400 `control_method_not_allowed`。

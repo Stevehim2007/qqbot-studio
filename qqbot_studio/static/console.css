@@ -2222,3 +2222,132 @@ body.console-modal-open { overflow: hidden; }
   background: var(--surface-soft, #f9fafb);
   color: var(--text, #111827);
 }
+
+/* Plugin group load recovery */
+.plugin-group-load-note {
+  margin: 10px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid #f0d38b;
+  border-radius: 8px;
+  background: #fffaf0;
+  color: #8a5b00;
+  font-size: 12px;
+}
+
+/* Group policy polish */
+.group-policy-section .group-policy-toolbar {
+  padding: 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.group-policy-scope-type,
+.group-policy-scope-id,
+.group-policy-template-row select,
+.group-policy-toolbar input {
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.group-policy-scope-type:focus,
+.group-policy-scope-id:focus,
+.group-policy-template-row select:focus,
+.group-policy-toolbar input:focus,
+.group-policy-field input:focus,
+.group-policy-field select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, .13);
+}
+
+.group-policy-card {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+  transition: box-shadow .15s ease, transform .15s ease;
+}
+
+.group-policy-card:hover {
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .08);
+  transform: translateY(-1px);
+}
+
+.group-policy-card-head {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border, #eef2f7);
+}
+
+.group-policy-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.group-policy-card-title strong {
+  font-size: 13px;
+  color: var(--text, #111827);
+}
+
+.group-policy-plugin-id {
+  font-size: 10.5px;
+  color: var(--muted, #6b7280);
+  background: transparent;
+  padding: 0;
+}
+
+.group-policy-plugin-desc {
+  margin: 0;
+  color: var(--muted, #6b7280);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.group-policy-field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text, #374151);
+  cursor: help;
+}
+
+.group-policy-field-meta {
+  color: var(--muted, #9ca3af);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.group-policy-enabled input,
+.group-policy-field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+}
+
+.group-policy-actions .btn {
+  flex: 1 1 auto;
+}
+
+.group-policy-template-section .group-policy-toolbar input,
+.group-policy-template-section textarea {
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: var(--text, #111827);
+  font: inherit;
+}
+
+.group-policy-template-section textarea {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.group-policy-template-section input:focus,
+.group-policy-template-section textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, .13);
+}
