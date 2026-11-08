@@ -226,3 +226,19 @@ estimated_input_tokens
 - 长会话不会无限增长 prompt；
 - 记忆检索条数和字符数有硬预算；
 - provider 不支持缓存时有降级策略。
+
+## 10. 已拍板决策（2026-11-08）
+
+1. **插件拆分采用 2 个业务状态插件 + 1 个词汇库**：
+   - `qqbot_social_state`：好感度 + 关系网（同一套群/人格/用户实体与隐私边界）。
+   - `qqbot_expression_state`：情绪 + 风格（同一份“怎么说话”的注入块，内部分 emotion/style 两个子模块；后续需要独立预算时可再拆）。
+   - `qqbot_vocabulary`：词汇库，独立 owner。
+   - 不采用“好感、关系、情绪、风格各一个插件”的四插件方案；如后续风格需要独立 LLM 预算/独立启停，再从 expression 拆出，不破坏 ABI。
+2. **群策略采用 safe_tools 侧车（sidecar）**：`capability_policy.json`/策略库由 safe_tools 单写，Studio 通过控制桥读写；保留 `group_admin_override_enabled` 开关，默认关闭。开启后群管理员只能改本群允许覆盖的非敏感参数，不能看/导出/删除数据。
+3. **辅助 LLM 首版预算 10–20 元/月**：只用于可选的摘要/抽取/风格刷新等后台任务；规则优先；80% 预警、100% 停止可选调用；核心聊天不受影响。首版不把辅助 LLM 作为回复链路的硬依赖。
+4. **可见性与删除权只在控制台**：好感、关系、情绪、风格、记忆卡等敏感数据的查看/导出/删除只走 Studio；QQ 内不提供数据查询/删除命令；群管理员只可改参数开关。
+5. **五 scope 保持默认，`group_member` 作为可选第六 scope**：默认不启用、不迁移；需要“本群内某成员”隔离的群显式开启。
+6. **词汇库接 AstrBot 知识库**：`qqbot_vocabulary` 是条目 owner；知识库作为检索/索引层；本地 SQLite/FTS 作为离线回退；不产生第二份真源。
+7. **测试版统一先开，生产按群灰度**：测试实例打开全部新能力但带保守预算/频率上限；生产默认关闭或按群灰度，观察指标后再扩大。
+8. **人格采用结构化人格库，不把人格文本塞进 memory persona scope**：新增 core/style/lore/rules 四层与 revision；现有 `group_personas`/`prompt_profiles` 作为迁移来源/兼容层；`persona` scope 只存“与人格绑定的记忆”，不存人格定义。
+

@@ -145,6 +145,23 @@ params = policy.params  # 已合并、已校验的 dict
   → 在 allowlist：按本群冷却/确认策略执行
 ```
 
+## 5.1 群管理员改参数开关
+
+保留一个实例级开关：
+
+```json
+{
+  "group_admin_override_enabled": false,
+  "group_admin_allowlist": []
+}
+```
+
+- 默认关闭；只有实例管理员能打开。
+- 打开后，QQ 群主/管理员（或显式 allowlist 中的 QQ 号）可以修改**本群允许覆盖的非敏感参数**。
+- 群管理员不能修改 `sensitive=true` 字段、不能改其他群、不能看/导出/删除记忆/关系/好感数据。
+- 所有群管理员修改都写审计：操作者、群、插件、字段、旧值→新值、时间；不记录消息正文。
+- 群管理员身份优先取 QQ 事件角色；取不到时回退 `group_admin_allowlist`，避免误授权。
+
 ## 6. Studio UI / API
 
 ### UI
