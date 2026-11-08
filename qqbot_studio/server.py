@@ -1254,26 +1254,6 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         )
                     )
                     return
-                if subroute == "auxiliary-llm":
-                    caller = getattr(manager, "plugin_control_call", None)
-                    if not callable(caller):
-                        self._json(
-                            HTTPStatus.SERVICE_UNAVAILABLE,
-                            {
-                                "ok": False,
-                                "code": "bridge_unavailable",
-                                "message": "当前后端未提供插件控制桥。",
-                            },
-                        )
-                        return
-                    self._serve_control_result(
-                        lambda: caller(
-                            "auxiliary_llm.get",
-                            scope=("admin", "global"),
-                            body={},
-                        )
-                    )
-                    return
                 if subroute == "memory-policy":
                     self._serve_memory_policy(manager, read_only=True)
                     return
@@ -1950,36 +1930,6 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     self._serve_control_result(
                         lambda: caller(
                             "aux_budget.cycle_reset",
-                            scope=("admin", "global"),
-                            body=body,
-                        )
-                    )
-                    return
-                if subroute == "auxiliary-llm":
-                    caller = getattr(manager, "plugin_control_call", None)
-                    if not callable(caller):
-                        self._json(
-                            HTTPStatus.SERVICE_UNAVAILABLE,
-                            {
-                                "ok": False,
-                                "code": "bridge_unavailable",
-                                "message": "当前后端未提供插件控制桥。",
-                            },
-                        )
-                        return
-                    tier = str(payload.get("tier") or "").strip()
-                    if tier not in {"off", "light", "standard", "advanced", "full"}:
-                        self._json(
-                            HTTPStatus.BAD_REQUEST,
-                            {"ok": False, "code": "invalid_tier", "message": "tier 不合法。"},
-                        )
-                        return
-                    body = {"tier": tier}
-                    if "expected_revision" in payload:
-                        body["expected_revision"] = payload["expected_revision"]
-                    self._serve_control_result(
-                        lambda: caller(
-                            "auxiliary_llm.set",
                             scope=("admin", "global"),
                             body=body,
                         )

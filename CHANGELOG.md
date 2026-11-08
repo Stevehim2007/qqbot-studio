@@ -7,6 +7,16 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.1（测试版）— V1 分群能力策略与辅助预算底座
+
+- 新增 `capability_policy.json` v2 侧车：实例默认 < 群模板 < 群/私聊覆盖，字段级合并、revision CAS、原子写和审计。
+- 新增 `aux_budget.json` + `aux_ledger.db`：五档预算（off/light/standard/advanced/full）、13 项辅助功能、reserve/commit/release、80% 省电、100% 停止、跨月 cycle 和幂等 request_id。
+- safe_tools 新增 `policy.*`、`aux_budget.*` 控制方法和 Studio 辅助模型/预算 API；设置页可切换档位并单独开关 13 项功能。
+- core_reply/food/stickers/memory_commands 接入分群策略门控；Food 的 `default_city` 只在群位置推断失败后兜底。
+- 测试通道改为自动发现最新 `alpha/beta/rc` 预发布标签，不再写死分支白名单。
+- 插件版本：core 4.0.4、safe_tools 3.2.0、food 3.0.4、stickers 3.0.3、memory_commands 4.0.2。
+- 插件仓库发布 `v4.4.0-beta.1`；主项目测试 tag 同名。
+
 ## v4.3.1（正式版）— 插件市场、七插件运行时与通用工具调用
 
 - 主项目合并插件市场、插件分组、安装/更新/删除、SHA-256 与 ZIP 安全校验、原子替换和操作预览/确认。

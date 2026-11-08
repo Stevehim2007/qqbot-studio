@@ -215,8 +215,6 @@ for _name, _provider, _access in (
     ("policy.snapshot", "safe_tools", "read"),
     ("policy.set", "safe_tools", "write"),
     ("policy.reset", "safe_tools", "write"),
-    ("auxiliary_llm.get", "safe_tools", "read"),
-    ("auxiliary_llm.set", "safe_tools", "write"),
     ("aux_budget.get", "safe_tools", "read"),
     ("aux_budget.set", "safe_tools", "write"),
     ("aux_budget.usage", "safe_tools", "read"),
