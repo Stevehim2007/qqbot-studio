@@ -7,6 +7,14 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.4（测试版）— V2 分群策略控制面
+
+- Studio 新增“群策略”分类：群/私聊 scope 查询、插件启停、字段级参数覆盖、模板应用、整群重置、审计记录。
+- 新增 `/api/instances/{id}/group-policies/*`、`/group-param-schema/*`、`/group-policy-templates/*`，支持 GET/POST/PUT 与 revision CAS。
+- safe_tools 新增 `policy.scope/scope_reset/audit/templates/template_set/template_delete/template_apply/param_schema` 控制方法。
+- core_reply 新增 `/分群 状态|开启|关闭|重置|模板|概率` 群管理员命令；默认关闭 `group_admin_override_enabled`，开启后仅允许本群非敏感参数。
+- 插件版本：core_reply 4.0.5、safe_tools 3.2.1；主项目测试 `848 tests OK`。
+
 ## v4.4.0-beta.3（测试版）— 对齐插件控制桥 RPC 协议
 
 - Studio 控制桥请求改为 safe_tools 实际使用的 `digest`/`hmac`/单 scope 协议，响应解析支持插件的 `{ok, request_id, result}`。

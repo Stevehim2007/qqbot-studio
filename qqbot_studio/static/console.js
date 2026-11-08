@@ -3126,6 +3126,359 @@
     return section;
   }
 
+  function buildGroupPolicySection(instance) {
+    const section = makeElement('section', 'instance-v3-section group-policy-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-shield'));
+    heading.appendChild(icon);
+    const copy = makeElement('div', 'instance-v3-section-copy');
+    copy.appendChild(makeElement('h4', '', '分群策略'));
+    copy.appendChild(makeElement('p', '', '按群或私聊覆盖插件开关与允许参数；作用于下一条消息。'));
+    heading.appendChild(copy);
+    section.appendChild(heading);
+
+    const status = makeElement('p', 'instance-v3-status');
+    status.setAttribute('role', 'status');
+    section.appendChild(status);
+
+    const toolbar = makeElement('div', 'group-policy-toolbar');
+    const scopeSelect = document.createElement('select');
+    scopeSelect.className = 'group-policy-scope-type';
+    [['group', 'QQ 群'], ['private', '私聊用户']].forEach(([value, label]) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      scopeSelect.appendChild(option);
+    });
+    const scopeInput = document.createElement('input');
+    scopeInput.type = 'text';
+    scopeInput.className = 'group-policy-scope-id';
+    scopeInput.placeholder = '群号或用户 QQ 号';
+    scopeInput.autocomplete = 'off';
+    const loadButton = makeElement('button', 'button-secondary', '加载策略');
+    loadButton.type = 'button';
+    toolbar.append(scopeSelect, scopeInput, loadButton);
+    section.appendChild(toolbar);
+
+    const content = makeElement('div', 'group-policy-content');
+    section.appendChild(content);
+    const auditBox = makeElement('div', 'group-policy-audit');
+    section.appendChild(auditBox);
+
+    const setStatus = (message, tone = 'info') => {
+      status.textContent = message;
+      status.dataset.tone = tone;
+    };
+    const currentScope = () => ({
+      type: scopeSelect.value || 'group',
+      id: scopeInput.value.trim()
+    });
+    const scopePath = (scope, suffix = '') => {
+      const base = `/api/instances/${encodeURIComponent(instance.id)}/group-policies/${encodeURIComponent(scope.type)}/${encodeURIComponent(scope.id)}`;
+      return suffix ? `${base}/${suffix}` : base;
+    };
+    const collectParams = (card, schema) => {
+      const params = {};
+      for (const [name, spec] of Object.entries(schema || {})) {
+        const field = card.querySelector(`[data-policy-param="${CSS.escape(name)}"]`);
+        if (!field) continue;
+        if (spec.kind === 'boolean') {
+          params[name] = Boolean(field.checked);
+        } else if (field.value !== '') {
+          params[name] = field.value;
+        }
+      }
+      return params;
+    };
+
+    const loadAudit = async (scope) => {
+      try {
+        const data = await apiRequest(`${scopePath(scope, 'audit')}?limit=20`);
+        auditBox.replaceChildren();
+        auditBox.appendChild(makeElement('h5', '', '最近修改'));
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (!items.length) {
+          auditBox.appendChild(makeElement('p', 'instance-v3-empty', '暂无修改记录。'));
+          return;
+        }
+        const list = makeElement('div', 'group-policy-audit-list');
+        items.forEach((row) => {
+          const line = makeElement('div', 'group-policy-audit-row');
+          line.appendChild(makeElement('span', 'group-policy-audit-action', textValue(row.action, 'update')));
+          line.appendChild(makeElement('span', 'group-policy-audit-target', textValue(row.target, '')));
+          line.appendChild(makeElement('span', 'group-policy-audit-time', textValue(row.ts, '')));
+          list.appendChild(line);
+        });
+        auditBox.appendChild(list);
+      } catch (error) {
+        auditBox.replaceChildren(makeElement('p', 'plugin-error', formatError(error, '审计记录读取失败。')));
+      }
+    };
+
+    const renderScope = (data, scope) => {
+      content.replaceChildren();
+      const templates = Array.isArray(data.templates) ? data.templates : [];
+      const summary = makeElement('div', 'group-policy-summary');
+      summary.appendChild(makeElement('span', '', `revision ${data.revision} · ${data.available_plugins.length} 个插件`));
+      if (data.degraded) summary.appendChild(makeElement('span', 'group-policy-degraded', '策略库降级，写操作已关闭'));
+      content.appendChild(summary);
+
+      const templateRow = makeElement('div', 'group-policy-template-row');
+      templateRow.appendChild(makeElement('label', '', '群模板'));
+      const templateSelect = document.createElement('select');
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = '不使用模板';
+      templateSelect.appendChild(none);
+      templates.forEach((id) => {
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = id;
+        templateSelect.appendChild(option);
+      });
+      templateSelect.value = textValue(data.template, '');
+      templateRow.appendChild(templateSelect);
+      const applyTemplate = makeElement('button', 'button-secondary', '应用模板');
+      applyTemplate.type = 'button';
+      applyTemplate.addEventListener('click', async () => {
+        if (!templateSelect.value) return;
+        setStatus('正在应用模板…');
+        try {
+          await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-templates/${encodeURIComponent(templateSelect.value)}/apply`, {
+            method: 'POST',
+            body: { group_id: scope.id, expected_revision: data.revision }
+          });
+          setStatus('模板已应用。', 'success');
+          await loadScope();
+        } catch (error) {
+          setStatus(formatError(error, '模板应用失败。'), 'error');
+        }
+      });
+      templateRow.appendChild(applyTemplate);
+      const resetAll = makeElement('button', 'button-danger', '重置整群');
+      resetAll.type = 'button';
+      resetAll.addEventListener('click', async () => {
+        setStatus('正在重置…');
+        try {
+          await apiRequest(scopePath(scope, 'reset'), { method: 'POST', body: { expected_revision: data.revision } });
+          setStatus('已重置。', 'success');
+          await loadScope();
+        } catch (error) {
+          setStatus(formatError(error, '重置失败。'), 'error');
+        }
+      });
+      templateRow.appendChild(resetAll);
+      content.appendChild(templateRow);
+
+      const pluginGrid = makeElement('div', 'group-policy-grid');
+      for (const pluginId of data.available_plugins || []) {
+        const raw = data.plugins && data.plugins[pluginId] ? data.plugins[pluginId] : {};
+        const effective = data.effective && data.effective[pluginId] ? data.effective[pluginId] : {};
+        const schema = data.schemas && data.schemas[pluginId] ? data.schemas[pluginId] : {};
+        const card = makeElement('div', 'group-policy-card');
+        const cardHead = makeElement('div', 'group-policy-card-head');
+        const enabledLabel = makeElement('label', 'group-policy-enabled');
+        const enabled = document.createElement('input');
+        enabled.type = 'checkbox';
+        enabled.checked = raw.enabled !== undefined ? Boolean(raw.enabled) : Boolean(effective.enabled !== false);
+        enabledLabel.append(enabled, document.createTextNode(' 启用'));
+        cardHead.appendChild(makeElement('strong', '', pluginId));
+        cardHead.appendChild(enabledLabel);
+        card.appendChild(cardHead);
+        const rawParams = raw.params || {};
+        const effectiveParams = effective.params || {};
+        for (const [name, spec] of Object.entries(schema)) {
+          if (!spec.group_overridable || spec.sensitive) continue;
+          const label = makeElement('label', 'group-policy-field');
+          label.appendChild(makeElement('span', '', name));
+          let field;
+          if (spec.kind === 'boolean') {
+            field = document.createElement('input');
+            field.type = 'checkbox';
+            field.checked = rawParams[name] !== undefined ? Boolean(rawParams[name]) : Boolean(effectiveParams[name]);
+          } else if (spec.kind === 'enum') {
+            field = document.createElement('select');
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.textContent = `默认${effectiveParams[name] !== undefined ? `（${effectiveParams[name]}）` : ''}`;
+            field.appendChild(empty);
+            (spec.enum || []).forEach((value) => {
+              const option = document.createElement('option');
+              option.value = value;
+              option.textContent = value;
+              field.appendChild(option);
+            });
+            field.value = rawParams[name] !== undefined ? String(rawParams[name]) : '';
+          } else {
+            field = document.createElement('input');
+            field.type = spec.kind === 'integer' || spec.kind === 'number' ? 'number' : 'text';
+            if (spec.minimum !== null && spec.minimum !== undefined) field.min = spec.minimum;
+            if (spec.maximum !== null && spec.maximum !== undefined) field.max = spec.maximum;
+            field.value = rawParams[name] !== undefined ? String(rawParams[name]) : '';
+            field.placeholder = effectiveParams[name] !== undefined ? String(effectiveParams[name]) : '默认';
+          }
+          field.dataset.policyParam = name;
+          label.appendChild(field);
+          card.appendChild(label);
+        }
+        const actions = makeElement('div', 'group-policy-actions');
+        const save = makeElement('button', 'button-primary', '保存');
+        save.type = 'button';
+        save.addEventListener('click', async () => {
+          setStatus('正在保存…');
+          try {
+            await apiRequest(scopePath(scope, encodeURIComponent(pluginId)), {
+              method: 'POST',
+              body: { enabled: enabled.checked, params: collectParams(card, schema), expected_revision: data.revision }
+            });
+            setStatus(`${pluginId} 已保存。`, 'success');
+            await loadScope();
+          } catch (error) {
+            setStatus(formatError(error, '保存失败。'), 'error');
+          }
+        });
+        const reset = makeElement('button', 'button-secondary', '重置');
+        reset.type = 'button';
+        reset.addEventListener('click', async () => {
+          setStatus('正在重置…');
+          try {
+            await apiRequest(scopePath(scope, `${encodeURIComponent(pluginId)}/reset`), {
+              method: 'POST', body: { expected_revision: data.revision }
+            });
+            setStatus(`${pluginId} 已重置。`, 'success');
+            await loadScope();
+          } catch (error) {
+            setStatus(formatError(error, '重置失败。'), 'error');
+          }
+        });
+        actions.append(save, reset);
+        card.appendChild(actions);
+        pluginGrid.appendChild(card);
+      }
+      content.appendChild(pluginGrid);
+    };
+
+    const loadScope = async () => {
+      const scope = currentScope();
+      if (!scope.id) {
+        setStatus('请输入群号或用户 QQ 号。', 'error');
+        return;
+      }
+      setStatus('正在读取策略…');
+      content.replaceChildren(makeElement('p', 'plugin-config-loading', '正在读取分群策略…'));
+      try {
+        const data = await apiRequest(scopePath(scope));
+        renderScope(data, scope);
+        setStatus('策略已加载；修改会在下一条消息生效。', 'success');
+        await loadAudit(scope);
+      } catch (error) {
+        content.replaceChildren();
+        setStatus(formatError(error, '分群策略读取失败。'), 'error');
+      }
+    };
+    loadButton.addEventListener('click', loadScope);
+    scopeInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') loadScope();
+    });
+    return section;
+  }
+
+  function buildGroupPolicyTemplateSection(instance) {
+    const section = makeElement('section', 'instance-v3-section group-policy-template-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const icon = makeElement('span', 'instance-v3-section-icon');
+    icon.appendChild(makeIcon('c-i-database'));
+    heading.appendChild(icon);
+    const copy = makeElement('div', 'instance-v3-section-copy');
+    copy.appendChild(makeElement('h4', '', '群策略模板'));
+    copy.appendChild(makeElement('p', '', '模板只包含允许群覆盖的非敏感参数；保存后可在群策略页应用。'));
+    heading.appendChild(copy);
+    section.appendChild(heading);
+
+    const status = makeElement('p', 'instance-v3-status');
+    status.setAttribute('role', 'status');
+    section.appendChild(status);
+    const toolbar = makeElement('div', 'group-policy-toolbar');
+    const idInput = document.createElement('input');
+    idInput.type = 'text';
+    idInput.placeholder = '模板 ID，例如 standard';
+    idInput.autocomplete = 'off';
+    const loadButton = makeElement('button', 'button-secondary', '加载');
+    loadButton.type = 'button';
+    toolbar.append(idInput, loadButton);
+    section.appendChild(toolbar);
+    const editor = document.createElement('textarea');
+    editor.className = 'group-policy-template-editor';
+    editor.rows = 12;
+    editor.placeholder = '{"qqbot_food":{"enabled":true,"params":{"default_city":"长春市"}}}';
+    section.appendChild(editor);
+    const actions = makeElement('div', 'group-policy-actions');
+    const save = makeElement('button', 'button-primary', '保存模板');
+    save.type = 'button';
+    const remove = makeElement('button', 'button-danger', '删除模板');
+    remove.type = 'button';
+    actions.append(save, remove);
+    section.appendChild(actions);
+
+    let revision = 0;
+    const setStatus = (message, tone = 'info') => {
+      status.textContent = message;
+      status.dataset.tone = tone;
+    };
+    const loadTemplate = async () => {
+      const templateId = idInput.value.trim();
+      if (!templateId) {
+        setStatus('请输入模板 ID。', 'error');
+        return;
+      }
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-templates/${encodeURIComponent(templateId)}`);
+        revision = Number(data.revision || 0);
+        const entry = data.templates && data.templates[templateId];
+        editor.value = entry ? JSON.stringify(entry.plugins || {}, null, 2) : '{}';
+        setStatus('模板已加载。', 'success');
+      } catch (error) {
+        setStatus(formatError(error, '模板读取失败。'), 'error');
+      }
+    };
+    save.addEventListener('click', async () => {
+      const templateId = idInput.value.trim();
+      if (!templateId) return setStatus('请输入模板 ID。', 'error');
+      let plugins;
+      try {
+        plugins = JSON.parse(editor.value || '{}');
+      } catch (error) {
+        return setStatus('模板 JSON 格式错误。', 'error');
+      }
+      try {
+        const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-templates/${encodeURIComponent(templateId)}`, {
+          method: 'POST', body: { plugins, expected_revision: revision }
+        });
+        revision = Number(result.revision || revision);
+        setStatus('模板已保存。', 'success');
+      } catch (error) {
+        setStatus(formatError(error, '模板保存失败。'), 'error');
+      }
+    });
+    remove.addEventListener('click', async () => {
+      const templateId = idInput.value.trim();
+      if (!templateId) return setStatus('请输入模板 ID。', 'error');
+      try {
+        const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-templates/${encodeURIComponent(templateId)}`, {
+          method: 'POST', body: { action: 'delete', expected_revision: revision }
+        });
+        revision = Number(result.revision || revision);
+        editor.value = '{}';
+        setStatus('模板已删除。', 'success');
+      } catch (error) {
+        setStatus(formatError(error, '模板删除失败。'), 'error');
+      }
+    });
+    loadButton.addEventListener('click', loadTemplate);
+    return section;
+  }
+
   function buildSettingsShell(instance) {
     const shell = makeElement('div', 'settings-shell');
     const nav = makeElement('nav', 'settings-nav');
@@ -3143,6 +3496,7 @@
           buildMemoryContentSection(instance)
         ]
       },
+      { id: 'groups', label: '群策略', sections: [buildGroupPolicySection(instance), buildGroupPolicyTemplateSection(instance)] },
       { id: 'prompts', label: '提示词', sections: [buildPromptManagerSection(instance)] },
       { id: 'aux', label: '辅助模型', sections: [buildAuxBudgetSection(instance)] },
       { id: 'stats', label: '运行状态', sections: [buildStatsSection(instance)] }

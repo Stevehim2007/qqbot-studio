@@ -567,6 +567,18 @@ class ServerTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read().decode("utf-8")
 
+    def _put(self, path, payload, *, token=True):
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(self.base + path, data=body, method="PUT")
+        request.add_header("Content-Type", "application/json")
+        if token:
+            request.add_header("X-QB-Token", "test-token-123")
+        try:
+            with self.opener.open(request, timeout=5) as response:
+                return response.status, response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8")
+
     def _delete(self, path, *, token=True):
         request = urllib.request.Request(self.base + path, method="DELETE")
         if token:
@@ -871,6 +883,70 @@ class ServerTests(unittest.TestCase):
             "/api/instances/bot-1/aux-budget", {"enabled": "yes"}
         )
         self.assertEqual(status, 400)
+    def test_group_policy_routes_contract_and_token_protection(self):
+        calls = []
+
+        def control(method, *, scope, body):
+            calls.append((method, scope, dict(body)))
+            return {"ok": True, "method": method, "body": body, "scope": list(scope)}
+
+        self.studio.manager.plugin_control_call = control
+        status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876")
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.scope")
+        self.assertEqual(calls[-1][2], {"scope_type": "group", "scope_id": "1056821876"})
+        status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876/audit?limit=10&offset=5")
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.audit")
+        self.assertEqual(calls[-1][2]["limit"], 10)
+        self.assertEqual(calls[-1][2]["offset"], 5)
+        status, body = self._get("/api/instances/bot-1/group-param-schema/qqbot_food")
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.param_schema")
+        status, body = self._get("/api/instances/bot-1/group-policy-templates")
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.templates")
+
+        status, body = self._put(
+            "/api/instances/bot-1/group-policies/group/1056821876/qqbot_food",
+            {"enabled": False, "params": {"default_city": "长春市"}, "expected_revision": 3},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.set")
+        self.assertEqual(calls[-1][2]["plugin_id"], "qqbot_food")
+        self.assertEqual(calls[-1][2]["group_id"], "1056821876")
+        self.assertFalse(calls[-1][2]["enabled"])
+        status, body = self._post(
+            "/api/instances/bot-1/group-policies/group/1056821876/qqbot_food/reset",
+            {"expected_revision": 4},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.reset")
+        status, body = self._post(
+            "/api/instances/bot-1/group-policies/group/1056821876/reset",
+            {"expected_revision": 5},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.scope_reset")
+        status, body = self._post(
+            "/api/instances/bot-1/group-policy-templates/standard",
+            {"plugins": {"qqbot_food": {"enabled": True, "params": {"default_city": "长春市"}}}, "expected_revision": 6},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.template_set")
+        status, body = self._post(
+            "/api/instances/bot-1/group-policy-templates/standard/apply",
+            {"group_id": "1056821876", "expected_revision": 7},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.template_apply")
+        status, body = self._post(
+            "/api/instances/bot-1/group-policy-templates/standard",
+            {"action": "delete", "expected_revision": 8},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(calls[-1][0], "policy.template_delete")
+
     def test_prompt_profiles_post_has_bounded_large_body_limit(self):
         # > default 2MiB, but this endpoint is explicitly allowed up to 8MiB.
         prompt = "x" * (2 * 1024 * 1024)

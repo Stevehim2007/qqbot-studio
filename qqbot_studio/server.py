@@ -282,6 +282,33 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
         self._method_not_allowed()
 
     def do_PUT(self) -> None:  # noqa: N802
+        if not self._validate_host_header():
+            self._error(HTTPStatus.BAD_REQUEST, "Invalid Host header")
+            return
+        if not self._check_token():
+            self._error(HTTPStatus.FORBIDDEN, "本地访问令牌无效或已过期。")
+            return
+        parsed = urlsplit(self.path)
+        nested = self._nested_instance_route(parsed.path)
+        if nested is None:
+            self._method_not_allowed()
+            return
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        instance_id, subroute = nested
+        try:
+            self.server.context.studio.get_instance_meta(instance_id)
+            manager = self.server.context.studio.get_manager(instance_id)
+            if self._group_policy_write(manager, subroute, payload):
+                return
+        except ValueError as exc:
+            self._error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "分群策略更新失败。")
+            return
         self._method_not_allowed()
 
     def do_PATCH(self) -> None:  # noqa: N802
@@ -569,6 +596,130 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             )
             return
         self._json(HTTPStatus.OK, result)
+
+    def _group_policy_get(self, manager: Any, subroute: str, query: dict[str, list[str]]) -> bool:
+        parts = [urllib.parse.unquote(part) for part in subroute.split("/") if part]
+        if not parts or parts[0] not in {"group-policies", "group-param-schema", "group-policy-templates"}:
+            return False
+        caller = getattr(manager, "plugin_control_call", None)
+        if not callable(caller):
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"ok": False, "code": "bridge_unavailable", "message": "当前后端未提供插件控制桥。"},
+            )
+            return True
+        if parts[0] == "group-param-schema" and len(parts) == 2:
+            self._serve_control_result(
+                lambda: caller(
+                    "policy.param_schema",
+                    scope=("admin", "global"),
+                    body={"plugin_id": parts[1]},
+                )
+            )
+            return True
+        if parts[0] == "group-policy-templates":
+            def _templates():
+                result = caller("policy.templates", scope=("admin", "global"), body={})
+                if len(parts) == 1 or not isinstance(result, dict):
+                    return result
+                templates = result.get("templates")
+                if not isinstance(templates, dict):
+                    return result
+                selected = templates.get(parts[1])
+                if selected is None:
+                    raise ValueError("模板不存在。")
+                return {**result, "templates": {parts[1]: selected}}
+            self._serve_control_result(_templates)
+            return True
+        if parts[0] != "group-policies" or len(parts) < 3:
+            return False
+        scope_type, scope_id = parts[1], parts[2]
+        if len(parts) >= 4 and parts[3] == "audit":
+            limit_values = query.get("limit") or ["50"]
+            offset_values = query.get("offset") or ["0"]
+            try:
+                limit = int(limit_values[0])
+                offset = int(offset_values[0])
+            except (TypeError, ValueError):
+                self._error(HTTPStatus.BAD_REQUEST, "limit/offset 必须是整数。")
+                return True
+            self._serve_control_result(
+                lambda: caller(
+                    "policy.audit",
+                    scope=("admin", "global"),
+                    body={"scope_type": scope_type, "scope_id": scope_id, "limit": limit, "offset": offset},
+                )
+            )
+            return True
+        self._serve_control_result(
+            lambda: caller(
+                "policy.scope",
+                scope=("admin", "global"),
+                body={"scope_type": scope_type, "scope_id": scope_id},
+            )
+        )
+        return True
+
+    def _group_policy_write(self, manager: Any, subroute: str, payload: dict[str, Any]) -> bool:
+        parts = [urllib.parse.unquote(part) for part in subroute.split("/") if part]
+        if not parts or parts[0] not in {"group-policies", "group-policy-templates"}:
+            return False
+        caller = getattr(manager, "plugin_control_call", None)
+        if not callable(caller):
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"ok": False, "code": "bridge_unavailable", "message": "当前后端未提供插件控制桥。"},
+            )
+            return True
+        if parts[0] == "group-policy-templates":
+            if len(parts) == 1:
+                return False
+            template_id = parts[1]
+            if len(parts) == 3 and parts[2] == "apply":
+                body = {
+                    "group_id": str(payload.get("group_id") or "").strip(),
+                    "template_id": template_id,
+                    "expected_revision": payload.get("expected_revision"),
+                }
+                if not body["group_id"]:
+                    self._error(HTTPStatus.BAD_REQUEST, "group_id 不能为空。")
+                    return True
+                self._serve_control_result(lambda: caller("policy.template_apply", scope=("admin", "global"), body=body))
+                return True
+            if len(parts) == 2:
+                body = {"template_id": template_id, "plugins": payload.get("plugins"), "expected_revision": payload.get("expected_revision")}
+                method = "policy.template_delete" if payload.get("action") == "delete" else "policy.template_set"
+                if method == "policy.template_delete":
+                    body.pop("plugins", None)
+                self._serve_control_result(lambda: caller(method, scope=("admin", "global"), body=body))
+                return True
+            return False
+        if parts[0] != "group-policies" or len(parts) < 4:
+            return False
+        scope_type, scope_id = parts[1], parts[2]
+        if scope_type not in {"group", "private"}:
+            self._error(HTTPStatus.BAD_REQUEST, "scope_type 必须是 group 或 private。")
+            return True
+        base = {"scope_type": scope_type, "scope_id": scope_id}
+        if len(parts) == 4 and parts[3] == "reset":
+            base["expected_revision"] = payload.get("expected_revision")
+            self._serve_control_result(lambda: caller("policy.scope_reset", scope=("admin", "global"), body=base))
+            return True
+        plugin_id = parts[3]
+        body = {
+            "plugin_id": plugin_id,
+            "group_id": scope_id if scope_type == "group" else None,
+            "user_id": scope_id if scope_type == "private" else None,
+            "is_private": scope_type == "private",
+            "expected_revision": payload.get("expected_revision"),
+        }
+        if len(parts) == 5 and parts[4] == "reset":
+            self._serve_control_result(lambda: caller("policy.reset", scope=("admin", "global"), body=body))
+            return True
+        body["enabled"] = payload.get("enabled", True)
+        body["params"] = payload.get("params", {})
+        self._serve_control_result(lambda: caller("policy.set", scope=("admin", "global"), body=body))
+        return True
 
     # ------------------------------------------------------------------
     # Per-group long-term memory policy
@@ -1011,6 +1162,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if self._group_policy_get(manager, subroute, query):
+                    return
                 if subroute == "plugin-migrations/status":
                     try:
                         service = self._migration_service_for(manager)
@@ -1624,6 +1777,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if self._group_policy_write(manager, subroute, payload):
+                    return
                 if subroute == "plugin-migration-plans":
                     self._serve_migration_result(
                         lambda: self._migration_service_for(manager).create_plan(
