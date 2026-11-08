@@ -7,6 +7,11 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.5（测试版）— 修复 V2 群策略 RPC 白名单
+
+- 将 `policy.scope`、`policy.audit`、`policy.templates`、`policy.param_schema`、`policy.scope_reset`、`policy.template_set/delete/apply` 加入 Studio 固定 RPC 方法白名单，修复群策略页 400 `control_method_not_allowed`。
+- 主项目测试 848 tests OK；插件侧版本仍为 core 4.0.5 / safe_tools 3.2.1。
+
 ## v4.4.0-beta.4（测试版）— V2 分群策略控制面
 
 - Studio 新增“群策略”分类：群/私聊 scope 查询、插件启停、字段级参数覆盖、模板应用、整群重置、审计记录。
