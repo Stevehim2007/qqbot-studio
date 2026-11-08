@@ -503,7 +503,7 @@
         makeUpdateVersionItem({
           name: textValue(entry.version, target),
           meta,
-          note: entry.current === true ? '当前版本' : '测试通道',
+          note: entry.current === true ? '当前版本' : '自动发现的测试版',
           current: entry.current === true,
           buttonLabel: entry.current === true ? '当前版本' : '切换到测试版',
           disabled: entry.current === true || blocked || !target,
@@ -596,7 +596,7 @@
     setText('update-subtitle', '正在读取版本信息…');
     try {
       await loadUpdatePanelData();
-      setText('update-subtitle', '稳定版跟随正式发布；测试版只允许已登记的分支或预发布标签。');
+      setText('update-subtitle', '稳定版跟随正式发布；测试版自动获取最新 alpha/beta/rc 预发布版本。');
     } catch (error) {
       const message = formatError(error, '读取版本信息失败。');
       showUpdateError(message);
