@@ -1112,11 +1112,11 @@ class ServerTests(unittest.TestCase):
             return_value={"ok": True, "restarting": True},
         ) as start_mock:
             status, body = self._post(
-                "/api/update/apply", {"channel": "test", "test_ref": "feat/plugin-repository-4.3"}
+                "/api/update/apply", {"channel": "test", "test_ref": "v4.3.0-beta.1"}
             )
         self.assertEqual(status, 200)
         start_mock.assert_called_once_with(
-            channel="test", data_dir=self.studio.root, test_ref="feat/plugin-repository-4.3"
+            channel="test", data_dir=self.studio.root, test_ref="v4.3.0-beta.1"
         )
 
     def test_update_rollback_errors_are_user_facing_400(self):

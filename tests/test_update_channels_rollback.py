@@ -13,6 +13,7 @@ from qqbot_studio.gitutil import run_git
 from qqbot_studio.updater import (
     UpdateError,
     apply_update,
+    check_update,
     list_versions,
     load_history,
     rollback,
@@ -298,27 +299,87 @@ class RollbackSafetyTests(ReleaseRepoTestCase):
 
 
 class ChannelApplyTests(ReleaseRepoTestCase):
-    def test_test_channel_switches_allowlisted_branch(self):
-        git(self.root, "branch", "feat/plugin-repository-4.3")
+    def _add_test_tag(self, tag: str, version: str) -> None:
+        package = self.root / "qqbot_studio"
+        (package / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+        (self.root / "CHANGELOG.md").write_text(f"# {tag}\n", encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", f"test release {version}")
+        git(self.root, "tag", tag)
+
+    def _seed_test_tags(self) -> None:
+        git(self.root, "checkout", "-q", "-b", "beta-test")
+        self._add_test_tag("v4.3.0-beta.1", "4.3.0-beta.1")
+        self._add_test_tag("v4.3.0-beta.2", "4.3.0-beta.2")
+        git(self.root, "checkout", "-q", "main")
+
+    def test_test_channel_lists_all_prerelease_tags_newest_first(self):
+        self._seed_test_tags()
         result = list_versions("test", root=self.root, data_dir=self.data)
         self.assertTrue(result["ok"])
-        refs = [item["ref"] for item in result["versions"]]
-        self.assertIn("origin/feat/plugin-repository-4.3", refs)
+        tags = [item["tag"] for item in result["versions"]]
+        self.assertEqual(tags, ["v4.3.0-beta.2", "v4.3.0-beta.1"])
+        self.assertTrue(all(item["kind"] == "tag" for item in result["versions"]))
+        self.assertNotIn("v4.2.0", tags)
+
+    def test_test_channel_auto_selects_latest_prerelease(self):
+        self._seed_test_tags()
+        applied = apply_update("test", root=self.root, data_dir=self.data, restart=False)
+        self.assertTrue(applied["ok"])
+        self.assertEqual(applied["channel"], "test")
+        self.assertEqual(self.head_commit(), self.tag_commit("v4.3.0-beta.2"))
+        status = update_status(root=self.root, data_dir=self.data)
+        self.assertEqual(status["current"]["channel"], "test")
+        self.assertEqual(status["current"]["tag"], "v4.3.0-beta.2")
+        self.assertEqual(status["current"]["version"], "4.3.0-beta.2")
+        self.assertEqual(self.history()[0]["channel"], "test")
+
+    def test_test_channel_can_switch_to_a_specific_prerelease(self):
+        self._seed_test_tags()
         applied = apply_update(
             "test",
             root=self.root,
             data_dir=self.data,
-            test_ref="feat/plugin-repository-4.3",
+            test_ref="v4.3.0-beta.1",
             restart=False,
         )
         self.assertTrue(applied["ok"])
-        self.assertEqual(applied["channel"], "test")
-        self.assertTrue(updater._head_info(self.root, None)["detached"])
-        record = self.history()[0]
-        self.assertEqual(record["channel"], "test")
+        self.assertEqual(self.head_commit(), self.tag_commit("v4.3.0-beta.1"))
+        self.assertEqual(update_status(root=self.root, data_dir=self.data)["current"]["tag"], "v4.3.0-beta.1")
+
+    def test_test_channel_without_prerelease_tags_is_empty(self):
+        result = list_versions("test", root=self.root, data_dir=self.data)
+        self.assertEqual(result["versions"], [])
+        with self.assertRaises(UpdateError) as caught:
+            apply_update("test", root=self.root, data_dir=self.data, restart=False)
+        self.assertIn("没有可用", str(caught.exception))
+
+    def test_check_update_auto_detects_latest_test_tag(self):
+        self._seed_test_tags()
+        origin = self.base / "origin.git"
+        git(self.base, "init", "--bare", "-q", str(origin))
+        git(self.root, "remote", "add", "origin", str(origin))
+        git(self.root, "push", "-q", "--all", "origin")
+        git(self.root, "push", "-q", "--tags", "origin")
+        result = check_update(root=self.root, channel="test")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["target"], "v4.3.0-beta.2")
+        self.assertTrue(result["can_update"])
+        stable = check_update(root=self.root)
+        self.assertEqual(stable["channel"], "stable")
+        self.assertFalse(stable["can_update"])
 
     def test_test_channel_rejects_arbitrary_refs(self):
-        for ref in ("main", "origin/main", "https://example.com/repo", "refs/heads/main", "v4.0.4"):
+        for ref in (
+            "main",
+            "origin/main",
+            "feat/plugin-repository-4.3",
+            "https://example.com/repo",
+            "refs/heads/main",
+            "v4.0.4",
+            "v4.3.0-beta.1; rm -rf /",
+            "",
+        ):
             with self.assertRaises(UpdateError, msg=ref):
                 apply_update(
                     "test",

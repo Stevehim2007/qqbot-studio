@@ -5,8 +5,9 @@ Channels
 ``stable``
     Follow formal GitHub releases on ``origin/main`` (fast-forward only).
 ``test``
-    Switch to an explicitly allowlisted test branch or prerelease tag. Arbitrary
-    branches, commits or URLs are never accepted.
+    Automatically discover the newest prerelease tag (``vX.Y.Z-alpha.N``,
+    ``vX.Y.Z-beta.N`` or ``vX.Y.Z-rc.N``). Arbitrary branches, commits or URLs
+    are never accepted.
 
 Rollback
 --------
@@ -45,9 +46,10 @@ GitRunner = Callable[[Sequence[str], Path, int], subprocess.CompletedProcess[str
 CHANNEL_LABELS = {"stable": "稳定版", "test": "测试版"}
 CHANNELS = tuple(CHANNEL_LABELS)
 FORMAL_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-# Explicit allowlist for the test channel. Nothing else is switchable.
-TEST_BRANCHES: tuple[str, ...] = ("feat/plugin-repository-4.3",)
-TEST_TAGS: tuple[str, ...] = ()
+# Test channel is tag-driven: every prerelease tag matching this strict shape
+# is discoverable, and the newest one is selected automatically.
+TEST_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-(alpha|beta|rc)\.(\d+)$")
+TEST_PRERELEASE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
 HISTORY_LIMIT = 50
 LOCK_STALE_SECONDS = 30 * 60
 BACKUP_KEEP = 8
@@ -111,6 +113,14 @@ def _parse_formal_tag(name: str) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups()) if match else None
 
 
+def _parse_test_tag(name: str) -> tuple[int, int, int, str, int] | None:
+    match = TEST_TAG_RE.match(str(name or "").strip())
+    if not match:
+        return None
+    major, minor, patch, stage, number = match.groups()
+    return (int(major), int(minor), int(patch), stage, int(number))
+
+
 def _resolve_commit(repo: Path, rev: str, runner: GitRunner | None) -> str:
     result = _git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}", runner=runner)
     return result.stdout.strip() if result.returncode == 0 else ""
@@ -149,13 +159,20 @@ def _head_info(repo: Path, runner: GitRunner | None) -> dict[str, Any]:
 
     exact = _git(repo, "describe", "--tags", "--exact-match", "HEAD", runner=runner)
     exact_tag = exact.stdout.strip() if exact.returncode == 0 else ""
-    if exact_tag and not _parse_formal_tag(exact_tag):
+    if exact_tag and not (_parse_formal_tag(exact_tag) or _parse_test_tag(exact_tag)):
         exact_tag = ""
     nearest = _git(repo, "describe", "--tags", "--abbrev=0", runner=runner)
     nearest_tag = nearest.stdout.strip() if nearest.returncode == 0 else ""
 
+    test_tag = exact_tag if _parse_test_tag(exact_tag) else ""
+    if not test_tag and _parse_test_tag(nearest_tag):
+        test_tag = nearest_tag
     version_tuple = _parse_formal_tag(exact_tag) or _parse_formal_tag(nearest_tag)
-    if version_tuple:
+    if test_tag:
+        parsed_test = _parse_test_tag(test_tag)
+        version = test_tag.lstrip("v")
+        major = parsed_test[0] if parsed_test else 0
+    elif version_tuple:
         version = ".".join(str(part) for part in version_tuple)
         major = version_tuple[0]
     else:
@@ -167,9 +184,7 @@ def _head_info(repo: Path, runner: GitRunner | None) -> dict[str, Any]:
 
     branch_name = branch.stdout.strip()
     detached = branch_name in ("", "HEAD")
-    channel = "stable"
-    if not detached and branch_name in TEST_BRANCHES:
-        channel = "test"
+    channel = "test" if exact_tag and _parse_test_tag(exact_tag) else "stable"
 
     return {
         "version": version,
@@ -404,9 +419,10 @@ def _schema_conflicts(repo: Path, data_dir: Path, rev: str, runner: GitRunner | 
 def check_update(
     root: Path | str | None = None,
     *,
+    channel: str = "",
     runner: GitRunner | None = None,
 ) -> dict:
-    """Fetch the configured remote and report whether a fast-forward is available."""
+    """Fetch origin and report whether the selected channel has a newer version."""
 
     repo = Path(root or PROJECT_ROOT).expanduser().resolve()
     if not (repo / ".git").exists():
@@ -441,6 +457,69 @@ def check_update(
         return {"ok": False, "can_update": False, "message": _output(local) or "无法读取当前 Git 版本。"}
 
     branch_name = branch.stdout.strip() or "main"
+    selected = str(channel or "").strip()
+    if not selected:
+        try:
+            selected = _head_info(repo, runner)["channel"]
+        except UpdateError:
+            selected = "stable"
+    if selected not in CHANNELS:
+        return {"ok": False, "can_update": False, "message": "更新通道只能是 stable 或 test。"}
+
+    if selected == "test":
+        test_tag = _latest_test_tag(repo, runner)
+        if not test_tag:
+            return {
+                "ok": True,
+                "can_update": False,
+                "channel": "test",
+                "current": local.stdout.strip(),
+                "message": "当前没有可用的测试版预发布标签（v*-alpha.N / v*-beta.N / v*-rc.N）。",
+            }
+        target = _resolve_commit(repo, f"refs/tags/{test_tag}", runner)
+        if not target:
+            return {
+                "ok": False,
+                "can_update": False,
+                "channel": "test",
+                "message": f"找不到测试版标签 {test_tag}；请检查远端标签。",
+            }
+        counts = _git(
+            repo,
+            "rev-list",
+            "--left-right",
+            "--count",
+            f"HEAD...{target}",
+            runner=runner,
+        )
+        if counts.returncode != 0:
+            return {"ok": False, "can_update": False, "message": _output(counts) or "无法比较测试版。"}
+        parts = counts.stdout.strip().split()
+        ahead = int(parts[0]) if len(parts) >= 2 and parts[0].isdigit() else 0
+        behind = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+        current_commit = _resolve_commit(repo, "HEAD", runner)
+        can_update = current_commit != target and behind > 0 and ahead == 0
+        if current_commit == target:
+            message = f"当前已经是测试版 {test_tag}。"
+        elif ahead == 0:
+            message = f"发现测试版 {test_tag}（{behind} 个新提交），可以自动更新。"
+        elif behind == 0:
+            message = f"当前已包含测试版 {test_tag} 的全部提交。"
+        else:
+            message = f"本地测试版与 {test_tag} 已分叉（领先 {ahead}、落后 {behind}），无法自动快进；可在测试版列表手动切换。"
+        return {
+            "ok": True,
+            "can_update": can_update,
+            "channel": "test",
+            "branch": branch_name,
+            "target": test_tag,
+            "current": local.stdout.strip(),
+            "remote": target[:7],
+            "ahead": ahead,
+            "behind": behind,
+            "message": message,
+        }
+
     upstream = f"origin/{branch_name}"
     remote = _git(repo, "rev-parse", "--short", upstream, runner=runner)
     if remote.returncode != 0:
@@ -473,6 +552,7 @@ def check_update(
     return {
         "ok": True,
         "can_update": can_update,
+        "channel": "stable",
         "branch": branch_name,
         "upstream": upstream,
         "current": local.stdout.strip(),
@@ -513,8 +593,8 @@ def update_status(
             },
             "test": {
                 "label": CHANNEL_LABELS["test"],
-                "description": "仅允许已登记的测试分支/预发布标签。",
-                "refs": [f"origin/{branch}" for branch in TEST_BRANCHES] + list(TEST_TAGS),
+                "description": "自动发现并选择最新的 alpha/beta/rc 预发布标签。",
+                "refs": ["refs/tags/v*-alpha.N / v*-beta.N / v*-rc.N"],
             },
         },
     }
@@ -558,6 +638,51 @@ def _tag_entries(repo: Path, runner: GitRunner | None) -> list[dict[str, Any]]:
     return entries
 
 
+def _test_tag_entries(repo: Path, runner: GitRunner | None) -> list[dict[str, Any]]:
+    """Return every strict prerelease tag, newest semantic version first."""
+
+    result = _git(
+        repo,
+        "for-each-ref",
+        "--sort=-version:refname",
+        "--format=%(refname:short)%09%(creatordate:short)%09%(subject)%09%(objectname:short)%09%(*objectname:short)",
+        "refs/tags",
+        runner=runner,
+    )
+    entries: list[dict[str, Any]] = []
+    if result.returncode != 0:
+        return entries
+    for line in result.stdout.splitlines():
+        parts = line.split("	")
+        if len(parts) < 2:
+            continue
+        tag = parts[0].strip()
+        version = _parse_test_tag(tag)
+        if not version:
+            continue
+        peeled = parts[4].strip() if len(parts) > 4 else ""
+        commit = peeled or (parts[3].strip() if len(parts) > 3 else "")
+        entries.append(
+            {
+                "tag": tag,
+                "ref": f"refs/tags/{tag}",
+                "kind": "tag",
+                "version": tag.lstrip("v"),
+                "major": version[0],
+                "commit": commit,
+                "date": parts[1].strip() if len(parts) > 1 else "",
+                "subject": parts[2].strip() if len(parts) > 2 else "",
+            }
+        )
+    entries.sort(key=lambda item: _parse_test_tag(item["tag"]) or (0, 0, 0, "", 0), reverse=True)
+    return entries
+
+
+def _latest_test_tag(repo: Path, runner: GitRunner | None) -> str:
+    entries = _test_tag_entries(repo, runner)
+    return entries[0]["tag"] if entries else ""
+
+
 def list_versions(
     channel: str = "stable",
     root: Path | str | None = None,
@@ -569,7 +694,7 @@ def list_versions(
 
     ``stable`` returns every formal tag with a ``same_major`` flag so the UI can
     offer any same-major rollback and grey out cross-major entries. ``test``
-    returns only explicitly allowlisted branches/tags.
+    returns every strict prerelease tag, newest first, discovered from origin.
     """
 
     if channel not in CHANNELS:
@@ -586,46 +711,11 @@ def list_versions(
             entry["current"] = entry["commit"] == head["commit"]
             versions.append(entry)
     else:
-        for branch in TEST_BRANCHES:
-            commit = _resolve_commit(repo, f"origin/{branch}", runner) or _resolve_commit(repo, branch, runner)
-            if not commit:
-                continue
-            info = _git(repo, "log", "-1", "--format=%h%x09%cs%x09%s", commit, runner=runner)
-            parts = info.stdout.strip().split("\t") if info.returncode == 0 else []
-            versions.append(
-                {
-                    "tag": "",
-                    "ref": f"origin/{branch}",
-                    "kind": "branch",
-                    "version": f"{branch}",
-                    "major": head["major"],
-                    "commit": parts[0] if parts else commit[:7],
-                    "date": parts[1] if len(parts) > 1 else "",
-                    "subject": parts[2] if len(parts) > 2 else "",
-                    "same_major": True,
-                    "current": commit == head["commit_full"],
-                }
-            )
-        for tag in TEST_TAGS:
-            commit = _resolve_commit(repo, f"refs/tags/{tag}", runner)
-            if not commit:
-                continue
-            info = _git(repo, "log", "-1", "--format=%h%x09%cs%x09%s", commit, runner=runner)
-            parts = info.stdout.strip().split("\t") if info.returncode == 0 else []
-            versions.append(
-                {
-                    "tag": tag,
-                    "ref": f"refs/tags/{tag}",
-                    "kind": "tag",
-                    "version": tag.lstrip("v"),
-                    "major": head["major"],
-                    "commit": parts[0] if parts else commit[:7],
-                    "date": parts[1] if len(parts) > 1 else "",
-                    "subject": parts[2] if len(parts) > 2 else "",
-                    "same_major": True,
-                    "current": commit == head["commit_full"],
-                }
-            )
+        for entry in _test_tag_entries(repo, runner):
+            commit_full = _resolve_commit(repo, f"refs/tags/{entry['tag']}", runner)
+            entry["same_major"] = entry["major"] == head["major"]
+            entry["current"] = bool(commit_full) and commit_full == head["commit_full"]
+            versions.append(entry)
 
     message = fetch_message
     if not versions and not message:
@@ -825,9 +915,9 @@ def rollback(
 
 def _resolve_test_ref(repo: Path, ref: str, runner: GitRunner | None) -> str:
     ref = str(ref or "").strip()
-    if ref not in TEST_BRANCHES and ref not in TEST_TAGS:
-        raise UpdateError("测试通道只允许已登记的测试分支或预发布标签。")
-    candidates = [f"origin/{ref}", ref] if ref in TEST_BRANCHES else [f"refs/tags/{ref}", ref]
+    if not _parse_test_tag(ref):
+        raise UpdateError("测试通道只允许 vX.Y.Z-alpha.N / beta.N / rc.N 形式的预发布标签。")
+    candidates = [f"refs/tags/{ref}", ref]
     for candidate in candidates:
         if _resolve_commit(repo, candidate, runner):
             return candidate
@@ -856,7 +946,9 @@ def apply_update(
         head = _head_info(repo, runner)
         fetched, fetch_message = _fetch(repo, runner)
         if channel == "test":
-            ref = test_ref or (TEST_BRANCHES[0] if TEST_BRANCHES else "")
+            ref = str(test_ref or "").strip() or _latest_test_tag(repo, runner)
+            if not ref:
+                raise UpdateError("当前没有可用的测试版预发布标签。")
             resolved = _resolve_test_ref(repo, ref, runner)
             return _switch_code(
                 repo,
