@@ -1419,13 +1419,25 @@
   }
 
   async function loadV3ForInstance(instance) {
-    const [plugins, memory, memoryPolicy, stats, pluginGroups] = await Promise.all([
+    const results = await Promise.allSettled([
       loadPluginsForInstance(instance),
       loadMemoryForInstance(instance),
       loadMemoryPolicyForInstance(instance),
       loadStatsForInstance(instance),
       loadPluginGroupsForInstance(instance)
     ]);
+    const fallback = (index, value) => {
+      const result = results[index];
+      if (result && result.status === 'fulfilled') return result.value;
+      const message = formatError(result ? result.reason : null, '读取失败。');
+      if (value && typeof value === 'object') return { ...value, status: 'error', error: message };
+      return value;
+    };
+    const plugins = fallback(0, emptyPluginState());
+    const memory = fallback(1, emptyMemoryState(instance.memory_mode_hint || ''));
+    const memoryPolicy = fallback(2, { ...emptyMemoryPolicyState(), status: 'error' });
+    const stats = fallback(3, emptyStatsState());
+    const pluginGroups = fallback(4, { ok: false, groups: [], error: '插件分组读取失败。' });
     return { ...instance, v3: { plugins, memory, memoryPolicy, stats, pluginGroups } };
   }
 
