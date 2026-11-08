@@ -7,6 +7,13 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.2（正式版）— 测试更新通道修复
+
+- 测试通道不再写死 `feat/plugin-repository-4.3`，改为自动发现最新的 `vX.Y.Z-alpha.N` / `beta.N` / `rc.N` 预发布 tag。
+- `check_update(channel="test")` 可按预发布 tag 比较当前版本；`apply_update("test")` 不指定 ref 时自动选最新预发布版本。
+- 更新面板文案同步为“自动获取最新 alpha/beta/rc 预发布版本”。
+- 全仓 `845 tests OK`（main 分支）。
+
 ## v4.3.1（正式版）— 插件市场、七插件运行时与通用工具调用
 
 - 主项目合并插件市场、插件分组、安装/更新/删除、SHA-256 与 ZIP 安全校验、原子替换和操作预览/确认。
