@@ -26,7 +26,7 @@ Transports
 ==========
 
 * ``HttpControlTransport`` talks to a fixed loopback endpoint (default
-  ``127.0.0.1:6198/control``).  The host must literally be loopback; callers
+  ``127.0.0.1:6198/rpc``).  The host must literally be loopback; callers
   cannot supply an arbitrary URL.
 * ``DockerExecTransport`` runs a fixed ``docker exec -i <container> python3 -c
   <script>`` command.  The script only forwards stdin JSON to the container's
@@ -64,8 +64,8 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping
 CONTROL_PROTOCOL_VERSION = 1
 CONTROL_DEFAULT_HOST = "127.0.0.1"
 CONTROL_DEFAULT_PORT = 6198
-CONTROL_DEFAULT_PATH = "/control"
-CONTROL_ALLOWED_PATHS = frozenset({"/control", "/v1/control"})
+CONTROL_DEFAULT_PATH = "/rpc"
+CONTROL_ALLOWED_PATHS = frozenset({"/rpc", "/control", "/v1/control"})
 CONTROL_HEALTH_PATH = "/healthz"
 CONTROL_MAX_BODY_BYTES = 256 * 1024
 CONTROL_MAX_RESPONSE_BYTES = 512 * 1024

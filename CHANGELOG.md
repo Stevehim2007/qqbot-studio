@@ -7,6 +7,11 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.2（测试版）— 修复控制桥 RPC 路径
+
+- 修复 Studio 控制桥默认端点从 `/control` 改为插件实际监听的 `/rpc`，解决 `/aux-budget`、`/plugin-policy` 全部 503 的问题。
+- 保留 `/control`、`/v1/control` 为兼容允许路径；新增默认端点契约测试。
+
 ## v4.4.0-beta.1（测试版）— V1 分群能力策略与辅助预算底座
 
 - 新增 `capability_policy.json` v2 侧车：实例默认 < 群模板 < 群/私聊覆盖，字段级合并、revision CAS、原子写和审计。

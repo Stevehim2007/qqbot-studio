@@ -164,6 +164,12 @@ class PluginControlTests(unittest.TestCase):
             http_server.server_close()
             thread.join(3)
 
+    def test_default_control_endpoint_matches_plugin_rpc_path(self):
+        from qqbot_studio.plugin_control import CONTROL_DEFAULT_PATH
+
+        self.assertEqual(CONTROL_DEFAULT_PATH, "/rpc")
+        self.assertEqual(LoopbackEndpoint().path, "/rpc")
+
     def test_http_endpoint_rejects_non_loopback_host(self):
         with self.assertRaises(Exception):
             LoopbackEndpoint(host="0.0.0.0", port=6198)
