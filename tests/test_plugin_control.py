@@ -235,6 +235,22 @@ class PluginControlTests(unittest.TestCase):
         self.assertEqual(payload, b'{"x":1}')
         self.assertLessEqual(timeout, 60)
 
+    def test_docker_exec_returns_plugin_error_json_on_nonzero_exit(self):
+        def runner(args, payload, timeout):
+            return type(
+                "Result",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": b'{"ok":false,"code":"scope_not_allowed","message":"scope"}',
+                    "stderr": b"",
+                },
+            )()
+
+        transport = DockerExecTransport("qqbot-bot-1-astrbot", runner=runner)
+        output = transport.send(b'{"x":1}')
+        self.assertIn(b"scope_not_allowed", output)
+
     def test_invalid_container_name_is_rejected(self):
         with self.assertRaises(Exception):
             DockerExecTransport("qqbot-1; rm -rf /")

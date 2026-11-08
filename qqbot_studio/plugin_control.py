@@ -1127,6 +1127,20 @@ class DockerExecTransport:
         stdout = getattr(result, "stdout", b"") or b""
         stderr = getattr(result, "stderr", b"") or b""
         if returncode != 0:
+            # The in-container shim exits 1 when the plugin rejects the
+            # request (scope/actor/auth/protocol errors), but it still writes
+            # a JSON error body.  Preserve that body so the caller can surface
+            # the plugin's stable error code instead of mislabelling every
+            # rejection as a transport failure.
+            if stdout:
+                try:
+                    _parse_json_object(
+                        stdout, max_bytes=CONTROL_MAX_RESPONSE_BYTES, where="response"
+                    )
+                except ControlError:
+                    pass
+                else:
+                    return bytes(stdout)
             raise ControlUnavailable(
                 "插件控制桥 docker 传输失败。",
                 detail="stderr" if stderr else f"exit_{returncode}",

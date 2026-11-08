@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.8（测试版）— 控制桥错误可读性
+
+- Docker exec 传输在插件拒绝请求（401/403/404/422）时保留插件返回的 JSON 错误，不再统一误报为“docker 传输失败”。
+- 修复生产 `control_bridge_scope_allowlist` 被写成 `globaladmin` 后导致的 `scope_not_allowed`；控制桥支持 `global,admin` 逗号列表。
+- 新增 `DockerExecTransport` 非零退出返回 JSON 的回归测试。
+
 ## v4.4.0-beta.7（测试版）— 插件分组独立加载
 
 - 设置页的插件/记忆/策略/统计改为独立 `Promise.allSettled`，任一接口失败不再连带清空插件分组。
