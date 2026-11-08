@@ -839,9 +839,19 @@ class ServerTests(unittest.TestCase):
 
         def control(method, *, scope, body):
             calls.append((method, scope, dict(body)))
-            return {"ok": True, "method": method, "body": body, "scope": list(scope)}
+            result = {"ok": True, "method": method, "body": body, "scope": list(scope)}
+            if method == "policy.scope":
+                result.update({
+                    "schemas": {"qqbot_food": {"max_results": {"config_key": "food_max_results"}}},
+                    "available_plugins": ["qqbot_food"],
+                })
+            return result
 
         self.studio.manager.plugin_control_call = control
+        self.studio.manager.get_plugin_config = lambda plugin_id: {
+            "ok": True,
+            "values": {"food_max_results": 7},
+        }
         status, body = self._get("/api/instances/bot-1/aux-budget")
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)["ok"])
@@ -888,13 +898,25 @@ class ServerTests(unittest.TestCase):
 
         def control(method, *, scope, body):
             calls.append((method, scope, dict(body)))
-            return {"ok": True, "method": method, "body": body, "scope": list(scope)}
+            result = {"ok": True, "method": method, "body": body, "scope": list(scope)}
+            if method == "policy.scope":
+                result.update({
+                    "schemas": {"qqbot_food": {"max_results": {"config_key": "food_max_results"}}},
+                    "available_plugins": ["qqbot_food"],
+                })
+            return result
 
         self.studio.manager.plugin_control_call = control
+        self.studio.manager.get_plugin_config = lambda plugin_id: {
+            "ok": True,
+            "values": {"food_max_results": 7},
+        }
         status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876")
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.scope")
         self.assertEqual(calls[-1][2], {"scope_type": "group", "scope_id": "1056821876"})
+        self.assertEqual(json.loads(body)["plugin_configs"]["qqbot_food"]["food_max_results"], 7)
+        self.assertEqual(json.loads(body)["plugin_configs"]["qqbot_food"]["food_max_results"], 7)
         status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876/audit?limit=10&offset=5")
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.audit")

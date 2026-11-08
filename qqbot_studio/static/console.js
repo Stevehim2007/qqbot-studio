@@ -3376,9 +3376,22 @@
         const rawParams = raw.params || {};
         const effectiveParams = effective.params || {};
         const policyDefaults = data.defaults && data.defaults[pluginId] ? data.defaults[pluginId] : {};
-        const inheritedValue = (name) => (
-          effectiveParams[name] !== undefined ? effectiveParams[name] : policyDefaults[name]
-        );
+        const pluginConfigs = data.plugin_configs && data.plugin_configs[pluginId] ? data.plugin_configs[pluginId] : {};
+        const configValue = (name) => {
+          const key = schema[name] && schema[name].config_key;
+          return key && Object.prototype.hasOwnProperty.call(pluginConfigs, key) ? pluginConfigs[key] : undefined;
+        };
+        const inheritedValue = (name) => {
+          if (effectiveParams[name] !== undefined) return effectiveParams[name];
+          const configured = configValue(name);
+          return configured !== undefined ? configured : policyDefaults[name];
+        };
+        const inheritedLabel = (name) => {
+          if (effectiveParams[name] !== undefined) return '群覆盖';
+          if (configValue(name) !== undefined) return '插件参数';
+          if (policyDefaults[name] !== undefined) return '默认';
+          return '未设置';
+        };
         for (const [name, spec] of Object.entries(schema)) {
           if (!spec.group_overridable || spec.sensitive) continue;
           const paramMeta = groupPolicyParamMeta(name, spec);
@@ -3394,7 +3407,7 @@
             field = document.createElement('select');
             const empty = document.createElement('option');
             empty.value = '';
-            empty.textContent = `默认${inheritedValue(name) !== undefined ? `（${inheritedValue(name)}）` : ''}`;
+            empty.textContent = `${inheritedLabel(name)}${inheritedValue(name) !== undefined ? `（${inheritedValue(name)}）` : ''}`;
             field.appendChild(empty);
             (spec.enum || []).forEach((value) => {
               const option = document.createElement('option');
@@ -3409,7 +3422,7 @@
             if (spec.minimum !== null && spec.minimum !== undefined) field.min = spec.minimum;
             if (spec.maximum !== null && spec.maximum !== undefined) field.max = spec.maximum;
             field.value = rawParams[name] !== undefined ? String(rawParams[name]) : '';
-            field.placeholder = inheritedValue(name) !== undefined ? String(inheritedValue(name)) : '默认';
+            field.placeholder = inheritedValue(name) !== undefined ? String(inheritedValue(name)) : '跟随插件参数';
           }
           field.dataset.policyParam = name;
           field.setAttribute('aria-label', `${paramMeta.label}（${name}）`);
@@ -3418,7 +3431,7 @@
           label.appendChild(makeElement(
             'small',
             'group-policy-field-meta',
-            defaultValue !== undefined ? `默认：${String(defaultValue)}` : '默认：未设置'
+            defaultValue !== undefined ? `${inheritedLabel(name)}：${String(defaultValue)}` : '未设置（跟随插件参数）'
           ));
           card.appendChild(label);
         }

@@ -7,6 +7,13 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.10（测试版）— 群策略默认值改为插件参数
+
+- 群策略默认值改为读取插件“插件参数”的实时值，不再只显示策略层硬编码默认。
+- Studio 群策略 GET 响应增加 `plugin_configs`，仅暴露策略 schema 引用的配置键。
+- 前端参数提示区分“群覆盖 / 插件参数 / 默认”；未覆盖时显示插件参数实际值。
+- safe_tools 3.2.4：参数 schema 增加 `config_key`，可把策略参数映射回插件配置键。
+
 ## v4.4.0-beta.9（测试版）— 群策略默认值展示
 
 - 群策略参数 API 增加 `defaults`，UI 在未设置时显示插件默认值，而不是“默认：未设置”。

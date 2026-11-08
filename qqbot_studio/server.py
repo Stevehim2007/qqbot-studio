@@ -597,6 +597,52 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             return
         self._json(HTTPStatus.OK, result)
 
+    @staticmethod
+    def _attach_plugin_configs(manager: Any, result: Any) -> Any:
+        """Add the live plugin-parameter values used as group-policy defaults.
+
+        The policy sidecar only stores overrides.  The visible default for a
+        group must come from the plugin's own configuration, so the Studio
+        reads those values here instead of duplicating them in the policy
+        schema.  Only keys referenced by the policy schema are copied.
+        """
+        if not isinstance(result, dict) or not result.get("ok"):
+            return result
+        getter = getattr(manager, "get_plugin_config", None)
+        if not callable(getter):
+            return result
+        schemas = result.get("schemas")
+        available = result.get("available_plugins")
+        if not isinstance(schemas, dict) or not isinstance(available, list):
+            return result
+        configs: dict[str, dict[str, Any]] = {}
+        for plugin_id in available:
+            fields = schemas.get(str(plugin_id))
+            if not isinstance(fields, dict):
+                continue
+            keys = {
+                str(spec.get("config_key") or "")
+                for spec in fields.values()
+                if isinstance(spec, dict) and spec.get("config_key")
+            }
+            if not keys:
+                continue
+            try:
+                payload = getter(str(plugin_id))
+            except Exception:
+                continue
+            if not isinstance(payload, dict) or not payload.get("ok"):
+                continue
+            values = payload.get("values")
+            if not isinstance(values, dict):
+                continue
+            configs[str(plugin_id)] = {
+                key: values[key] for key in keys if key in values
+            }
+        enriched = dict(result)
+        enriched["plugin_configs"] = configs
+        return enriched
+
     def _group_policy_get(self, manager: Any, subroute: str, query: dict[str, list[str]]) -> bool:
         parts = [urllib.parse.unquote(part) for part in subroute.split("/") if part]
         if not parts or parts[0] not in {"group-policies", "group-param-schema", "group-policy-templates"}:
@@ -652,10 +698,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             )
             return True
         self._serve_control_result(
-            lambda: caller(
-                "policy.scope",
-                scope=("admin", "global"),
-                body={"scope_type": scope_type, "scope_id": scope_id},
+            lambda: self._attach_plugin_configs(
+                manager,
+                caller(
+                    "policy.scope",
+                    scope=("admin", "global"),
+                    body={"scope_type": scope_type, "scope_id": scope_id},
+                ),
             )
         )
         return True
