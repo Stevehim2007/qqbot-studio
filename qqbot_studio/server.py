@@ -1182,6 +1182,26 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 if memory_route is not None:
                     self._serve_memory_admin(manager, memory_route, method="GET", query=query)
                     return
+                if subroute == "plugin-policy":
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    self._serve_control_result(
+                        lambda: caller(
+                            "policy.snapshot",
+                            scope=("admin", "global"),
+                            body={},
+                        )
+                    )
+                    return
                 if subroute == "memory-policy":
                     self._serve_memory_policy(manager, read_only=True)
                     return
@@ -1745,6 +1765,47 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 if memory_route is not None:
                     self._serve_memory_admin(
                         manager, memory_route, method="POST", payload=payload, query=query
+                    )
+                    return
+                if subroute == "plugin-policy":
+                    caller = getattr(manager, "plugin_control_call", None)
+                    if not callable(caller):
+                        self._json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "code": "bridge_unavailable",
+                                "message": "当前后端未提供插件控制桥。",
+                            },
+                        )
+                        return
+                    action = str(payload.get("action") or "set").strip()
+                    if action not in {"set", "reset"}:
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "code": "invalid_action", "message": "action 必须是 set 或 reset。"},
+                        )
+                        return
+                    method = "policy.set" if action == "set" else "policy.reset"
+                    body = {
+                        key: payload[key]
+                        for key in (
+                            "plugin_id",
+                            "group_id",
+                            "user_id",
+                            "is_private",
+                            "enabled",
+                            "params",
+                            "expected_revision",
+                        )
+                        if key in payload
+                    }
+                    self._serve_control_result(
+                        lambda: caller(
+                            method,
+                            scope=("admin", "global"),
+                            body=body,
+                        )
                     )
                     return
                 if subroute == "memory-policy":
