@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.5（正式版）— 更新自检兼容无 Node 环境
+
+- `scripts/post-update-test.sh` 在服务器未安装 `node` 时跳过前端语法检查，不再阻断自动更新。
+- 引导路径执行 `scripts/update.sh` 时输出写入 `release-update.log`（0600），带上 from/to/channel。
+- 保持更新失败时旧管理进程继续运行。
+
 ## v4.3.4（正式版）— 更新脚本引导兼容
 
 - `scripts/auto-update.sh` 增加一次性引导路径：旧版更新器切到本版本后也会执行 `scripts/update.sh`。

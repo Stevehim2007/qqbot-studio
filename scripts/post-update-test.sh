@@ -29,8 +29,12 @@ run_step "repository unittest suite" \
 run_step "python syntax" \
   python3 -m py_compile qqbot_studio/*.py
 
-run_step "console javascript syntax" \
-  node --check qqbot_studio/static/console.js
+if command -v node >/dev/null 2>&1; then
+  run_step "console javascript syntax" \
+    node --check qqbot_studio/static/console.js
+else
+  echo "--- console javascript syntax: SKIP (node not installed)"
+fi
 
 if [ -n "${ASTRBOT_SRC_TGZ:-}" ] && [ -f "$ASTRBOT_SRC_TGZ" ]; then
   run_step "AstrBot memory patch verification" \
