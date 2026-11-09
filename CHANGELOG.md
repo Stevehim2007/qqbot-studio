@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.4（正式版）— 更新脚本引导兼容
+
+- `scripts/auto-update.sh` 增加一次性引导路径：旧版更新器切到本版本后也会执行 `scripts/update.sh`。
+- 新版更新器同步执行脚本并设置 `QQBOT_UPDATE_SCRIPT_ALREADY_RAN=1`，避免自动更新重启路径重复执行。
+- 增加更新脚本契约测试：禁止网络下载、必须可执行、必须有超时。
+
 ## v4.3.3（正式版）— 版本自带更新脚本
 
 - 稳定版和测试版更新在切换代码后、重启服务前自动执行新版本内的 `scripts/update.sh`。
