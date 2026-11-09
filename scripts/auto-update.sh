@@ -34,7 +34,14 @@ fi
 # ships scripts/update.sh.
 if [ "${QQBOT_UPDATE_SCRIPT_ALREADY_RAN:-0}" != "1" ] && [ -f "$ROOT_DIR/scripts/update.sh" ]; then
   echo "=== running release update hook (bootstrap path) ==="
-  if ! timeout 600 bash "$ROOT_DIR/scripts/update.sh"; then
+  hook_log="$DATA_DIR/release-update.log"
+  umask 077
+  mkdir -p "$DATA_DIR"
+  touch "$hook_log"
+  chmod 600 "$hook_log" 2>/dev/null || true
+  printf '=== %s from=%s to=%s channel=%s status=bootstrap ===\n' \
+    "$(date -Is)" "${QQBOT_UPDATE_FROM_VERSION:-unknown}" "${QQBOT_UPDATE_TO_VERSION:-unknown}" "${QQBOT_UPDATE_CHANNEL:-unknown}" >> "$hook_log"
+  if ! timeout 600 bash "$ROOT_DIR/scripts/update.sh" >> "$hook_log" 2>&1; then
     echo "=== auto update aborted: release update hook failed; old server left running ==="
     exit 1
   fi
