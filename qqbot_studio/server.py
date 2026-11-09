@@ -636,9 +636,32 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             values = payload.get("values")
             if not isinstance(values, dict):
                 continue
-            configs[str(plugin_id)] = {
-                key: values[key] for key in keys if key in values
-            }
+            plugin_values: dict[str, Any] = {}
+            for spec in fields.values():
+                if not isinstance(spec, dict):
+                    continue
+                key = str(spec.get("config_key") or "")
+                if not key:
+                    continue
+                if key in values:
+                    plugin_values[key] = values[key]
+                legacy = str(spec.get("legacy_key") or "")
+                if not legacy or legacy not in values:
+                    continue
+                # Canonical schema defaults are materialised by AstrBot even
+                # when the operator only changed the deprecated flat key.  In
+                # that case the legacy value is the explicit setting.
+                canonical_value = values.get(key)
+                if (
+                    canonical_value is None
+                    or (
+                        canonical_value == spec.get("default")
+                        and values[legacy] != spec.get("default")
+                    )
+                ):
+                    plugin_values[key] = values[legacy]
+            if plugin_values:
+                configs[str(plugin_id)] = plugin_values
         enriched = dict(result)
         enriched["plugin_configs"] = configs
         return enriched

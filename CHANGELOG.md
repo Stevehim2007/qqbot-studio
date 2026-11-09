@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.14（测试版）— 群策略默认值继承旧参数
+
+- 群策略的“插件参数”默认值现在识别核心回复的旧 `reply_probability` 键：当规范键仍是默认值、旧键被显式修改时，展示旧键值。
+- safe_tools 3.2.5 的 `param_schema` 增加 `legacy_key`，不改变群覆盖/继承语义。
+- 修复设置页把旧键设置 0 仍显示 0.12 的问题。
+
 ## v4.4.0-beta.13（测试版）— 更新自检兼容无 Node 环境
 
 - `scripts/post-update-test.sh` 在服务器未安装 `node` 时跳过前端语法检查，不再阻断自动更新。

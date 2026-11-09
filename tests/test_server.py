@@ -901,22 +901,41 @@ class ServerTests(unittest.TestCase):
             result = {"ok": True, "method": method, "body": body, "scope": list(scope)}
             if method == "policy.scope":
                 result.update({
-                    "schemas": {"qqbot_food": {"max_results": {"config_key": "food_max_results"}}},
-                    "available_plugins": ["qqbot_food"],
+                    "schemas": {
+                        "qqbot_food": {"max_results": {"config_key": "food_max_results"}},
+                        "qqbot_core_reply": {
+                            "participation.reply_probability": {
+                                "config_key": "participation.group_probability",
+                                "legacy_key": "reply_probability",
+                                "default": 0.12,
+                            }
+                        },
+                    },
+                    "available_plugins": ["qqbot_food", "qqbot_core_reply"],
                 })
             return result
 
         self.studio.manager.plugin_control_call = control
         self.studio.manager.get_plugin_config = lambda plugin_id: {
             "ok": True,
-            "values": {"food_max_results": 7},
+            "values": (
+                {"food_max_results": 7}
+                if plugin_id == "qqbot_food"
+                else {
+                    "participation.group_probability": 0.12,
+                    "reply_probability": 0.0,
+                }
+            ),
         }
         status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876")
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.scope")
         self.assertEqual(calls[-1][2], {"scope_type": "group", "scope_id": "1056821876"})
         self.assertEqual(json.loads(body)["plugin_configs"]["qqbot_food"]["food_max_results"], 7)
-        self.assertEqual(json.loads(body)["plugin_configs"]["qqbot_food"]["food_max_results"], 7)
+        self.assertEqual(
+            json.loads(body)["plugin_configs"]["qqbot_core_reply"]["participation.group_probability"],
+            0.0,
+        )
         status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876/audit?limit=10&offset=5")
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.audit")
