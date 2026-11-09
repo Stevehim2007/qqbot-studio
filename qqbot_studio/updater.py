@@ -956,6 +956,7 @@ def _switch_code(
                 from_version=str(head.get("version") or ""),
                 to_version=to_version,
                 channel=channel,
+                update_script_ran=bool(update_script.get("ran")),
             )
             restart_state = "started"
         except UpdateError as exc:
@@ -1009,6 +1010,7 @@ def _launch_restart(
     from_version: str = "",
     to_version: str = "",
     channel: str = "",
+    update_script_ran: bool = False,
 ) -> None:
     if os.name == "nt":
         raise UpdateError("Windows 版请按 windows 目录说明手动重启管理服务。")
@@ -1017,9 +1019,12 @@ def _launch_restart(
         raise UpdateError("找不到 scripts/auto-update.sh。")
     env = os.environ.copy()
     env["QQBOT_AUTO_UPDATE_ROOT"] = str(repo)
+    env["QQBOT_UPDATE_ROOT"] = str(repo)
+    env["QQBOT_UPDATE_DATA_DIR"] = str(data_dir)
     env["QQBOT_UPDATE_FROM_VERSION"] = str(from_version or "")
     env["QQBOT_UPDATE_TO_VERSION"] = str(to_version or "")
     env["QQBOT_UPDATE_CHANNEL"] = str(channel or "")
+    env["QQBOT_UPDATE_SCRIPT_ALREADY_RAN"] = "1" if update_script_ran else "0"
     try:
         subprocess.Popen(
             ["bash", str(script), str(data_dir), "restart"],
@@ -1207,6 +1212,7 @@ def apply_update(
                     from_version=str(head.get("version") or ""),
                     to_version=to_version,
                     channel="stable",
+                    update_script_ran=bool(update_script.get("ran")),
                 )
                 restart_state = "started"
             except UpdateError as exc:

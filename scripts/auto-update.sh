@@ -28,6 +28,18 @@ else
   echo "skip git pull; code already switched to $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 fi
 
+# Release-owned update hook.  Newer updaters run this synchronously before
+# launching us and set QQBOT_UPDATE_SCRIPT_ALREADY_RAN=1.  Older updaters do
+# not, so this is also the one-time bootstrap path for the first release that
+# ships scripts/update.sh.
+if [ "${QQBOT_UPDATE_SCRIPT_ALREADY_RAN:-0}" != "1" ] && [ -f "$ROOT_DIR/scripts/update.sh" ]; then
+  echo "=== running release update hook (bootstrap path) ==="
+  if ! timeout 600 bash "$ROOT_DIR/scripts/update.sh"; then
+    echo "=== auto update aborted: release update hook failed; old server left running ==="
+    exit 1
+  fi
+fi
+
 # Automatic post-update verification.  Keep the old management process alive
 # when tests fail; a broken build must not be restarted silently.
 if [ "${QQBOT_STUDIO_AUTO_TEST:-1}" != "0" ]; then
