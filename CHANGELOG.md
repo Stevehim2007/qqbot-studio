@@ -7,6 +7,14 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.3.3（正式版）— 版本自带更新脚本
+
+- 稳定版和测试版更新在切换代码后、重启服务前自动执行新版本内的 `scripts/update.sh`。
+- 脚本固定路径、只从已签出的 Git 版本读取，不下载远程内容；超时 600 秒、大小上限 256 KiB。
+- 脚本失败会恢复原版本并写入更新历史；输出写入 `release-update.log`（0600，已脱敏）。
+- 更新响应和历史记录增加 `update_script` 执行结果。
+- README 更新通道说明改为测试版自动发现 alpha/beta/rc 预发布标签。
+
 ## v4.3.2（正式版）— 测试更新通道修复
 
 - 测试通道不再写死 `feat/plugin-repository-4.3`，改为自动发现最新的 `vX.Y.Z-alpha.N` / `beta.N` / `rc.N` 预发布 tag。
