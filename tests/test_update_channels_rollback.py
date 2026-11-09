@@ -299,10 +299,14 @@ class RollbackSafetyTests(ReleaseRepoTestCase):
 
 
 class ChannelApplyTests(ReleaseRepoTestCase):
-    def _add_test_tag(self, tag: str, version: str) -> None:
+    def _add_test_tag(self, tag: str, version: str, script: str | None = None) -> None:
         package = self.root / "qqbot_studio"
         (package / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
         (self.root / "CHANGELOG.md").write_text(f"# {tag}\n", encoding="utf-8")
+        if script is not None:
+            hook = self.root / "scripts" / "update.sh"
+            hook.parent.mkdir(parents=True, exist_ok=True)
+            hook.write_text(script, encoding="utf-8")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", f"test release {version}")
         git(self.root, "tag", tag)
@@ -353,6 +357,39 @@ class ChannelApplyTests(ReleaseRepoTestCase):
         with self.assertRaises(UpdateError) as caught:
             apply_update("test", root=self.root, data_dir=self.data, restart=False)
         self.assertIn("没有可用", str(caught.exception))
+
+    def test_release_update_script_runs_and_gets_version_env(self):
+        self._seed_test_tags()
+        script = (
+            "#!/usr/bin/env bash\n"
+            "set -Eeuo pipefail\n"
+            "printf '%s|%s|%s' \"$QQBOT_UPDATE_FROM_VERSION\" \"$QQBOT_UPDATE_TO_VERSION\" \"$QQBOT_UPDATE_CHANNEL\" > \"$QQBOT_UPDATE_DATA_DIR/update-marker\"\n"
+        )
+        # Replace beta.2 with a scripted release.
+        git(self.root, "checkout", "-q", "beta-test")
+        self._add_test_tag("v4.3.0-beta.3", "4.3.0-beta.3", script=script)
+        git(self.root, "checkout", "-q", "main")
+        applied = apply_update("test", root=self.root, data_dir=self.data, restart=False)
+        self.assertTrue(applied["ok"])
+        self.assertTrue(applied["update_script"]["ran"])
+        self.assertEqual(
+            (self.data / "update-marker").read_text(encoding="utf-8"),
+            "4.2.0|4.3.0-beta.3|test",
+        )
+
+    def test_release_update_script_failure_restores_code(self):
+        self._seed_test_tags()
+        before = self.head_commit()
+        script = "#!/usr/bin/env bash\nexit 7\n"
+        git(self.root, "checkout", "-q", "beta-test")
+        self._add_test_tag("v4.3.0-beta.4", "4.3.0-beta.4", script=script)
+        git(self.root, "checkout", "-q", "main")
+        with self.assertRaises(UpdateError) as caught:
+            apply_update("test", root=self.root, data_dir=self.data, restart=False)
+        self.assertIn("版本更新脚本执行失败", str(caught.exception))
+        self.assertEqual(self.head_commit(), before)
+        self.assertEqual(self.history()[0]["result"], "restored")
+        self.assertTrue((self.data / "release-update.log").is_file())
 
     def test_check_update_auto_detects_latest_test_tag(self):
         self._seed_test_tags()

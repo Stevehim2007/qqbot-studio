@@ -53,6 +53,9 @@ TEST_PRERELEASE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
 HISTORY_LIMIT = 50
 LOCK_STALE_SECONDS = 30 * 60
 BACKUP_KEEP = 8
+UPDATE_SCRIPT = "scripts/update.sh"
+UPDATE_SCRIPT_TIMEOUT = 600
+UPDATE_SCRIPT_MAX_BYTES = 256 * 1024
 CONFIG_BACKUP_FILES = ("studio.json", "config.json", "secrets.json", "deploy-state.json", ".env")
 INSTANCE_BACKUP_FILES = ("instance.json", "config.json", "secrets.json", ".env", "compose.yml")
 SECRET_PATTERNS = (
@@ -91,6 +94,119 @@ def sanitize_message(text: str) -> str:
     cleaned = SECRET_PATTERNS[2].sub(r"\1***@", cleaned)
     cleaned = SECRET_PATTERNS[0].sub(r"\1=***", cleaned)
     return cleaned[:1500]
+
+
+def _read_repo_version(repo: Path) -> str:
+    """Read the version that was just checked out (best effort)."""
+    path = repo / "qqbot_studio" / "__init__.py"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
+    return match.group(1).strip() if match else ""
+
+
+def _run_release_update(
+    repo: Path,
+    data_dir: Path,
+    *,
+    from_version: str,
+    to_version: str,
+    channel: str,
+) -> dict[str, Any]:
+    """Run the release-owned post-checkout update script, if present.
+
+    The script comes from the just-checked-out Git revision (never from a URL),
+    has a fixed path, and is limited in size and runtime.  It must be
+    idempotent: the updater may run it again after a retry.  A non-zero exit
+    aborts the update before the management service is restarted.
+    """
+    script = repo / UPDATE_SCRIPT
+    if not script.is_file():
+        return {"ran": False, "path": UPDATE_SCRIPT, "exit_code": 0, "output": ""}
+    try:
+        info = script.lstat()
+    except OSError as exc:
+        raise UpdateError(f"无法读取版本更新脚本：{sanitize_message(str(exc))}") from exc
+    if script.is_symlink() or not script.is_file():
+        raise UpdateError("版本更新脚本必须是普通文件，不能是符号链接。")
+    if info.st_size > UPDATE_SCRIPT_MAX_BYTES:
+        raise UpdateError("版本更新脚本过大，已拒绝执行。")
+    try:
+        resolved = script.resolve()
+        resolved.relative_to(repo.resolve())
+    except (OSError, ValueError) as exc:
+        raise UpdateError("版本更新脚本路径越界，已拒绝执行。") from exc
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "QQBOT_UPDATE_ROOT": str(repo),
+            "QQBOT_UPDATE_DATA_DIR": str(data_dir),
+            "QQBOT_UPDATE_FROM_VERSION": str(from_version or ""),
+            "QQBOT_UPDATE_TO_VERSION": str(to_version or ""),
+            "QQBOT_UPDATE_CHANNEL": str(channel or ""),
+        }
+    )
+    started_at = _now_iso()
+    try:
+        completed = subprocess.run(
+            ["bash", str(script)],
+            cwd=str(repo),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=UPDATE_SCRIPT_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        message = f"版本更新脚本超时（{UPDATE_SCRIPT_TIMEOUT} 秒），已中止更新。"
+        _append_update_script_log(data_dir, started_at, from_version, to_version, channel, "timeout", message)
+        raise UpdateError(message) from exc
+    except OSError as exc:
+        message = f"无法执行版本更新脚本：{sanitize_message(str(exc))}"
+        _append_update_script_log(data_dir, started_at, from_version, to_version, channel, "error", message)
+        raise UpdateError(message) from exc
+
+    raw_output = (completed.stdout or "") + (completed.stderr or "")
+    output = sanitize_message(raw_output[-8000:])
+    status = "ok" if completed.returncode == 0 else f"exit_{completed.returncode}"
+    _append_update_script_log(data_dir, started_at, from_version, to_version, channel, status, output)
+    if completed.returncode != 0:
+        detail = output.strip() or f"exit {completed.returncode}"
+        raise UpdateError(f"版本更新脚本执行失败（exit {completed.returncode}）：{detail}")
+    return {
+        "ran": True,
+        "path": UPDATE_SCRIPT,
+        "exit_code": 0,
+        "output": output,
+    }
+
+
+def _append_update_script_log(
+    data_dir: Path,
+    at: str,
+    from_version: str,
+    to_version: str,
+    channel: str,
+    status: str,
+    output: str,
+) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    log = data_dir / "release-update.log"
+    try:
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(
+                f"=== {at} from={from_version or '-'} to={to_version or '-'} "
+                f"channel={channel or '-'} status={status} ===\n{output}\n"
+            )
+        try:
+            os.chmod(log, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
 
 
 def _now_iso() -> str:
@@ -799,11 +915,48 @@ def _switch_code(
         )
         raise UpdateError(f"切换到 {rev} 失败：{message}")
 
+    to_version = _read_repo_version(repo) or rev.lstrip("v")
+    update_script: dict[str, Any] = {"ran": False}
+    if action == "update":
+        try:
+            update_script = _run_release_update(
+                repo,
+                data_dir,
+                from_version=str(head.get("version") or ""),
+                to_version=to_version,
+                channel=channel,
+            )
+        except UpdateError as exc:
+            restored, restore_error = _restore_original(repo, head, runner)
+            message = sanitize_message(str(exc)) + (
+                "；已恢复原版本。" if restored else f"；恢复原版本失败：{restore_error}"
+            )
+            _append_history(
+                data_dir,
+                {
+                    "at": started_at,
+                    "action": action,
+                    "channel": channel,
+                    "from": _from_snapshot(head),
+                    "to": {"version": to_version, "tag": rev, "commit": target_commit[:7]},
+                    "result": "failed" if not restored else "restored",
+                    "backup": backup["path"],
+                    "message": message,
+                },
+            )
+            raise UpdateError(message) from exc
+
     restart_state = "skipped"
     restart_message = ""
     if restart:
         try:
-            _launch_restart(repo, data_dir)
+            _launch_restart(
+                repo,
+                data_dir,
+                from_version=str(head.get("version") or ""),
+                to_version=to_version,
+                channel=channel,
+            )
             restart_state = "started"
         except UpdateError as exc:
             restart_state = "failed"
@@ -818,6 +971,7 @@ def _switch_code(
         "result": "success",
         "backup": backup["path"],
         "message": restart_message,
+        "update_script": update_script,
     }
     _append_history(data_dir, record)
     if restart_state == "failed":
@@ -834,6 +988,7 @@ def _switch_code(
         "backup_files": backup["files"],
         "restarting": restart_state == "started",
         "restart": restart_state,
+        "update_script": update_script,
         "message": f"已切换到 {rev}，管理服务将在几秒后重启。请稍后刷新页面。",
     }
 
@@ -847,7 +1002,14 @@ def _from_snapshot(head: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _launch_restart(repo: Path, data_dir: Path) -> None:
+def _launch_restart(
+    repo: Path,
+    data_dir: Path,
+    *,
+    from_version: str = "",
+    to_version: str = "",
+    channel: str = "",
+) -> None:
     if os.name == "nt":
         raise UpdateError("Windows 版请按 windows 目录说明手动重启管理服务。")
     script = repo / "scripts" / "auto-update.sh"
@@ -855,6 +1017,9 @@ def _launch_restart(repo: Path, data_dir: Path) -> None:
         raise UpdateError("找不到 scripts/auto-update.sh。")
     env = os.environ.copy()
     env["QQBOT_AUTO_UPDATE_ROOT"] = str(repo)
+    env["QQBOT_UPDATE_FROM_VERSION"] = str(from_version or "")
+    env["QQBOT_UPDATE_TO_VERSION"] = str(to_version or "")
+    env["QQBOT_UPDATE_CHANNEL"] = str(channel or "")
     try:
         subprocess.Popen(
             ["bash", str(script), str(data_dir), "restart"],
@@ -1001,11 +1166,48 @@ def apply_update(
                 },
             )
             raise UpdateError(f"稳定版更新失败：{message}")
+
+        to_version = _read_repo_version(repo) or target[:7]
+        update_script: dict[str, Any] = {"ran": False}
+        try:
+            update_script = _run_release_update(
+                repo,
+                data,
+                from_version=str(head.get("version") or ""),
+                to_version=to_version,
+                channel="stable",
+            )
+        except UpdateError as exc:
+            restored, restore_error = _restore_original(repo, head, runner)
+            message = sanitize_message(str(exc)) + (
+                "；已恢复原版本。" if restored else f"；恢复原版本失败：{restore_error}"
+            )
+            _append_history(
+                data,
+                {
+                    "at": started_at,
+                    "action": "update",
+                    "channel": "stable",
+                    "from": _from_snapshot(head),
+                    "to": {"version": to_version, "commit": target[:7]},
+                    "result": "failed" if not restored else "restored",
+                    "backup": backup["path"],
+                    "message": message,
+                },
+            )
+            raise UpdateError(message) from exc
+
         restart_state = "skipped"
         restart_message = ""
         if restart:
             try:
-                _launch_restart(repo, data)
+                _launch_restart(
+                    repo,
+                    data,
+                    from_version=str(head.get("version") or ""),
+                    to_version=to_version,
+                    channel="stable",
+                )
                 restart_state = "started"
             except UpdateError as exc:
                 restart_state = "failed"
@@ -1021,6 +1223,7 @@ def apply_update(
                 "result": "success",
                 "backup": backup["path"],
                 "message": restart_message,
+                "update_script": update_script,
             },
         )
         if restart_state == "failed":
@@ -1035,6 +1238,7 @@ def apply_update(
             "current": target[:7],
             "backup": backup["path"],
             "backup_files": backup["files"],
+            "update_script": update_script,
             "message": "稳定版更新已应用，管理服务将在几秒后重启。请稍后刷新页面。",
         }
     finally:
