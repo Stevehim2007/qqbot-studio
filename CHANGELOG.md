@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.16（测试版）— QQ 官方接入安装与控制台细节
+
+- 官方模式状态识别补齐；安装向导、README 与旧 SnowLuma 文案区分。
+- 官方模式只运行 AstrBot，群策略/插件 identity 使用官方 openid。
+- 保留旧实例 SnowLuma 兼容路径。
+
 ## v4.4.0-beta.15（测试版）— QQ 官方机器人接入迁移
 
 - 新增官方机器人接入方式：AstrBot 直接使用 `qq_official`，不再依赖 SnowLuma/OneBot/noVNC。
