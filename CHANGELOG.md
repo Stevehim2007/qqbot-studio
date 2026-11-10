@@ -14,6 +14,13 @@
 - 添加插件时同步从所有分组下拉列表移除，避免同一插件重复出现在多个分组候选中。
 - `node --check` 与 70 项静态测试通过。
 
+## v4.4.0-beta.26（测试版）— 新实例默认最小插件
+
+- 新实例部署完成后自动安装最小可运行三件套：`qqbot_safe_tools`、`qqbot_memory_commands`、`qqbot_core_reply`。
+- 按拓扑顺序安装并在每一步重启 AstrBot，避免依赖未加载导致安装被拒绝。
+- 修复 `safe_tools` 可选依赖造成的依赖环，新实例可正常安装基础插件。
+- 其他 food/stickers/web/image/fortune/weather/scheduler 不预装。
+
 ## v4.4.0-beta.25（测试版）— 插件安装权限修复
 
 - 安装/更新插件前自动通过 AstrBot 容器把 `data/astrbot/plugins` 所有者修复为 Studio 运行用户。

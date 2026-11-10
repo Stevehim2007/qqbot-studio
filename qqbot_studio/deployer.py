@@ -52,6 +52,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
 REPLY_PLUGIN_ID = "qqbot_core_reply"
+DEFAULT_PLUGIN_IDS = ("qqbot_safe_tools", "qqbot_memory_commands", "qqbot_core_reply")
 SCHEMA_READ_ATTEMPTS = 3
 SCHEMA_READ_RETRY_DELAY_SECONDS = 0.05
 MAX_PROMPT_LENGTH = 12_000
@@ -772,6 +773,9 @@ class DeployManager:
         client.upsert_persona(PERSONA_ID, prompt)
         add_log("机器人人格提示词已写入 AstrBot。")
 
+        self._set_job(job, step="安装默认插件", progress=92, message="正在安装最小可运行插件：核心回复、安全工具、记忆命令…")
+        self._install_default_plugins(client, add_log)
+
         self._set_job(job, step="检查容器状态", progress=90, message="正在确认 AstrBot 容器处于运行状态…")
         state = self.docker.detect(force=True)
         astrbot_state = self.docker._docker(["inspect", "--format", "{{.State.Status}}", self.docker.ASTRBOT_CONTAINER], timeout=20)
@@ -817,6 +821,68 @@ class DeployManager:
             pass
         return "未知系统"
 
+    def _install_default_plugins(self, client: AstrBotClient, log: Callable[[str], None]) -> None:
+        """Install the minimal runnable plugin set on a fresh instance.
+
+        Dependency validation requires each dependency to be installed and
+        loaded before its dependent plugin can be planned, so we install in
+        topological order and restart AstrBot between steps.
+        """
+        plugin_root = self.astrbot_data_dir / "plugins"
+        self.repair_plugin_root_permissions()
+        try:
+            if any(item.is_dir() for item in plugin_root.iterdir()):
+                log("插件目录已有插件，跳过默认插件安装。")
+                return
+        except OSError as exc:
+            log(f"读取插件目录失败，跳过默认插件安装：{exc}")
+            return
+        try:
+            self.refresh_plugin_market(None)
+        except Exception as exc:  # noqa: BLE001 - deployment should still finish
+            log(f"刷新插件市场失败，跳过默认插件安装：{exc}")
+            return
+        for plugin_id in DEFAULT_PLUGIN_IDS:
+            log(f"安装默认插件：{plugin_id}")
+            try:
+                preview = self.preview_plugin_operation(
+                    {"operation": "install", "plugin_id": plugin_id}
+                )
+            except Exception as exc:  # noqa: BLE001
+                log(f"默认插件 {plugin_id} 预览失败：{exc}")
+                return
+            if not preview.get("ok"):
+                log(f"默认插件 {plugin_id} 预览失败：{preview.get('message') or preview}")
+                return
+            token = str(preview.get("preview_token") or "")
+            if not token:
+                log(f"默认插件 {plugin_id} 缺少预览 token，跳过。")
+                return
+            try:
+                result = self.execute_plugin_operation(
+                    {
+                        "operation": "install",
+                        "plugin_id": plugin_id,
+                        "preview_token": token,
+                        "confirm": True,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                log(f"默认插件 {plugin_id} 安装失败：{exc}")
+                return
+            if not result.get("ok"):
+                log(f"默认插件 {plugin_id} 安装失败：{result.get('message') or result}")
+                return
+            self.docker.restart()
+            try:
+                client.wait_until_ready(timeout=180)
+            except Exception as exc:  # noqa: BLE001
+                log(f"等待 AstrBot 重启失败：{exc}")
+                return
+            time.sleep(4)
+            log(f"默认插件已安装：{plugin_id}")
+        log("最小默认插件安装完成。")
+
     @staticmethod
     def _seed_final_reply_config(
         astrbot_data: Path,
@@ -838,7 +904,7 @@ class DeployManager:
             DeployManager._write_private_json(target, existing)
         except OSError as exc:
             log(f"写入核心回复初始配置失败：{exc}")
-        log("未安装 qqbot_enhancer/qqbot_core_full；请在插件市场安装七个 qqbot_* 插件。")
+        log("未安装 qqbot_enhancer/qqbot_core_full；默认最小三件套由部署流程安装，其他插件请通过插件市场安装。")
 
     @staticmethod
     def _enhancer_schema_defaults() -> dict[str, Any]:
