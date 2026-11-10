@@ -3178,7 +3178,7 @@ class DeployManager:
         repair = self.repair_plugin_root_permissions()
         if not repair.get("ok") and not repair.get("repaired"):
             logger.warning("plugin root permission repair failed: %s", repair.get("message", ""))
-        return self.plugin_market_service.execute_operation(payload)
+        return self.plugin_market_service.execute_operation(payload, wait=False)
 
     def get_plugin_operation(self, operation_id: str) -> dict[str, Any]:
         return self.plugin_market_service.get_operation(operation_id)

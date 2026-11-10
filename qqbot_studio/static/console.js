@@ -2401,10 +2401,17 @@
     }
   }
 
+  let pluginOperationInFlight = false;
   async function startPluginOperation(instance, entry, operation, panel) {
     if (operation !== 'delete' && !pluginMarketActionEnabled(entry)) return;
     const pluginId = textValue(entry.plugin_id || entry.id, '');
     if (!pluginId) return;
+    if (pluginOperationInFlight) {
+      pluginMarketSetStatus(panel, '已有插件操作正在进行，请等待完成后再安装下一个。', 'info');
+      return;
+    }
+    pluginOperationInFlight = true;
+    try {
     const verb = operation === 'delete' ? '删除' : operation === 'update' ? '更新' : '安装';
     const version = textValue(entry.version, '');
     const sha = textValue(entry.sha256, '');
@@ -2463,6 +2470,9 @@
       if (instanceSettings.isOpenFor(instance.id)) instanceSettings.refresh();
     } catch (error) {
       pluginMarketSetStatus(panel, formatError(error, `插件${verb}失败。`), 'error');
+    }
+    } finally {
+      pluginOperationInFlight = false;
     }
   }
 

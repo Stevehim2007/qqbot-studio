@@ -225,6 +225,11 @@ class PreviewExpiredError(PluginMarketError):
     code = "preview_expired"
 
 
+class PluginOperationBusy(PluginMarketError):
+    http_status = 409
+    code = "operation_in_progress"
+
+
 class PluginOperationFailed(PluginMarketError):
     http_status = 500
     code = "plugin_operation_failed"
@@ -2650,6 +2655,7 @@ class PluginMarket:
         self.staging_root = self.state_dir / "staging"
         self.download_root = self.state_dir / "downloads"
         self.lock = lock or threading.RLock()
+        self._operation_gate = threading.Lock()
         self._redact = redact or (lambda value: value)
         self._file_lock_path = self.state_dir / "market.lock"
         self._configured_trusted_hosts = tuple(trusted_hosts or ())
@@ -3958,7 +3964,15 @@ class PluginMarket:
             "warnings": [] if plan.get("target_exists", True) else ["登记目录原本已不存在，已清理残留登记。"],
         }
 
-    def execute_operation(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def execute_operation(self, payload: Mapping[str, Any], *, wait: bool = True) -> dict[str, Any]:
+        if not self._operation_gate.acquire(blocking=wait):
+            raise PluginOperationBusy("已有插件操作正在进行，请等待完成后再试。")
+        try:
+            return self._execute_operation(payload)
+        finally:
+            self._operation_gate.release()
+
+    def _execute_operation(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             raise PluginMarketError("插件操作请求必须是 JSON object。")
         if payload.get("confirm") is not True:
