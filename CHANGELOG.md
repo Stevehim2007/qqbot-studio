@@ -7,6 +7,14 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.15（测试版）— QQ 官方机器人接入迁移
+
+- 新增官方机器人接入方式：AstrBot 直接使用 `qq_official`，不再依赖 SnowLuma/OneBot/noVNC。
+- 安装向导支持官方 AppID/AppSecret；官方模式只生成/运行 AstrBot 单容器。
+- 插件身份、群策略、记忆、人格和群管理员判断兼容官方 `openid`。
+- 保留 SnowLuma 旧实例兼容路径，但新安装默认走官方接入。
+- 本版为官方接入迁移测试版，需在 bot 测试群验证 @、全量群消息、群策略与工具调用。
+
 ## v4.4.0-beta.14（测试版）— 群策略默认值继承旧参数
 
 - 群策略的“插件参数”默认值现在识别核心回复的旧 `reply_probability` 键：当规范键仍是默认值、旧键被显式修改时，展示旧键值。

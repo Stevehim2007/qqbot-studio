@@ -295,6 +295,7 @@ class WizardPlatformStaticTests(unittest.TestCase):
         )
         prelude = r"""
         const elements = {
+          'platform-mode': { value: 'snowluma' },
           'qq-account': { value: '123456789' },
           'deepseek-key': { value: 'sk-test' },
           'prompt-preview': { textContent: '', setAttribute() {}, removeAttribute() {}, focus() {} },

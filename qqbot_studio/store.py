@@ -21,6 +21,8 @@ PROJECT_NAME = "qqbot-studio"
 CONFIG_SCHEMA_VERSION = 2
 DEFAULT_MEMORY_MODE = "direct"
 MEMORY_MODES = ("direct", "astrbot")
+PLATFORM_MODES = ("snowluma", "official")
+DEFAULT_PLATFORM_MODE = "snowluma"
 
 DEFAULT_PROMPT = """你是一位友好、真诚、有边界感的 QQ 聊天助手。
 请使用简洁自然的中文回复；避免机械感、刷屏、重复内容和不必要的 @。
@@ -36,6 +38,8 @@ DEFAULT_PROMPT = """你是一位友好、真诚、有边界感的 QQ 聊天助�
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": CONFIG_SCHEMA_VERSION,
     "qq_account": "",
+    "platform_mode": DEFAULT_PLATFORM_MODE,
+    "qq_official_appid": "",
     "model": MODEL_NAME,
     "prompt": DEFAULT_PROMPT,
     "prompt_profiles": [],
@@ -62,6 +66,7 @@ SENSITIVE_CONFIG_KEYS = {
     "password",
     "vnc_password",
     "onebot_token",
+    "qq_official_secret",
 }
 
 
@@ -253,6 +258,7 @@ class Store:
             "astrbot_password": generate_password,
             "astrbot_jwt_secret": lambda: generate_token(32),
             "onebot_token": lambda: generate_token(32),
+            "qq_official_secret": lambda: "",
             "snowluma_http_token": lambda: generate_token(32),
             "snowluma_ws_token": lambda: generate_token(32),
             "vnc_password": generate_vnc_password,

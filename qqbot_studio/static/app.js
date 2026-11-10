@@ -469,24 +469,44 @@
 
   function validateConfigForm() {
     clearFormError();
+    const platformInput = $('platform-mode');
+    const platformMode = platformInput && platformInput.value === 'snowluma' ? 'snowluma' : 'official';
     const qqInput = $('qq-account');
+    const appidInput = $('official-appid');
+    const secretInput = $('official-secret');
     const keyInput = $('deepseek-key');
     const promptPreview = $('prompt-preview');
     const riskInput = $('accept-risk');
     const invalidFields = [];
 
     clearFieldError(qqInput, $('qq-account-error'));
+    clearFieldError(appidInput, $('official-appid-error'));
+    clearFieldError(secretInput, $('official-secret-error'));
     clearFieldError(keyInput, $('deepseek-key-error'));
     clearFieldError(promptPreview, $('prompt-error'));
     clearFieldError(riskInput, $('risk-error'));
 
     const qqAccount = qqInput ? qqInput.value.trim() : '';
+    const officialAppid = appidInput ? appidInput.value.trim() : '';
+    const officialSecret = secretInput ? secretInput.value.trim() : '';
     const apiKey = keyInput ? keyInput.value.trim() : '';
     const prompt = currentWizardPrompt();
     const promptText = prompt.trim();
     const promptLength = Array.from(prompt).length;
 
-    if (!qqAccount) {
+    if (platformMode === 'official') {
+      if (!officialAppid) {
+        setFieldError(appidInput, $('official-appid-error'), '请输入 QQ 官方机器人 AppID。');
+        invalidFields.push(appidInput);
+      } else if (!/^[0-9]{5,32}$/.test(officialAppid)) {
+        setFieldError(appidInput, $('official-appid-error'), 'AppID 必须为 5–32 位数字。');
+        invalidFields.push(appidInput);
+      }
+      if (!officialSecret) {
+        setFieldError(secretInput, $('official-secret-error'), '请输入 QQ 官方机器人 AppSecret。');
+        invalidFields.push(secretInput);
+      }
+    } else if (!qqAccount) {
       setFieldError(qqInput, $('qq-account-error'), '请输入机器人 QQ 号。');
       invalidFields.push(qqInput);
     } else if (!/^[0-9]{5,12}$/.test(qqAccount)) {
@@ -522,7 +542,10 @@
     }
 
     return {
-      qq_account: qqAccount,
+      platform_mode: platformMode,
+      qq_account: platformMode === 'snowluma' ? qqAccount : '',
+      official_appid: platformMode === 'official' ? officialAppid : '',
+      official_secret: platformMode === 'official' ? officialSecret : '',
       deepseek_api_key: apiKey,
       prompt,
       accept_risk: true
@@ -1394,9 +1417,18 @@
     }
     renderRequirements(nextState.requirements);
 
+    const platformInput = $('platform-mode');
+    if (platformInput && nextState.deployment.platform_mode) {
+      platformInput.value = nextState.deployment.platform_mode === 'snowluma' ? 'snowluma' : 'official';
+      platformInput.dispatchEvent(new Event('change'));
+    }
     const qqInput = $('qq-account');
     if (qqInput && nextState.deployment.qq_account && !qqInput.value.trim()) {
       qqInput.value = nextState.deployment.qq_account;
+    }
+    const appidInput = $('official-appid');
+    if (appidInput && nextState.deployment.qq_official_appid && !appidInput.value.trim()) {
+      appidInput.value = nextState.deployment.qq_official_appid;
     }
 
     const deployment = nextState.deployment;
@@ -1886,6 +1918,10 @@
     const urls = deployment.urls;
     const credentials = deployment.credentials;
     const deployed = deployment.deployed === true;
+    const official = deployment.platform_mode === 'official';
+    $$('.legacy-only').forEach((element) => {
+      element.hidden = official;
+    });
 
     setPill(
       $('deployment-overall'),
@@ -1908,15 +1944,17 @@
     const qqLoggedIn = deployment.qq_logged_in;
     setStatusValue(
       $('qq-login-status'),
-      qqLoggedIn === true ? '已登录' : qqLoggedIn === false ? '未登录' : '状态未知',
-      qqLoggedIn === true ? 'success' : qqLoggedIn === false ? 'warning' : ''
+      official ? '官方机器人' : qqLoggedIn === true ? '已登录' : qqLoggedIn === false ? '未登录' : '状态未知',
+      official || qqLoggedIn === true ? 'success' : qqLoggedIn === false ? 'warning' : ''
     );
 
-    const onebotConnected = deployment.onebot_connected;
+    const platformConnected = deployment.platform_connected;
     setStatusValue(
       $('onebot-status'),
-      onebotConnected === true ? '已连接' : onebotConnected === false ? '未连接' : '状态未知',
-      onebotConnected === true ? 'success' : onebotConnected === false ? 'warning' : ''
+      official
+        ? platformConnected === true ? '官方适配器已连接' : platformConnected === false ? '官方适配器未连接' : '等待连接'
+        : platformConnected === true ? '已连接' : platformConnected === false ? '未连接' : '状态未知',
+      platformConnected === true ? 'success' : platformConnected === false ? 'warning' : ''
     );
 
     setText('astrbot-url-text', fallbackDisplay(urls.astrbot_webui));
@@ -2143,10 +2181,40 @@
     const form = $('config-form');
     if (form) form.addEventListener('submit', handleDeploySubmit);
 
+    const platformInput = $('platform-mode');
+    const togglePlatformFields = () => {
+      const official = !platformInput || platformInput.value !== 'snowluma';
+      const officialFields = $('official-fields');
+      const legacyFields = $('legacy-fields');
+      if (officialFields) officialFields.hidden = !official;
+      if (legacyFields) legacyFields.hidden = official;
+    };
+    if (platformInput) {
+      platformInput.addEventListener('change', () => {
+        togglePlatformFields();
+        clearFormError();
+      });
+      togglePlatformFields();
+    }
+
     const qqInput = $('qq-account');
     if (qqInput) {
       qqInput.addEventListener('input', () => {
         clearFieldError(qqInput, $('qq-account-error'));
+        clearFormError();
+      });
+    }
+    const appidInput = $('official-appid');
+    if (appidInput) {
+      appidInput.addEventListener('input', () => {
+        clearFieldError(appidInput, $('official-appid-error'));
+        clearFormError();
+      });
+    }
+    const secretInput = $('official-secret');
+    if (secretInput) {
+      secretInput.addEventListener('input', () => {
+        clearFieldError(secretInput, $('official-secret-error'));
         clearFormError();
       });
     }

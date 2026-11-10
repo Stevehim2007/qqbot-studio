@@ -2374,6 +2374,9 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     prompt=str(payload.get("prompt") or ""),
                     accept_risk=bool(payload.get("accept_risk")),
                     mirror_candidates=ctx.studio.candidate_mirror_prefixes(),
+                    platform_mode=str(payload.get("platform_mode") or "snowluma"),
+                    official_appid=str(payload.get("official_appid") or ""),
+                    official_secret=str(payload.get("official_secret") or ""),
                 )
                 self._json(HTTPStatus.OK, {"ok": True, "job_id": job_id})
                 return

@@ -119,6 +119,32 @@ class ConfigGenerationTests(unittest.TestCase):
         self.assertTrue(set(first.values()).isdisjoint(second.values()))
         self.assertEqual(second["astrbot_webui"], first["astrbot_webui"] + 3)
 
+    def test_official_platform_generates_single_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generate_artifacts(
+                tmp,
+                api_key="sk-official-test",
+                prompt="官方机器人",
+                qq_account="",
+                use_mirror=False,
+                secrets_data=fake_secrets(),
+                ports=choose_ports(probe=False),
+                host_uid=1000,
+                host_gid=1000,
+                platform_mode="official",
+                official_appid="102091266",
+                official_secret="official-secret",
+            )
+            self.assertEqual(result["platform_mode"], "official")
+            self.assertIsNone(result["snowluma_config"])
+            self.assertNotIn("snowluma", result["compose"].read_text(encoding="utf-8"))
+            self.assertNotIn("SNOWLUMA", result["env"].read_text(encoding="utf-8"))
+            astrbot = json.loads(result["astrbot_config"].read_text(encoding="utf-8"))
+            self.assertEqual(astrbot["platform"][0]["type"], "qq_official")
+            self.assertEqual(astrbot["platform"][0]["appid"], "102091266")
+            self.assertEqual(astrbot["platform"][0]["secret"], "official-secret")
+            self.assertFalse((result["root"] / "data" / "snowluma").exists())
+
     def test_all_generated_files_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             secrets_data = fake_secrets()
