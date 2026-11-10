@@ -2627,6 +2627,30 @@
       groupBlock.appendChild(makeElement('p', 'instance-v3-empty', '尚未创建分组。'));
     } else {
       const choices = pluginMarketInstalledChoices(instance, marketData);
+      const groupedIds = () => {
+        const ids = new Set();
+        for (const item of groups) {
+          for (const pluginId of Array.isArray(item.plugin_ids) ? item.plugin_ids : []) ids.add(String(pluginId));
+        }
+        return ids;
+      };
+      const removePluginOptionEverywhere = (pluginId) => {
+        for (const select of panel.querySelectorAll('.plugin-group-add select')) {
+          const option = Array.from(select.options).find((item) => item.value === pluginId);
+          if (option) option.remove();
+        }
+      };
+      const addPluginOptionEverywhere = (pluginId) => {
+        if (groupedIds().has(String(pluginId))) return;
+        const label = choices.get(pluginId) || pluginId;
+        for (const select of panel.querySelectorAll('.plugin-group-add select')) {
+          if (Array.from(select.options).some((item) => item.value === pluginId)) continue;
+          const option = document.createElement('option');
+          option.value = pluginId;
+          option.textContent = `${label} (${pluginId})`;
+          select.appendChild(option);
+        }
+      };
       const groupList = makeElement('div', 'plugin-group-list');
       for (const group of groups) {
         const groupId = textValue(group.id, '');
@@ -2677,7 +2701,17 @@
                 panel,
                 `确认把 ${pluginId} 移出分组“${group.name}”？不会删除插件文件。`
               );
-              if (ok) await loadPluginMarketPanel(instance, panel);
+              if (ok) {
+                chip.remove();
+                const index = members.indexOf(pluginId);
+                if (index >= 0) members.splice(index, 1);
+                if (Array.isArray(group.plugin_ids)) {
+                  const groupIndex = group.plugin_ids.indexOf(pluginId);
+                  if (groupIndex >= 0) group.plugin_ids.splice(groupIndex, 1);
+                }
+                addPluginOptionEverywhere(pluginId);
+                pluginMarketSetStatus(panel, `已把 ${pluginId} 移出分组“${group.name}”。`, 'success');
+              }
             });
             chip.appendChild(remove);
             chips.appendChild(chip);
@@ -2687,7 +2721,7 @@
           card.appendChild(makeElement('p', 'instance-v3-empty', '分组内暂无插件。'));
         }
 
-        const available = Array.from(choices.entries()).filter(([pluginId]) => !members.includes(pluginId));
+        const available = Array.from(choices.entries()).filter(([pluginId]) => !groupedIds().has(String(pluginId)));
         if (available.length) {
           const addRow = makeElement('div', 'plugin-group-add');
           const select = document.createElement('select');
@@ -2711,8 +2745,7 @@
               { skipConfirm: true }
             );
             if (ok) {
-              const option = Array.from(select.options).find((item) => item.value === pluginId);
-              if (option) option.remove();
+              removePluginOptionEverywhere(pluginId);
               if (!members.includes(pluginId)) members.push(pluginId);
               let chips = card.querySelector('.plugin-group-members');
               if (!chips) {
@@ -2736,6 +2769,11 @@
                   chip.remove();
                   const index = members.indexOf(pluginId);
                   if (index >= 0) members.splice(index, 1);
+                  if (Array.isArray(group.plugin_ids)) {
+                    const groupIndex = group.plugin_ids.indexOf(pluginId);
+                    if (groupIndex >= 0) group.plugin_ids.splice(groupIndex, 1);
+                  }
+                  addPluginOptionEverywhere(pluginId);
                   pluginMarketSetStatus(panel, `已把 ${pluginId} 移出分组“${group.name}”。`, 'success');
                 }
               });
