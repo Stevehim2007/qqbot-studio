@@ -7,6 +7,18 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v5.0.0-beta.1（测试版）— QQ 官方机器人 5.0 基线
+
+- 主项目正式切换到 QQ 官方机器人接入：AstrBot 单容器、AppID/AppSecret，不再需要 SnowLuma、OneBot 或 noVNC。
+- 安装向导、控制台、实例状态、群策略、记忆策略、白名单全部改为官方 openid 语义。
+- 新增插件市场默认 GitHub catalog；新实例无需本地市场种子即可发现插件。
+- 插件市场支持运行时依赖声明与 pip/apt 安装确认；连续点击安装改为单操作串行保护。
+- 新实例默认只安装最小三件套：`qqbot_safe_tools`、`qqbot_memory_commands`、`qqbot_core_reply`。
+- 新增 `qqbot_scheduler`、`qqbot_fortune`、`qqbot_weather` 三个本地工具插件；天气图按中国天气网样式生成并只发图片。
+- `/option` 改为用户功能清单与逐条说明；工具命令在群聊必须真实 @ 才触发。
+- 组内插件过滤、移除后不刷新、插件市场首屏分组标签修复。
+- 下一阶段开始记忆系统 v3。
+
 ## v4.4.0-beta.23（测试版）— 插件分组过滤与本地移除
 
 - 已加入任意分组的插件不再出现在其他分组的“可添加插件”下拉列表。
@@ -169,6 +181,33 @@
 - 测试通道改为自动发现最新 `alpha/beta/rc` 预发布标签，不再写死分支白名单。
 - 插件版本：core 4.0.4、safe_tools 3.2.0、food 3.0.4、stickers 3.0.3、memory_commands 4.0.2。
 - 插件仓库发布 `v4.4.0-beta.1`；主项目测试 tag 同名。
+
+## v4.3.5（正式版）— 更新自检兼容无 Node 环境
+
+- `scripts/post-update-test.sh` 在服务器未安装 `node` 时跳过前端语法检查，不再阻断自动更新。
+- 引导路径执行 `scripts/update.sh` 时输出写入 `release-update.log`（0600），带上 from/to/channel。
+- 保持更新失败时旧管理进程继续运行。
+
+## v4.3.4（正式版）— 更新脚本引导兼容
+
+- `scripts/auto-update.sh` 增加一次性引导路径：旧版更新器切到本版本后也会执行 `scripts/update.sh`。
+- 新版更新器同步执行脚本并设置 `QQBOT_UPDATE_SCRIPT_ALREADY_RAN=1`，避免自动更新重启路径重复执行。
+- 增加更新脚本契约测试：禁止网络下载、必须可执行、必须有超时。
+
+## v4.3.3（正式版）— 版本自带更新脚本
+
+- 稳定版和测试版更新在切换代码后、重启服务前自动执行新版本内的 `scripts/update.sh`。
+- 脚本固定路径、只从已签出的 Git 版本读取，不下载远程内容；超时 600 秒、大小上限 256 KiB。
+- 脚本失败会恢复原版本并写入更新历史；输出写入 `release-update.log`（0600，已脱敏）。
+- 更新响应和历史记录增加 `update_script` 执行结果。
+- README 更新通道说明改为测试版自动发现 alpha/beta/rc 预发布标签。
+
+## v4.3.2（正式版）— 测试更新通道修复
+
+- 测试通道不再写死 `feat/plugin-repository-4.3`，改为自动发现最新的 `vX.Y.Z-alpha.N` / `beta.N` / `rc.N` 预发布 tag。
+- `check_update(channel="test")` 可按预发布 tag 比较当前版本；`apply_update("test")` 不指定 ref 时自动选最新预发布版本。
+- 更新面板文案同步为“自动获取最新 alpha/beta/rc 预发布版本”。
+- 全仓 `845 tests OK`（main 分支）。
 
 ## v4.3.1（正式版）— 插件市场、七插件运行时与通用工具调用
 
