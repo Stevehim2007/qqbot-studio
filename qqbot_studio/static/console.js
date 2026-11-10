@@ -3256,7 +3256,7 @@
     const scopeInput = document.createElement('input');
     scopeInput.type = 'text';
     scopeInput.className = 'group-policy-scope-id';
-    scopeInput.placeholder = '群号或用户 QQ 号';
+    scopeInput.placeholder = '群 openid 或用户 openid';
     scopeInput.autocomplete = 'off';
     const loadButton = makeElement('button', 'btn btn-secondary btn-small', '加载策略');
     loadButton.type = 'button';
@@ -3501,7 +3501,7 @@
     const loadScope = async () => {
       const scope = currentScope();
       if (!scope.id) {
-        setStatus('请输入群号或用户 QQ 号。', 'error');
+        setStatus('请输入群 openid 或用户 openid。', 'error');
         return;
       }
       setStatus('正在读取策略…');
@@ -3679,7 +3679,7 @@
     heading.appendChild(icon);
     const headingCopy = makeElement('div', 'instance-v3-section-copy');
     headingCopy.appendChild(makeElement('h4', '', '群组白名单'));
-    headingCopy.appendChild(makeElement('p', '', '控制 AstrBot 是否只处理白名单中的 QQ 群；私聊不受此项影响。'));
+    headingCopy.appendChild(makeElement('p', '', '控制 AstrBot 是否只处理白名单中的群 openid；私聊不受此项影响。'));
     heading.appendChild(headingCopy);
     section.appendChild(heading);
 
@@ -3696,11 +3696,11 @@
     toggleLabel.appendChild(toggleCopy);
     form.appendChild(toggleLabel);
 
-    const idLabel = makeElement('label', 'group-whitelist-label', 'QQ 群号（每行一个）');
+    const idLabel = makeElement('label', 'group-whitelist-label', '群 openid（每行一个）');
     const ids = document.createElement('textarea');
     ids.rows = 5;
     ids.placeholder = '例如：\n123456789\n987654321';
-    ids.setAttribute('aria-label', 'QQ 群号列表');
+    ids.setAttribute('aria-label', '群 openid 列表');
     ids.className = 'group-whitelist-ids';
     idLabel.appendChild(ids);
     form.appendChild(idLabel);
@@ -4884,7 +4884,7 @@
       fields.hidden = true;
 
       const idField = makeElement('label', 'memory-policy-field');
-      idField.appendChild(makeElement('span', 'memory-policy-label', '群号'));
+      idField.appendChild(makeElement('span', 'memory-policy-label', '群 openid'));
       const idInput = document.createElement('input');
       idInput.type = 'text';
       idInput.dataset.field = 'group-id';
@@ -4924,7 +4924,7 @@
         const injectInput = rowElement.querySelector('[data-field="inject"]');
         if (maxItems && String(maxItems.value || '').trim()) budget.push(`条数 ${maxItems.value}`);
         if (maxChars && String(maxChars.value || '').trim()) budget.push(`字符 ${maxChars.value}`);
-        summaryTitle.textContent = groupId || '未填写群号';
+        summaryTitle.textContent = groupId || '未填写群 openid';
         summaryMeta.textContent = [
           memoryPolicyModeLabel(policy, modeSelect.value),
           memoryPolicyOptionLabel(policy.scopeOptions, scopeSelect.value, scopeSelect.value),
@@ -5084,7 +5084,7 @@
         });
       }
       if (firstInvalid) {
-        setPolicyError('请填写每一行群策略的群号，或删除该行。');
+        setPolicyError('请填写每一行群策略的群 openid，或删除该行。');
         if (typeof firstInvalid.focus === 'function') firstInvalid.focus();
         return;
       }
@@ -5323,9 +5323,9 @@
       .map((row) => textValue(row && row.group_id, ''))
       .filter((value) => value);
     if (!ids.length) {
-      return 'scope_id 形如 <平台>:<群号> 或 <平台>:<QQ号>（例如 aiocqhttp:838796241）。';
+      return 'scope_id 形如 <平台>:<群 openid> 或 <平台>:<用户 openid>（例如 qq_official:6D71...）。';
     }
-    return `scope_id 形如 <平台>:<群号>；已配置的群号：${ids.slice(0, 6).join('、')}（平台名以 AstrBot 适配器为准）。`;
+    return `scope_id 形如 <平台>:<群 openid>；已配置的群 openid：${ids.slice(0, 6).join('、')}（平台名以 AstrBot 适配器为准）。`;
   }
 
   function memoryContentDatalist(instance) {
@@ -5965,7 +5965,7 @@
     scopeInput.type = 'text';
     scopeInput.className = 'memory-content-input';
     scopeInput.value = state.scopeId;
-    scopeInput.placeholder = '群号或 aiocqhttp:群号；group_member 填 aiocqhttp:群号:QQ';
+    scopeInput.placeholder = '群 openid 或 qq_official:群 openid；group_member 填 qq_official:群 openid:用户 openid';
     scopeInput.setAttribute('list', 'memory-content-scope-ids');
     scopeInput.dataset.memoryContentField = 'scope-id';
     controls.appendChild(memoryContentField(state, 'scope-id', 'Scope ID', scopeInput));

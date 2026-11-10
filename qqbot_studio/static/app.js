@@ -50,17 +50,17 @@
     },
     config: {
       title: '连接账号与模型',
-      subtitle: '填写 QQ 号与 DeepSeek API Key。QQ 登录将通过 noVNC 扫码完成。',
+      subtitle: '填写 QQ 官方机器人 AppID / AppSecret 与 DeepSeek API Key。',
       index: 1
     },
     deploy: {
       title: '正在部署你的智能助手',
-      subtitle: '本地服务会逐步创建容器、配置 AstrBot 与 SnowLuma，并输出实时日志。',
+      subtitle: '本地服务会创建 AstrBot 单容器，配置 QQ 官方适配器，并输出实时日志。',
       index: 2
     },
     done: {
       title: '部署完成，开始使用',
-      subtitle: '扫码登录 QQ，确认 OneBot 连接，并在这里管理本地服务。',
+      subtitle: '确认 QQ 官方适配器连接，并在这里管理本地服务。',
       index: 3
     }
   };
@@ -323,7 +323,7 @@
     if (!meta) return;
     if (step === 'done' && deploymentStepsLocked()) {
       setText('page-title', '机器人已部署');
-      setText('page-subtitle', '机器人已部署，环境/账号/部署步骤已锁定；扫码登录、服务控制与日志仍可在完成页使用。');
+      setText('page-subtitle', '机器人已部署，环境/账号/部署步骤已锁定；官方适配器状态、服务控制与日志仍可在完成页使用。');
       return;
     }
     setText('page-title', meta.title);
@@ -727,26 +727,26 @@
           : '先确认这台 Ubuntu 已准备好 Docker 环境，再填写账号与模型信息。';
     STEP_META.env.title = title;
     STEP_META.env.subtitle = subtitle;
-    setText('env-step-hint', windows ? 'Windows 与 Docker Desktop' : unknown ? '系统与 Docker' : linuxOther ? 'Linux 与 Docker' : 'Ubuntu 与 Docker');
+    setText('env-step-hint', windows ? 'Windows 与 Docker Desktop' : unknown ? '系统未识别' : linuxOther ? 'Linux 与 Docker' : 'Ubuntu 与 Docker');
     setText('env-heading', windows ? '准备 Windows 10/11 与 Docker Desktop' : unknown ? '准备本机 Docker 环境' : linuxOther ? '准备 Ubuntu 与 Docker' : '准备一台已安装 Docker 的 Ubuntu');
     if (windows) {
-      setText('env-intro', '这个向导会帮助你在 Windows 10/11 上使用 Docker Desktop 启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。所有操作均在本机浏览器与本地服务之间完成。');
-      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。重复运行 windows\\start.ps1 会创建新实例并需要重新扫码；管理已有实例请使用 windows\\console.ps1。');
+      setText('env-intro', '这个向导会帮助你在 Windows 10/11 上使用 Docker Desktop 启动 AstrBot 单容器，并通过 QQ 开放平台 AppID/AppSecret 接入官方机器人。所有操作均在本机浏览器与本地服务之间完成。');
+      setText('env-platform-note', '注意：每个新机器人实例都需要在 QQ 开放平台配置 AppID/AppSecret 与群消息权限；重复运行 windows\\start.ps1 会创建新实例，管理已有实例请使用 windows\\console.ps1。');
       setText('env-help-title', 'Docker Desktop 未就绪？');
       setText('env-help-text', '请使用 Windows PowerShell 执行检查卡中的命令。Docker Desktop 必须使用 Linux containers；如果刚安装 Docker Desktop，请注销或重启 Windows 后重新检测。');
     } else if (unknown) {
-      setText('env-intro', '这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。请先确认当前系统的 Docker 环境可用。');
-      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。请使用当前操作系统对应的启动与控制脚本；如果系统未识别，控制台仍会在部署前再次校验 Docker。');
+      setText('env-intro', '这个向导会帮助你在本机启动 AstrBot 单容器，并通过 QQ 开放平台 AppID/AppSecret 接入官方机器人。请先确认当前系统的 Docker 环境可用。');
+      setText('env-platform-note', '注意：每个新机器人实例都需要在 QQ 开放平台配置 AppID/AppSecret 与群消息权限；请使用当前操作系统对应的启动与控制脚本。');
       setText('env-help-title', '环境状态不完整？');
       setText('env-help-text', '如果无法识别操作系统，但 Docker 已确认就绪，可继续配置。检查卡中的命令会按当前可识别平台显示。');
     } else if (linuxOther) {
-      setText('env-intro', '这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。Linux 版当前仅面向 Ubuntu。');
-      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。重复运行 ./start.sh 会创建新实例并需要重新扫码；管理已有实例请使用 ./console.sh。');
+      setText('env-intro', '这个向导会帮助你在本机启动 AstrBot 单容器，并通过 QQ 开放平台 AppID/AppSecret 接入官方机器人。Linux 版当前仅面向 Ubuntu。');
+      setText('env-platform-note', '注意：每个新机器人实例都需要在 QQ 开放平台配置 AppID/AppSecret 与群消息权限；重复运行 ./start.sh 会创建新实例，管理已有实例请使用 ./console.sh。');
       setText('env-help-title', '不知道怎么安装？');
       setText('env-help-text', '当前 Linux 不是 Ubuntu；建议改用 Ubuntu。若继续排错，请按检查卡中的命令并确认系统包管理器和发行版兼容。');
     } else {
-      setText('env-intro', '这个向导会帮助你启动 AstrBot、SnowLuma 和 noVNC，并引导你用手机 QQ 扫码登录。所有操作均在本机浏览器与本地服务之间完成。');
-      setText('env-platform-note', '注意：每个新机器人实例首次部署都必须在 noVNC 中扫码登录 QQ。重复运行 ./start.sh 会创建新实例并需要重新扫码；管理已有实例请使用 ./console.sh。');
+      setText('env-intro', '这个向导会帮助你在本机启动 AstrBot 单容器，并通过 QQ 开放平台 AppID/AppSecret 接入官方机器人。所有操作均在本机浏览器与本地服务之间完成。');
+      setText('env-platform-note', '注意：每个新机器人实例都需要在 QQ 开放平台配置 AppID/AppSecret 与群消息权限；重复运行 ./start.sh 会创建新实例，管理已有实例请使用 ./console.sh。');
       setText('env-help-title', '不知道怎么安装？');
       setText('env-help-text', '每张未就绪的检查卡都会提供可复制的终端命令。打开 Ubuntu 终端，粘贴并执行即可；权限组变更后可能需要重新登录。');
     }
@@ -2131,7 +2131,7 @@
         clearDeployError();
         updateStepNavigation();
         showStep('config');
-        showToast('请确认 QQ 号、API Key 与提示词后重新部署。', 'info', 4200);
+        showToast('请确认官方 AppID/AppSecret、API Key 与提示词后重新部署。', 'info', 4200);
       });
     }
     const jobRetryPoll = $('job-retry-poll');

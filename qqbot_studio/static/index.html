@@ -346,14 +346,14 @@
             <div class="risk-box">
               <svg class="icon risk-icon" aria-hidden="true"><use href="#i-alert"></use></svg>
               <div>
-                <h4>账号与合规风险提示</h4>
-                <p>第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。登录及安全验证只能由你在 QQ 官方界面完成。</p>
+                <h4>开放平台权限与合规提示</h4>
+                <p>QQ 官方机器人受开放平台权限、主动消息频控与群主设置限制；请遵守 QQ 开放平台协议与当地法律法规。机器人凭据只写入本机配置。</p>
               </div>
             </div>
 
             <div class="checkbox-field">
               <input id="accept-risk" name="accept_risk" type="checkbox" aria-describedby="risk-error" required>
-              <label for="accept-risk">我已阅读并理解上述风险，确认使用小号，并遵守 QQ 用户协议与当地法律法规。<span class="required-mark" aria-hidden="true">*</span></label>
+              <label for="accept-risk">我已阅读并理解上述限制，确认遵守 QQ 开放平台协议与当地法律法规。<span class="required-mark" aria-hidden="true">*</span></label>
               <p id="risk-error" class="field-error" role="alert" hidden></p>
             </div>
 
@@ -460,11 +460,11 @@
             <span id="astrbot-service-status" class="status-value"><span class="status-dot"></span>状态未知</span>
           </div>
           <div class="status-item">
-            <span class="status-label">QQ 登录</span>
+            <span class="status-label">官方机器人</span>
             <span id="qq-login-status" class="status-value"><span class="status-dot"></span>状态未知</span>
           </div>
           <div class="status-item">
-            <span class="status-label">OneBot 连接</span>
+            <span class="status-label">WebSocket 连接</span>
             <span id="official-status" class="status-value"><span class="status-dot"></span>状态未知</span>
           </div>
           <button id="refresh-connection" class="btn btn-quiet btn-small" type="button">
@@ -567,7 +567,7 @@
           <svg class="icon disclaimer-icon" aria-hidden="true"><use href="#i-shield"></use></svg>
           <div>
             <h3>安全提示与免责声明</h3>
-            <p>本工具不收集、不保存 QQ 密码，API Key 仅写入本机 AstrBot 配置。机器人使用 QQ 开放平台官方接口，不需要 noVNC。请遵守 QQ 开放平台协议与当地法律法规。因使用本工具造成的账号、数据或合规风险由使用者自行承担。</p>
+            <p>本工具不收集、不保存 QQ 密码；机器人 AppID/AppSecret 与模型 API Key 仅写入本机 AstrBot 配置。机器人使用 QQ 开放平台官方接口，无需额外客户端登录。请遵守 QQ 开放平台协议与当地法律法规。因使用本工具造成的账号、数据或合规风险由使用者自行承担。</p>
           </div>
         </div>
       </section>

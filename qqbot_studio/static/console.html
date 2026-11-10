@@ -80,7 +80,7 @@
       <div class="console-hero-copy">
         <p class="eyebrow">多实例管理</p>
         <h1 id="console-heading" tabindex="-1">你的 QQ 机器人</h1>
-        <p>集中查看每个机器人的部署、容器和 WebUI 状态。安全验证始终在对应实例的 noVNC 中由你本人完成。</p>
+        <p>集中查看每个机器人的部署、容器和 WebUI 状态。QQ 官方适配器连接与开放平台权限在这里统一查看。</p>
       </div>
       <div class="console-stats" aria-label="实例统计">
         <div class="console-stat"><strong id="instance-count">—</strong><span>实例</span></div>
@@ -129,8 +129,8 @@
         <span class="create-instance-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-plus"></use></svg></span>
         <div>
           <h2 id="create-instance-heading">新建机器人实例</h2>
-          <p>每个实例拥有独立的 QQ 号、配置、容器和数据目录。创建后会进入该实例的部署向导。</p>
-          <p class="field-hint"><strong>注意：</strong>每个新实例首次部署都必须在 noVNC 中扫码登录 QQ；重启已有实例通常复用登录态，但 QQ 会话过期时仍需重新验证。</p>
+          <p>每个实例拥有独立的 QQ 官方机器人 AppID、配置、容器和数据目录。创建后会进入该实例的部署向导。</p>
+          <p class="field-hint"><strong>注意：</strong>每个新实例都需要在 QQ 开放平台配置 AppID/AppSecret、群消息权限与沙箱环境；重启已有实例不会重新验证登录。</p>
         </div>
       </div>
       <form id="create-instance-form" class="create-instance-form" novalidate>
@@ -165,7 +165,7 @@
     <section id="instances-empty" class="instances-empty" hidden aria-labelledby="instances-empty-heading">
       <span class="instances-empty-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-server"></use></svg></span>
       <h2 id="instances-empty-heading">还没有机器人实例</h2>
-      <p>创建第一个实例后，向导会引导你完成环境检查、QQ 扫码登录和 DeepSeek 配置。</p>
+      <p>创建第一个实例后，向导会引导你完成环境检查、QQ 官方机器人凭据和 DeepSeek 配置。</p>
       <button class="btn btn-primary" type="button" data-open-create>
         <svg class="icon" aria-hidden="true"><use href="#c-i-plus"></use></svg>
         新建第一个机器人
@@ -177,18 +177,18 @@
         <span class="console-safety-icon" aria-hidden="true"><svg class="icon"><use href="#c-i-shield"></use></svg></span>
         <div>
           <h2 id="console-safety-heading">安全提示与免责声明</h2>
-          <p>不收集、不保存 QQ 密码；现代 QQ 需要扫码登录。如果扫码后要求设备验证、短信验证、滑块或安全验证，必须在 noVNC 里按 QQ 官方提示操作；工具不能绕过验证。</p>
+          <p>不收集、不保存 QQ 密码；QQ 官方机器人使用 AppID/AppSecret 接入。请确保机器人已加入目标群、群主已开启需要的消息权限，并遵守 QQ 开放平台的频控与审核规则。</p>
         </div>
       </div>
       <div class="console-safety-grid">
-        <p><strong>账号风险：</strong>第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。</p>
+        <p><strong>平台限制：</strong>官方机器人受开放平台权限、主动消息频控和群主设置限制；请遵守 QQ 开放平台协议与当地法律。</p>
         <p><strong>密钥边界：</strong>DeepSeek API Key 仅写入本机 AstrBot 配置，不写入浏览器存储，也不在控制台中显示。</p>
       </div>
     </section>
 
     <footer class="console-footer">
       <div class="console-footer-brand"><svg class="icon" aria-hidden="true"><use href="#c-i-lock"></use></svg>本地优先 · 多实例隔离</div>
-      <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek、AstrBot 与 SnowLuma 均为其各自权利人的产品或项目。</p>
+      <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek 与 AstrBot 均为其各自权利人的产品或项目。</p>
     </footer>
   </main>
 

@@ -7,6 +7,13 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.20（测试版）— 前端 official-only 收口与 openid 文案
+
+- 安装向导、控制台、实例状态全部改为 QQ 官方机器人 AppID/AppSecret 单容器，不再出现 SnowLuma/noVNC/OneBot/扫码登录入口。
+- 群策略、记忆策略、群白名单的标识文案从 QQ 群号改为群 openid；scope 示例改为 `qq_official:<openid>`。
+- 纯 @ 回复与工具命令 mention 守卫修复：无真实 At 时不再触发 `/option`、`/定时`、`/每日运势`、`/天气`。
+- 前端静态检查、`node --check` 与主项目全量测试通过。
+
 ## v4.4.0-beta.19（测试版）— 官方-only 清理、插件依赖与新工具插件
 
 - 删除安装向导、控制台和项目内的 SnowLuma/noVNC 入口，安装只支持 QQ 官方 AppID/AppSecret 单容器。
