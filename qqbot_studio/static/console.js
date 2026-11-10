@@ -2573,7 +2573,7 @@
         prev.disabled = page <= 1;
         prev.addEventListener('click', () => {
           panel.dataset.marketPage = String(page - 1);
-          renderPluginMarketPanel(instance, panel, marketData, groupData);
+          renderPluginMarketPanel(instance, panel, marketData, groupData, options);
         });
         const label = makeElement('span', 'plugin-market-page-label', `第 ${page} / ${totalPages} 页`);
         const next = makeElement('button', 'btn btn-quiet btn-small', '下一页');
@@ -2581,7 +2581,7 @@
         next.disabled = page >= totalPages;
         next.addEventListener('click', () => {
           panel.dataset.marketPage = String(page + 1);
-          renderPluginMarketPanel(instance, panel, marketData, groupData);
+          renderPluginMarketPanel(instance, panel, marketData, groupData, options);
         });
         pager.appendChild(prev);
         pager.appendChild(label);
@@ -2865,7 +2865,7 @@
     heading.appendChild(icon);
     const headingCopy = makeElement('div', 'instance-v3-section-copy');
     headingCopy.appendChild(makeElement('h4', '', '插件市场'));
-    headingCopy.appendChild(makeElement('p', '', '安装、更新和删除独立插件；市场与插件分组分开显示。'));
+    headingCopy.appendChild(makeElement('p', '', '安装、更新和删除独立插件；可切换到插件分组管理。'));
     heading.appendChild(headingCopy);
     section.appendChild(heading);
     const tools = makeElement('div', 'plugin-market-tools');
@@ -2877,7 +2877,7 @@
     tools.appendChild(refresh);
     tools.appendChild(panel);
     section.appendChild(tools);
-    void loadPluginMarketPanel(instance, panel, { marketOnly: true });
+    void loadPluginMarketPanel(instance, panel);
     return section;
   }
 

@@ -7,6 +7,12 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.21（测试版）— 插件市场首屏分组修复
+
+- 插件市场首屏改为始终显示「插件分组」标签页，翻页后也保持同一视图状态。
+- 修复首屏 `marketOnly` 隐藏分组、翻到第二页才出现分组标签的问题。
+- 前端 `node --check` 与静态测试通过。
+
 ## v4.4.0-beta.20（测试版）— 前端 official-only 收口与 openid 文案
 
 - 安装向导、控制台、实例状态全部改为 QQ 官方机器人 AppID/AppSecret 单容器，不再出现 SnowLuma/noVNC/OneBot/扫码登录入口。
