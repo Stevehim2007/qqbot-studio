@@ -28,6 +28,7 @@ import copy
 import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -60,6 +61,8 @@ from .store import chmod_best_effort, utc_now
 PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 GROUP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+logger = logging.getLogger(__name__)
+
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 RESERVED_PLUGIN_IDS = frozenset({"qqbot_enhancer"})
 MARKET_SCHEMA_VERSION = 1
@@ -4019,7 +4022,16 @@ class PluginMarket:
                 public_outcome["ok"] = True
                 self._update_operation_record(operation_id, "completed", public_outcome)
             except Exception as exc:
-                safe_message = sanitize_error_text(exc.message if isinstance(exc, PluginMarketError) else "插件操作执行失败，详情请查看管理服务终端日志。")
+                if isinstance(exc, PermissionError):
+                    logger.exception("plugin operation permission failure: %s", exc)
+                    safe_message = sanitize_error_text(
+                        f"插件目录不可写，请先修复实例插件目录权限：{exc}"
+                    )
+                elif isinstance(exc, PluginMarketError):
+                    safe_message = sanitize_error_text(exc.message)
+                else:
+                    logger.exception("plugin operation failed")
+                    safe_message = "插件操作执行失败，详情请查看管理服务终端日志。"
                 failed_outcome = {"ok": False, "error": safe_message, "message": safe_message}
                 try:
                     self._update_operation_record(operation_id, "failed", failed_outcome)

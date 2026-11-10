@@ -1685,6 +1685,41 @@ class DeployManager:
         "print('ok')\n"
     )
 
+    def repair_plugin_root_permissions(self) -> dict[str, Any]:
+        """Best-effort chown of the bind-mounted plugin root to the Studio user.
+
+        AstrBot creates ``data/astrbot/plugins`` as root on first boot.  The
+        Studio process runs as an unprivileged user and cannot install or
+        update plugins until the directory is writable.  Docker exec runs as
+        the container's root user, so a numeric chown is safe and does not
+        require sudo on the host.
+        """
+
+        available, reason = self._astrbot_container_available()
+        if not available:
+            return {"ok": False, "repaired": False, "message": reason}
+        uid = os.getuid()
+        gid = os.getgid()
+        try:
+            result = self.docker.exec_in_container(
+                self.astrbot_container,
+                ["chown", "-R", f"{uid}:{gid}", "/AstrBot/data/plugins"],
+                timeout=30,
+            )
+        except Exception as exc:  # noqa: BLE001 - repair is best effort
+            return {
+                "ok": False,
+                "repaired": False,
+                "message": self.redact_sensitive_text(str(exc)) or "修复插件目录权限失败。",
+            }
+        if not result.ok:
+            return {
+                "ok": False,
+                "repaired": False,
+                "message": (result.output or f"exit {result.returncode}").strip(),
+            }
+        return {"ok": True, "repaired": True, "uid": uid, "gid": gid, "message": "插件目录权限已修复。"}
+
     def _astrbot_container_available(self) -> tuple[bool, str]:
         """Return whether the AstrBot container can be used for config IO."""
 
@@ -2890,6 +2925,9 @@ class DeployManager:
         return self.plugin_market_service.execute_plugin_group_action(payload)
 
     def preview_plugin_operation(self, payload: Any) -> dict[str, Any]:
+        repair = self.repair_plugin_root_permissions()
+        if not repair.get("ok") and not repair.get("repaired"):
+            logger.warning("plugin root permission repair failed: %s", repair.get("message", ""))
         result = self.plugin_market_service.preview_operation(payload)
         plan = result.get("plan") if isinstance(result, dict) else None
         if isinstance(plan, Mapping):
@@ -3071,6 +3109,9 @@ class DeployManager:
         return {"ok": True, "installed": installed, "manual_required": [], "status": after}
 
     def execute_plugin_operation(self, payload: Any) -> dict[str, Any]:
+        repair = self.repair_plugin_root_permissions()
+        if not repair.get("ok") and not repair.get("repaired"):
+            logger.warning("plugin root permission repair failed: %s", repair.get("message", ""))
         return self.plugin_market_service.execute_operation(payload)
 
     def get_plugin_operation(self, operation_id: str) -> dict[str, Any]:

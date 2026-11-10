@@ -14,6 +14,12 @@
 - 添加插件时同步从所有分组下拉列表移除，避免同一插件重复出现在多个分组候选中。
 - `node --check` 与 70 项静态测试通过。
 
+## v4.4.0-beta.25（测试版）— 插件安装权限修复
+
+- 安装/更新插件前自动通过 AstrBot 容器把 `data/astrbot/plugins` 所有者修复为 Studio 运行用户。
+- `PluginMarket` 遇到 `PermissionError` 时返回真实可读错误，不再只显示“查看终端日志”。
+- 修复新建实例首次安装插件时 `root:root` 插件目录导致的 500。
+
 ## v4.4.0-beta.24（测试版）— 默认 GitHub 插件市场源
 
 - 新建实例未配置市场时，默认从 GitHub 官方 catalog 拉取插件目录。
