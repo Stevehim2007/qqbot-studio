@@ -4588,7 +4588,50 @@
       retryButton.addEventListener('click', () => void loadConsole({ silent: true }));
       section.appendChild(retryButton);
     }
+    section.appendChild(buildMemoryCardsSection(instance));
     return section;
+  }
+
+  function buildMemoryCardsSection(instance) {
+    const box = makeElement('div', 'memory-cards-panel');
+    const heading = makeElement('div', 'memory-cards-heading');
+    heading.appendChild(makeElement('strong', '', '记忆卡片 v3'));
+    const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新');
+    refresh.type = 'button';
+    heading.appendChild(refresh);
+    box.appendChild(heading);
+    const status = makeElement('p', 'instance-v3-status', '正在读取记忆卡片…');
+    const list = makeElement('div', 'memory-cards-list');
+    box.appendChild(status);
+    box.appendChild(list);
+    const load = async () => {
+      status.textContent = '正在读取记忆卡片…';
+      list.replaceChildren();
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-cards?limit=50`);
+        if (!data || data.ok === false) {
+          status.textContent = (data && data.error) || '记忆卡片接口不可用。';
+          return;
+        }
+        if (!data.available) {
+          status.textContent = '当前实例还没有记忆卡片；机器人完成一段对话后会自动生成。';
+          return;
+        }
+        const stats = data.stats || {};
+        status.textContent = `活跃 ${Number(stats.active || 0)} 张，归档 ${Number(stats.archived || 0)} 张。`;
+        for (const card of (data.cards || []).slice(0, 8)) {
+          const row = makeElement('div', 'memory-card-row');
+          row.appendChild(makeElement('span', 'memory-card-kind', textValue(card.kind, 'card')));
+          row.appendChild(makeElement('span', 'memory-card-content', textValue(card.content, '')));
+          list.appendChild(row);
+        }
+      } catch (error) {
+        status.textContent = `读取记忆卡片失败：${error.message || error}`;
+      }
+    };
+    refresh.addEventListener('click', () => void load());
+    void load();
+    return box;
   }
 
   async function handleMemoryModeChange(instance, mode, group, statusElement) {

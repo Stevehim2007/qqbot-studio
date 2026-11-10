@@ -2351,3 +2351,43 @@ body.console-modal-open { overflow: hidden; }
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, .13);
 }
+
+.memory-cards-panel {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border, #d8dee8);
+  border-radius: 12px;
+  background: var(--surface-subtle, #f8fafc);
+}
+.memory-cards-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.memory-cards-list {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.memory-card-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+.memory-card-kind {
+  flex: 0 0 auto;
+  min-width: 68px;
+  color: var(--muted, #6b7280);
+  font-size: 12px;
+}
+.memory-card-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}

@@ -1403,6 +1403,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._serve_plugin_api_result(lambda: getter(operation_id))
                     return
+                if subroute == "memory-cards":
+                    getter = getattr(manager, "get_memory_cards", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆卡片接口。")
+                        return
+                    scope = str((query.get("scope") or [""])[0]).strip()
+                    limit = self._safe_int((query.get("limit") or ["50"])[0], 50, 1, 100)
+                    self._json(HTTPStatus.OK, getter(scope=scope, limit=limit))
+                    return
                 memory_route = self._memory_admin_route(subroute)
                 if memory_route is not None:
                     self._serve_memory_admin(manager, memory_route, method="GET", query=query)

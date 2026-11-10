@@ -7,6 +7,15 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v5.0.0-beta.2（测试版）— 记忆卡片 v3
+
+- 记忆系统 v3：增加 active/archive 记忆卡、清晰度半衰期、容量上限、append-only 事件审计与 `memory_cards.db`。
+- 新增确定性收尾：按轮次生成会话摘要、阶段摘要、未完成话题，可选生成 purpose 卡片；`wrapup_ledger` 保证幂等。
+- `/记忆 卡片` 查看当前 scope 卡片，`/记忆 收尾` 立即生成收尾卡片；每 6 轮自动收尾，可通过插件参数关闭或调整。
+- 回复前注入当前会话最多 4 张卡片，包在 `untrusted="true"` 块中；卡片文本不作为指令执行，不替代五 scope 原始记忆。
+- Studio 记忆面板增加卡片统计与最近卡片列表；新增只读 `/api/instances/{id}/memory-cards`。
+- 记忆命令插件版本 4.1.0；新增/更新测试覆盖卡片存储、衰减、容量、收尾幂等和注入去重。
+
 ## v5.0.0-beta.1（测试版）— QQ 官方机器人 5.0 基线
 
 - 主项目正式切换到 QQ 官方机器人接入：AstrBot 单容器、AppID/AppSecret，不再需要 SnowLuma、OneBot 或 noVNC。

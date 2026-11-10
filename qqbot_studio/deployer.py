@@ -2227,6 +2227,49 @@ class DeployManager:
             row["effective_scope"] = row["scope"]
         return row
 
+    def get_memory_cards(self, *, scope: str = "", limit: int = 50) -> dict[str, Any]:
+        """Read the memory-card sidecar for the Studio memory panel."""
+
+        db_path = self.astrbot_data_dir / "plugin_data" / "qqbot_memory_commands" / "memory_cards.db"
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": db_path.is_file(),
+            "scope": str(scope or ""),
+            "limit": max(1, min(100, int(limit or 50))),
+            "stats": {},
+            "cards": [],
+            "error": "",
+        }
+        if not db_path.is_file():
+            return payload
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                stat_rows = connection.execute(
+                    "SELECT status, COUNT(*) AS n FROM card GROUP BY status"
+                ).fetchall()
+                payload["stats"] = {str(row["status"]): int(row["n"]) for row in stat_rows}
+                clauses = []
+                params: list[Any] = []
+                if scope:
+                    clauses.append("scope = ?")
+                    params.append(str(scope))
+                where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+                rows = connection.execute(
+                    f"SELECT id, scope, kind, subtype, title, content, importance, confidence, "
+                    f"clarity, status, updated_at, last_used_at, revision FROM card {where} "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (*params, payload["limit"]),
+                ).fetchall()
+                payload["cards"] = [dict(row) for row in rows]
+            finally:
+                connection.close()
+        except (sqlite3.Error, OSError) as exc:
+            payload["ok"] = False
+            payload["error"] = f"读取记忆卡片失败：{exc}"
+        return payload
+
     def get_memory_policy(self) -> dict[str, Any]:
         """Return the stored per-group long-term memory policy (config only)."""
 
