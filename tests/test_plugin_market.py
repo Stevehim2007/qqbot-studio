@@ -312,6 +312,18 @@ class ManifestAndZipTests(PluginMarketTestBase):
             "REMOTE = True\n",
         )
 
+    def test_empty_market_uses_default_github_catalog(self):
+        from qqbot_studio.plugin_market import DEFAULT_MARKET_SOURCE_URL
+        with mock.patch(
+            "qqbot_studio.plugin_market._http_get_bytes",
+            return_value=(b'{"plugins": []}', DEFAULT_MARKET_SOURCE_URL),
+        ) as getter:
+            result = self.market.refresh_market()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(getter.call_args.args[0], DEFAULT_MARKET_SOURCE_URL)
+        self.assertIn("raw.githubusercontent.com", getter.call_args.kwargs["trusted_hosts"])
+
     def test_fixed_source_config_allows_trusted_url_without_request_body(self):
         self.market_dir.mkdir(parents=True, exist_ok=True)
         (self.market_dir / "trusted-hosts.json").write_text(

@@ -14,6 +14,13 @@
 - 添加插件时同步从所有分组下拉列表移除，避免同一插件重复出现在多个分组候选中。
 - `node --check` 与 70 项静态测试通过。
 
+## v4.4.0-beta.22（测试版）— 默认 GitHub 插件市场源
+
+- 新建实例未配置市场时，默认从 GitHub 官方 catalog 拉取插件目录。
+- 默认信任 `raw.githubusercontent.com`、`github.com`、`objects.githubusercontent.com`。
+- 插件仓库增加 `market/catalog.json`，下载地址指向 GitHub raw 制品。
+- Release workflow 动态校验插件数量，并上传 catalog、manifest、group registry。
+
 ## v4.4.0-beta.21（测试版）— 插件市场首屏分组修复
 
 - 插件市场首屏改为始终显示「插件分组」标签页，翻页后也保持同一视图状态。
