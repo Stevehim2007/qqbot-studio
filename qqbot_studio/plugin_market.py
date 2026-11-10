@@ -63,6 +63,12 @@ SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 RESERVED_PLUGIN_IDS = frozenset({"qqbot_enhancer"})
 MARKET_SCHEMA_VERSION = 1
+DEFAULT_MARKET_SOURCE_URL = "https://raw.githubusercontent.com/Stevehim2007/qqbot-plugins/main/market/catalog.json"
+DEFAULT_MARKET_TRUSTED_HOSTS = (
+    "raw.githubusercontent.com",
+    "github.com",
+    "objects.githubusercontent.com",
+)
 MANIFEST_SCHEMA_VERSION = 2
 MANIFEST_V1_MAX_SCHEMA_VERSION = 1
 SUPPORTED_MANIFEST_SCHEMA_VERSIONS = frozenset({1, 2})
@@ -2662,7 +2668,8 @@ class PluginMarket:
                 raise PluginStateError("无法创建插件市场数据目录。", detail=exc.__class__.__name__) from exc
 
     def _trusted_hosts(self) -> tuple[str, ...]:
-        hosts: list[str] = list(self._configured_trusted_hosts)
+        hosts: list[str] = list(DEFAULT_MARKET_TRUSTED_HOSTS)
+        hosts.extend(self._configured_trusted_hosts)
         env = os.environ.get("QQBOT_PLUGIN_MARKET_HOSTS", "")
         if env.strip():
             hosts.extend(item for item in re.split(r"[,;\s]+", env) if item)
@@ -2695,13 +2702,10 @@ class PluginMarket:
                 candidate = self.market_dir / name
                 if candidate.exists():
                     return self._load_source_path(candidate, trusted)
-            return _SourceDocument(
-                raw={"plugins": []},
-                kind="local",
-                name="未配置市场清单",
-                base_dir=self.market_dir,
-                trusted_hosts=trusted,
-            )
+            # Fresh instances have no local market cache.  Use the official
+            # GitHub-hosted catalog by default; deployments can still pin a
+            # different source through market/source.json.
+            return self._normalise_source(DEFAULT_MARKET_SOURCE_URL)
         if isinstance(source, Mapping):
             if isinstance(source.get("plugins"), list) or isinstance(source.get("entries"), list):
                 return _SourceDocument(

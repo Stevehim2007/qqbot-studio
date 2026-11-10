@@ -7,12 +7,19 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
-## v4.4.0-beta.22（测试版）— 插件分组过滤与本地移除
+## v4.4.0-beta.23（测试版）— 插件分组过滤与本地移除
 
 - 已加入任意分组的插件不再出现在其他分组的“可添加插件”下拉列表。
 - 从分组移除插件改为本地更新，不重新加载整个插件市场，保留当前滚动位置和展开状态。
 - 添加插件时同步从所有分组下拉列表移除，避免同一插件重复出现在多个分组候选中。
 - `node --check` 与 70 项静态测试通过。
+
+## v4.4.0-beta.23（测试版）— 默认 GitHub 插件市场源
+
+- 新建实例未配置市场时，默认从 GitHub 官方 catalog 拉取插件目录。
+- 默认信任 `raw.githubusercontent.com`、`github.com`、`objects.githubusercontent.com`。
+- 插件仓库增加 `market/catalog.json`，下载地址指向 GitHub raw 制品。
+- Release workflow 动态校验插件数量，并上传 catalog、manifest、group registry。
 
 ## v4.4.0-beta.21（测试版）— 插件市场首屏分组修复
 
