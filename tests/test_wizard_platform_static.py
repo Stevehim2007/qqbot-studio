@@ -295,12 +295,13 @@ class WizardPlatformStaticTests(unittest.TestCase):
         )
         prelude = r"""
         const elements = {
-          'platform-mode': { value: 'snowluma' },
-          'qq-account': { value: '123456789' },
+          'official-appid': { value: '123456789' },
+          'official-secret': { value: 'official-secret' },
           'deepseek-key': { value: 'sk-test' },
           'prompt-preview': { textContent: '', setAttribute() {}, removeAttribute() {}, focus() {} },
           'accept-risk': { checked: true },
-          'qq-account-error': {},
+          'official-appid-error': {},
+          'official-secret-error': {},
           'deepseek-key-error': {},
           'prompt-error': {},
           'risk-error': {},
@@ -338,7 +339,8 @@ class WizardPlatformStaticTests(unittest.TestCase):
         data = self._run_wizard_prompt_validation(prompt)
         self.assertIsNotNone(data["result"])
         self.assertEqual(data["result"]["prompt"], prompt)
-        self.assertEqual(data["result"]["qq_account"], "123456789")
+        self.assertEqual(data["result"]["official_appid"], "123456789")
+        self.assertEqual(data["result"]["official_secret"], "official-secret")
         self.assertEqual(data["result"]["deepseek_api_key"], "sk-test")
         self.assertTrue(data["result"]["accept_risk"])
 

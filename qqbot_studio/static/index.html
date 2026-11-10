@@ -149,8 +149,8 @@
           <div class="welcome-copy">
             <span class="kicker"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>本机安全优先</span>
             <h2 id="env-heading" tabindex="-1">准备一台已安装 Docker 的 Ubuntu</h2>
-            <p id="env-intro">这个向导帮助你接入 QQ 官方机器人：启动 AstrBot 并填写开放平台 AppID/AppSecret。不需要 SnowLuma、noVNC 或扫码登录。所有操作均在本机浏览器与本地服务之间完成。</p>
-            <p id="env-platform-note" class="field-hint"><strong>注意：</strong>官方机器人不需要扫码；请先在 QQ 开放平台配置机器人并把它加入测试群。重复运行 <code>./start.sh</code> 会创建新实例；管理已有实例请使用 <code>./console.sh</code>。</p>
+            <p id="env-intro">这个向导帮助你接入 QQ 官方机器人：启动 AstrBot 并填写开放平台 AppID/AppSecret。所有操作均在本机浏览器与本地服务之间完成。</p>
+            <p id="env-platform-note" class="field-hint"><strong>注意：</strong>请先在 QQ 开放平台配置机器人并把它加入测试群。重复运行 <code>./start.sh</code> 会创建新实例；管理已有实例请使用 <code>./console.sh</code>。</p>
           </div>
           <div class="welcome-orbit" aria-hidden="true">
             <div class="orbit-ring orbit-ring--one"></div>
@@ -210,7 +210,7 @@
               <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-user"></use></svg></span>
               <div>
                 <h3>QQ 接入方式</h3>
-                <p>官方机器人需要 AppID/AppSecret；不再需要扫码登录。</p>
+                <p>官方机器人需要 AppID/AppSecret。</p>
               </div>
             </div>
 
@@ -435,7 +435,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
           <div>
             <strong>请保持页面开启</strong>
-            <p>部署期间请勿关闭本地启动器。官方接入完成后不需要扫码登录。</p>
+            <p>部署期间请勿关闭本地启动器。官方接入完成后检查 AstrBot 的 QQ 官方适配器状态。</p>
           </div>
         </div>
       </section>
@@ -446,7 +446,7 @@
           <div class="success-copy">
             <span class="kicker kicker--success">本地部署已完成</span>
             <h2 id="done-heading" tabindex="-1">登录 QQ，开始对话</h2>
-            <p>服务已部署到这台电脑。官方接入不需要扫码，直接检查 AstrBot 的 QQ 官方连接状态即可。</p>
+            <p>服务已部署到这台电脑。直接检查 AstrBot 的 QQ 官方适配器连接状态即可。</p>
           </div>
           <div class="success-status-stack" aria-label="部署状态">
             <span id="deployment-overall" class="pill pill--success">已部署</span>
@@ -465,7 +465,7 @@
           </div>
           <div class="status-item">
             <span class="status-label">OneBot 连接</span>
-            <span id="onebot-status" class="status-value"><span class="status-dot"></span>状态未知</span>
+            <span id="official-status" class="status-value"><span class="status-dot"></span>状态未知</span>
           </div>
           <button id="refresh-connection" class="btn btn-quiet btn-small" type="button">
             <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
@@ -495,7 +495,7 @@
               <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-robot"></use></svg></span>
               <div><h3>QQ 官方机器人</h3><p>AppID / AppSecret 单容器接入</p></div>
             </div>
-            <p class="field-hint">AstrBot 直接连接 QQ 开放平台，不需要 noVNC、扫码登录或 OneBot 协议端。</p>
+            <p class="field-hint">AstrBot 直接连接 QQ 开放平台。</p>
             <div class="credential-grid">
               <div><span class="credential-label">AppID</span><code id="official-appid-status" class="credential-value">未提供</code></div>
               <div><span class="credential-label">连接状态</span><code id="official-connection-status" class="credential-value">检查中</code></div>
@@ -509,7 +509,7 @@
         <div class="card guide-card">
           <div class="guide-heading">
             <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-robot"></use></svg></span>
-            <div><h3>官方机器人检查</h3><p>不需要扫码</p></div>
+            <div><h3>官方机器人检查</h3><p>等待连接</p></div>
           </div>
           <ol class="guide-steps">
             <li><span>1</span><p><strong>确认 AppID/AppSecret</strong>：在 QQ 开放平台机器人详情页获取，填到上一步。</p></li>

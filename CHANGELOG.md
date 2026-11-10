@@ -7,6 +7,14 @@
 - Windows 发行版：Windows 仓库独立版本，内嵌 Linux core 版本单独记录
 - AI 助手 B：独立仓库 `qqbot-studio-ai-assistant`
 
+## v4.4.0-beta.19（测试版）— 官方-only 清理、插件依赖与新工具插件
+
+- 删除安装向导、控制台和项目内的 SnowLuma/noVNC 入口，安装只支持 QQ 官方 AppID/AppSecret 单容器。
+- 插件市场支持运行时依赖声明；安装前检查 Python/system 依赖，用户确认后执行 pip/apt，无法满足则取消安装。
+- 新增 `qqbot_scheduler`（/定时）、`qqbot_fortune`（/每日运势）、`qqbot_weather`（/天气）三个不调用聊天模型的插件。
+- `/option` 改为用户功能列表与逐条详情，不暴露实例设置/插件参数/管理员入口。
+- 更新脚本、官方 openid、群策略默认值继承和纯 @ 回复的修复纳入本版。
+
 ## v4.4.0-beta.16（测试版）— QQ 官方接入安装与控制台细节
 
 - 官方模式状态识别补齐；安装向导、README 与旧 SnowLuma 文案区分。

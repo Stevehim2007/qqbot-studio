@@ -2996,8 +2996,9 @@ class DeployManager:
         """Install missing Python dependencies after explicit user consent.
 
         Only declarations frozen into the plugin-operation preview are used;
-        the browser cannot submit arbitrary package names.  System packages are
-        reported for manual installation, never auto-installed with apt.
+        the browser cannot submit arbitrary package names.  Declared system
+        packages may be installed with apt after explicit consent; font and
+        command checks that do not name a package remain manual.
         """
         if not isinstance(payload, Mapping):
             raise ValueError("依赖安装请求必须是 JSON object。")
@@ -3014,23 +3015,48 @@ class DeployManager:
             return {"ok": True, "installed": [], "manual_required": [], "status": status}
         installed: list[str] = []
         manual: list[dict[str, Any]] = []
+        apt_updated = False
+        package_re = re.compile(r"[a-z0-9][a-z0-9+.-]{0,80}\Z")
         for item in missing:
-            if item.get("type") != "python":
+            kind = str(item.get("kind") or "") if item.get("type") == "system" else ""
+            if item.get("type") == "python":
+                name = str(item.get("name") or "").strip()
+                spec = str(item.get("spec") or "").strip()
+                if not name:
+                    raise RuntimeError("依赖声明缺少包名。")
+                requirement = name + spec
+                result = self.docker.exec_in_container(
+                    self.astrbot_container,
+                    ["python3", "-m", "pip", "install", "--no-cache-dir", "--disable-pip-version-check", requirement],
+                    timeout=600,
+                )
+                if not result.ok:
+                    raise RuntimeError("安装 Python 依赖失败：" + (result.output or f"exit {result.returncode}"))
+                installed.append(requirement)
+                continue
+            target = str(item.get("target") or "").strip()
+            if kind != "package" or not package_re.fullmatch(target):
                 manual.append(item)
                 continue
-            name = str(item.get("name") or "").strip()
-            spec = str(item.get("spec") or "").strip()
-            if not name:
-                raise RuntimeError("依赖声明缺少包名。")
-            requirement = name + spec
+            if not apt_updated:
+                update = self.docker.exec_in_container(
+                    self.astrbot_container,
+                    ["apt-get", "update"],
+                    timeout=300,
+                )
+                apt_updated = True
+                if not update.ok:
+                    manual.append(item)
+                    continue
             result = self.docker.exec_in_container(
                 self.astrbot_container,
-                ["python3", "-m", "pip", "install", "--no-cache-dir", "--disable-pip-version-check", requirement],
+                ["apt-get", "install", "-y", "--no-install-recommends", target],
                 timeout=600,
             )
             if not result.ok:
-                raise RuntimeError("安装 Python 依赖失败：" + (result.output or f"exit {result.returncode}"))
-            installed.append(requirement)
+                manual.append(item)
+                continue
+            installed.append("apt:" + target)
         after = self.check_plugin_runtime_requirements(requirements)
         if after.get("unavailable"):
             raise RuntimeError(str(after.get("message") or "依赖安装后检测失败。"))

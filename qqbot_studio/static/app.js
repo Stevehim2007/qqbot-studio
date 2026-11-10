@@ -94,8 +94,6 @@
     deployBusy: false,
     testBusy: false,
     actionBusy: false,
-    snowlumaResetBusy: false,
-    snowlumaResetArmed: false,
     logLoading: false,
     logService: '',
     formInitialised: false
@@ -126,25 +124,20 @@
       deployment: {
         deployed: boolOrUndefined(deployment.deployed) === true,
         running: boolOrUndefined(deployment.running),
-        qq_account: textValue(deployment.qq_account, ''),
+        platform_mode: textValue(deployment.platform_mode, 'official'),
+        qq_official_appid: textValue(deployment.qq_official_appid, ''),
         active_job_id: textValue(deployment.active_job_id, ''),
         active_job_status: textValue(deployment.active_job_status, ''),
         model: textValue(deployment.model, ''),
         prompt: textValue(deployment.prompt, ''),
         urls: {
-          astrbot_webui: textValue(urls.astrbot_webui, ''),
-          snowluma_webui: textValue(urls.snowluma_webui, ''),
-          novnc: textValue(urls.novnc, '')
+          astrbot_webui: textValue(urls.astrbot_webui, '')
         },
         credentials: {
           astrbot_username: textValue(credentials.astrbot_username, ''),
-          astrbot_password: textValue(credentials.astrbot_password, ''),
-          snowluma_username: textValue(credentials.snowluma_username, 'admin'),
-          snowluma_password: textValue(credentials.snowluma_password, ''),
-          vnc_password: textValue(credentials.vnc_password, '')
+          astrbot_password: textValue(credentials.astrbot_password, '')
         },
-        onebot_connected: boolOrUndefined(deployment.onebot_connected),
-        qq_logged_in: boolOrUndefined(deployment.qq_logged_in)
+        platform_connected: boolOrUndefined(deployment.platform_connected)
       },
       notice
     };
@@ -469,9 +462,6 @@
 
   function validateConfigForm() {
     clearFormError();
-    const platformInput = $('platform-mode');
-    const platformMode = platformInput && platformInput.value === 'snowluma' ? 'snowluma' : 'official';
-    const qqInput = $('qq-account');
     const appidInput = $('official-appid');
     const secretInput = $('official-secret');
     const keyInput = $('deepseek-key');
@@ -479,14 +469,12 @@
     const riskInput = $('accept-risk');
     const invalidFields = [];
 
-    clearFieldError(qqInput, $('qq-account-error'));
     clearFieldError(appidInput, $('official-appid-error'));
     clearFieldError(secretInput, $('official-secret-error'));
     clearFieldError(keyInput, $('deepseek-key-error'));
     clearFieldError(promptPreview, $('prompt-error'));
     clearFieldError(riskInput, $('risk-error'));
 
-    const qqAccount = qqInput ? qqInput.value.trim() : '';
     const officialAppid = appidInput ? appidInput.value.trim() : '';
     const officialSecret = secretInput ? secretInput.value.trim() : '';
     const apiKey = keyInput ? keyInput.value.trim() : '';
@@ -494,24 +482,16 @@
     const promptText = prompt.trim();
     const promptLength = Array.from(prompt).length;
 
-    if (platformMode === 'official') {
-      if (!officialAppid) {
-        setFieldError(appidInput, $('official-appid-error'), '请输入 QQ 官方机器人 AppID。');
-        invalidFields.push(appidInput);
-      } else if (!/^[0-9]{5,32}$/.test(officialAppid)) {
-        setFieldError(appidInput, $('official-appid-error'), 'AppID 必须为 5–32 位数字。');
-        invalidFields.push(appidInput);
-      }
-      if (!officialSecret) {
-        setFieldError(secretInput, $('official-secret-error'), '请输入 QQ 官方机器人 AppSecret。');
-        invalidFields.push(secretInput);
-      }
-    } else if (!qqAccount) {
-      setFieldError(qqInput, $('qq-account-error'), '请输入机器人 QQ 号。');
-      invalidFields.push(qqInput);
-    } else if (!/^[0-9]{5,12}$/.test(qqAccount)) {
-      setFieldError(qqInput, $('qq-account-error'), 'QQ 号必须为 5–12 位数字，请勿填写空格或其他字符。');
-      invalidFields.push(qqInput);
+    if (!officialAppid) {
+      setFieldError(appidInput, $('official-appid-error'), '请输入 QQ 官方机器人 AppID。');
+      invalidFields.push(appidInput);
+    } else if (!/^[0-9]{5,32}$/.test(officialAppid)) {
+      setFieldError(appidInput, $('official-appid-error'), 'AppID 必须为 5–32 位数字。');
+      invalidFields.push(appidInput);
+    }
+    if (!officialSecret) {
+      setFieldError(secretInput, $('official-secret-error'), '请输入 QQ 官方机器人 AppSecret。');
+      invalidFields.push(secretInput);
     }
 
     if (!apiKey) {
@@ -542,10 +522,9 @@
     }
 
     return {
-      platform_mode: platformMode,
-      qq_account: platformMode === 'snowluma' ? qqAccount : '',
-      official_appid: platformMode === 'official' ? officialAppid : '',
-      official_secret: platformMode === 'official' ? officialSecret : '',
+      platform_mode: 'official',
+      official_appid: officialAppid,
+      official_secret: officialSecret,
       deepseek_api_key: apiKey,
       prompt,
       accept_risk: true
@@ -1417,15 +1396,6 @@
     }
     renderRequirements(nextState.requirements);
 
-    const platformInput = $('platform-mode');
-    if (platformInput && nextState.deployment.platform_mode) {
-      platformInput.value = nextState.deployment.platform_mode === 'snowluma' ? 'snowluma' : 'official';
-      platformInput.dispatchEvent(new Event('change'));
-    }
-    const qqInput = $('qq-account');
-    if (qqInput && nextState.deployment.qq_account && !qqInput.value.trim()) {
-      qqInput.value = nextState.deployment.qq_account;
-    }
     const appidInput = $('official-appid');
     if (appidInput && nextState.deployment.qq_official_appid && !appidInput.value.trim()) {
       appidInput.value = nextState.deployment.qq_official_appid;
@@ -1918,10 +1888,6 @@
     const urls = deployment.urls;
     const credentials = deployment.credentials;
     const deployed = deployment.deployed === true;
-    const official = deployment.platform_mode === 'official';
-    $$('.legacy-only').forEach((element) => {
-      element.hidden = official;
-    });
 
     setPill(
       $('deployment-overall'),
@@ -1941,19 +1907,11 @@
       running === true ? 'success' : running === false ? 'warning' : ''
     );
 
-    const qqLoggedIn = deployment.qq_logged_in;
-    setStatusValue(
-      $('qq-login-status'),
-      official ? '官方机器人' : qqLoggedIn === true ? '已登录' : qqLoggedIn === false ? '未登录' : '状态未知',
-      official || qqLoggedIn === true ? 'success' : qqLoggedIn === false ? 'warning' : ''
-    );
-
     const platformConnected = deployment.platform_connected;
+    setStatusValue($('qq-login-status'), '官方机器人', 'success');
     setStatusValue(
-      $('onebot-status'),
-      official
-        ? platformConnected === true ? '官方适配器已连接' : platformConnected === false ? '官方适配器未连接' : '等待连接'
-        : platformConnected === true ? '已连接' : platformConnected === false ? '未连接' : '状态未知',
+      $('official-status'),
+      platformConnected === true ? '官方适配器已连接' : platformConnected === false ? '官方适配器未连接' : '等待连接',
       platformConnected === true ? 'success' : platformConnected === false ? 'warning' : ''
     );
 
@@ -1961,15 +1919,6 @@
     setText('astrbot-username', fallbackDisplay(credentials.astrbot_username));
     setText('astrbot-password', fallbackDisplay(credentials.astrbot_password));
     setOpenLink($('astrbot-open'), urls.astrbot_webui);
-
-    setText('snowluma-url-text', fallbackDisplay(urls.snowluma_webui));
-    setText('snowluma-username', fallbackDisplay(credentials.snowluma_username || 'admin'));
-    setText('snowluma-password', fallbackDisplay(credentials.snowluma_password));
-    setOpenLink($('snowluma-open'), urls.snowluma_webui);
-
-    setText('novnc-url-text', fallbackDisplay(urls.novnc));
-    setText('novnc-password', fallbackDisplay(credentials.vnc_password));
-    setOpenLink($('novnc-open'), urls.novnc);
 
     const promptPreview = $('deployment-prompt-preview');
     if (promptPreview) {
@@ -2028,57 +1977,8 @@
     }
   }
 
-  function resetSnowlumaButtonLabel() {
-    const button = $('snowluma-reset');
-    if (!button) return;
-    button.textContent = '重置密码';
-    button.disabled = false;
-    button.classList.remove('is-loading');
-    app.snowlumaResetArmed = false;
-  }
-
-  async function handleSnowlumaReset() {
-    const button = $('snowluma-reset');
-    if (!button || app.snowlumaResetBusy) return;
-
-    if (!app.snowlumaResetArmed) {
-      app.snowlumaResetArmed = true;
-      button.textContent = '再次点击确认重置';
-      window.setTimeout(() => {
-        if (!app.snowlumaResetBusy) resetSnowlumaButtonLabel();
-      }, 5000);
-      return;
-    }
-
-    app.snowlumaResetBusy = true;
-    app.snowlumaResetArmed = false;
-    button.disabled = true;
-    button.classList.add('is-loading');
-    button.textContent = '正在重置…';
-
-    try {
-      const data = await apiRequest('/api/snowluma-reset', { method: 'POST', body: {} });
-      if (data && data.ok === false) {
-        throw new ApiError(textValue(data.message, 'SnowLuma 密码重置失败。'));
-      }
-      const password = textValue(data && data.password, '');
-      if (!password) throw new ApiError('服务没有返回新的 SnowLuma 密码。');
-      setText('snowluma-password', password);
-      app.state.credentials.snowluma_username = textValue(data.username, 'admin') || 'admin';
-      setText('snowluma-username', app.state.credentials.snowluma_username);
-      showToast('SnowLuma 密码已重置，新密码已显示在卡片中。', 'success', 7000);
-      await loadState({ silent: true });
-    } catch (error) {
-      const message = formatError(error, 'SnowLuma 密码重置失败。');
-      showToast(message, 'error', 7000);
-    } finally {
-      app.snowlumaResetBusy = false;
-      resetSnowlumaButtonLabel();
-    }
-  }
-
   async function loadDashboardLogs(service) {
-    if (!['astrbot', 'snowluma'].includes(service) || app.logLoading) return;
+    if (service !== 'astrbot' || app.logLoading) return;
     app.logLoading = true;
     app.logService = service;
     const container = $('dashboard-logs');
@@ -2086,7 +1986,7 @@
     const status = $('dashboard-logs-status');
     const title = $('dashboard-logs-title');
     if (container) container.hidden = false;
-    if (title) title.textContent = service === 'astrbot' ? 'AstrBot 日志' : 'SnowLuma 日志';
+    if (title) title.textContent = 'AstrBot 日志';
     if (output) output.textContent = '正在读取最近 200 行日志…';
     setInlineStatus(status, '正在读取…', 'info');
     $$('.log-service-btn').forEach((button) => {
@@ -2115,28 +2015,15 @@
   }
 
   function copyCardCredentials(card) {
+    if (card !== 'astrbot') return;
     const deployment = app.state.deployment;
     const urls = deployment.urls;
     const credentials = deployment.credentials;
-    let lines = [];
-    if (card === 'astrbot') {
-      lines = [
-        `AstrBot WebUI: ${fallbackDisplay(urls.astrbot_webui)}`,
-        `用户名: ${fallbackDisplay(credentials.astrbot_username)}`,
-        `密码: ${fallbackDisplay(credentials.astrbot_password)}`
-      ];
-    } else if (card === 'snowluma') {
-      lines = [
-        `SnowLuma WebUI: ${fallbackDisplay(urls.snowluma_webui)}`,
-        `用户名: ${fallbackDisplay(credentials.snowluma_username || 'admin')}`,
-        `初始密码: ${fallbackDisplay(credentials.snowluma_password)}`
-      ];
-    } else if (card === 'novnc') {
-      lines = [
-        `noVNC: ${fallbackDisplay(urls.novnc)}`,
-        `VNC 密码: ${fallbackDisplay(credentials.vnc_password)}`
-      ];
-    }
+    const lines = [
+      `AstrBot WebUI: ${fallbackDisplay(urls.astrbot_webui)}`,
+      `用户名: ${fallbackDisplay(credentials.astrbot_username)}`,
+      `密码: ${fallbackDisplay(credentials.astrbot_password)}`
+    ];
     copyText(lines.join('\n'), '登录信息已复制。');
   }
 
@@ -2166,8 +2053,6 @@
 
     const refreshState = $('refresh-state');
     if (refreshState) refreshState.addEventListener('click', () => loadState({ silent: false }));
-    const snowlumaReset = $('snowluma-reset');
-    if (snowlumaReset) snowlumaReset.addEventListener('click', () => void handleSnowlumaReset());
     const retryRequirements = $('retry-requirements');
     if (retryRequirements) retryRequirements.addEventListener('click', () => loadState({ silent: false }));
     const stateErrorRetry = $('state-error-retry');
@@ -2181,29 +2066,6 @@
     const form = $('config-form');
     if (form) form.addEventListener('submit', handleDeploySubmit);
 
-    const platformInput = $('platform-mode');
-    const togglePlatformFields = () => {
-      const official = !platformInput || platformInput.value !== 'snowluma';
-      const officialFields = $('official-fields');
-      const legacyFields = $('legacy-fields');
-      if (officialFields) officialFields.hidden = !official;
-      if (legacyFields) legacyFields.hidden = official;
-    };
-    if (platformInput) {
-      platformInput.addEventListener('change', () => {
-        togglePlatformFields();
-        clearFormError();
-      });
-      togglePlatformFields();
-    }
-
-    const qqInput = $('qq-account');
-    if (qqInput) {
-      qqInput.addEventListener('input', () => {
-        clearFieldError(qqInput, $('qq-account-error'));
-        clearFormError();
-      });
-    }
     const appidInput = $('official-appid');
     if (appidInput) {
       appidInput.addEventListener('input', () => {

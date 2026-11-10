@@ -275,6 +275,37 @@ class DeployerTests(unittest.TestCase):
             self.assertEqual(result["installed"], ["Pillow>=10"])
             self.assertTrue(any(call[:4] == ("python3", "-m", "pip", "install") for call in calls))
 
+    def test_runtime_dependency_check_and_apt_install(self):
+        requirements = {
+            "python": [],
+            "system": [{"kind": "package", "target": "fonts-noto-cjk", "description": "字体包"}],
+        }
+        present = {"value": False}
+        calls = []
+
+        def fake_exec(container, argv, timeout=60):
+            calls.append(tuple(argv))
+            if argv[:2] == ["dpkg", "-s"]:
+                return CommandResult(tuple(argv), 0 if present["value"] else 1, "", "")
+            if argv[:2] == ["apt-get", "update"]:
+                return CommandResult(tuple(argv), 0, "updated", "")
+            if argv[:2] == ["apt-get", "install"]:
+                present["value"] = True
+                return CommandResult(tuple(argv), 0, "installed", "")
+            return CommandResult(tuple(argv), 0, "", "")
+
+        self.manager._astrbot_container_available = lambda: (True, "")
+        self.manager.plugin_market_service.preview_plan = lambda token: {"runtime_requirements": requirements}
+        with mock.patch.object(self.docker, "exec_in_container", create=True, side_effect=fake_exec):
+            before = self.manager.check_plugin_runtime_requirements(requirements)
+            self.assertFalse(before["ok"])
+            result = self.manager.install_plugin_runtime_dependencies(
+                {"preview_token": "preview-1", "confirm": True}
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["installed"], ["apt:fonts-noto-cjk"])
+            self.assertTrue(any(call[:4] == ("apt-get", "install", "-y", "--no-install-recommends") for call in calls))
+
     def test_validation_rejects_bad_inputs(self):
         with self.assertRaises(DeploymentError):
             self.manager.start_deploy(

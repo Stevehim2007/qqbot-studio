@@ -244,13 +244,12 @@
       created_at: textValue(instance.created_at, ''),
       deployed: boolOrUndefined(instance.deployed) === true,
       running: boolOrUndefined(instance.running),
-      qq_account: textValue(instance.qq_account, ''),
+      qq_official_appid: textValue(instance.qq_official_appid, ''),
+      platform_connected: boolOrUndefined(instance.platform_connected),
       active_job_id: textValue(instance.active_job_id, ''),
       active_job_status: textValue(instance.active_job_status, ''),
       urls: {
-        astrbot_webui: textValue(urls.astrbot_webui || urls.astrbot, ''),
-        snowluma_webui: textValue(urls.snowluma_webui || urls.snowluma, ''),
-        novnc: textValue(urls.novnc || urls.no_vnc, '')
+        astrbot_webui: textValue(urls.astrbot_webui || urls.astrbot, '')
       },
       memory_mode_hint: normaliseMemoryMode(instance.memory_mode || asRecord(instance.memory).mode),
       state_error: textValue(instance.state_error, ''),
@@ -273,13 +272,12 @@
       ...instance,
       deployed: mergedState === undefined ? instance.deployed : mergedState,
       running: boolOrUndefined(deployment.running) ?? instance.running,
-      qq_account: textValue(deployment.qq_account, instance.qq_account),
+      qq_official_appid: textValue(deployment.qq_official_appid, instance.qq_official_appid),
+      platform_connected: boolOrUndefined(deployment.platform_connected) ?? instance.platform_connected,
       active_job_id: textValue(deployment.active_job_id, instance.active_job_id),
       active_job_status: textValue(deployment.active_job_status, instance.active_job_status),
       urls: {
-        astrbot_webui: textValue(stateUrls.astrbot_webui, instance.urls.astrbot_webui),
-        snowluma_webui: textValue(stateUrls.snowluma_webui, instance.urls.snowluma_webui),
-        novnc: textValue(stateUrls.novnc, instance.urls.novnc)
+        astrbot_webui: textValue(stateUrls.astrbot_webui, instance.urls.astrbot_webui)
       },
       memory_mode_hint: normaliseMemoryMode(deployment.memory_mode || root.memory_mode || instance.memory_mode_hint),
       state_error: textValue(root.status_error, '')
@@ -2434,7 +2432,7 @@
         }).join('\n');
         const consent = await pluginMarketAskConfirm(
           panel,
-          `插件 ${pluginId} 需要以下运行依赖：\n${lines}\n\n是否现在安装缺失依赖？安装会写入 AstrBot 容器，不会删除插件配置或数据。`
+          `插件 ${pluginId} 需要以下运行依赖：\n${lines}\n\n是否现在安装缺失依赖？Python 包会使用 pip，系统 package 会使用 apt；字体/命令类若无法自动安装会提示你手动处理。安装只写入 AstrBot 容器，不会删除插件配置或数据。`
         );
         if (!consent) return;
         pluginMarketSetStatus(panel, '正在安装插件运行依赖…', 'info');
@@ -6401,8 +6399,8 @@
 
     const meta = makeElement('div', 'instance-meta');
     const qq = makeElement('div', 'instance-meta-item');
-    qq.appendChild(makeElement('span', 'instance-meta-label', 'QQ 号'));
-    qq.appendChild(makeElement('strong', 'instance-meta-value', instance.qq_account || '尚未配置'));
+    qq.appendChild(makeElement('span', 'instance-meta-label', '官方机器人'));
+    qq.appendChild(makeElement('strong', 'instance-meta-value', instance.qq_official_appid || '尚未配置'));
     meta.appendChild(qq);
     const stateStatus = makeElement('div', 'instance-meta-item');
     stateStatus.appendChild(makeElement('span', 'instance-meta-label', '实时状态'));
@@ -6415,11 +6413,9 @@
     }
 
     const webSection = makeElement('div', 'instance-web-section');
-    webSection.appendChild(makeElement('span', 'instance-section-label', 'WebUI 与远程桌面'));
+    webSection.appendChild(makeElement('span', 'instance-section-label', 'AstrBot WebUI'));
     const webLinks = makeElement('div', 'instance-web-links');
     webLinks.appendChild(makeWebLink('AstrBot WebUI', instance.urls.astrbot_webui));
-    webLinks.appendChild(makeWebLink('SnowLuma WebUI', instance.urls.snowluma_webui));
-    webLinks.appendChild(makeWebLink('noVNC 扫码', instance.urls.novnc));
     webSection.appendChild(webLinks);
     card.appendChild(webSection);
 

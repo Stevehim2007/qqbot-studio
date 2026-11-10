@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、QQ 官方机器人开放平台、DeepSeek AI 聊天。当前版本仅支持 QQ 官方机器人接入。
 
-当前主项目版本：**4.4.0-beta.16（测试版）**。包含长期记忆、按群记忆策略、插件市场与插件分组、七个自包含 QQ 插件、统一安全工具入口、Food 地点解析与更新/回退功能。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**4.4.0-beta.19（测试版）**。包含长期记忆、按群记忆策略、插件市场与插件分组、七个核心自包含 QQ 插件与定时/运势/天气三个工具插件、统一安全工具入口、Food 地点解析与更新/回退功能。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **升级提醒**：4.4.0 是下一大版本的测试线；beta.15 引入 QQ 官方机器人接入迁移。升级前请备份实例 `data/`，并先在测试实例验证。长期记忆是独立 SQLite sidecar，启用前同样先备份。
 
@@ -270,7 +270,7 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000)\b'
 <a id="enhancer"></a>
 ### 2.2 QQ 增强插件：概率、识图、找图、表情包、唱歌、/option
 
-最终模块化版本只保留七个独立插件：`qqbot_core_reply`（回复/人格/会话/点歌）、`qqbot_safe_tools`（唯一 marker/授权/确认/审计）、`qqbot_web_reader`、`qqbot_image_search`、`qqbot_food`、`qqbot_stickers`、`qqbot_memory_commands`。部署过程**不再**复制 `qqbot_enhancer` 或 `qqbot_core_full`；请在控制台的插件市场按依赖顺序安装这七个包。
+最终模块化版本保留七个核心插件：`qqbot_core_reply`（回复/人格/会话/点歌）、`qqbot_safe_tools`（唯一 marker/授权/确认/审计）、`qqbot_web_reader`、`qqbot_image_search`、`qqbot_food`、`qqbot_stickers`、`qqbot_memory_commands`；另有 `qqbot_scheduler`、`qqbot_fortune`、`qqbot_weather` 三个不调用大模型的工具插件。部署过程**不再**复制 `qqbot_enhancer` 或 `qqbot_core_full`；请在控制台的插件市场按依赖顺序安装这七个包。
 
 插件开发与新增插件规范见 [docs/plugin-standard.md](docs/plugin-standard.md)。
 
