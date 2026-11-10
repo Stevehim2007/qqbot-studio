@@ -1615,8 +1615,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 manager = ctx.studio.get_manager(instance_id)
                 service = (query.get("service") or [""])[0]
                 lines = self._safe_int((query.get("lines") or ["200"])[0], 200, 1, 1000)
-                if service not in {"astrbot", "snowluma"}:
-                    self._error(HTTPStatus.BAD_REQUEST, "service 只能是 astrbot 或 snowluma")
+                if service != "astrbot":
+                    self._error(HTTPStatus.BAD_REQUEST, "service 只能是 astrbot")
                     return
                 self._json(HTTPStatus.OK, {"ok": True, "logs": manager.get_logs(service, lines)})
                 return
@@ -2040,6 +2040,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._serve_plugin_api_result(lambda: executor(payload))
                     return
+                if subroute == "plugin-dependencies/install":
+                    installer = getattr(manager, "install_plugin_runtime_dependencies", None)
+                    if not callable(installer):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供依赖安装接口。")
+                        return
+                    self._serve_plugin_api_result(lambda: installer(payload))
+                    return
                 memory_route = self._memory_admin_route(subroute)
                 if memory_route is not None:
                     self._serve_memory_admin(
@@ -2368,13 +2375,30 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, manager.test_deepseek_key(str(payload.get("deepseek_api_key") or "")))
                 return
             if path == "/api/deploy":
+                mode = str(payload.get("platform_mode") or "official").strip().lower()
+                if mode != "official":
+                    self._error(HTTPStatus.BAD_REQUEST, "仅支持 QQ 官方机器人接入方式。")
+                    return
+                legacy_fields = sorted(
+                    key
+                    for key in payload
+                    if key in {"qq_account"}
+                    or key.startswith("snowluma")
+                    or key.startswith("novnc")
+                    or key.startswith("vnc")
+                    or key.startswith("onebot")
+                )
+                if legacy_fields:
+                    self._error(
+                        HTTPStatus.BAD_REQUEST,
+                        "不支持旧版扫码部署参数：" + "、".join(legacy_fields),
+                    )
+                    return
                 job_id = manager.start_deploy(
-                    qq_account=str(payload.get("qq_account") or ""),
                     deepseek_api_key=str(payload.get("deepseek_api_key") or ""),
                     prompt=str(payload.get("prompt") or ""),
                     accept_risk=bool(payload.get("accept_risk")),
                     mirror_candidates=ctx.studio.candidate_mirror_prefixes(),
-                    platform_mode=str(payload.get("platform_mode") or "snowluma"),
                     official_appid=str(payload.get("official_appid") or ""),
                     official_secret=str(payload.get("official_secret") or ""),
                 )
@@ -2383,10 +2407,6 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/action":
                 message = manager.container_action(str(payload.get("action") or ""))
                 self._json(HTTPStatus.OK, {"ok": True, "message": message})
-                return
-            if path == "/api/snowluma-reset":
-                result = manager.reset_snowluma_password()
-                self._json(HTTPStatus.OK, result)
                 return
             if path == "/api/persona":
                 message = manager.update_persona(str(payload.get("prompt") or ""))

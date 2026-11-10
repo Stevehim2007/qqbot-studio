@@ -7,7 +7,7 @@
 | 文档 | 内容 | 适用对象 |
 |---|---|---|
 | [`../README.md`](../README.md) | 最短安装、首个机器人、管理控制台、进阶功能、FAQ、声明 | 所有用户 |
-| [`server-troubleshooting.md`](server-troubleshooting.md) | Git SSL、Docker、0.0.0.0/127、腾讯云安全组、防火墙、SSH 隧道、SnowLuma 密码、端口冲突等真实故障 | 云服务器/远程 Ubuntu 用户 |
+| [`server-troubleshooting.md`](server-troubleshooting.md) | Git SSL、Docker、0.0.0.0/127、腾讯云安全组、防火墙、SSH 隧道、AstrBot WebUI、端口冲突等真实故障 | 云服务器/远程 Ubuntu 用户 |
 
 ## 2. 功能与接口
 
@@ -24,7 +24,7 @@
 | [`group-plugin-config.md`](group-plugin-config.md) | 分群插件启用与分群参数设计：数据模型、字段级覆盖、优先级、运行时快照、Studio/API、审计与双群验收 |
 | [`next-major-decisions.md`](next-major-decisions.md) | 下一大版本 8 项拍板与解释：插件拆分、侧车、首版预算、可见/删除权、五/六 scope、词汇库、测试版灰度、人格四层 |
 | [`update-rollback.md`](update-rollback.md) | 更新通道（稳定/测试）、同大版本任意回滚、备份与失败恢复、schema 兼容、历史与 `/api/update/*` 契约 |
-| [`integration-research.md`](integration-research.md) | AstrBot / SnowLuma / OneBot / DeepSeek 集成字段调研与来源 |
+| [`integration-research.md`](integration-research.md) | AstrBot / QQ 官方平台 / DeepSeek 集成字段调研与来源（历史资料） |
 | [`../plugins/qqbot_enhancer/README.md`](../plugins/qqbot_enhancer/README.md) | 插件开发者/高级用户的文件结构、安装、搜索、点歌与 `/option` 说明 |
 | [`../plugins/qqbot_enhancer/songs/README.md`](../plugins/qqbot_enhancer/songs/README.md) | 本地点歌目录、授权音频格式和文件限制 |
 
@@ -46,16 +46,14 @@
 | [Windows Releases](https://github.com/Stevehim2007/qqbot-studio-windows/releases) | 后续正式 EXE 发布页；当前 Releases 为空时请使用 Actions artifact |
 | [QQ Bot Studio AI Assistant B](https://github.com/Stevehim2007/qqbot-studio-ai-assistant) | 可选、独立的生成式 AI 使用助手 B；主控制台通过独立 /assistant 页面管理 |
 | [AstrBot](https://github.com/AstrBotDevs/AstrBot) | 上游聊天机器人框架 |
-| [SnowLuma](https://github.com/SnowLuma/SnowLuma) | 上游 OneBot v11/QQ 协议端 |
-| [OneBot v11](https://github.com/botuniverse/onebot-11) | 上游协议标准 |
 | [DeepSeek API Docs](https://api-docs.deepseek.com/) | DeepSeek API 文档 |
 
 ## 5. 安全提醒
 
-- 管理服务默认监听 `0.0.0.0:8765`；每个机器人实例的 AstrBot、SnowLuma、noVNC 使用自动分配的三端口块。
-- 不要把管理端口或 noVNC 直接暴露到公网；先用安全组、防火墙、VPN 或 SSH 隧道限制访问。
-- 本项目不保存 QQ 密码，不绕过 QQ 官方设备/短信/滑块/安全验证。
-- API Key、访问令牌、SnowLuma/VNC 密码不要贴到公开 issue、聊天截图或日志中。
+- 管理服务默认监听 `0.0.0.0:8765`；每个机器人实例只发布一个自动分配的 AstrBot WebUI 端口。
+- 不要把管理端口或 AstrBot WebUI 直接暴露到公网；先用安全组、防火墙、VPN 或 SSH 隧道限制访问。
+- 本项目不保存 QQ 密码，不绕过 QQ 开放平台的授权、频控或权限要求。
+- API Key、访问令牌、QQ 官方 AppSecret 不要贴到公开 issue、聊天截图或日志中。
 - Windows 是独立项目，不能与 Linux 主项目共用数据目录或自动更新；AI 助手 B 也是独立可选项目，主项目不会自动启动它或传递它的 API Key。
 
 - [`qa-report-final.md`](qa-report-final.md)：Ponytail 第二阶段后的最终 QA（v4.1.1，0 P0/P1）

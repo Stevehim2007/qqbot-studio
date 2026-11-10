@@ -80,7 +80,6 @@ class DockerController:
     """Execute Docker commands with optional non-interactive sudo fallback."""
 
     ASTRBOT_CONTAINER = "qqbot-astrbot"
-    SNOWLUMA_CONTAINER = "qqbot-snowluma"
 
     def __init__(
         self,
@@ -91,7 +90,6 @@ class DockerController:
         env_file: Path | str | None = None,
         project_name: str = PROJECT_NAME,
         astrbot_container: str = "qqbot-astrbot",
-        snowluma_container: str = "qqbot-snowluma",
     ) -> None:
         self.data_dir = Path(data_dir).expanduser().resolve()
         # ``subprocess.run(cwd=...)`` fails with FileNotFoundError if the
@@ -104,7 +102,6 @@ class DockerController:
             pass
         self.project_name = str(project_name or PROJECT_NAME)
         self.ASTRBOT_CONTAINER = str(astrbot_container or "qqbot-astrbot")
-        self.SNOWLUMA_CONTAINER = str(snowluma_container or "qqbot-snowluma")
         self.compose_file = Path(compose_file) if compose_file else self.data_dir / "compose.yml"
         self.env_file = Path(env_file) if env_file else self.data_dir / ".env"
         self._runner = runner or _default_runner
@@ -510,13 +507,11 @@ class DockerController:
         return self.container_status(name) == "running"
 
     def is_running(self) -> bool:
-        return self.container_status(self.ASTRBOT_CONTAINER) == "running" and (
-            self.container_status(self.SNOWLUMA_CONTAINER) == "running"
-        )
+        return self.container_status(self.ASTRBOT_CONTAINER) == "running"
 
     def logs(self, service: str, lines: int = 200) -> str:
-        if service not in {"astrbot", "snowluma"}:
-            raise ValueError("service 只能是 astrbot 或 snowluma")
+        if service != "astrbot":
+            raise ValueError("service 只能是 astrbot")
         lines = max(1, min(int(lines), 1000))
         result = self.compose(
             ["logs", "--no-color", "--tail", str(lines), service],

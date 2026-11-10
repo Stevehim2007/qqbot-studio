@@ -30,7 +30,7 @@
 sudo docker ps --format 'table {{.Names}}\t{{.Status}}'
 ```
 
-AstrBot 和 SnowLuma 都应显示 running；AstrBot 最好为 healthy。
+AstrBot 容器应显示 running，最好为 healthy。
 
 ## 3. AstrBot memory patch
 

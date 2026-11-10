@@ -18,14 +18,12 @@ from qqbot_studio.store import Store
 
 class FakeDocker:
     ASTRBOT_CONTAINER = "qqbot-astrbot"
-    SNOWLUMA_CONTAINER = "qqbot-snowluma"
 
     def __init__(self):
         self.status = DockerStatus(True, True, True, True)
         self.actions = []
         self.logs_by_service = {
-            "astrbot": "aiocqhttp(OneBot v11) 适配器已连接。\n",
-            "snowluma": "initial credentials: user=admin password=SnowPass123\n",
+            "astrbot": "WebUI 已启动。\n",
         }
 
     def detect(self, force=False):
@@ -224,9 +222,7 @@ class DeployerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Store(self.tmp.name)
-        secrets_data = self.store.ensure_secrets()
-        secrets_data["snowluma_password"] = "SnowPass123"
-        self.store.save_secrets(secrets_data)
+        self.store.ensure_secrets()
         self.docker = FakeDocker()
         self.api = FakeApi()
         self.manager = DeployManager(
@@ -249,24 +245,57 @@ class DeployerTests(unittest.TestCase):
             time.sleep(0.05)
         self.fail("deployment job did not finish")
 
+    def test_runtime_dependency_check_and_python_install(self):
+        requirements = {
+            "python": [{"name": "Pillow", "spec": ">=10", "module": "PIL", "description": "图片"}],
+            "system": [],
+        }
+        installed = {"value": False}
+        calls = []
+
+        def fake_exec(container, argv, timeout=60):
+            calls.append(tuple(argv))
+            if argv[:2] == ["python3", "-c"] and "importlib.util" in argv[2]:
+                return CommandResult(tuple(argv), 0, "[]" if installed["value"] else '["PIL"]', "")
+            if argv[:4] == ["python3", "-m", "pip", "install"]:
+                installed["value"] = True
+                return CommandResult(tuple(argv), 0, "Successfully installed Pillow", "")
+            return CommandResult(tuple(argv), 0, "", "")
+
+        self.manager._astrbot_container_available = lambda: (True, "")
+        self.manager.plugin_market_service.preview_plan = lambda token: {"runtime_requirements": requirements}
+        with mock.patch.object(self.docker, "exec_in_container", create=True, side_effect=fake_exec):
+            before = self.manager.check_plugin_runtime_requirements(requirements)
+            self.assertFalse(before["ok"])
+            self.assertEqual(before["missing"][0]["name"], "Pillow")
+            result = self.manager.install_plugin_runtime_dependencies(
+                {"preview_token": "preview-1", "confirm": True}
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["installed"], ["Pillow>=10"])
+            self.assertTrue(any(call[:4] == ("python3", "-m", "pip", "install") for call in calls))
+
     def test_validation_rejects_bad_inputs(self):
         with self.assertRaises(DeploymentError):
             self.manager.start_deploy(
-                qq_account="abc",
+                official_appid="abc",
+                official_secret="official-secret",
                 deepseek_api_key="sk-test",
                 prompt="prompt",
                 accept_risk=True,
             )
         with self.assertRaises(DeploymentError):
             self.manager.start_deploy(
-                qq_account="12345678",
+                official_appid="12345678",
+                official_secret="official-secret",
                 deepseek_api_key="sk-test",
                 prompt="",
                 accept_risk=True,
             )
         with self.assertRaises(DeploymentError):
             self.manager.start_deploy(
-                qq_account="12345678",
+                official_appid="12345678",
+                official_secret="official-secret",
                 deepseek_api_key="sk-test",
                 prompt="prompt",
                 accept_risk=False,
@@ -287,7 +316,8 @@ class DeployerTests(unittest.TestCase):
             clear=False,
         ):
             job_id = manager.start_deploy(
-                qq_account="12345678",
+                official_appid="12345678",
+                official_secret="official-secret",
                 deepseek_api_key="sk-test-secret",
                 prompt="prompt",
                 use_mirror=True,
@@ -308,7 +338,8 @@ class DeployerTests(unittest.TestCase):
 
     def test_full_deployment_success_and_status(self):
         job_id = self.manager.start_deploy(
-            qq_account="12345678",
+            official_appid="12345678",
+            official_secret="official-secret",
             deepseek_api_key="sk-test-secret",
             prompt="你是测试 QQ 机器人。",
             use_mirror=True,
@@ -318,11 +349,13 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(job["status"], "success", job.get("error"))
         config = self.store.load_config()
         self.assertTrue(config["deployed"])
-        self.assertEqual(config["qq_account"], "12345678")
+        self.assertEqual(config["platform_mode"], "official")
+        self.assertEqual(config["qq_official_appid"], "12345678")
+        self.assertNotIn("qq_account", config)
         self.assertEqual(config["model"], "deepseek-flash")
         self.assertTrue((Path(self.tmp.name) / "compose.yml").exists())
         self.assertTrue((Path(self.tmp.name) / "data" / "astrbot" / "cmd_config.json").exists())
-        self.assertTrue((Path(self.tmp.name) / "data" / "snowluma" / "config" / "onebot.json").exists())
+        self.assertFalse((Path(self.tmp.name) / "data" / "snowluma").exists())
         self.assertEqual(self.api.persona_ids, [PERSONA_ID])
         self.assertEqual(self.api.prompts, ["你是测试 QQ 机器人。"])
         raw_astrbot = (Path(self.tmp.name) / "data" / "astrbot" / "cmd_config.json").read_text(encoding="utf-8")
@@ -340,57 +373,22 @@ class DeployerTests(unittest.TestCase):
         )
         self.assertTrue(any("插件市场" in line for line in job["logs"]))
 
-        qq_config_dir = Path(self.tmp.name) / "data" / "snowluma" / "config"
-        (qq_config_dir / "onebot_12345678.json").write_text("{}", encoding="utf-8")
         status = self.manager.get_status()
-        self.assertTrue(status["deployment"]["deployed"])
-        self.assertTrue(status["deployment"]["running"])
-        self.assertEqual(status["deployment"]["model"], "deepseek-flash")
-        self.assertTrue(status["deployment"]["onebot_connected"])
-        self.assertTrue(status["deployment"]["qq_logged_in"])
-        self.assertEqual(status["deployment"]["credentials"]["snowluma_username"], "admin")
-        self.assertEqual(status["deployment"]["credentials"]["snowluma_password"], "SnowPass123")
-        self.assertTrue(status["deployment"]["urls"]["novnc"].startswith("http://127.0.0.1:"))
+        deployment = status["deployment"]
+        self.assertTrue(deployment["deployed"])
+        self.assertTrue(deployment["running"])
+        self.assertEqual(deployment["model"], "deepseek-flash")
+        self.assertEqual(deployment["platform_mode"], "official")
+        self.assertEqual(deployment["qq_official_appid"], "12345678")
+        self.assertIn("astrbot_webui", deployment["urls"])
+        self.assertIn("astrbot_password", deployment["credentials"])
+        for absent in ("qq_account", "onebot_connected", "platform_connected", "qq_logged_in"):
+            self.assertNotIn(absent, deployment)
+        for absent in ("snowluma_username", "snowluma_password", "vnc_password"):
+            self.assertNotIn(absent, deployment["credentials"])
+        self.assertNotIn("snowluma_webui", deployment["urls"])
+        self.assertNotIn("novnc", deployment["urls"])
 
-
-    def test_reset_snowluma_password_writes_known_hash_and_backs_up(self):
-        config = self.store.load_config()
-        config["deployed"] = True
-        self.store.save_config(config)
-        webui_path = Path(self.tmp.name) / "data" / "snowluma" / "config" / "webui.json"
-        webui_path.parent.mkdir(parents=True, exist_ok=True)
-        webui_path.write_text('{"old": true}\n', encoding="utf-8")
-        self.docker.logs_by_service["snowluma"] = (
-            "initial credentials: user=admin password=OldPass12345678\n"
-        )
-        import qqbot_studio.deployer as deployer_module
-        original_sleep = deployer_module.time.sleep
-        deployer_module.time.sleep = lambda *_: None
-        try:
-            result = self.manager.reset_snowluma_password()
-        finally:
-            deployer_module.time.sleep = original_sleep
-        self.assertTrue(result["ok"])
-        password = result["password"]
-        self.assertTrue(password)
-        self.assertNotEqual(password, "OldPass12345678")
-        self.assertTrue(webui_path.exists())
-        backups = list(webui_path.parent.glob("webui.json.bak.*"))
-        self.assertEqual(len(backups), 1)
-        state = json.loads((webui_path).read_text(encoding="utf-8"))
-        self.assertFalse(state["mustChangePassword"])
-        digest = hashlib.scrypt(
-            password.encode(),
-            salt=bytes.fromhex(state["passwordSalt"]),
-            n=16384,
-            r=8,
-            p=1,
-            dklen=64,
-        )
-        self.assertEqual(digest.hex(), state["passwordHash"])
-        stored = self.store.load_secrets()["snowluma_password"]
-        self.assertEqual(stored, password)
-        self.assertIn("SnowLuma WebUI 密码已重置", result["message"])
 
     def test_container_actions(self):
         config = self.store.load_config()
@@ -432,10 +430,10 @@ class DeployerTests(unittest.TestCase):
             json.dumps({"provider": [{"key": ["sk-log-secret-marker-12345"]}]}),
             encoding="utf-8",
         )
-        token = self.store.load_secrets()["onebot_token"]
+        token = self.store.load_secrets()["astrbot_jwt_secret"]
         self.docker.logs_by_service["astrbot"] = (
             "provider key sk-log-secret-marker-12345\n"
-            f"onebot token {token}\n"
+            f"jwt secret {token}\n"
             "Authorization: Bearer abcdefghijklmnopqrstuvwxyz\n"
             "url ?access_token=another-secret-token\n"
             "unseen sk-unknownsecret123456789\n"
@@ -452,7 +450,8 @@ class DeployerTests(unittest.TestCase):
         secrets_path = Path(self.tmp.name) / "secrets.json"
         secrets_path.write_text("{broken-json", encoding="utf-8")
         job_id = self.manager.start_deploy(
-            qq_account="12345678",
+            official_appid="12345678",
+            official_secret="official-secret",
             deepseek_api_key="sk-test-secret",
             prompt="prompt",
             accept_risk=True,
@@ -500,7 +499,7 @@ class DeployerTests(unittest.TestCase):
         config = self.store.load_config()
         config["deployed"] = True
         self.store.save_config(config)
-        states = {"qqbot-astrbot": "exited", "qqbot-snowluma": "running"}
+        states = {"qqbot-astrbot": "exited"}
 
         def container_status(name):
             return states.get(name)
@@ -510,7 +509,6 @@ class DeployerTests(unittest.TestCase):
 
         def fake_up(*args, **kwargs):
             states[self.docker.ASTRBOT_CONTAINER] = "running"
-            states[self.docker.SNOWLUMA_CONTAINER] = "running"
             self.docker.actions.append("up")
             return CommandResult(("up",), 0, "", "")
 
@@ -523,11 +521,7 @@ class DeployerTests(unittest.TestCase):
     def _mark_deployed(self):
         config = self.store.load_config()
         config["deployed"] = True
-        config["ports"] = {
-            "astrbot_webui": 16185,
-            "snowluma_webui": 15099,
-            "novnc": 16081,
-        }
+        config["ports"] = {"astrbot_webui": 16185}
         self.store.save_config(config)
 
     def _install_plugin_schema(self, extra: dict | None = None) -> Path:
@@ -890,11 +884,7 @@ class DeployerTests(unittest.TestCase):
     def test_plugin_config_offline_save_and_type_validation(self):
         config = self.store.load_config()
         config["deployed"] = True
-        config["ports"] = {
-            "astrbot_webui": 16185,
-            "snowluma_webui": 15099,
-            "novnc": 16081,
-        }
+        config["ports"] = {"astrbot_webui": 16185}
         self.store.save_config(config)
         self._install_plugin_schema(
             extra={
@@ -996,41 +986,6 @@ class DeployerTests(unittest.TestCase):
         missing = self.manager.get_plugin_config("missing_plugin")
         self.assertFalse(missing["ok"])
         self.assertIn("schema", missing["error"])
-
-    def test_snowluma_password_parser(self):
-        secrets_data = self.store.load_secrets()
-        secrets_data["snowluma_password"] = ""
-        self.store.save_secrets(secrets_data)
-        self.docker.logs_by_service["snowluma"] = "\x1b[32m临时密码: Abcd1234\x1b[0m\n"
-        # Avoid the deliberate two-second settle delay in production.
-        import qqbot_studio.deployer as deployer_module
-        original_sleep = deployer_module.time.sleep
-        deployer_module.time.sleep = lambda *_: None
-        try:
-            parsed = self.manager._capture_snowluma_password()
-        finally:
-            deployer_module.time.sleep = original_sleep
-        self.assertEqual(parsed, "Abcd1234")
-        self.assertEqual(self.store.load_secrets()["snowluma_password"], "Abcd1234")
-
-        # If SnowLuma rotates its bootstrap password, a stale local value must
-        # be replaced by the newest credentials line from the logs.
-        self.docker.logs_by_service["snowluma"] = (
-            "initial credentials: user=admin password=Rotated9876abcd\n"
-        )
-        import qqbot_studio.deployer as deployer_module
-        original_sleep = deployer_module.time.sleep
-        deployer_module.time.sleep = lambda *_: None
-        try:
-            rotated = self.manager._capture_snowluma_password()
-        finally:
-            deployer_module.time.sleep = original_sleep
-        self.assertEqual(rotated, "Rotated9876abcd")
-        self.assertEqual(
-            self.store.load_secrets()["snowluma_password"],
-            "Rotated9876abcd",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

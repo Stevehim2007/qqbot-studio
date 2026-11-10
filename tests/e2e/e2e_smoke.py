@@ -10,8 +10,9 @@ Typical use on Ubuntu/Linux:
     python3 tests/e2e/e2e_smoke.py --timeout 900
 
 On a WSL2 host where Docker Desktop integration is available, the same command
-works.  QQ scan/device verification cannot be automated; the script records
-that as a manual/ENV_BLOCKED step and never attempts to bypass Tencent.
+works.  It uses dummy QQ Official AppID/secret values and never asks for or
+uses real platform credentials.  Real QQ Open Platform authorization is
+outside this smoke test.
 """
 
 from __future__ import annotations
@@ -39,8 +40,9 @@ from typing import Any, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = Path(__file__).resolve().with_name("run_studio_server.py")
 FAKE_DEEPSEEK_KEY = "sk-e2e-invalid-not-a-real-key"
+FAKE_OFFICIAL_APPID = "10001"
+FAKE_OFFICIAL_SECRET = "e2e-official-secret-not-real"
 PERSONA_ID = "qqbot-assistant"
-ONEBOT_INTERNAL_PORT = 6199
 
 
 class E2EBlocked(RuntimeError):
@@ -336,7 +338,8 @@ class SmokeRun:
             f"/api/deploy?{q}",
             method="POST",
             payload={
-                "qq_account": "10001",
+                "official_appid": FAKE_OFFICIAL_APPID,
+                "official_secret": FAKE_OFFICIAL_SECRET,
                 "deepseek_api_key": FAKE_DEEPSEEK_KEY,
                 "prompt": "你是 E2E 测试机器人。请用简洁中文回答。",
                 "accept_risk": True,
@@ -390,43 +393,36 @@ class SmokeRun:
         env_path = instance_dir / ".env"
         compose_path = instance_dir / "compose.yml"
         astrbot_config_path = instance_dir / "data" / "astrbot" / "cmd_config.json"
-        snowluma_config_path = instance_dir / "data" / "snowluma" / "config" / "onebot.json"
         secrets_path = instance_dir / "secrets.json"
-        for path in (env_path, compose_path, astrbot_config_path, snowluma_config_path, secrets_path):
+        for path in (env_path, compose_path, astrbot_config_path, secrets_path):
             if not path.is_file():
                 raise E2EFailed(f"部署产物缺失：{path.name}")
         env_values = _read_env(env_path)
         bind_address = env_values.get("BIND_ADDRESS", "")
         if bind_address != "0.0.0.0":
             raise E2EFailed(f"BIND_ADDRESS 不是 0.0.0.0：{bind_address!r}")
-        port_keys = ("ASTRBOT_WEBUI_PORT", "SNOWLUMA_WEBUI_PORT_HOST", "NOVNC_PORT")
-        ports = [int(env_values[key]) for key in port_keys]
-        if len(set(ports)) != 3 or any(port < 5000 or port > 10000 for port in ports):
-            raise E2EFailed(f"实例端口块不符合 5000-10000 随机分配预期：{ports}")
+        port = int(env_values.get("ASTRBOT_WEBUI_PORT") or 0)
+        if port < 5000 or port > 10000:
+            raise E2EFailed(f"实例端口不符合 5000-10000 随机分配预期：{port}")
         secrets_data = _read_json(secrets_path)
         self.secret_values.extend(
             str(secrets_data.get(key) or "")
-            for key in (
-                "astrbot_password",
-                "astrbot_jwt_secret",
-                "onebot_token",
-                "snowluma_http_token",
-                "snowluma_ws_token",
-                "snowluma_password",
-                "vnc_password",
-            )
+            for key in ("astrbot_password", "astrbot_jwt_secret", "qq_official_secret")
         )
         self.secret_values = [item for item in self.secret_values if item]
         astrbot_config = _read_json(astrbot_config_path)
-        snowluma_config = _read_json(snowluma_config_path)
         platforms = astrbot_config.get("platform")
-        if not isinstance(platforms, list):
-            raise E2EFailed("cmd_config.json.platform 不是数组")
-        onebot_platform = next((item for item in platforms if isinstance(item, dict) and item.get("type") == "aiocqhttp"), None)
-        if not isinstance(onebot_platform, dict):
-            raise E2EFailed("cmd_config.json 缺少 aiocqhttp 平台")
-        if int(onebot_platform.get("ws_reverse_port") or 0) != ONEBOT_INTERNAL_PORT:
-            raise E2EFailed("aiocqhttp 内部 WS 端口不是 6199")
+        if not isinstance(platforms, list) or len(platforms) != 1:
+            raise E2EFailed("cmd_config.json.platform 必须且只能包含 QQ 官方平台")
+        official_platform = platforms[0] if isinstance(platforms[0], dict) else {}
+        if official_platform.get("type") != "qq_official":
+            raise E2EFailed("cmd_config.json 平台类型不是 qq_official")
+        if str(official_platform.get("appid") or "") != FAKE_OFFICIAL_APPID:
+            raise E2EFailed("QQ 官方 AppID 未写入 AstrBot 配置")
+        if str(official_platform.get("secret") or "") != FAKE_OFFICIAL_SECRET:
+            raise E2EFailed("QQ 官方 Secret 未写入 AstrBot 配置")
+        if str(secrets_data.get("qq_official_secret") or "") != FAKE_OFFICIAL_SECRET:
+            raise E2EFailed("QQ 官方 Secret 未保存到 secrets.json")
         providers = astrbot_config.get("provider")
         sources = astrbot_config.get("provider_sources")
         provider = next((item for item in providers if isinstance(item, dict) and item.get("id") == "deepseek-flash"), None) if isinstance(providers, list) else None
@@ -451,43 +447,34 @@ class SmokeRun:
             raise E2EFailed("agent_runner 配置缺失或格式错误")
         if agent_runner["config"].get("persona", {}).get("persona_id") != PERSONA_ID:
             raise E2EFailed("agent_runner persona_id 未指向 E2E Persona")
-        networks = snowluma_config.get("networks")
-        clients = networks.get("wsClients") if isinstance(networks, dict) else None
-        if not isinstance(clients, list) or not clients:
-            raise E2EFailed("onebot.json 缺少 networks.wsClients")
-        client = clients[0]
-        if not isinstance(client, dict) or client.get("url") != "ws://astrbot:6199/ws":
-            raise E2EFailed("SnowLuma wsClients.url 不是 ws://astrbot:6199/ws")
-        onebot_token = str(secrets_data.get("onebot_token") or "")
-        if not onebot_token or onebot_platform.get("ws_reverse_token") != onebot_token or client.get("accessToken") != onebot_token:
-            raise E2EFailed("OneBot token 未在 AstrBot 与 SnowLuma 配置中一致写入")
-        if FAKE_DEEPSEEK_KEY in json.dumps(snowluma_config, ensure_ascii=False):
-            raise E2EFailed("DeepSeek Key 被错误写入了 SnowLuma 配置")
-        self.summary["ports"] = {
-            "astrbot_webui": ports[0],
-            "snowluma_webui": ports[1],
-            "novnc": ports[2],
-        }
+        artifact_text = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in (env_path, compose_path, astrbot_config_path)
+        ).lower()
+        for forbidden in ("snowluma", "novnc", "onebot"):
+            if forbidden in artifact_text:
+                raise E2EFailed(f"官方部署产物仍包含旧版字段：{forbidden}")
+        if FAKE_DEEPSEEK_KEY in artifact_text:
+            raise E2EFailed("DeepSeek Key 被错误写入了部署产物")
+        self.summary["ports"] = {"astrbot_webui": port}
         self.summary["bind_address"] = bind_address
-        self.set_check("generated_json", True, "cmd_config.json / onebot.json 可解析且关键字段匹配")
-        self.set_check("three_port_allocation", True, f"bind=0.0.0.0 ports={ports}")
+        self.set_check("generated_json", True, "cmd_config.json 为 qq_official 且关键字段匹配")
+        self.set_check("single_port_allocation", True, f"bind=0.0.0.0 port={port}")
         return {
             "instance_dir": instance_dir,
             "env": env_values,
             "secrets": secrets_data,
             "astrbot_config": astrbot_config,
-            "snowluma_config": snowluma_config,
         }
 
     def verify_containers(self, instance_dir: Path) -> dict[str, Any]:
         meta = _read_json(instance_dir / "instance.json")
         astrbot_container = str(meta.get("astrbot_container") or "")
-        snowluma_container = str(meta.get("snowluma_container") or "")
         project_name = str(meta.get("project_name") or "")
-        if not astrbot_container or not snowluma_container or not project_name:
-            raise E2EFailed("instance.json 缺少 container/project 名称")
-        self.summary["container_names"] = [astrbot_container, snowluma_container]
-        result = self.docker.run(["inspect", astrbot_container, snowluma_container], timeout=30)
+        if not astrbot_container or not project_name:
+            raise E2EFailed("instance.json 缺少 AstrBot container/project 名称")
+        self.summary["container_names"] = [astrbot_container]
+        result = self.docker.run(["inspect", astrbot_container], timeout=30)
         if result.returncode != 0:
             raise E2EFailed(f"docker inspect 失败：{(result.stdout + result.stderr).strip()[-1000:]}")
         data = json.loads(result.stdout)
@@ -497,11 +484,10 @@ class SmokeRun:
             state = item.get("State") if isinstance(item.get("State"), dict) else {}
             health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
             states[name] = {"status": state.get("Status"), "health": health.get("Status")}
-        for name in (astrbot_container, snowluma_container):
-            info = states.get(name) or {}
-            if info.get("status") != "running":
-                raise E2EFailed(f"容器 {name} 状态不是 running：{info}")
-        if states.get(astrbot_container, {}).get("health") == "unhealthy":
+        info = states.get(astrbot_container) or {}
+        if info.get("status") != "running":
+            raise E2EFailed(f"容器 {astrbot_container} 状态不是 running：{info}")
+        if info.get("health") == "unhealthy":
             self.summary["warnings"].append("AstrBot 容器 healthcheck 报告 unhealthy；以 WebUI/API 200 为主判据")
         self.set_check("containers_running", True, json.dumps(states, ensure_ascii=False))
         return {"project_name": project_name, "containers": states, "meta": meta}
@@ -543,49 +529,39 @@ class SmokeRun:
         deployment = state.get("deployment") if isinstance(state.get("deployment"), dict) else {}
         urls = deployment.get("urls") if isinstance(deployment.get("urls"), dict) else {}
         astrbot_container = str(meta.get("astrbot_container") or "")
-        snowluma_container = str(meta.get("snowluma_container") or "")
-        internal = {
-            "astrbot_webui": (astrbot_container, "http://127.0.0.1:6185/"),
-            "snowluma_webui": (snowluma_container, "http://127.0.0.1:5099/"),
-            "novnc": (snowluma_container, "http://127.0.0.1:6081/"),
-        }
-        host_failures: list[str] = []
-        for key, label in (("astrbot_webui", "AstrBot WebUI"), ("snowluma_webui", "SnowLuma WebUI"), ("novnc", "noVNC")):
-            url = str(urls.get(key) or "")
-            if not url.startswith(("http://", "https://")):
-                raise E2EFailed(f"state.urls.{key} 无效：{url!r}")
-            host_ok = False
-            host_detail = ""
-            try:
-                status, _, _ = _http("GET", url.rstrip("/") + "/", timeout=12)
-                if status < 500:
-                    host_ok = True
-                    host_detail = f"{url} -> HTTP {status}"
-                else:
-                    host_detail = f"{url} -> HTTP {status}"
-            except Exception as exc:  # noqa: BLE001
-                host_detail = f"{url} 不可达：{exc}"
-            if host_ok:
-                self.set_check(f"http_{key}", True, host_detail)
-                continue
-            host_failures.append(f"{label}: {host_detail}")
-            container, internal_url = internal[key]
-            if not container:
-                raise E2EFailed(f"{label} 宿主端口不可达且缺少容器名：{host_detail}")
-            internal_status = self._container_http_status(container, internal_url)
-            if internal_status >= 500:
-                raise E2EFailed(f"{label} 容器内返回 HTTP {internal_status}")
-            self.set_check(f"http_{key}_internal", True, f"{internal_url} -> HTTP {internal_status}")
-        if host_failures:
-            detail = "；".join(host_failures)
-            self.summary["warnings"].append("宿主端口发布在当前环境不可用，已改用容器内回环验证：" + detail)
-            self.summary["blocked"].append(
-                {
-                    "code": "ENV_BLOCKED:HOST_PORT_PUBLISHING",
-                    "detail": detail + "；容器内服务正常，但宿主机未收到 Docker Desktop 发布端口。",
-                }
-            )
-            log("ENV_BLOCKED: 宿主端口发布不可用；已用容器内 HTTP 验证代替")
+        if set(urls) != {"astrbot_webui"}:
+            raise E2EFailed(f"state.urls 应仅包含 astrbot_webui：{sorted(urls)}")
+        url = str(urls.get("astrbot_webui") or "")
+        if not url.startswith(("http://", "https://")):
+            raise E2EFailed(f"state.urls.astrbot_webui 无效：{url!r}")
+        host_ok = False
+        host_detail = ""
+        try:
+            status, _, _ = _http("GET", url.rstrip("/") + "/", timeout=12)
+            if status < 500:
+                host_ok = True
+                host_detail = f"{url} -> HTTP {status}"
+            else:
+                host_detail = f"{url} -> HTTP {status}"
+        except Exception as exc:  # noqa: BLE001
+            host_detail = f"{url} 不可达：{exc}"
+        if host_ok:
+            self.set_check("http_astrbot_webui", True, host_detail)
+            return
+        if not astrbot_container:
+            raise E2EFailed(f"AstrBot WebUI 宿主端口不可达且缺少容器名：{host_detail}")
+        internal_status = self._container_http_status(astrbot_container, "http://127.0.0.1:6185/")
+        if internal_status >= 500:
+            raise E2EFailed(f"AstrBot WebUI 容器内返回 HTTP {internal_status}")
+        self.set_check("http_astrbot_webui_internal", True, f"http://127.0.0.1:6185/ -> HTTP {internal_status}")
+        self.summary["warnings"].append("宿主端口发布在当前环境不可用，已改用容器内回环验证：" + host_detail)
+        self.summary["blocked"].append(
+            {
+                "code": "ENV_BLOCKED:HOST_PORT_PUBLISHING",
+                "detail": host_detail + "；容器内服务正常，但宿主机未收到 Docker Desktop 发布端口。",
+            }
+        )
+        log("ENV_BLOCKED: 宿主端口发布不可用；已用容器内 HTTP 验证代替")
 
     def _astrbot_exec_json(
         self,
@@ -714,79 +690,6 @@ print(json.dumps({"status": status, "body": body}, ensure_ascii=False))
             raise E2EFailed("实例 state 响应泄漏了 DeepSeek Key")
         self.set_check("state_query_api", True, f"running={deployment.get('running')!r}")
 
-    def verify_onebot_websocket(self, instance_dir: Path, secrets_data: dict[str, Any], meta: dict[str, Any]) -> None:
-        container = str(meta.get("astrbot_container") or "")
-        token = str(secrets_data.get("onebot_token") or "")
-        if not container or not token:
-            raise E2EFailed("缺少 AstrBot 容器名或 OneBot token")
-        inner = r'''
-import asyncio, os
-import websockets
-
-async def main():
-    headers = {
-        "Authorization": "Bearer " + os.environ["QB_E2E_ONEBOT_TOKEN"],
-        "X-Self-ID": "10001",
-        "X-Client-Role": "Universal",
-        "User-Agent": "OneBot/11",
-    }
-    async with websockets.connect(
-        "ws://127.0.0.1:6199/ws",
-        additional_headers=headers,
-        open_timeout=10,
-        close_timeout=2,
-    ):
-        print("ONEBOT_WS_CONNECTED")
-
-asyncio.run(main())
-'''
-        env = os.environ.copy()
-        env["QB_E2E_ONEBOT_TOKEN"] = token
-        command = [
-            "exec",
-            "-i",
-            "-e",
-            "QB_E2E_ONEBOT_TOKEN",
-            container,
-            "python",
-            "-",
-        ]
-        result = self.docker.run(command, timeout=60, env=env, input_text=inner)
-        if result.returncode != 0:
-            detail = (result.stdout + "\n" + result.stderr).strip()
-            if "No module named" in detail or "executable file not found" in detail or "python: not found" in detail:
-                raise E2EBlocked(f"ENV_BLOCKED:ONEBOT_WS_CLIENT: 容器内缺少 Python/websockets：{detail[-600:]}")
-            raise E2EFailed(f"OneBot WebSocket 连接失败：{detail[-1200:]}")
-        if "ONEBOT_WS_CONNECTED" not in result.stdout:
-            raise E2EFailed(f"OneBot WebSocket 未确认连接：{(result.stdout + result.stderr)[-800:]}")
-        self.set_check("onebot_websocket", True, "容器内 ws://127.0.0.1:6199/ws 握手成功")
-
-    def record_qq_manual_step(self, state: dict[str, Any]) -> None:
-        deployment = state.get("deployment") if isinstance(state.get("deployment"), dict) else {}
-        urls = deployment.get("urls") if isinstance(deployment.get("urls"), dict) else {}
-        novnc = str(urls.get("novnc") or "")
-        manual = (
-            "QQ 扫码/设备验证属于人工步骤，本 E2E 未尝试也不允许自动绕过。\n"
-            f"1. 打开 noVNC：{novnc}\n"
-            "2. 使用管理完成页显示的用户/密码登录（不要写入日志）。\n"
-            "3. 在 noVNC 中的官方 QQ 窗口用手机 QQ 扫码。\n"
-            "4. 如出现设备/短信/滑块验证，按 QQ 官方提示手动完成。\n"
-            "5. 登录成功后再检查控制台 OneBot/QQ 状态。\n"
-        )
-        (self.artifact_dir / "manual-qq-checklist.txt").write_text(manual, encoding="utf-8")
-        self.summary["blocked"].append(
-            {
-                "code": "ENV_BLOCKED:QQ_SCAN_REQUIRED",
-                "detail": "真实 QQ 扫码/设备验证必须由用户在 noVNC 官方界面完成；本轮未执行。",
-            }
-        )
-        self.summary["checks"]["qq_scan_manual"] = {
-            "ok": False,
-            "status": "ENV_BLOCKED",
-            "detail": "人工步骤；自动化未伪造成功。",
-        }
-        log("ENV_BLOCKED: QQ 扫码/设备验证需要用户在 noVNC 手动完成")
-
     def write_redacted_job(self, job: dict[str, Any]) -> None:
         safe = {
             "job_id": job.get("job_id"),
@@ -889,8 +792,6 @@ asyncio.run(main())
             self.verify_http_endpoints(state, meta)
             self.verify_astrbot_api(urls, files["secrets"], meta)
             self.verify_management_features(instance_id)
-            self.verify_onebot_websocket(instance_dir, files["secrets"], meta)
-            self.record_qq_manual_step(state)
             # Persist only a redacted job record for debugging.
             status, job, text = self.api(f"/api/job/{urllib.parse.quote(job_id)}?instance={urllib.parse.quote(instance_id)}")
             if status == 200:
@@ -898,7 +799,7 @@ asyncio.run(main())
             if any(str(item.get("code", "")).startswith("ENV_BLOCKED:") for item in self.summary["blocked"]):
                 self.summary["status"] = "PASS_WITH_ENV_BLOCKED_STEPS"
             else:
-                self.summary["status"] = "PASS_WITH_MANUAL_QQ_BLOCKED"
+                self.summary["status"] = "PASS"
             return 0
         except E2EBlocked as exc:
             self.summary["status"] = "ENV_BLOCKED"
@@ -923,9 +824,6 @@ asyncio.run(main())
                 "result_json": _display_path(self.summary_path),
                 "server_log": _display_path(self.server_log_path),
                 "job_log": _display_path(self.job_artifact_path) if self.job_artifact_path.exists() else "",
-                "manual_checklist": _display_path(self.artifact_dir / "manual-qq-checklist.txt")
-                if (self.artifact_dir / "manual-qq-checklist.txt").exists()
-                else "",
             }
             self.redact_artifacts()
             self.summary_path.write_text(

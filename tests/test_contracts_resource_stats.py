@@ -115,7 +115,6 @@ class _FakeStatsProvider:
 
 class _FakeStatsDocker:
     ASTRBOT_CONTAINER = "qqbot-bot-1-astrbot"
-    SNOWLUMA_CONTAINER = "qqbot-bot-1-snowluma"
 
     def detect(self, force=False):
         return DockerStatus(True, True, True, True)
@@ -146,7 +145,7 @@ class ResourceStatsModuleTests(unittest.TestCase):
                         "MemPerc": "9.77%",
                     }
                 ),
-                "qqbot-bot-1-snowluma\t2.50%\t200MiB / 2GiB\t9.77%",
+                "qqbot-bot-1-helper\t2.50%\t200MiB / 2GiB\t9.77%",
             ]
         )
         parsed = parse_docker_stats_output(output)
@@ -155,7 +154,7 @@ class ResourceStatsModuleTests(unittest.TestCase):
             parsed["qqbot-bot-1-astrbot"]["memory_usage_bytes"], 100 * 1024 * 1024
         )
         self.assertEqual(
-            parsed["qqbot-bot-1-snowluma"]["memory_limit_bytes"], 2 * 1024 * 1024 * 1024
+            parsed["qqbot-bot-1-helper"]["memory_limit_bytes"], 2 * 1024 * 1024 * 1024
         )
 
     def test_directory_usage_skips_symlinks_and_reports_errors_safely(self):
@@ -191,12 +190,6 @@ class ResourceStatsModuleTests(unittest.TestCase):
                     "memory_usage_bytes": 123,
                     "memory_limit_bytes": 1000,
                     "memory_percent": 12.3,
-                },
-                meta["snowluma_container"]: {
-                    "cpu_percent": 1.5,
-                    "memory_usage_bytes": 456,
-                    "memory_limit_bytes": 2000,
-                    "memory_percent": 22.8,
                 },
             }
             root_path = Path(tmp)
@@ -246,7 +239,7 @@ class ContractConformanceTests(unittest.TestCase):
     def test_deployment_and_ui_protocol_mocks_are_replaceable(self):
         deployment = _StaticDeployment()
         self.assertIsInstance(deployment, DeploymentProvider)
-        self.assertEqual(deployment.start_deploy(qq_account="1"), "job-mock")
+        self.assertEqual(deployment.start_deploy(official_appid="1", official_secret="secret"), "job-mock")
         self.assertEqual(deployment.get_job("job-1")["status"], "success")
 
         provider = _StaticUIProvider()

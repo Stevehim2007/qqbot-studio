@@ -84,25 +84,19 @@
   "deployment": {
     "deployed": true,
     "running": true,
-    "qq_account": "123456789",
+    "platform_mode": "official",
+    "qq_official_appid": "123456789",
     "model": "deepseek-flash",
     "prompt": "机器人提示词",
     "active_job_id": "job_abc",
     "active_job_status": "success",
     "urls": {
-      "astrbot_webui": "http://127.0.0.1:6185",
-      "snowluma_webui": "http://127.0.0.1:5099",
-      "novnc": "http://127.0.0.1:6081"
+      "astrbot_webui": "http://127.0.0.1:6185"
     },
     "credentials": {
       "astrbot_username": "admin",
-      "astrbot_password": "本地随机密码",
-      "snowluma_username": "admin",
-      "snowluma_password": "本地预置初始密码",
-      "vnc_password": "本地 VNC 密码"
-    },
-    "onebot_connected": true,
-    "qq_logged_in": true
+      "astrbot_password": "本地随机密码"
+    }
   },
   "notice": "可选提示"
 }
@@ -137,7 +131,8 @@ v2 请求体不包含 `use_mirror`；镜像节点由服务端按已选节点决�
 
 ```json
 {
-  "qq_account": "123456789",
+  "official_appid": "123456789",
+  "official_secret": "QQ 开放平台 AppSecret",
   "deepseek_api_key": "sk-...",
   "prompt": "提示词文本",
   "accept_risk": true
@@ -153,6 +148,10 @@ v2 请求体不包含 `use_mirror`；镜像节点由服务端按已选节点决�
 ```json
 { "ok": false, "message": "失败原因" }
 ```
+
+仅支持 QQ 官方接入：`official_appid` 必须是 5–32 位数字，`official_secret` 非空；
+`platform_mode` 缺省或为 `official`。传入 `qq_account` 或 `snowluma*`、`novnc*`、
+`vnc*`、`onebot*` 旧参数会返回 HTTP 400。
 
 ### GET `/api/job/<id>?instance=<id>`
 
@@ -203,7 +202,7 @@ v2 请求体不包含 `use_mirror`；镜像节点由服务端按已选节点决�
 { "ok": true, "logs": "日志文本" }
 ```
 
-`logs` 兼容字符串或数组。`service` 仅取 `astrbot / snowluma`。
+`logs` 兼容字符串或数组。`service` 仅取 `astrbot`；旧版 `snowluma` 等值返回 HTTP 400。
 
 ## 4. 镜像节点接口与 UI
 
@@ -353,12 +352,11 @@ v2 请求体不包含 `use_mirror`；镜像节点由服务端按已选节点决�
       "created_at": "2026-01-01T12:00:00Z",
       "deployed": true,
       "running": true,
-      "qq_account": "123456789",
+      "platform_mode": "official",
+      "qq_official_appid": "123456789",
       "active_job_id": "job_abc",
       "urls": {
-        "astrbot_webui": "http://127.0.0.1:6185",
-        "snowluma_webui": "http://127.0.0.1:5099",
-        "novnc": "http://127.0.0.1:6081"
+        "astrbot_webui": "http://127.0.0.1:6185"
       }
     }
   ]
@@ -419,7 +417,7 @@ POST /api/action?instance=<id>
 成功后控制台重新读取实例列表与每个实例 state。每个实例卡片包含：
 
 - 打开向导：`/wizard?instance=<id>`
-- AstrBot WebUI、SnowLuma WebUI、noVNC 链接（仅绝对 http/https 地址可用）
+- AstrBot WebUI 链接（仅绝对 http/https 地址可用）
 - 启动 / 停止 / 重启
 - 当前部署任务状态与“查看进度”链接
 
@@ -437,23 +435,7 @@ POST /api/action?instance=<id>
 8. 前端不会构造端口；URL 仅接受绝对 `http://` / `https://`，不安全协议不生成可点击链接。
 9. 前端不使用 localStorage / sessionStorage；刷新恢复完全依赖 `/api/state.deployment.active_job_id`。
 
-## 6.1 SnowLuma 密码重置与自动更新
-
-### POST `/api/snowluma-reset?instance=<id>`
-
-需要 `X-QB-Token`。该操作会备份并重建 SnowLuma WebUI 的 `webui.json`，
-保留 QQ/OneBot 数据，然后重启 SnowLuma 容器。成功响应：
-
-```json
-{
-  "ok": true,
-  "username": "admin",
-  "password": "新的初始密码",
-  "message": "SnowLuma WebUI 密码已重置，请用新密码登录。"
-}
-```
-
-前端应在收到新密码后更新 SnowLuma 卡片，并提示用户在登录后自行修改并保存新密码。
+## 6.1 自动更新
 
 ### GET `/api/update/check`
 
@@ -491,15 +473,15 @@ POST /api/action?instance=<id>
 
 ## 7. 安全文案边界
 
-v2 默认将管理服务、AstrBot WebUI、SnowLuma WebUI 和 noVNC 的宿主机监听地址都设为
-`0.0.0.0`，以便从用户自己的电脑直接访问服务器 IP。部署时必须使用防火墙/安全组/VPN
-限制来源，不要把管理端口和 noVNC/VNC 端口直接暴露到公网。
+v2 默认将管理服务和 AstrBot WebUI 的宿主机监听地址都设为 `0.0.0.0`，以便从用户
+自己的电脑直接访问服务器 IP。部署时必须使用防火墙/安全组/VPN 限制来源，不要把管理
+端口和 AstrBot WebUI 直接暴露到公网。
 
 向导和控制台均保留以下安全要求：
 
-- 不收集、不保存 QQ 密码；现代 QQ 需要扫码登录。
-- 如果扫码后要求设备验证、短信验证、滑块或安全验证，必须在 noVNC 里按 QQ 官方提示操作；工具不能绕过验证。
-- 第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。
+- 不收集、不保存 QQ 密码；仅使用 QQ 开放平台 AppID/AppSecret 接入。
+- 不绕过 QQ 开放平台的授权、频控、权限和安全验证。
+- 使用 QQ 官方机器人须遵守 QQ 开放平台规则与当地法律。
 - DeepSeek API Key 仅写入本机 AstrBot 配置，不在浏览器持久存储中保存，也不在控制台展示。
 
 ---
@@ -1105,7 +1087,7 @@ Content-Type: application/json
 - 服务端在 `host=0.0.0.0` 时仍使用 `127.0.0.1` 探测端口和健康状态；不把 `0.0.0.0`
   写进浏览器 URL，也不使用公网 URL 做本机健康检查。
 - `port` 范围为 5000–10000（含边界）。服务端会避开管理服务监听端口和所有实例的
-  AstrBot/SnowLuma/noVNC 端口。未指定端口时优先 8766，再选择范围内可用端口。
+  AstrBot WebUI 端口。未指定端口时优先 8766，再选择范围内可用端口。
 - 写入成功后返回与 GET 配置相同的安全字段，并带 `action:"configured"`。
 - 配置缺失、损坏、权限写入失败、端口冲突等返回 `ok:false` 和可操作中文错误。
 

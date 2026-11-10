@@ -2420,6 +2420,34 @@
         method: 'POST',
         body: { operation, plugin_id: pluginId }
       });
+      const deps = preview && preview.runtime_dependencies ? preview.runtime_dependencies : {};
+      const missing = Array.isArray(deps.missing) ? deps.missing : [];
+      if (deps.unavailable === true) {
+        throw new Error(textValue(deps.message, '无法检测插件运行依赖，已取消安装。'));
+      }
+      if (missing.length) {
+        const lines = missing.map((item) => {
+          if (item.type === 'python') {
+            return `· Python 包 ${item.name}${item.spec || ''}${item.description ? `（${item.description}）` : ''}`;
+          }
+          return `· 系统依赖 ${item.kind || ''} ${item.target || ''}${item.description ? `（${item.description}）` : ''}`;
+        }).join('\n');
+        const consent = await pluginMarketAskConfirm(
+          panel,
+          `插件 ${pluginId} 需要以下运行依赖：\n${lines}\n\n是否现在安装缺失依赖？安装会写入 AstrBot 容器，不会删除插件配置或数据。`
+        );
+        if (!consent) return;
+        pluginMarketSetStatus(panel, '正在安装插件运行依赖…', 'info');
+        const depResult = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-dependencies/install`, {
+          method: 'POST',
+          body: { preview_token: preview.preview_token, confirm: true }
+        });
+        const manual = Array.isArray(depResult.manual_required) ? depResult.manual_required : [];
+        if (manual.length || depResult.ok !== true) {
+          const manualText = manual.map((item) => item.target || item.name || '').filter(Boolean).join('、');
+          throw new Error(manualText ? `仍需手动安装：${manualText}` : textValue(depResult.message, '依赖安装未完成。'));
+        }
+      }
       pluginMarketSetStatus(panel, `正在${verb}插件…`, 'info');
       const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/plugin-operations`, {
         method: 'POST',

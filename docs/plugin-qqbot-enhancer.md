@@ -954,7 +954,7 @@ AstrBot memory 模式：使用官方 `filter.on_llm_request(event, req)` hook，
 - direct 模式复用 group identity/persona/tools/sticker 管线；memory 模式通过官方 `on_llm_request` **仅群聊**把当前 UMO 的受控群缓存（昵称/时间/文本/图片占位）追加到本轮 system prompt；私聊不注入 `Ambient Group Context`，缓存按 UMO 分开，不串群。不改 conversation history/全局人格/provider；并给 Agent 结果链加上发言人 At（已有 At 不重复），仍受一次一条文字+一个附件约束。缓存按群隔离，注入长度 `ambient_group_context_max_chars` 限制；hook 异常明确设降级标记并保留原 prompt。
 - 回复/日志不暴露 QQ/群号；缓存按群隔离，不串群。
 - 配置：`ambient_group_chat_enabled=false`、唯一普通概率 `reply_probability=0.12`、`ambient_group_keyword_probability=0.5`、`ambient_group_keywords`、`ambient_group_round_interval`、缓存条数/TTL、`ambient_group_min_interval_seconds`；`ambient_group_reply_probability` 仅为旧配置兼容，不参与决策。
-- 真实 AstrBot/OneBot 官方 At 组件与 QQ 群聊 E2E 未验证；不同适配器 At 支持可能不同，已做文本降级。
+- 真实 AstrBot/QQ 官方平台 At 组件与群聊 E2E 未验证；不同平台能力可能不同，已做文本降级。
 
 ### 4.24 AstrBot memory 表情/工具 catalog（2.1.0）
 
@@ -975,7 +975,7 @@ memory 模式 Agent 自己构建 system prompt，插件不能依赖 direct 的 `
 - 可匹配分类、tags、meaning；例如“可爱的猫猫”可唯一映射到安全分类/标签“猫猫”。路径/URL/超长/非法字符一律拒绝。
 - memory `on_decorating_result` 不再只依赖 `qqbot_enhancer_memory_reply` extra：只要结果链含 `[[tool:send_sticker ...]]` 就处理。成功替换为一条文字+一张 `Comp.Image`；失败保留安全文字并提示原因和可用分类/标签，marker 不残留。
 - `/表情状态` 增加最近工具失败原因；catalog 明确 category/tag/emotion 只能从精确列表选取，不输出路径/QQ。
-- 真实 AstrBot Agent marker 输出、OneBot/QQ 展示 E2E 未验证。
+- 真实 AstrBot Agent marker 输出与 QQ 官方平台展示 E2E 未验证。
 
 ### 4.26 自然语言美食提交 `submit_food_review`（2.4.0）
 

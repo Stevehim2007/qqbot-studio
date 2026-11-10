@@ -1,12 +1,12 @@
 # QQ Bot Studio v4
 
-在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、QQ 官方机器人开放平台、DeepSeek AI 聊天；SnowLuma/OneBot 作为旧实例兼容路径保留。
+在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、QQ 官方机器人开放平台、DeepSeek AI 聊天。当前版本仅支持 QQ 官方机器人接入。
 
 当前主项目版本：**4.4.0-beta.16（测试版）**。包含长期记忆、按群记忆策略、插件市场与插件分组、七个自包含 QQ 插件、统一安全工具入口、Food 地点解析与更新/回退功能。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **升级提醒**：4.4.0 是下一大版本的测试线；beta.15 引入 QQ 官方机器人接入迁移。升级前请备份实例 `data/`，并先在测试实例验证。长期记忆是独立 SQLite sidecar，启用前同样先备份。
 
-> **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把 noVNC 或管理端口直接公开到互联网。
+> **安全提醒：** 管理服务和机器人 WebUI 默认按 `0.0.0.0` 暴露到局域网/公网可达的网卡。第一次使用请先读 [安全组、防火墙和 SSH](#security)，不要把管理端口或 AstrBot WebUI 直接公开到互联网。
 > **文档维护约定：** 无论是正式版还是测试版，每次发布/合并都必须检查并同步：`README.md`、`CHANGELOG.md`、`docs/README.md`、相关功能文档、版本号和测试数量。没有文档变更的提交也必须确认“无需改文档”；禁止只改代码不改版本/文档。
 
 > **版本规则：** 正式版使用 `v4.y.z`；测试版继承当前正式版版本号并追加 `-beta.N`，例如从 `4.3.0` 继承的测试版为 `4.3.0-beta.1`。测试版必须在 README 明确标注“测试版”，不得冒充正式版。
@@ -16,12 +16,12 @@
 
 - [第一部分：最简单安装和使用](#part-1)
   - [Ubuntu 一键安装](#ubuntu-install)
-  - [部署第一个机器人并扫码](#first-bot)
+  - [部署第一个 QQ 官方机器人](#first-bot)
   - [打开管理控制台](#console)
   - [Windows 10/11：独立项目](#windows)
   - [AI 助手独立页面](#assistants)
 - [第二部分：进阶功能](#part-2)
-  - [多实例、三端口块、删除和端口冲突](#multi-instance)
+  - [多实例、单端口、删除和端口冲突](#multi-instance)
   - [QQ 增强插件：概率、识图、找图、表情包、唱歌、/option](#enhancer)
   - [记忆模式、群聊/私聊记忆和 token](#memory)
   - [插件选择器、存储/内存统计](#plugin-selector-stats)
@@ -32,7 +32,6 @@
   - [Docker 已安装却提示未检测到 Docker](#faq-docker-false-negative)
   - [0.0.0.0 访问不了 / 面板只监听 127.0.0.1](#faq-0000-127)
   - [腾讯云安全组 / 轻量应用服务器防火墙](#faq-tencent-cloud)
-  - [SnowLuma 登录密码错误或重置](#faq-snowluma-password)
   - [控制台状态读取失败](#faq-console-status)
   - [端口冲突、旧容器和旧实例](#faq-port-conflict)
   - [Windows 与 Docker Desktop 未验证](#faq-windows)
@@ -102,11 +101,11 @@ http://服务器IP:8765/console
 2. 接入方式选择 **QQ 官方机器人**，填写开放平台 AppID、AppSecret、DeepSeek API Key、人格提示词，勾选风险确认。
 3. 镜像节点可在向导里选择；不确定时保留默认自动选择。
 4. 点击 **开始部署**。首次拉镜像可能较慢，可关闭浏览器后稍后回来；后台任务会继续运行。
-5. 部署完成后回到控制台查看 AstrBot 与 QQ 官方连接状态；官方模式不需要 noVNC 扫码。
+5. 部署完成后回到控制台查看 AstrBot 与 QQ 官方连接状态。官方接入无需扫码登录。
 6. 在 QQ 开放平台把机器人加入测试群；群主需开启「获取群内全部消息」和「机器人主动在群聊内发言」才能收到非 @ 群消息。
-7. 如果使用旧 SnowLuma 实例，仍可在向导选择旧接入方式并进入 noVNC 扫码；新安装默认走官方接入。
+7. 在 QQ 开放平台配置好回调/IP 白名单和所需权限，并确保 AppID/AppSecret 有效。
 
-> **官方机器人不需要扫码，也不能绕过平台频控/权限。** 旧 SnowLuma 实例的登录态、风控与验证仍由 SnowLuma/noVNC 处理。工具不会收集或保存 QQ 密码。
+> **QQ 官方机器人不能绕过平台频控/权限。** 管理工具不会收集或保存 QQ 密码；真实平台授权和权限配置以 QQ 开放平台为准。
 
 <a id="console"></a>
 ### 1.3 打开管理控制台
@@ -117,8 +116,8 @@ http://服务器IP:8765/console
 
 控制台可以：
 
-- 查看每个实例的 QQ 号、部署状态、容器状态和 WebUI 链接；
-- 打开向导、AstrBot、SnowLuma、noVNC；
+- 查看每个实例的 QQ 官方 AppID、部署状态、容器状态和 WebUI 链接；
+- 打开向导和 AstrBot WebUI；
 - 启动、停止、重启或删除实例；
 - 展开 **插件、记忆与资源**，管理插件、记忆模式和资源统计；
 - 从这里打开 **AI 助手** 独立页面，管理可选的 DeepSeek 助手 B。
@@ -140,9 +139,9 @@ Windows 版不是 Ubuntu 主项目的同一发行版、不是本仓库的自动�
 - Releases 页面：<https://github.com/Stevehim2007/qqbot-studio-windows/releases>
 - 双发行版（同一版本线/同一 Release）：
   - **Docker edition（稳定）**：`QQBotStudioWindows.exe`，Docker Desktop + WSL2 + Linux containers；
-  - **Native edition（POC/bootstrap）**：`QQBotStudioWindowsNative.exe`，官方 SnowLuma Windows + 本机桌面 NTQQ 单实例路线；当前 Native EXE 只提供官方指南和只读依赖检查，不是已完成的 AstrBot/SnowLuma 管理器，也没有 native E2E 结果。
+  - **Native edition（POC/bootstrap）**：由 Windows 独立仓库维护；其支持范围和验证状态以该仓库为准。
 - 主仓库内的 [`windows/README.md`](windows/README.md) 是早期移植资料/开发记录，正式 Windows 入口以上面的独立仓库为准。
-- Windows 双发行版可行性、noVNC 取舍和限制见 [`docs/windows-editions-research.md`](docs/windows-editions-research.md)。
+- Windows 双发行版可行性见 [`docs/windows-editions-research.md`](docs/windows-editions-research.md)（历史研究资料）。
 
 **每次 Linux 主项目更新都要同步 Windows 双版本**：Windows 仓库的
 `.github/workflows/sync-upstream.yml` 支持 `workflow_dispatch` 和每日 schedule，从本仓库
@@ -152,7 +151,7 @@ PowerShell、build/spec、`VERSION` 和 release workflow 保留在 Windows 仓�
 major/minor 发布后必须在同一发布周期同步 Windows；`v*` Release 校验 tag/VERSION 并同批
 构建、smoke、上传 Docker/Native 两个 EXE + SHA256 + README/VALIDATION。未同步、测试失败或
 任一 EXE smoke 失败时不得发布。当前 Windows 正式 Release 的 EXE/API 真实验证与未验证项
-以 Windows 仓库 README/VALIDATION 为准；真实 Windows AstrBot/SnowLuma/QQ/noVNC E2E 仍未验证，
+以 Windows 仓库 README/VALIDATION 为准；真实 Windows AstrBot/QQ 官方平台 E2E 仍未验证，
 不能把 Native bootstrap 当作生产可用版本。
 
 <a id="assistants"></a>
@@ -209,7 +208,7 @@ tail -n 100 "$HOME/.local/share/qqbot-studio/ai-assistant/assistant.log"
 ## 第二部分：进阶功能
 
 <a id="multi-instance"></a>
-### 2.1 多实例、三端口块、删除和端口冲突
+### 2.1 多实例、单端口、删除和端口冲突
 
 #### 新建实例
 
@@ -219,28 +218,26 @@ tail -n 100 "$HOME/.local/share/qqbot-studio/ai-assistant/assistant.log"
 
 每次运行都会创建新的隔离实例，拥有独立的：
 
-- 数据目录、QQ 号、DeepSeek API Key、提示词；
+- 数据目录、QQ 官方 AppID、DeepSeek API Key、提示词；
 - Compose 项目名、容器名、Docker 网络；
-- AstrBot / SnowLuma / noVNC 宿主机端口。
+- AstrBot WebUI 宿主机端口。
 
-新实例第一次部署必须在 noVNC 里扫码登录 QQ。管理已有机器人请用 `./console.sh`，不要重复点 `start.sh` 来“刷新”已有机器人。
+新实例在向导填写 QQ 官方 AppID/AppSecret 并部署即可，不需要扫码。管理已有机器人请用 `./console.sh`，不要重复点 `start.sh` 来“刷新”已有机器人。
 
-#### 三服务相邻端口块
+#### 每个实例一个 WebUI 端口
 
-每个实例的三个宿主机端口固定为一个连续块：
+每个实例只发布一个 AstrBot WebUI 宿主机端口：
 
 ```text
-AstrBot WebUI  = base
-SnowLuma WebUI = base + 1
-noVNC          = base + 2
+AstrBot WebUI = base
 ```
 
 所有实例端口限制在 `5000–10000`，且互不重叠。例如：
 
 ```text
-bot-1: 5000 / 5001 / 5002
-bot-2: 5003 / 5004 / 5005
-bot-3: 5006 / 5007 / 5008
+bot-1: 5000
+bot-2: 5001
+bot-3: 5002
 ```
 
 管理控制台默认使用 `8765`，并会从实例分配中预留。容器内部端口不变；变化的是宿主机映射端口。实际地址以控制台和实例的 `config.json` 为准：
@@ -252,7 +249,7 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 #### 删除实例
 
-控制台中每个实例都有 **删除实例** 按钮：第一次点击进入确认状态，第二次点击才会删除。删除会停止/移除该实例容器并删除实例目录，**不可恢复**，QQ 登录态、提示词和 API Key 都一起删除。只想修端口时先备份数据，不要直接删除。
+控制台中每个实例都有 **删除实例** 按钮：第一次点击进入确认状态，第二次点击才会删除。删除会停止/移除该实例容器并删除实例目录，**不可恢复**，提示词和 API Key 都一起删除。只想修端口时先备份数据，不要直接删除。
 
 #### 端口冲突
 
@@ -260,7 +257,7 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
+ss -ltnp 2>/dev/null | grep -E ':(8765|5000)\b'
 ```
 
 常见原因是旧实例、旧 v1 容器或 Docker Desktop/旧 Docker 代理仍占着端口。处理顺序：
@@ -268,7 +265,7 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 1. 在控制台删除不再需要的实例（确认已备份）；
 2. 如果是旧 v1 容器，见 [端口冲突 FAQ](#faq-port-conflict)；
 3. Docker Desktop/旧代理残留可重启 Docker Desktop 或 Docker daemon；
-4. 重新创建一个新实例，让程序重新分配三端口块。
+4. 重新创建一个新实例，让程序重新分配可用端口。
 
 <a id="enhancer"></a>
 ### 2.2 QQ 增强插件：概率、识图、找图、表情包、唱歌、/option
@@ -326,7 +323,7 @@ mkdir -p "$SONGS"
 cp "/你的授权音频.wav" "$SONGS/"
 ```
 
-支持 `.mp3`、`.wav`、`.ogg`、`.flac`、`.m4a`、`.aac`；部分 QQ 适配器可能只可靠播放 WAV，真实播放以 AstrBot/SnowLuma 环境为准。
+支持 `.mp3`、`.wav`、`.ogg`、`.flac`、`.m4a`、`.aac`；实际播放能力以 AstrBot 和 QQ 官方平台支持为准。
 
 <a id="memory"></a>
 ### 2.3 记忆模式、群聊/私聊记忆和 token
@@ -430,12 +427,12 @@ tail -n 100 ~/.local/share/qqbot-studio/studio-server.log
 <a id="security"></a>
 ### 2.6 安全组、防火墙和 SSH 隧道
 
-v2 默认管理服务监听 `0.0.0.0:8765`，新实例的 WebUI/noVNC 端口也会按默认 `BIND_ADDRESS=0.0.0.0` 发布。这样做方便从电脑/手机访问，但也意味着配置不当时会暴露到整个网络。
+v2 默认管理服务监听 `0.0.0.0:8765`，新实例的 AstrBot WebUI 端口也会按默认 `BIND_ADDRESS=0.0.0.0` 发布。这样做方便从电脑/手机访问，但也意味着配置不当时会暴露到整个网络。
 
 最低要求：
 
 1. 用腾讯云安全组/轻量应用服务器防火墙限制来源 IP，不要长期使用 `0.0.0.0/0`；
-2. 不要在公网公开 noVNC；它包含 QQ 登录和验证界面；
+2. 不要把管理端口和 AstrBot WebUI 长期公开到公网；
 3. 优先使用可信内网、VPN、Tailscale/WireGuard 或 SSH 隧道；
 4. 不要把本工具当作多租户安全隔离方案；
 5. 使用 QQ 小号并遵守 QQ 用户协议。
@@ -454,14 +451,12 @@ v2 默认管理服务监听 `0.0.0.0:8765`，新实例的 WebUI/noVNC 端口也�
 ssh -N -L 8765:127.0.0.1:8765 用户名@服务器IP
 ```
 
-然后本机打开 `http://127.0.0.1:8765/console`。要看 AstrBot/SnowLuma/noVNC，请按实例 `config.json` 的实际三端口块再追加 `-L`，例如实例端口为 5000/5001/5002：
+然后本机打开 `http://127.0.0.1:8765/console`。要看实例 AstrBot WebUI，请按实例 `config.json` 中的实际端口再追加 `-L`，例如实例端口为 5000：
 
 ```bash
 ssh -N \
   -L 8765:127.0.0.1:8765 \
   -L 5000:127.0.0.1:5000 \
-  -L 5001:127.0.0.1:5001 \
-  -L 5002:127.0.0.1:5002 \
   用户名@服务器IP
 ```
 
@@ -475,7 +470,7 @@ ssh -N \
 这一部分按“症状 → 原因 → 最短修复”给出用户真实踩过的坑。更长的 Docker、systemd、iptables 操作放在 [`docs/server-troubleshooting.md`](docs/server-troubleshooting.md)。
 
 <a id="faq-git-ssl"></a>
-### 3.1 Git 报 `Unsupported SSL backend 'openssl'`
+### 3.9 Git 报 `Unsupported SSL backend 'openssl'`
 
 **症状**
 
@@ -543,7 +538,7 @@ sudo usermod -aG docker "$USER"
 
 - 服务器本机 `curl http://127.0.0.1:8765/healthz` 正常，但自己电脑打不开；
 - 或 `ss` 看到管理服务只监听 `127.0.0.1:8765`；
-- 或 AstrBot/SnowLuma/noVNC 链接打不开。
+- 或 AstrBot WebUI 链接打不开。
 
 **原因**：绑定地址、实际端口、云安全组、Ubuntu 防火墙、`public_host` 是四件不同的事。只改 `public_host` 不会改变监听地址。
 
@@ -555,7 +550,7 @@ ss -ltnp 2>/dev/null | grep 8765
 # 如果看到 127.0.0.1:8765，重新用 0.0.0.0 启动/保存配置
 ./console.sh --ip 0.0.0.0 --port 8765 --public-host 你的公网IP或域名
 
-# 2. 实例实际三端口块
+# 2. 实例实际 WebUI 端口
 cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
@@ -576,7 +571,7 @@ curl -I http://127.0.0.1:8765/healthz
 
 1. 腾讯云 CVM：进入 **云服务器 → 实例 → 安全组 → 入站规则**；轻量应用服务器：进入 **服务器 → 防火墙**。
 2. 添加 TCP `8765`，来源填你自己的公网 IP/32；临时测试才用 `0.0.0.0/0`，用完立即收紧。
-3. 部署后从控制台/实例 `config.json`/`docker ps` 查看该实例的实际三端口块，再按需放行。不要只照旧默认端口 `6185/5099/6081` 开。
+3. 部署后从控制台/实例 `config.json`/`docker ps` 查看该实例的实际 WebUI 端口，再按需放行；每个实例只发布一个 AstrBot WebUI 端口。
 4. 检查 Ubuntu 本机防火墙：
 
 ```bash
@@ -587,42 +582,10 @@ sudo ufw allow 8765/tcp
 
 5. 最后在浏览器打开 `http://服务器公网IP:8765/console`；如果仍失败，看 `ss -ltnp | grep 8765` 和 `tail -n 100 ~/.local/share/qqbot-studio/studio-server.log`。
 
-> Docker 发布端口可能绕过部分 ufw 规则；云安全组/轻量防火墙才是公网边界。不要把 noVNC/VNC 端口长期开放给 `0.0.0.0/0`。
-
-<a id="faq-snowluma-password"></a>
-### 3.5 SnowLuma 登录密码错误或重置
-
-**症状**：SnowLuma WebUI 用户名 `admin` 登录失败，完成页密码无效，或日志中的一次性密码已过期。
-
-**原因**：新版会使用稳定的 bootstrap 密码；旧实例、首次登录后改过密码、或容器重启后日志轮换，都可能让完成页密码过期。
-
-**最短修复**
-
-1. 优先在控制台对应实例的 SnowLuma 卡片点 **重置密码**：第一次点击进入确认，第二次执行；成功后用户名仍是 `admin`。
-2. 命令行排查容器名和日志：
-
-```bash
-docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials\|初始登录"
-```
-
-3. 如果界面重置不可用，手动备份并删除 `webui.json`，重启容器，再读新一次性密码：
-
-```bash
-find ~/.local/share/qqbot-studio/instances -path '*/data/snowluma/config/webui.json' -print
-# 以 bot-1 为例；执行前先备份
-cp ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json \
-   ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json.bak
-rm ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json
-docker restart qqbot-bot-1-snowluma
-sleep 5
-docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials"
-```
-
-删除 `webui.json` 只重置 SnowLuma WebUI 登录，不是删除 QQ 数据目录；是否保留 QQ 登录态取决于 SnowLuma 版本，必要时仍要在 noVNC 重新验证。
+> Docker 发布端口可能绕过部分 ufw 规则；云安全组/轻量防火墙才是公网边界。不要把 AstrBot WebUI 端口长期开放给 `0.0.0.0/0`。
 
 <a id="faq-console-status"></a>
-### 3.6 控制台状态读取失败 / 实例状态异常
+### 3.5 控制台状态读取失败 / 实例状态异常
 
 **症状**：控制台某个实例显示“实时状态读取失败”，或打开 `/api/state` 返回 `status_error`；其他实例可能仍正常。
 
@@ -653,9 +616,9 @@ cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 不要因为某个实例状态读取失败就直接删除数据目录。Docker 修复和容器重启后再刷新控制台；具体容器错误看 [Docker/console 排查](docs/server-troubleshooting.md#console-status)。
 
 <a id="faq-port-conflict"></a>
-### 3.7 端口冲突、旧容器和旧实例
+### 3.6 端口冲突、旧容器和旧实例
 
-**症状**：控制台显示端口冲突、`port is already allocated`，或 AstrBot/SnowLuma/noVNC 链接打开后不是当前实例。
+**症状**：控制台显示端口冲突、`port is already allocated`，或 AstrBot WebUI 链接打开后不是当前实例。
 
 **原因**：旧版本/旧实例容器、Docker 残留代理、手工启动的进程，或旧 v1 容器仍绑定固定端口。
 
@@ -667,18 +630,12 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000|5001|5002)\b'
 ```
 
 - 在控制台删除不再需要的实例；删除前备份实例目录，删除不可恢复。
-- 旧 v1 容器可能是 `qqbot-astrbot`、`qqbot-snowluma`，监听 `127.0.0.1:6185/5099/6081`。确认不再需要后：
-
-```bash
-docker rm -f qqbot-astrbot qqbot-snowluma 2>/dev/null || true
-```
-
-删除容器不会删除旧宿主机数据；需要保留 QQ 登录态时先备份。
+- 旧 v1 容器（如 `qqbot-astrbot`）可能仍监听固定端口。确认不再需要后，用 `docker rm -f <容器名>` 删除；删除容器不会删除宿主机数据。
 - Docker Desktop/旧代理在容器停止后仍可能短暂占用端口，可重启 Docker Desktop/Docker daemon；Linux 服务器请先确认不会影响其他容器。
-- 新建实例会自动分配新的三端口块；旧实例不会自动迁移端口。
+- 新建实例会自动分配新的单端口；旧实例不会自动迁移端口。
 
 <a id="faq-windows"></a>
-### 3.8 Windows / Docker Desktop 未验证
+### 3.7 Windows / Docker Desktop 未验证
 
 **症状**：在 Windows 上运行 `./install.sh`、`screen` 或 `sudo` 失败；Docker Desktop 未启动或使用 Windows containers；EXE/端口/防火墙行为与 Linux 不同。
 
@@ -692,7 +649,7 @@ docker rm -f qqbot-astrbot qqbot-snowluma 2>/dev/null || true
 - 当前不承诺 Windows 生产可用；按独立仓库“已验证/未验证”章节逐项测试，并把 Windows 日志发到 Windows 项目仓库。
 
 <a id="faq-docker-install"></a>
-### 3.9 Docker 安装不完整、Docker daemon 启不来
+### 3.8 Docker 安装不完整、Docker daemon 启不来
 
 **症状**：安装 Docker 时取消/断网，向导仍打开但无法部署；或 systemd 报 `Start request repeated too quickly`。
 
@@ -747,12 +704,10 @@ tail -n 150 ~/.local/share/qqbot-studio/studio-server.log
 
 | 项目 | 关系 |
 |---|---|
-| **QQ Bot Studio（本仓库）** | Ubuntu/Linux 主项目：安装器、部署向导、多实例控制台、AstrBot/SnowLuma 编排 |
+| **QQ Bot Studio（本仓库）** | Ubuntu/Linux 主项目：安装器、部署向导、多实例控制台、AstrBot + QQ 官方平台编排 |
 | **QQ Bot Studio Windows** | **独立项目**：Windows 10/11 + Docker Desktop + WSL2 + EXE/PowerShell；版本文档、数据目录、升级和 issue 与 Linux 主项目分开 |
 | **AI 助手 B** | **可选独立子项目**：生成式使用助手；主项目只负责可选 clone/更新、配置/启动管理，不读取/传递其 API Key |
 | **AstrBot** | 上游聊天机器人框架，本项目不重分发其镜像/二进制 |
-| **SnowLuma** | 上游 OneBot v11/QQ 协议端，本项目不重分发其镜像/二进制 |
-| **OneBot v11** | 上游协议标准，本项目按其规范生成配置 |
 | **QQ / DeepSeek** | 第三方账号、协议和 API 服务；使用须遵守各自用户协议、许可、隐私政策和当地法律 |
 
 相关链接：
@@ -761,24 +716,22 @@ tail -n 150 ~/.local/share/qqbot-studio/studio-server.log
 - Windows 独立项目：<https://github.com/Stevehim2007/qqbot-studio-windows>
 - AI 助手 B：<https://github.com/Stevehim2007/qqbot-studio-ai-assistant>
 - AstrBot：<https://github.com/AstrBotDevs/AstrBot>
-- SnowLuma：<https://github.com/SnowLuma/SnowLuma>
-- OneBot v11：<https://github.com/botuniverse/onebot-11>
 - DeepSeek API 文档：<https://api-docs.deepseek.com/>
 - 本项目许可证：[MIT License](LICENSE)
 
 ### 4.2 声明
 
-- 本项目不是腾讯/QQ 官方产品，与 AstrBot、SnowLuma、OneBot、DeepSeek 及腾讯无隶属或背书关系。
-- 本项目不重分发 AstrBot、SnowLuma、QQ 或 DeepSeek 的二进制/镜像/服务；部署时会从相应上游来源拉取镜像或调用 API。各第三方项目适用其自身许可证、EULA 和服务条款，请自行核对。
-- 第三方 QQ 协议端存在账号风控、限制或封禁风险；建议使用小号并遵守 QQ 用户协议。设备验证、短信/邮箱验证、滑块、安全验证和风控只能在 QQ 官方界面完成；官方验证不可绕过，本工具不绕过。
-- 本项目不收集、不保存、不代填 QQ 密码。若在 noVNC 的 QQ 官方客户端中使用密码登录，密码由你在官方界面输入，工具不会读取或转发。
-- 默认 `0.0.0.0` 只适用于你已配置安全组/防火墙/VPN 的场景。管理控制台、AstrBot、SnowLuma、noVNC 和凭据页面都有敏感性，请限制来源 IP；不要把 noVNC 或管理端口长期暴露到公网。
+- 本项目不是腾讯/QQ 官方产品，与 AstrBot、DeepSeek 及腾讯无隶属或背书关系。
+- 本项目不重分发 AstrBot、QQ 或 DeepSeek 的二进制/镜像/服务；部署时会从相应上游来源拉取镜像或调用 API。各第三方项目适用其自身许可证、EULA 和服务条款，请自行核对。
+- QQ 官方机器人接入须遵守 QQ 开放平台规则、频控和权限要求；本工具不会绕过平台验证或风控。
+- 本项目不收集、不保存 QQ 密码或 QQ 开放平台凭据明文；AppID/AppSecret 仅保存在本地实例配置和 secrets 中。
+- 默认 `0.0.0.0` 只适用于你已配置安全组/防火墙/VPN 的场景。管理控制台、AstrBot WebUI 和凭据页面都有敏感性，请限制来源 IP。
 - 本项目不是多租户安全隔离方案；共享主机、共享浏览器和共享数据目录不在安全承诺内。
 - 软件按“现状”提供，不提供明示或暗示担保；使用第三方协议端、API、镜像和云服务产生的账号、数据、合规或费用风险由使用者自行评估和承担。
 
 ### 4.3 致谢
 
-感谢 AstrBot、SnowLuma、OneBot v11、DeepSeek 及所有上游贡献者和社区用户。也感谢提交真实故障日志、复现步骤、文档修正和测试反馈的用户；这些踩坑记录被保留在 [排错指南](docs/server-troubleshooting.md) 和 [常见问题](#part-3) 中。
+感谢 AstrBot、DeepSeek 及所有上游贡献者和社区用户。也感谢提交真实故障日志、复现步骤、文档修正和测试反馈的用户；这些踩坑记录被保留在 [排错指南](docs/server-troubleshooting.md) 和 [常见问题](#part-3) 中。
 
 <a id="docs-index"></a>
 
@@ -801,6 +754,6 @@ tail -n 150 ~/.local/share/qqbot-studio/studio-server.log
 - [QQ Bot 增强插件详解](docs/plugin-qqbot-enhancer.md)
 - [服务器部署与实战排错](docs/server-troubleshooting.md)
 - [v2 控制台/API 契约](docs/ui-api-contract-v2.md)
-- [AstrBot / SnowLuma / DeepSeek 集成调研](docs/integration-research.md)
+- [AstrBot / QQ 官方平台 / DeepSeek 集成调研（历史资料）](docs/integration-research.md)
 - [v2 QA 报告与真实 E2E 待测清单](docs/qa-report-v2.md)
 - [Windows 主仓库历史移植资料](windows/README.md)

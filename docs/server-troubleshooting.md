@@ -2,7 +2,7 @@
 
 面向 Ubuntu 云服务器/远程主机的专项排错文档。日常安装、使用和功能说明先看主项目 [`README.md`](../README.md)；本文只保留可复现的故障现象、原因和最短修复命令。
 
-> 不要把 API Key、QQ 密码、短信验证码、SnowLuma/VNC 密码或含访问令牌的完整日志贴到公开 issue。本文命令默认项目目录为 `"/你的路径/QQ Ai bot"`，实际路径请替换。
+> 不要把 API Key、QQ 密码、QQ 官方 AppSecret 或含访问令牌的完整日志贴到公开 issue。本文命令默认项目目录为 `"/你的路径/QQ Ai bot"`，实际路径请替换。
 
 ## 目录
 
@@ -19,13 +19,12 @@
 11. [旧版 v1 容器仍只监听 127.0.0.1](#old-v1-containers)
 12. [多实例端口冲突、删除实例和残留端口](#port-conflict)
 13. [控制台/API 状态读取失败](#console-status)
-14. [SnowLuma 用户名 admin 密码错误/重置](#snowluma-password)
-15. [QQ 增强插件、找图、点歌不工作](#plugin-issues)
-16. [screen/后台管理服务和日志](#screen)
-17. [Windows 与 Docker Desktop 未验证](#windows)
-18. [最终验证清单](#final-checklist)
-19. [AI 助手 B 公网拒绝连接](#assistant-public-diagnose)
-20. [记忆模式误报与资源统计 Permission denied](#memory-stats-permission)
+14. [QQ 增强插件、找图、点歌不工作](#plugin-issues)
+15. [screen/后台管理服务和日志](#screen)
+16. [Windows 与 Docker Desktop 未验证](#windows)
+17. [最终验证清单](#final-checklist)
+18. [AI 助手 B 公网拒绝连接](#assistant-public-diagnose)
+19. [记忆模式误报与资源统计 Permission denied](#memory-stats-permission)
 
 <a id="triage"></a>
 ## 1. 快速定位表
@@ -40,7 +39,6 @@
 | 面板链接只到 `127.0.0.1` | 查旧容器和实例 `.env`/`config.json` | [旧容器](#old-v1-containers) / [端口冲突](#port-conflict) |
 | `port is already allocated` | `docker ps` + `ss`，删除/重建实例 | [端口冲突](#port-conflict) |
 | 控制台某个实例“状态读取失败” | `healthz`、管理日志、`docker info/ps` | [控制台状态](#console-status) |
-| SnowLuma `admin` 密码错误 | 控制台重置密码，或手动重建 `webui.json` 后读新密码 | [SnowLuma](#snowluma-password) |
 | 找图无结果、点歌没声音、概率不回复 | 查插件启用、provider、网络/音频文件 | [插件问题](#plugin-issues) |
 | Windows EXE/ Docker Desktop 问题 | 去独立 Windows 仓库 | [Windows](#windows) |
 
@@ -366,7 +364,7 @@ docker info
 
 ### 症状
 
-拉 AstrBot/SnowLuma 镜像很慢、超时或拉取失败。
+拉 AstrBot 镜像很慢、超时或拉取失败。
 
 ### 原因
 
@@ -387,9 +385,7 @@ registry.example.com/
 
 ```bash
 docker pull soulter/astrbot:latest
-docker pull motricseven7/snowluma:latest
-docker save -o qqbot-images.tar \
-  soulter/astrbot:latest motricseven7/snowluma:latest
+docker save -o qqbot-images.tar soulter/astrbot:latest
 
 # 目标服务器
 docker load -i qqbot-images.tar
@@ -414,7 +410,7 @@ sudo systemctl restart docker
 |---|---|
 | 监听地址 `bind_host` | `0.0.0.0` 表示所有网卡；`127.0.0.1` 只允许本机 |
 | 管理端口 `bind_port` | 默认 `8765`，不是机器人实例端口 |
-| 实例三端口块 | AstrBot/SnowLuma/noVNC，程序在 `5000–10000` 内自动分配 |
+| 实例 WebUI 端口 | AstrBot WebUI，程序在 `5000–10000` 内自动分配，每实例一个 |
 | `public_host` | 只影响打印/打开的 URL，不改变监听地址 |
 
 ### 症状与修复
@@ -467,9 +463,9 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 | 用途 | 端口 |
 |---|---|
 | 管理控制台/部署向导 | 默认 `8765/tcp` |
-| 每个实例 AstrBot/SnowLuma/noVNC | 以控制台和 `config.json` 中该实例的实际三端口为准，通常在 `5000–10000` |
+| 每个实例 AstrBot WebUI | 以控制台和 `config.json` 中该实例的实际端口为准，通常在 `5000–10000` |
 
-不要再假设旧版的固定宿主机端口 `6185/5099/6081`；这些是容器内部端口，宿主机映射已按实例重新分配。
+AstrBot 容器内部 WebUI 端口为 `6185`；宿主机只发布该实例分配到的单个 WebUI 端口。
 
 ### CVM 安全组
 
@@ -502,7 +498,7 @@ sudo ufw allow 8765/tcp
 sudo ufw status numbered
 ```
 
-部署后再按实例实际端口放行，例如：
+部署后再按每个实例的实际 WebUI 端口放行，例如三个实例：
 
 ```bash
 sudo ufw allow 5000/tcp
@@ -535,7 +531,7 @@ sudo firewall-cmd --list-ports
 ssh -N -L 8765:127.0.0.1:8765 用户名@服务器IP
 ```
 
-本机打开 `http://127.0.0.1:8765/console`。要访问某个实例的 AstrBot/SnowLuma/noVNC，按 `config.json` 中该实例实际端口追加 `-L`。例如实例端口为 `5000/5001/5002`：
+本机打开 `http://127.0.0.1:8765/console`。要访问实例 AstrBot WebUI，按 `config.json` 中该实例实际端口追加 `-L`。例如三个实例的 WebUI 端口为 `5000/5001/5002`：
 
 ```bash
 ssh -N \
@@ -551,11 +547,11 @@ ssh -N \
 
 ### 症状
 
-旧容器 `qqbot-astrbot`、`qqbot-snowluma` 仍占用旧端口，`docker ps` 显示绑定 `127.0.0.1:5099/6081/6185`；v2 控制台不管理它们。
+旧容器 `qqbot-astrbot` 等仍占用旧端口，`docker ps` 显示固定端口绑定；v2 控制台不管理它们。
 
 ### 原因
 
-v1 单实例部署使用固定容器名/端口；v2 改成每实例独立名称、网络和三端口块，不会自动接管旧容器。
+v1 单实例部署使用固定容器名/端口；v2 改成每实例独立名称、网络和单 WebUI 端口，不会自动接管旧容器。
 
 ### 修复
 
@@ -570,10 +566,10 @@ ls -la ~/.local/share/qqbot-studio
 确认旧容器不再需要后删除容器（此命令不删除宿主机 bind mount 数据）：
 
 ```bash
-docker rm -f qqbot-astrbot qqbot-snowluma 2>/dev/null || true
+docker rm -f qqbot-astrbot 2>/dev/null || true
 ```
 
-然后用当前版本重新创建实例、扫码并验证。不要为了刷新端口直接删除正在使用的数据目录。
+然后用当前版本重新创建实例，填写 QQ 官方 AppID/AppSecret 并验证。不要为了刷新端口直接删除正在使用的数据目录。
 
 <a id="port-conflict"></a>
 ## 12. 多实例端口冲突、删除实例和残留端口
@@ -582,11 +578,11 @@ docker rm -f qqbot-astrbot qqbot-snowluma 2>/dev/null || true
 
 - 控制台提示端口已被占用；
 - Docker 报 `port is already allocated`；
-- 三个面板中某个打不开或指向了其他实例。
+- AstrBot WebUI 打不开或指向了其他实例。
 
 ### 原因
 
-旧实例容器、旧 v1 容器、手工进程、Docker Desktop 代理或上次异常退出仍占着端口。v2 新实例会在 `5000–10000` 分配三端口块，但旧实例不会自动迁移旧端口。
+旧实例容器、旧 v1 容器、手工进程、Docker Desktop 代理或上次异常退出仍占着端口。v2 新实例会在 `5000–10000` 分配单个 WebUI 端口，但旧实例不会自动迁移旧端口。
 
 ### 修复
 
@@ -601,7 +597,7 @@ cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 1. 控制台删除不再需要的实例：第一次点击确认，第二次实际删除；删除会清理容器和实例数据，不可恢复。
 2. 确认是旧 v1 容器时，按 [上一节](#old-v1-containers) 备份后删除。
 3. Docker Desktop/残留代理导致端口短时间不释放时，重启 Docker Desktop 或 Docker daemon；Linux 服务器先确认不会影响其他容器。
-4. 重新创建实例，让程序重新分配新的连续端口块。
+4. 重新创建实例，让程序重新分配新的可用端口。
 5. 若只是想在保留数据的情况下修复旧实例端口，先在停机状态完整备份实例目录，再在维护窗口调整/重建；不要在实例运行中手改 `.env`/`compose.yml`。
 
 管理服务默认 `8765` 由控制台预留，不应手动改实例配置去占用它。
@@ -650,54 +646,8 @@ cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 
 `/api/*` 需要页面注入的访问令牌；不要用浏览器直接去掉/伪造 token 调接口。控制台打不开但 `/healthz` 正常时，查看反向代理、端口转发和浏览器地址。
 
-<a id="snowluma-password"></a>
-## 14. SnowLuma 用户名 admin 密码错误/重置
-
-### 症状
-
-SnowLuma WebUI 登录失败，完成页显示密码无效，日志中的一次性密码已过期。
-
-### 原因
-
-用户名固定是 `admin`；新版可能使用 bootstrap 密码，旧实例/首次登录后手工改密/容器重启轮换都可能导致完成页密码过期。
-
-### 优先修复：控制台重置密码
-
-在控制台对应实例的 SnowLuma 卡片点击 **重置密码**，第一次进入确认状态，第二次执行。成功后用户名仍是 `admin`，卡片会显示新密码。
-
-### 命令行读取当前一次性密码
-
-```bash
-docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials\|初始登录"
-```
-
-常见格式：
-
-```text
-initial credentials: user=admin password=xxxxxxxxxxxxxxxx
-```
-
-### 手动重置 SnowLuma WebUI 登录
-
-先备份再删除 `webui.json`，然后重启容器并读新一次性密码：
-
-```bash
-find ~/.local/share/qqbot-studio/instances -path '*/data/snowluma/config/webui.json' -print
-
-# 以 bot-1 为例
-cp ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json \
-   ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json.bak
-rm ~/.local/share/qqbot-studio/instances/bot-1/data/snowluma/config/webui.json
-docker restart qqbot-bot-1-snowluma
-sleep 5
-docker logs --tail 200 qqbot-bot-1-snowluma 2>&1 | grep -i -A3 -B3 "initial credentials"
-```
-
-登录用户名始终是 `admin`。删除 `webui.json` 只重置 SnowLuma WebUI 登录，不是删除 QQ 数据目录；QQ 登录态是否保留取决于 SnowLuma 版本，必要时在 noVNC 重新验证。
-
 <a id="plugin-issues"></a>
-## 15. QQ 增强插件、找图、点歌不工作
+## 14. QQ 增强插件、找图、点歌不工作
 
 ### 先确认插件状态
 
@@ -736,12 +686,12 @@ mkdir -p "$SONGS"
 cp "/你的授权音频.wav" "$SONGS/"
 ```
 
-支持 `.mp3/.wav/.ogg/.flac/.m4a/.aac`，默认单文件上限 20 MB；部分 QQ 适配器可能只可靠支持 WAV，真实播放需按 AstrBot/SnowLuma 日志确认。
+支持 `.mp3/.wav/.ogg/.flac/.m4a/.aac`，默认单文件上限 20 MB；部分 QQ 适配器可能只可靠支持 WAV，真实播放需按 AstrBot 和 QQ 官方平台日志确认。
 
 `/option`、`/插件用法`、`/用法` 可显示本插件用法和已加载插件元数据，但不会猜测其他插件的子命令。完整配置见 [`plugin-qqbot-enhancer.md`](plugin-qqbot-enhancer.md)。
 
 <a id="screen"></a>
-## 16. screen/后台管理服务和日志
+## 15. screen/后台管理服务和日志
 
 管理服务默认在 screen 会话 `qqbot-studio-server` 中运行；受限系统/沙箱会降级到 nohup。查看：
 
@@ -757,7 +707,7 @@ tail -f ~/.local/share/qqbot-studio/studio-server.log
 关闭浏览器不会停止后台部署；关闭管理服务会中断部署任务（任务会标记为中断，通常可以重试）。Docker 容器不会因为关闭管理服务自动停止。
 
 <a id="windows"></a>
-## 17. Windows 与 Docker Desktop 未验证
+## 16. Windows 与 Docker Desktop 未验证
 
 Windows 10/11 是**独立项目**，不是本仓库的 Linux 脚本包装，也不能共用 Linux 数据目录/自动更新：
 
@@ -778,7 +728,7 @@ docker info --format "{{.OSType}}"
 当前没有完成真实 Windows 10/11 + Docker Desktop + EXE 的完整 E2E；不能把 Linux 主项目的结果外推为 Windows 生产可用。Windows 防火墙和云安全组是两层，具体步骤和未验证项以独立 Windows 仓库 README 为准。
 
 <a id="final-checklist"></a>
-## 18. 最终验证清单
+## 17. 最终验证清单
 
 ```bash
 cd "/你的路径/QQ Ai bot"
@@ -802,10 +752,10 @@ cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
-最后确认安全组/防火墙只放行实际需要的来源 IP 和端口；不要在公开网络暴露 noVNC。
+最后确认安全组/防火墙只放行实际需要的来源 IP 和端口；不要把管理端口和 AstrBot WebUI 长期暴露到公网。
 
 <a id="assistant-public-diagnose"></a>
-## 19. AI 助手 B 公网拒绝连接
+## 18. AI 助手 B 公网拒绝连接
 
 ### 症状
 
@@ -845,7 +795,7 @@ ssh -N -L <port>:127.0.0.1:<port> <用户名>@192.144.206.201
 如果页面/接口显示“当前后端不支持诊断”，请更新主项目后重启管理服务再试。
 
 <a id="memory-stats-permission"></a>
-## 20. 记忆模式误报与资源统计 Permission denied
+## 19. 记忆模式误报与资源统计 Permission denied
 
 ### 20.1 切换记忆模式后先报 cmd_config.json 无法解析
 

@@ -1,9 +1,9 @@
 """Secure plugin market, installation, grouping, and operation state.
 
-The module deliberately uses only the Python standard library.  It never runs
-``pip``, never writes to ``site-packages`` and never executes archive content:
-plugins are unpacked as data into the owning AstrBot instance's ``plugins``
-directory.
+The module deliberately uses only the Python standard library.  It never
+executes archive content: plugins are unpacked as data into the owning AstrBot
+instance's ``plugins`` directory.  Runtime dependencies are declarative; the
+installer checks them and may run ``pip`` only after explicit user consent.
 
 Security boundaries implemented here:
 
@@ -41,7 +41,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -514,6 +514,70 @@ def _normalise_string_list(value: Any, field: str, *, max_items: int = 100) -> l
     return result
 
 
+_RUNTIME_PY_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,80}$")
+_RUNTIME_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,80}$")
+_RUNTIME_SPEC_RE = re.compile(r"^[<>=!~0-9A-Za-z.*+_ -]{0,80}$")
+_RUNTIME_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+:/@()-]{0,120}$")
+
+
+def _normalise_runtime_requirements(value: Any) -> dict[str, Any]:
+    """Normalise optional runtime dependency declarations.
+
+    This never executes anything.  It only freezes the declarations that the
+    installer may show to the user and, after explicit consent, install.
+    """
+    if value in (None, ""):
+        return {"python": [], "system": []}
+    if not isinstance(value, Mapping):
+        raise ManifestError("manifest 的 runtime_requirements 必须是 JSON object。")
+    result: dict[str, Any] = {"python": [], "system": []}
+    python_items = value.get("python") or []
+    system_items = value.get("system") or []
+    if not isinstance(python_items, (list, tuple)) or not isinstance(system_items, (list, tuple)):
+        raise ManifestError("runtime_requirements.python/system 必须是数组。")
+    if len(python_items) > 20 or len(system_items) > 20:
+        raise ManifestError("runtime_requirements 条目过多。")
+    seen: set[str] = set()
+    for item in python_items:
+        if not isinstance(item, Mapping):
+            raise ManifestError("runtime_requirements.python 条目必须是 object。")
+        name = _normalise_text(item.get("name"), "runtime_requirements.python.name", max_len=81, required=True)
+        if not _RUNTIME_PY_NAME_RE.fullmatch(name):
+            raise ManifestError("runtime_requirements.python.name 不合法。")
+        if name.lower() in seen:
+            raise ManifestError("runtime_requirements.python 包含重复依赖。")
+        seen.add(name.lower())
+        spec = str(item.get("spec") or "").strip()
+        if spec and not _RUNTIME_SPEC_RE.fullmatch(spec):
+            raise ManifestError("runtime_requirements.python.spec 不合法。")
+        module = str(item.get("module") or name.replace("-", "_")).strip()
+        if not _RUNTIME_MODULE_RE.fullmatch(module):
+            raise ManifestError("runtime_requirements.python.module 不合法。")
+        result["python"].append({
+            "name": name,
+            "spec": spec,
+            "module": module,
+            "description": _normalise_text(item.get("description") or "", "runtime_requirements.python.description", max_len=300),
+        })
+    for item in system_items:
+        if not isinstance(item, Mapping):
+            raise ManifestError("runtime_requirements.system 条目必须是 object。")
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in {"font", "command", "package"}:
+            raise ManifestError("runtime_requirements.system.kind 只支持 font/command/package。")
+        target = _normalise_text(item.get("target"), "runtime_requirements.system.target", max_len=121, required=True)
+        if not _RUNTIME_TARGET_RE.fullmatch(target):
+            raise ManifestError("runtime_requirements.system.target 不合法。")
+        if kind == "command" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+/-]{0,120}", target):
+            raise ManifestError("runtime_requirements.system.command 只能是单个命令名。")
+        result["system"].append({
+            "kind": kind,
+            "target": target,
+            "description": _normalise_text(item.get("description") or "", "runtime_requirements.system.description", max_len=300),
+        })
+    return result
+
+
 _CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 
 
@@ -813,7 +877,7 @@ def _manifest_for_record(record: Mapping[str, Any]) -> dict[str, Any]:
     nested = record.get("manifest")
     if isinstance(nested, Mapping):
         merged = dict(nested)
-        for key in ("id", "plugin_id", "version", "provides", "requires", "conflicts", "dependencies"):
+        for key in ("id", "plugin_id", "version", "provides", "requires", "conflicts", "dependencies", "runtime_requirements"):
             if key not in merged and key in record:
                 merged[key] = record[key]
         return merged
@@ -1156,6 +1220,7 @@ class PluginManifest:
     config_schema_version: int = 1
     data_schema_version: int = 1
     recommended_groups: tuple[str, ...] = ()
+    runtime_requirements: dict[str, Any] = field(default_factory=dict)
     extra: Mapping[str, Any] | None = None
 
     @property
@@ -1184,6 +1249,7 @@ class PluginManifest:
             "config_schema_version": int(self.config_schema_version),
             "data_schema_version": int(self.data_schema_version),
             "recommended_groups": list(self.recommended_groups),
+            "runtime_requirements": _deepcopy_json(dict(self.runtime_requirements)),
         }
         if self.extra:
             payload["extra"] = _deepcopy_json(dict(self.extra))
@@ -1266,6 +1332,7 @@ def _manifest_from_dict(
         "astrbot", "astrbot_version", "min_astrbot_version", "dependencies",
         "provides", "requires", "conflicts", "config_schema_version",
         "data_schema_version", "recommended_groups", "groups", "extra",
+        "runtime_requirements",
     }
     extra = {str(key): _deepcopy_json(value) for key, value in raw.items() if str(key) not in known}
     if isinstance(raw.get("extra"), Mapping):
@@ -1289,6 +1356,7 @@ def _manifest_from_dict(
         config_schema_version=config_schema_version,
         data_schema_version=data_schema_version,
         recommended_groups=tuple(recommended_groups),
+        runtime_requirements=_normalise_runtime_requirements(raw.get("runtime_requirements")),
         extra=extra or None,
     )
 
@@ -3357,6 +3425,7 @@ class PluginMarket:
             "provides": [dict(item) for item in manifest.provides],
             "requires": [dict(item) for item in manifest.requires],
             "conflicts": [dict(item) for item in manifest.conflicts],
+            "runtime_requirements": _deepcopy_json(dict(manifest.runtime_requirements)),
             "config_schema_version": manifest.config_schema_version,
             "data_schema_version": manifest.data_schema_version,
             "dependency_graph": dependency_graph,
@@ -3365,6 +3434,23 @@ class PluginMarket:
             "warnings": dependency_warnings,
             "_execution": execution,
         }
+
+    def preview_plan(self, token: str) -> dict[str, Any]:
+        """Return a stored preview plan without consuming it.
+
+        Dependency installation must not consume the plugin-operation preview:
+        after the user consents to dependencies, the same preview token still
+        installs the plugin.
+        """
+        token = str(token or "").strip()
+        if not token:
+            raise PluginMarketError("缺少预览 token。")
+        with self.lock:
+            preview = self._load_operation_preview(token)
+            plan = preview.get("plan")
+            if not isinstance(plan, Mapping):
+                raise PluginMarketError("预览内容无效。")
+            return self._public_plan(plan)
 
     @staticmethod
     def _public_plan(plan: Mapping[str, Any]) -> dict[str, Any]:

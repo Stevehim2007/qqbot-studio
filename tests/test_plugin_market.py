@@ -128,6 +128,56 @@ class ManifestAndZipTests(PluginMarketTestBase):
         self.assertEqual(result["sha256"], "a" * 64)
         self.assertEqual(result["extra"]["custom_manifest_key"], {"keep": True})
 
+    def test_manifest_normalises_runtime_requirements(self):
+        base = make_manifest("demo_plugin", "1.0.0", "demo.zip", "a" * 64)
+        result = validate_manifest({
+            **base,
+            "runtime_requirements": {
+                "python": [{"name": "Pillow", "spec": ">=10", "module": "PIL", "description": "图片"}],
+                "system": [{"kind": "font", "target": "Noto Sans CJK SC"}],
+            },
+        })
+        self.assertEqual(result["runtime_requirements"]["python"][0]["module"], "PIL")
+        self.assertEqual(result["runtime_requirements"]["system"][0]["kind"], "font")
+
+    def test_preview_exposes_runtime_requirements_without_consuming_token(self):
+        archive, manifest = self.add_market_plugin()
+        manifest["runtime_requirements"] = {
+            "python": [{"name": "Pillow", "spec": ">=10", "module": "PIL"}],
+            "system": [{"kind": "font", "target": "Noto Sans CJK SC"}],
+        }
+        self.write_catalog([manifest])
+        self.market.refresh_market()
+        preview = self.market.preview_operation(
+            {"operation": "install", "plugin_id": manifest["id"], "confirm": False}
+        )
+        self.assertTrue(preview["ok"], preview)
+        self.assertEqual(preview["plan"]["runtime_requirements"]["python"][0]["module"], "PIL")
+        plan = self.market.preview_plan(preview["preview_token"])
+        self.assertEqual(plan["runtime_requirements"]["system"][0]["kind"], "font")
+        result = self.market.execute_operation(
+            {
+                "operation": "install",
+                "plugin_id": manifest["id"],
+                "preview_token": preview["preview_token"],
+                "confirm": True,
+                "idempotency_key": "runtime-preview-once",
+            }
+        )
+        self.assertTrue(result["ok"], result)
+
+    def test_manifest_rejects_unsafe_runtime_requirements(self):
+        base = make_manifest("demo_plugin", "1.0.0", "demo.zip", "a" * 64)
+        for bad in (
+            {"python": [{"name": "Pillow; rm -rf /"}]},
+            {"python": [{"name": "Pillow", "spec": ">=10; rm -rf /"}]},
+            {"system": [{"kind": "shell", "target": "sh"}]},
+            {"system": [{"kind": "command", "target": "sh -c evil"}]},
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(Exception):
+                    validate_manifest({**base, "runtime_requirements": bad})
+
     def test_manifest_rejects_bad_sha_root_and_id(self):
         base = {
             "id": "demo_plugin",

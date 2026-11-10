@@ -400,19 +400,15 @@ class StudioManager:
         except OSError:
             pass
         containers: dict[str, str] = {}
-        for service in ("astrbot", "snowluma"):
-            match = re.search(
-                rf"(?ms)^  {service}:\s*\n(.*?)(?=^  [A-Za-z0-9_.-]+:\s*$|^networks:\s*$|\Z)",
-                compose_text,
-            )
-            if match:
-                name_match = re.search(r"(?m)^\s+container_name:\s*[\"']?([A-Za-z0-9_.-]+)", match.group(1))
-                if name_match:
-                    containers[service] = name_match.group(1)
-        legacy_names = (
-            containers.get("astrbot") == "qqbot-astrbot"
-            or containers.get("snowluma") == "qqbot-snowluma"
+        match = re.search(
+            r"(?ms)^  astrbot:\s*\n(.*?)(?=^  [A-Za-z0-9_.-]+:\s*$|^networks:\s*$|\Z)",
+            compose_text,
         )
+        if match:
+            name_match = re.search(r"(?m)^\s+container_name:\s*[\"']?([A-Za-z0-9_.-]+)", match.group(1))
+            if name_match:
+                containers["astrbot"] = name_match.group(1)
+        legacy_names = containers.get("astrbot") == "qqbot-astrbot"
         project_name = "qqbot-studio" if legacy_names else f"qqbot-studio-{instance_id}"
         network_name = "qqbot-studio-net" if legacy_names else f"qqbot-studio-{instance_id}-net"
         network_match = re.search(
@@ -434,7 +430,6 @@ class StudioManager:
             "created_at": created_at,
             "project_name": project_name,
             "astrbot_container": containers.get("astrbot") or f"qqbot-{instance_id}-astrbot",
-            "snowluma_container": containers.get("snowluma") or f"qqbot-{instance_id}-snowluma",
             "network_name": network_name,
             "legacy": True,
         }
@@ -500,7 +495,7 @@ class StudioManager:
                 continue
             for line in env_text.splitlines():
                 key, _, value = line.partition("=")
-                if key in {"ASTRBOT_WEBUI_PORT", "SNOWLUMA_WEBUI_PORT_HOST", "NOVNC_PORT"}:
+                if key == "ASTRBOT_WEBUI_PORT":
                     try:
                         used.add(int(value.strip()))
                     except ValueError:
@@ -524,12 +519,7 @@ class StudioManager:
             else:
                 manager.docker.require_ready()
                 manager.docker._docker(
-                    [
-                        "rm",
-                        "-f",
-                        str(meta.get("astrbot_container") or ""),
-                        str(meta.get("snowluma_container") or ""),
-                    ],
+                    ["rm", "-f", str(meta.get("astrbot_container") or "")],
                     timeout=120,
                 )
         except Exception as exc:  # noqa: BLE001 - report but do not orphan silently
@@ -566,7 +556,6 @@ class StudioManager:
             "created_at": utc_now(),
             "project_name": f"qqbot-studio-{instance_id}",
             "astrbot_container": f"qqbot-{instance_id}-astrbot",
-            "snowluma_container": f"qqbot-{instance_id}-snowluma",
             "network_name": f"qqbot-studio-{instance_id}-net",
         }
         self._write_instance_meta(path, meta)
@@ -634,7 +623,6 @@ class StudioManager:
         meta.setdefault("created_at", utc_now())
         meta.setdefault("project_name", f"qqbot-studio-{instance_id}")
         meta.setdefault("astrbot_container", f"qqbot-{instance_id}-astrbot")
-        meta.setdefault("snowluma_container", f"qqbot-{instance_id}-snowluma")
         meta.setdefault("network_name", f"qqbot-studio-{instance_id}-net")
         return meta
 
@@ -669,7 +657,6 @@ class StudioManager:
             instance_dir,
             project_name=str(meta["project_name"]),
             astrbot_container=str(meta["astrbot_container"]),
-            snowluma_container=str(meta["snowluma_container"]),
         )
         settings = self.load_settings()
         manager = DeployManager(
@@ -680,7 +667,6 @@ class StudioManager:
             instance_id=instance_id,
             project_name=str(meta["project_name"]),
             astrbot_container=str(meta["astrbot_container"]),
-            snowluma_container=str(meta["snowluma_container"]),
             network_name=str(meta["network_name"]),
         )
         with self._lock:
@@ -698,7 +684,8 @@ class StudioManager:
             "created_at": meta.get("created_at") or "",
             "deployed": bool(deployment.get("deployed")),
             "running": deployment.get("running"),
-            "qq_account": deployment.get("qq_account") or "",
+            "platform_mode": deployment.get("platform_mode") or "official",
+            "qq_official_appid": deployment.get("qq_official_appid") or "",
             "urls": deployment.get("urls") or {},
             "active_job_id": deployment.get("active_job_id") or "",
             "active_job_status": deployment.get("active_job_status"),
@@ -719,7 +706,8 @@ class StudioManager:
                         "created_at": meta.get("created_at") or "",
                         "deployed": False,
                         "running": None,
-                        "qq_account": "",
+                        "platform_mode": "official",
+                        "qq_official_appid": "",
                         "urls": {},
                         "active_job_id": "",
                         "active_job_status": None,
@@ -816,13 +804,6 @@ class StudioManager:
                     "instance_id": instance_id,
                     "container": str(meta.get("astrbot_container") or ""),
                     "service": "astrbot",
-                }
-            )
-            expected.append(
-                {
-                    "instance_id": instance_id,
-                    "container": str(meta.get("snowluma_container") or ""),
-                    "service": "snowluma",
                 }
             )
         if not expected:

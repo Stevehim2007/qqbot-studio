@@ -2,7 +2,9 @@
 > 每个机器人实例使用独立的 Compose 项目、容器名、网络和端口。
 > SnowLuma ↔ AstrBot 仍通过 `ws://astrbot:6199/ws` 连接，但只存在于各自实例的 Docker 网络内。
 
-# 集成调研结论（AstrBot v4.29.x + SnowLuma v2.2.x）
+# 集成调研结论（历史：AstrBot v4.29.x + SnowLuma v2.2.x）
+
+> 历史资料：当前项目已不再支持 SnowLuma/OneBot/noVNC，仅保留 QQ 官方机器人接入。以下内容仅用于追溯调研过程。
 
 调研时间：2026-10-28。以下结论用于本仓库的自动部署生成器；实际字段以对应版本源码为准。
 本项目不修改或重新分发 AstrBot / SnowLuma 的镜像或二进制文件，只调用官方发布物。

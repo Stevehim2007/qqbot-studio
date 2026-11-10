@@ -740,7 +740,7 @@ class AssistantExtensionManager:
                 env_text = ""
             for line in env_text.splitlines():
                 key, _, value = line.partition("=")
-                if key in {"ASTRBOT_WEBUI_PORT", "SNOWLUMA_WEBUI_PORT_HOST", "NOVNC_PORT"}:
+                if key == "ASTRBOT_WEBUI_PORT":
                     try:
                         reserved.add(int(value.strip()))
                     except ValueError:

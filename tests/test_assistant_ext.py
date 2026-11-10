@@ -480,7 +480,7 @@ class AssistantConfigStartTests(unittest.TestCase):
         instance_dir = self.root / "instances" / "bot-2"
         instance_dir.mkdir(parents=True)
         (instance_dir / "config.json").write_text(
-            json.dumps({"ports": {"astrbot_webui": 6000, "snowluma_webui": 6001, "novnc": 6002}}),
+            json.dumps({"ports": {"astrbot_webui": 6000}}),
             encoding="utf-8",
         )
         result = manager.save_config({**base, "port": 6000})

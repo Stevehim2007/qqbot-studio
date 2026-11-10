@@ -21,8 +21,8 @@ PROJECT_NAME = "qqbot-studio"
 CONFIG_SCHEMA_VERSION = 2
 DEFAULT_MEMORY_MODE = "direct"
 MEMORY_MODES = ("direct", "astrbot")
-PLATFORM_MODES = ("snowluma", "official")
-DEFAULT_PLATFORM_MODE = "snowluma"
+PLATFORM_MODES = ("official",)
+DEFAULT_PLATFORM_MODE = "official"
 
 DEFAULT_PROMPT = """你是一位友好、真诚、有边界感的 QQ 聊天助手。
 请使用简洁自然的中文回复；避免机械感、刷屏、重复内容和不必要的 @。
@@ -37,7 +37,6 @@ DEFAULT_PROMPT = """你是一位友好、真诚、有边界感的 QQ 聊天助�
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": CONFIG_SCHEMA_VERSION,
-    "qq_account": "",
     "platform_mode": DEFAULT_PLATFORM_MODE,
     "qq_official_appid": "",
     "model": MODEL_NAME,
@@ -64,9 +63,19 @@ SENSITIVE_CONFIG_KEYS = {
     "api_key",
     "qq_password",
     "password",
-    "vnc_password",
-    "onebot_token",
     "qq_official_secret",
+}
+
+# Official-only deployments no longer use these legacy fields. They are
+# removed on load/save so a stale config cannot reintroduce another platform.
+LEGACY_CONFIG_KEYS = {"qq_account"}
+LEGACY_SECRET_KEYS = {
+    "onebot_token",
+    "snowluma_http_token",
+    "snowluma_ws_token",
+    "snowluma_password",
+    "snowluma_username",
+    "vnc_password",
 }
 
 
@@ -154,19 +163,12 @@ def generate_password(length: int = 20) -> str:
     return "".join(chars)
 
 
-def generate_vnc_password() -> str:
-    """Generate a short VNC password.
-
-    Classic VNC authentication only uses the first eight characters, so we
-    generate exactly eight random alphanumeric characters.
-    """
-
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(8))
-
-
 def generate_token(nbytes: int = 32) -> str:
     return secrets.token_urlsafe(nbytes)
+
+
+def _strip_legacy_config_keys(config: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in config.items() if key not in LEGACY_CONFIG_KEYS}
 
 
 class Store:
@@ -234,10 +236,10 @@ class Store:
         config = {**DEFAULT_CONFIG, **raw}
         # Never allow API keys or passwords to persist in config.json, even if
         # an older version or a manual edit placed them there.
-        return _strip_sensitive_keys(config)
+        return _strip_legacy_config_keys(_strip_sensitive_keys(config))
 
     def save_config(self, config: dict[str, Any]) -> dict[str, Any]:
-        clean = _strip_sensitive_keys({**DEFAULT_CONFIG, **config})
+        clean = _strip_legacy_config_keys(_strip_sensitive_keys({**DEFAULT_CONFIG, **config}))
         self.write_json(self.config_path, clean, mode=0o600)
         return clean
 
@@ -257,22 +259,19 @@ class Store:
             "astrbot_username": lambda: "admin",
             "astrbot_password": generate_password,
             "astrbot_jwt_secret": lambda: generate_token(32),
-            "onebot_token": lambda: generate_token(32),
             "qq_official_secret": lambda: "",
-            "snowluma_http_token": lambda: generate_token(32),
-            "snowluma_ws_token": lambda: generate_token(32),
-            "vnc_password": generate_vnc_password,
         }
         for key, factory in defaults.items():
             value = secrets_data.get(key)
             if not isinstance(value, str) or not value:
                 secrets_data[key] = factory()
                 changed = True
-        # The SnowLuma WebUI password is discovered from logs after first
-        # boot, so an empty string is a legitimate persisted value.
-        if not isinstance(secrets_data.get("snowluma_password"), str):
-            secrets_data["snowluma_password"] = ""
-            changed = True
+        # Official-only deployments do not use the old SnowLuma/noVNC/OneBot
+        # credentials. Purge them when migrating an existing secrets file.
+        for key in LEGACY_SECRET_KEYS:
+            if key in secrets_data:
+                secrets_data.pop(key, None)
+                changed = True
         if changed or not self.secrets_path.exists():
             self.save_secrets(secrets_data)
         else:
@@ -298,6 +297,13 @@ class Store:
             return False
         migrated = dict(raw)
         changed = False
+        for key in LEGACY_CONFIG_KEYS:
+            if key in migrated:
+                migrated.pop(key, None)
+                changed = True
+        if migrated.get("platform_mode") != DEFAULT_PLATFORM_MODE:
+            migrated["platform_mode"] = DEFAULT_PLATFORM_MODE
+            changed = True
         for key, value in DEFAULT_CONFIG.items():
             if key not in migrated:
                 migrated[key] = value

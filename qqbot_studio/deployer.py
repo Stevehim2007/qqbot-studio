@@ -1,12 +1,10 @@
-"""Deployment orchestration for AstrBot + SnowLuma + DeepSeek."""
+"""Deployment orchestration for AstrBot + DeepSeek."""
 
 from __future__ import annotations
 
 import base64
 import copy
 import errno
-import glob
-import hashlib
 import json
 import math
 import os
@@ -22,7 +20,7 @@ from urllib.parse import quote as urlquote
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from . import __version__
 from .astrbot_api import (
@@ -31,14 +29,17 @@ from .astrbot_api import (
     AstrBotTransientError,
     call_with_retry,
 )
-from .configgen import generate_artifacts, image_names_for_prefix, mirror_prefixes, set_image_names
+from .configgen import (
+    generate_artifacts,
+    image_names_for_prefix,
+    mirror_prefixes,
+    set_image_names,
+)
 from .dockerctl import DockerController, DockerError
 from .store import (
     DEFAULT_MEMORY_MODE,
-    DEFAULT_PLATFORM_MODE,
     DEFAULT_PROMPT,
     MEMORY_MODES,
-    PLATFORM_MODES,
     MODEL_NAME,
     Store,
     chmod_best_effort,
@@ -48,7 +49,6 @@ from .store import (
 )
 
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-QQ_ACCOUNT_RE = re.compile(r"^\d{5,12}$")
 PERSONA_ID = "qqbot-assistant"
 ENHANCER_PLUGIN_ID = "qqbot_enhancer"
 REPLY_PLUGIN_ID = "qqbot_core_reply"
@@ -225,7 +225,6 @@ class DeployManager:
         instance_id: str = "",
         project_name: str = "qqbot-studio",
         astrbot_container: str = "qqbot-astrbot",
-        snowluma_container: str = "qqbot-snowluma",
         network_name: str = "qqbot-studio-net",
         plugin_market_trusted_hosts: list[str] | tuple[str, ...] | None = None,
     ) -> None:
@@ -249,13 +248,11 @@ class DeployManager:
         self.instance_id = str(instance_id or "").strip()
         self.project_name = str(project_name or "qqbot-studio")
         self.astrbot_container = str(astrbot_container or "qqbot-astrbot")
-        self.snowluma_container = str(snowluma_container or "qqbot-snowluma")
         self.network_name = str(network_name or "qqbot-studio-net")
         self.docker = docker or DockerController(
             self.data_dir,
             project_name=self.project_name,
             astrbot_container=self.astrbot_container,
-            snowluma_container=self.snowluma_container,
         )
         self._api_client_factory = api_client_factory or (
             lambda base_url, username, password: AstrBotClient(base_url, username, password)
@@ -276,18 +273,10 @@ class DeployManager:
             pass
         self._last_persist_at: dict[str, float] = {}
         self._recover_interrupted_jobs()
-        self._refresh_snowluma_status_migration()
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    @staticmethod
-    def _validate_qq(qq_account: str) -> str:
-        value = str(qq_account or "").strip()
-        if not QQ_ACCOUNT_RE.fullmatch(value):
-            raise DeploymentError("QQ 号必须为 5–12 位数字。")
-        return value
-
     @staticmethod
     def _validate_prompt(prompt: str) -> str:
         # Validate non-empty/limits without collapsing internal newlines.
@@ -416,7 +405,7 @@ class DeployManager:
             for key, value in secrets_data.items():
                 if not isinstance(value, str) or len(value) < 6:
                     continue
-                if any(word in str(key).lower() for word in ("password", "token", "secret", "vnc")):
+                if any(word in str(key).lower() for word in ("password", "token", "secret")):
                     values.add(value)
         except Exception:
             pass
@@ -529,29 +518,20 @@ class DeployManager:
     def start_deploy(
         self,
         *,
-        qq_account: str,
         deepseek_api_key: str,
         prompt: str,
         use_mirror: bool = False,
         accept_risk: bool = False,
         mirror_candidates: list[str] | None = None,
-        platform_mode: str = DEFAULT_PLATFORM_MODE,
         official_appid: str = "",
         official_secret: str = "",
     ) -> str:
-        mode = str(platform_mode or DEFAULT_PLATFORM_MODE).strip()
-        if mode not in PLATFORM_MODES:
-            raise DeploymentError(f"不支持的接入方式：{mode}")
         appid = str(official_appid or "").strip()
         appsecret = str(official_secret or "").strip()
-        if mode == "official":
-            if not re.fullmatch(r"\d{5,32}", appid):
-                raise DeploymentError("QQ 官方机器人 AppID 必须为 5–32 位数字。")
-            if not appsecret:
-                raise DeploymentError("请填写 QQ 官方机器人 AppSecret。")
-            qq = appid
-        else:
-            qq = self._validate_qq(qq_account)
+        if not re.fullmatch(r"\d{5,32}", appid):
+            raise DeploymentError("QQ 官方机器人 AppID 必须为 5–32 位数字。")
+        if not appsecret:
+            raise DeploymentError("请填写 QQ 官方机器人 AppSecret。")
         text_prompt = self._validate_prompt(prompt)
         api_key = str(deepseek_api_key or "").strip()
         if not api_key:
@@ -584,18 +564,13 @@ class DeployManager:
         try:
             config = self.store.load_config()
             config["last_job_id"] = job_id
-            config["platform_mode"] = mode
-            config["qq_account"] = qq
-            config["qq_official_appid"] = appid if mode == "official" else ""
+            config["platform_mode"] = "official"
+            config["qq_official_appid"] = appid
             config["prompt"] = text_prompt
             config["use_mirror"] = bool(configured_prefixes)
             config["mirror_candidates"] = configured_prefixes
             config["model"] = MODEL_NAME
             self.store.save_config(config)
-            if mode == "official":
-                secrets = self.store.ensure_secrets()
-                secrets["qq_official_secret"] = appsecret
-                self.store.save_secrets(secrets)
         except Exception as exc:
             with self._lock:
                 self._jobs.pop(job_id, None)
@@ -609,7 +584,7 @@ class DeployManager:
             target=self._run_deploy,
             name=f"qqbot-deploy-{job_id}",
             daemon=True,
-            args=(job_id, qq, api_key, text_prompt, configured_prefixes, mode, appid, appsecret),
+            args=(job_id, api_key, text_prompt, configured_prefixes, appid, appsecret),
         )
         try:
             thread.start()
@@ -634,11 +609,9 @@ class DeployManager:
     def _run_deploy(
         self,
         job_id: str,
-        qq_account: str,
         api_key: str,
         prompt: str,
         mirror_candidates: list[str],
-        platform_mode: str = DEFAULT_PLATFORM_MODE,
         official_appid: str = "",
         official_secret: str = "",
     ) -> None:
@@ -649,7 +622,7 @@ class DeployManager:
         redact: Callable[[str], str] = lambda text: str(text).replace(api_key, "***") if api_key else str(text)
         try:
             redact = self._redactor(api_key)
-            self._deploy_impl(job, qq_account, api_key, prompt, mirror_candidates, redact, platform_mode, official_appid, official_secret)
+            self._deploy_impl(job, api_key, prompt, mirror_candidates, redact, official_appid, official_secret)
         except Exception as exc:  # noqa: BLE001 - report all failures to the UI
             message = redact(str(exc) or exc.__class__.__name__)
             if not isinstance(exc, (DeploymentError, DockerError, AstrBotAPIError, ValueError)):
@@ -667,16 +640,10 @@ class DeployManager:
                 job.status = "success"
                 job.progress = 100
                 job.step = "部署完成"
-                if platform_mode == "official":
-                    job.message = "AstrBot 与 DeepSeek 已配置完成。QQ 官方机器人将直接连接，无需扫码。"
-                    job.error = ""
-                    job.updated_at = utc_now()
-                    self._append_log(job, "[完成] 部署成功。QQ 官方机器人已配置。")
-                else:
-                    job.message = "AstrBot、SnowLuma 与 DeepSeek 已配置完成。下一步请打开 noVNC 扫码登录 QQ。"
-                    job.error = ""
-                    job.updated_at = utc_now()
-                    self._append_log(job, "[完成] 部署成功。请打开 noVNC 扫码登录 QQ。")
+                job.message = "AstrBot 与 DeepSeek 已配置完成。QQ 官方机器人将直接连接，无需扫码。"
+                job.error = ""
+                job.updated_at = utc_now()
+                self._append_log(job, "[完成] 部署成功。QQ 官方机器人已配置。")
                 self._persist_job(job, force=True)
         finally:
             with self._lock:
@@ -686,16 +653,13 @@ class DeployManager:
     def _deploy_impl(
         self,
         job: Job,
-        qq_account: str,
         api_key: str,
         prompt: str,
         mirror_candidates: list[str],
         redact: Callable[[str], str],
-        platform_mode: str = DEFAULT_PLATFORM_MODE,
         official_appid: str = "",
         official_secret: str = "",
     ) -> None:
-        official = platform_mode == "official"
         add_log = lambda text: self._append_log(job, redact(text))  # noqa: E731
 
         self._set_job(job, step="检查 Docker 环境", progress=4, message="正在检查 Docker 与 Compose 是否可用…")
@@ -711,13 +675,13 @@ class DeployManager:
         if not ok:
             add_log("警告：DeepSeek 预检未能完成，将继续部署；请在部署后通过 AstrBot WebUI 检查模型配置。")
 
-        self._set_job(job, step="生成本地配置", progress=14, message="正在生成 Docker Compose、QQ 官方机器人与模型配置…" if official else "正在生成 Docker Compose、OneBot 与模型配置…")
+        self._set_job(job, step="生成本地配置", progress=14, message="正在生成 Docker Compose、QQ 官方机器人与模型配置…")
         secrets_data = self.store.ensure_secrets()
+        secrets_data["qq_official_secret"] = official_secret
         artifacts = generate_artifacts(
             self.data_dir,
             api_key=api_key,
             prompt=prompt,
-            qq_account=qq_account,
             use_mirror=bool(mirror_candidates),
             secrets_data=secrets_data,
             ports=self.store.load_config().get("ports") or None,
@@ -725,9 +689,7 @@ class DeployManager:
             bind_address=self.bind_address,
             project_name=self.project_name,
             astrbot_container=self.astrbot_container,
-            snowluma_container=self.snowluma_container,
             network_name=self.network_name,
-            platform_mode=platform_mode,
             official_appid=official_appid,
             official_secret=official_secret,
         )
@@ -738,9 +700,8 @@ class DeployManager:
         config = self.store.load_config()
         config.update(
             {
-                "platform_mode": platform_mode,
-                "qq_account": qq_account,
-                "qq_official_appid": official_appid if official else "",
+                "platform_mode": "official",
+                "qq_official_appid": official_appid,
                 "prompt": prompt,
                 "use_mirror": bool(mirror_candidates),
                 "mirror_candidates": list(mirror_candidates),
@@ -756,23 +717,22 @@ class DeployManager:
             add_log("警告：" + unique_default_error)
         else:
             add_log("AstrBot 群聊会话将按 event.unified_msg_origin 共享（已确保 unique_session 默认关闭）。")
-        add_log("本地配置已生成，包含 QQ 官方机器人配置与 AstrBot 登录凭据。" if official else "本地配置已生成，包含随机 OneBot token 与 AstrBot 登录凭据。")
+        add_log("本地配置已生成，包含 QQ 官方机器人配置与 AstrBot 登录凭据。")
         candidate_prefixes = list(mirror_candidates) or [""]
         if mirror_candidates:
             add_log("镜像候选源：" + "、".join(candidate_prefixes[:6]))
 
-        self._set_job(job, step="拉取 Docker 镜像", progress=24, message="正在拉取 AstrBot 镜像，首次运行可能需要数分钟…" if official else "正在拉取 AstrBot 与 SnowLuma 镜像，首次运行可能需要数分钟…")
+        self._set_job(job, step="拉取 Docker 镜像", progress=24, message="正在拉取 AstrBot 镜像，首次运行可能需要数分钟…")
         pull_result = None
         last_pull_error: Exception | None = None
         for index, prefix in enumerate(candidate_prefixes):
             if index > 0:
-                astrbot_image, snowluma_image = image_names_for_prefix(prefix)
-                set_image_names(artifacts["env"], astrbot_image, snowluma_image)
+                astrbot_image = image_names_for_prefix(prefix)
+                set_image_names(artifacts["env"], astrbot_image)
                 add_log(f"镜像源不可用，自动切换到：{prefix or 'Docker Hub'}")
             try:
                 add_log(f"开始从 {prefix or 'Docker Hub'} 拉取镜像…")
-                all_images = list(image_names_for_prefix(prefix))
-                pull_images = [all_images[0]] if official else all_images
+                pull_images = [image_names_for_prefix(prefix)]
                 pull_result = self.docker.pull(on_line=add_log, images=pull_images)
             except DockerError as exc:
                 last_pull_error = exc
@@ -794,7 +754,7 @@ class DeployManager:
             detail = f" 最后错误：{last_pull_error}" if last_pull_error else ""
             raise DeploymentError(f"拉取镜像失败，已尝试的镜像源均不可用。{suggestion}{detail}")
 
-        self._set_job(job, step="启动容器", progress=46, message="正在创建并启动 AstrBot 容器…" if official else "正在创建并启动 AstrBot 与 SnowLuma 容器…")
+        self._set_job(job, step="启动容器", progress=46, message="正在创建并启动 AstrBot 容器…")
         up_result = self.docker.up()
         add_log(self.docker._tail(up_result.output, 3000) or "容器启动命令已完成。")
 
@@ -808,34 +768,19 @@ class DeployManager:
         client.wait_until_ready(timeout=180)
         add_log("AstrBot WebUI 已响应。")
 
-        if not official:
-            # SnowLuma's initial WebUI password is emitted exactly once on first
-            # boot; capture it now while the logs are guaranteed to be available.
-            self._set_job(job, step="初始化 SnowLuma", progress=68, message="正在读取 SnowLuma 初始化信息并配置人格…")
-            self._capture_snowluma_password(secrets_data, add_log)
-
         self._set_job(job, step="写入机器人人格", progress=78, message="正在通过 AstrBot API 创建/更新机器人提示词…")
         client.upsert_persona(PERSONA_ID, prompt)
         add_log("机器人人格提示词已写入 AstrBot。")
 
-        self._set_job(job, step="检查容器状态", progress=90, message="正在确认 AstrBot 容器处于运行状态…" if official else "正在确认两个容器均处于运行状态…")
+        self._set_job(job, step="检查容器状态", progress=90, message="正在确认 AstrBot 容器处于运行状态…")
         state = self.docker.detect(force=True)
         astrbot_state = self.docker._docker(["inspect", "--format", "{{.State.Status}}", self.docker.ASTRBOT_CONTAINER], timeout=20)
         astrbot_running = astrbot_state.ok and astrbot_state.stdout.strip() == "running"
-        if official:
-            if not astrbot_running:
-                raise DeploymentError("AstrBot 容器启动后未保持运行。请查看向导中的 AstrBot 日志。")
-        else:
-            snowluma_state = self.docker._docker(["inspect", "--format", "{{.State.Status}}", self.docker.SNOWLUMA_CONTAINER], timeout=20)
-            snowluma_running = snowluma_state.ok and snowluma_state.stdout.strip() == "running"
-            if not (astrbot_running and snowluma_running):
-                raise DeploymentError(
-                    "容器启动后未保持运行。请查看向导中的 AstrBot / SnowLuma 日志。"
-                    + f" AstrBot={astrbot_state.stdout.strip() or 'unknown'}, SnowLuma={snowluma_state.stdout.strip() or 'unknown'}"
-                )
+        if not astrbot_running:
+            raise DeploymentError("AstrBot 容器启动后未保持运行。请查看向导中的 AstrBot 日志。")
         if not state.ready:
             raise DeploymentError(state.detail or "Docker 状态异常。")
-        add_log("AstrBot 容器运行中。" if official else "AstrBot 与 SnowLuma 容器均运行中。")
+        add_log("AstrBot 容器运行中。")
 
         config = self.store.load_config()
         config["deployed"] = True
@@ -846,294 +791,15 @@ class DeployManager:
                 "deployed": True,
                 "deployed_at": config["deployed_at"],
                 "ports": ports,
-                "containers": (
-                    {"astrbot": "running"}
-                    if official
-                    else {"astrbot": "running", "snowluma": "running"}
-                ),
+                "containers": {"astrbot": "running"},
             }
         )
         self._set_job(
             job,
             step="部署完成",
             progress=100,
-            message="部署完成。QQ 官方机器人会直接连接；请在群里 @ 机器人测试。" if official else "部署完成。请打开 noVNC，在 QQ 官方登录界面扫码并完成必要验证。",
+            message="部署完成。QQ 官方机器人会直接连接；请在群里 @ 机器人测试。",
         )
-
-    # ------------------------------------------------------------------
-    # Status and operations
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _snowluma_passwords_from_logs(logs: str) -> list[str]:
-        clean = ANSI_RE.sub("", logs or "")
-        patterns = (
-            r"临时密码\s*[:：]\s*([A-Za-z0-9_@#%+\-]{4,128})",
-            r"initial credentials:\s*user=\S+\s+password=([^\s]+)",
-            r"password\s*[:：]\s*([A-Za-z0-9_@#%+\-]{4,128})",
-        )
-        found: list[str] = []
-        for pattern in patterns:
-            found.extend(
-                str(item).strip()
-                for item in re.findall(pattern, clean, flags=re.IGNORECASE)
-                if str(item).strip()
-            )
-        deduped: list[str] = []
-        for item in found:
-            if item not in deduped:
-                deduped.append(item)
-        return deduped
-
-    def reset_snowluma_password(self) -> dict[str, Any]:
-        """Reset SnowLuma WebUI login while preserving QQ/OneBot data."""
-
-        config = self.store.load_config()
-        if str(config.get("platform_mode") or DEFAULT_PLATFORM_MODE) == "official":
-            raise DeploymentError("当前实例使用 QQ 官方机器人，不需要 SnowLuma 密码。")
-        if not config.get("deployed"):
-            raise DeploymentError("尚未完成部署，不能重置 SnowLuma 密码。")
-        secrets_data = self.store.load_secrets()
-
-        before_passwords: set[str] = set()
-        try:
-            before_passwords = set(
-                self._snowluma_passwords_from_logs(self.docker.logs("snowluma", 800))
-            )
-        except Exception:
-            pass
-
-        snowluma_root = self.data_dir / "data" / "snowluma"
-        config_files: list[Path] = []
-        if snowluma_root.exists():
-            try:
-                config_files = list(snowluma_root.rglob("webui.json"))
-            except OSError:
-                config_files = []
-        expected = snowluma_root / "config" / "webui.json"
-        if expected not in config_files:
-            config_files.append(expected)
-
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        for path in config_files:
-            if path.exists():
-                try:
-                    path.replace(path.with_name(f"{path.name}.bak.{stamp}"))
-                except OSError as exc:
-                    raise DeploymentError(f"备份 SnowLuma webui.json 失败：{exc}") from exc
-
-        # SnowLuma v2.x stores a scrypt hash (N=16384, r=8, p=1, 64-byte key).
-        # Writing this file avoids depending on a one-time password that rotates
-        # when the bootstrap password was never changed.
-        password = f"Aa1!{generate_token(18)}"
-        salt = os.urandom(16)
-        digest = hashlib.scrypt(
-            password.encode("utf-8"),
-            salt=salt,
-            n=16384,
-            r=8,
-            p=1,
-            dklen=64,
-        )
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        auth_state = {
-            "passwordHash": digest.hex(),
-            "passwordSalt": salt.hex(),
-            "mustChangePassword": False,
-            "generatedAt": now,
-            "updatedAt": now,
-        }
-        expected.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            chmod_best_effort(expected.parent, 0o700)
-            payload = json.dumps(auth_state, ensure_ascii=False, indent=2) + "\n"
-            fd = os.open(expected, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            chmod_best_effort(expected, 0o600)
-        except OSError as exc:
-            raise DeploymentError(f"写入 SnowLuma webui.json 失败：{exc}") from exc
-
-        restart = self.docker._docker(
-            ["restart", self.docker.SNOWLUMA_CONTAINER],
-            timeout=120,
-        )
-        if not restart.ok:
-            raise DockerError(
-                "SnowLuma 重置密码后重启失败："
-                + (self.docker._tail(restart.output, 1200) or f"退出码 {restart.returncode}")
-            )
-
-        # Some SnowLuma versions may reject the generated schema and regenerate
-        # a one-time password. Only accept a credentials line that did not exist
-        # before this reset, so an old log line cannot overwrite the new hash.
-        time.sleep(3)
-        actual_password = password
-        try:
-            after_passwords = self._snowluma_passwords_from_logs(
-                self.docker.logs("snowluma", 400)
-            )
-            new_passwords = [item for item in after_passwords if item not in before_passwords]
-            if new_passwords:
-                actual_password = new_passwords[-1]
-        except Exception:
-            pass
-
-        secrets_data["snowluma_password"] = actual_password
-        secrets_data["snowluma_username"] = "admin"
-        self.store.save_secrets(secrets_data)
-        return {
-            "ok": True,
-            "username": "admin",
-            "password": actual_password,
-            "message": "SnowLuma WebUI 密码已重置，请用新密码登录。",
-        }
-
-    def _capture_snowluma_password(
-        self,
-        secrets_data: dict[str, Any] | None = None,
-        log: Callable[[str], None] | None = None,
-    ) -> str:
-        secrets_data = secrets_data or self.store.load_secrets()
-        existing = str(secrets_data.get("snowluma_password") or "").strip()
-        try:
-            time.sleep(2)
-            logs = self.docker.logs("snowluma", 800)
-        except Exception as exc:  # noqa: BLE001 - optional display credential
-            if log:
-                log(f"暂时无法读取 SnowLuma 初始密码：{exc}")
-            return ""
-        passwords = self._snowluma_passwords_from_logs(logs)
-        found = passwords[-1] if passwords else ""
-        if found:
-            if found != existing:
-                secrets_data["snowluma_password"] = found
-                self.store.save_secrets(secrets_data)
-                if log:
-                    log("已从最新日志同步 SnowLuma WebUI 密码到本地 secrets.json。")
-            return found
-        if existing:
-            return existing
-        if log:
-            log("SnowLuma 初始密码尚未出现在日志中；可在完成页刷新状态，或查看 SnowLuma 日志。")
-        return ""
-
-    def _refresh_snowluma_status_migration(self) -> dict[str, Any]:
-        try:
-            result = self._migrate_snowluma_status_commands()
-        except (OSError, ValueError) as exc:
-            result = {
-                "changed": [],
-                "errors": [f"SnowLuma #sl 迁移失败：{exc}"],
-            }
-        self.snowluma_status_migration = result
-        return result
-
-    def _migrate_snowluma_status_commands(self) -> dict[str, Any]:
-        """Disable the legacy SnowLuma ``#sl`` status command in old instances.
-
-        SnowLuma stores global/account config in ``data/snowluma/config``.
-        Only ``statusCommand.enabled`` is changed; every other field and every
-        other top-level setting is preserved.  Unreadable or malformed files are
-        skipped and reported instead of crashing instance loading.
-        """
-
-        config_dir = self.data_dir / "data" / "snowluma" / "config"
-        changed: list[str] = []
-        errors: list[str] = []
-        if not config_dir.is_dir():
-            return {"changed": changed, "errors": errors}
-        try:
-            candidates = sorted(
-                (
-                    path
-                    for path in config_dir.iterdir()
-                    if path.is_file()
-                    and not path.is_symlink()
-                    and re.fullmatch(r"onebot(?:_\d+)?\.json", path.name)
-                ),
-                key=lambda path: path.name,
-            )
-        except OSError as exc:
-            return {"changed": changed, "errors": [f"无法读取 SnowLuma 配置目录：{exc}"]}
-        for path in candidates:
-            data, read_error = self._read_json_object_with_error(path)
-            if read_error:
-                errors.append(f"{path.name}: {read_error}")
-                continue
-            if data is None:
-                errors.append(f"{path.name}: 配置不是 JSON object")
-                continue
-            status_command = data.get("statusCommand")
-            if status_command is None:
-                # No command was configured; nothing to migrate.
-                continue
-            changed_file = False
-            if isinstance(status_command, dict):
-                if status_command.get("enabled") is not False:
-                    status_command["enabled"] = False
-                    changed_file = True
-            else:
-                data["statusCommand"] = {"enabled": False}
-                changed_file = True
-            if not changed_file:
-                continue
-            try:
-                self._write_private_json(path, data)
-            except OSError as exc:
-                errors.append(f"{path.name}: 无法写入迁移后的 SnowLuma 配置：{exc}")
-                continue
-            changed.append(str(path))
-        return {"changed": changed, "errors": errors}
-
-    def _detect_onebot_connection(self, lines: int = 400) -> bool | None:
-        try:
-            logs = self.docker.logs("astrbot", lines)
-        except Exception:
-            return None
-        lower = ANSI_RE.sub("", logs).lower()
-        connected_markers = (
-            "aiocqhttp(onebot v11) 适配器已连接",
-            "aiocqhttp 适配器已连接",
-            "aiocqhttp adapter connected",
-            "qqofficial 适配器已连接",
-            "qq_official 适配器已连接",
-            "loading im platform adapter qq_official",
-            "qqofficial websocket session starting",
-            "qq_official websocket session starting",
-            "qq official adapter connected",
-            "QQ 官方机器人已连接",
-            "QQ官方机器人已连接",
-        )
-        closed_markers = (
-            "aiocqhttp 适配器已被关闭",
-            "aiocqhttp adapter closed",
-            "qqofficial 适配器已被关闭",
-            "qq_official 适配器已被关闭",
-        )
-        last_connected = max((lower.rfind(marker) for marker in connected_markers), default=-1)
-        last_closed = max((lower.rfind(marker) for marker in closed_markers), default=-1)
-        if last_connected < 0 and last_closed < 0:
-            return None
-        return last_connected > last_closed
-
-    def _detect_qq_login(self, qq_account: str) -> bool:
-        config_dir = self.data_dir / "data" / "snowluma" / "config"
-        try:
-            files = [
-                Path(path)
-                for path in glob.glob(str(config_dir / "onebot_*.json"))
-                if re.fullmatch(r"onebot_\d+\.json", Path(path).name)
-            ]
-        except OSError:
-            return False
-        if not files:
-            return False
-        if not qq_account:
-            return bool(files)
-        expected = f"onebot_{qq_account}.json"
-        return any(path.name == expected for path in files)
 
     @staticmethod
     def _read_os_name() -> str:
@@ -3224,7 +2890,159 @@ class DeployManager:
         return self.plugin_market_service.execute_plugin_group_action(payload)
 
     def preview_plugin_operation(self, payload: Any) -> dict[str, Any]:
-        return self.plugin_market_service.preview_operation(payload)
+        result = self.plugin_market_service.preview_operation(payload)
+        plan = result.get("plan") if isinstance(result, dict) else None
+        if isinstance(plan, Mapping):
+            result["runtime_dependencies"] = self.check_plugin_runtime_requirements(
+                plan.get("runtime_requirements")
+            )
+        return result
+
+    def check_plugin_runtime_requirements(self, requirements: Any) -> dict[str, Any]:
+        """Check declared plugin runtime dependencies without installing them.
+
+        Python modules are checked inside the AstrBot container.  System
+        requirements are declarative only (font/command/package); arbitrary
+        manifest commands are never executed.
+        """
+        normalized = requirements if isinstance(requirements, Mapping) else {}
+        python_items = list(normalized.get("python") or []) if isinstance(normalized, Mapping) else []
+        system_items = list(normalized.get("system") or []) if isinstance(normalized, Mapping) else []
+        missing: list[dict[str, Any]] = []
+        if not python_items and not system_items:
+            return {"ok": True, "missing": [], "python": [], "system": [], "unavailable": False}
+        available, reason = self._astrbot_container_available()
+        if not available:
+            return {
+                "ok": False,
+                "unavailable": True,
+                "missing": [],
+                "python": [],
+                "system": [],
+                "message": reason or "AstrBot 容器不可用，无法检测依赖。",
+            }
+        if python_items:
+            modules = [str(item.get("module") or "") for item in python_items if isinstance(item, Mapping)]
+            script = (
+                "import importlib.util,json,sys;"
+                "mods=json.loads(sys.argv[1]);"
+                "print(json.dumps([m for m in mods if importlib.util.find_spec(m) is None]))"
+            )
+            result = self.docker.exec_in_container(
+                self.astrbot_container,
+                ["python3", "-c", script, __import__("json").dumps(modules)],
+                timeout=30,
+            )
+            if not result.ok:
+                return {
+                    "ok": False,
+                    "unavailable": True,
+                    "missing": [],
+                    "python": [],
+                    "system": [],
+                    "message": "检测 Python 依赖失败：" + (result.output or f"exit {result.returncode}"),
+                }
+            try:
+                missing_modules = set(__import__("json").loads(result.stdout or "[]"))
+            except Exception:
+                missing_modules = set(modules)
+            for item in python_items:
+                if not isinstance(item, Mapping):
+                    continue
+                if str(item.get("module") or "") in missing_modules:
+                    missing.append({
+                        "type": "python",
+                        "name": str(item.get("name") or ""),
+                        "spec": str(item.get("spec") or ""),
+                        "module": str(item.get("module") or ""),
+                        "description": str(item.get("description") or ""),
+                    })
+        for item in system_items:
+            if not isinstance(item, Mapping):
+                continue
+            kind = str(item.get("kind") or "")
+            target = str(item.get("target") or "")
+            present = False
+            try:
+                if kind == "font":
+                    check = self.docker.exec_in_container(
+                        self.astrbot_container,
+                        ["fc-match", "-f", "%{family}", target],
+                        timeout=20,
+                    )
+                    present = bool(check.ok and target.casefold() in (check.stdout or "").casefold())
+                elif kind == "command":
+                    check = self.docker.exec_in_container(
+                        self.astrbot_container, ["sh", "-lc", f"command -v -- {target}"], timeout=20
+                    )
+                    present = bool(check.ok and (check.stdout or "").strip())
+                elif kind == "package":
+                    check = self.docker.exec_in_container(
+                        self.astrbot_container, ["dpkg", "-s", target], timeout=20
+                    )
+                    present = bool(check.ok)
+            except Exception:
+                present = False
+            if not present:
+                missing.append({
+                    "type": "system",
+                    "kind": kind,
+                    "target": target,
+                    "description": str(item.get("description") or ""),
+                })
+        return {"ok": not missing, "missing": missing, "python": python_items, "system": system_items, "unavailable": False}
+
+    def install_plugin_runtime_dependencies(self, payload: Any) -> dict[str, Any]:
+        """Install missing Python dependencies after explicit user consent.
+
+        Only declarations frozen into the plugin-operation preview are used;
+        the browser cannot submit arbitrary package names.  System packages are
+        reported for manual installation, never auto-installed with apt.
+        """
+        if not isinstance(payload, Mapping):
+            raise ValueError("依赖安装请求必须是 JSON object。")
+        if payload.get("confirm") is not True:
+            raise ValueError("安装依赖需要显式确认（confirm=true）。")
+        token = str(payload.get("preview_token") or "").strip()
+        plan = self.plugin_market_service.preview_plan(token)
+        requirements = plan.get("runtime_requirements") if isinstance(plan, Mapping) else {}
+        status = self.check_plugin_runtime_requirements(requirements)
+        if status.get("unavailable"):
+            raise RuntimeError(str(status.get("message") or "AstrBot 容器不可用。"))
+        missing = list(status.get("missing") or [])
+        if not missing:
+            return {"ok": True, "installed": [], "manual_required": [], "status": status}
+        installed: list[str] = []
+        manual: list[dict[str, Any]] = []
+        for item in missing:
+            if item.get("type") != "python":
+                manual.append(item)
+                continue
+            name = str(item.get("name") or "").strip()
+            spec = str(item.get("spec") or "").strip()
+            if not name:
+                raise RuntimeError("依赖声明缺少包名。")
+            requirement = name + spec
+            result = self.docker.exec_in_container(
+                self.astrbot_container,
+                ["python3", "-m", "pip", "install", "--no-cache-dir", "--disable-pip-version-check", requirement],
+                timeout=600,
+            )
+            if not result.ok:
+                raise RuntimeError("安装 Python 依赖失败：" + (result.output or f"exit {result.returncode}"))
+            installed.append(requirement)
+        after = self.check_plugin_runtime_requirements(requirements)
+        if after.get("unavailable"):
+            raise RuntimeError(str(after.get("message") or "依赖安装后检测失败。"))
+        if after.get("missing"):
+            return {
+                "ok": False,
+                "installed": installed,
+                "manual_required": after.get("missing") or manual,
+                "status": after,
+                "message": "部分依赖仍需手动安装。",
+            }
+        return {"ok": True, "installed": installed, "manual_required": [], "status": after}
 
     def execute_plugin_operation(self, payload: Any) -> dict[str, Any]:
         return self.plugin_market_service.execute_operation(payload)
@@ -4698,14 +4516,9 @@ class DeployManager:
                 )
 
     def get_status(self) -> dict[str, Any]:
-        # Old instances may have been created before statusCommand was disabled;
-        # migrate lazily as well so opening the console is sufficient.
-        self._refresh_snowluma_status_migration()
         config = self.store.load_config()
         secrets_data = self.store.load_secrets()
         state = self.store.load_state()
-        platform_mode = str(config.get("platform_mode") or state.get("platform_mode") or DEFAULT_PLATFORM_MODE)
-        official = platform_mode == "official"
         docker_status = self.docker.detect()
         deployed = bool(config.get("deployed") or state.get("deployed"))
         ports = config.get("ports") or state.get("ports") or {}
@@ -4719,19 +4532,7 @@ class DeployManager:
                     ["inspect", "--format", "{{.State.Status}}", self.docker.ASTRBOT_CONTAINER],
                     timeout=15,
                 )
-                if official:
-                    running = astrbot_state.ok and astrbot_state.stdout.strip() == "running"
-                else:
-                    snowluma_state = self.docker._docker(
-                        ["inspect", "--format", "{{.State.Status}}", self.docker.SNOWLUMA_CONTAINER],
-                        timeout=15,
-                    )
-                    running = (
-                        astrbot_state.ok
-                        and astrbot_state.stdout.strip() == "running"
-                        and snowluma_state.ok
-                        and snowluma_state.stdout.strip() == "running"
-                    )
+                running = astrbot_state.ok and astrbot_state.stdout.strip() == "running"
             except Exception:
                 running = None
 
@@ -4740,8 +4541,6 @@ class DeployManager:
             url_host = f"[{url_host}]"
         urls = {
             "astrbot_webui": f"http://{url_host}:{ports['astrbot_webui']}" if ports.get("astrbot_webui") else "",
-            "snowluma_webui": "" if official else (f"http://{url_host}:{ports['snowluma_webui']}" if ports.get("snowluma_webui") else ""),
-            "novnc": "" if official else (f"http://{url_host}:{ports['novnc']}" if ports.get("novnc") else ""),
         }
         with self._lock:
             active_job_id = self._active_job_id
@@ -4756,11 +4555,6 @@ class DeployManager:
                 if last_job and last_job.get("status") in {"error", "failed", "interrupted", "cancelled"}:
                     active_job_id = last_job_id
                     active_job_status = str(last_job.get("status"))
-        snowluma_password = str(secrets_data.get("snowluma_password") or "")
-        if not official and deployed and not snowluma_password and running:
-            snowluma_password = self._capture_snowluma_password(secrets_data)
-        platform_connected = self._detect_onebot_connection() if deployed and running else None
-        qq_logged_in = True if official else (self._detect_qq_login(str(config.get("qq_account") or "")) if deployed else False)
         try:
             memory_mode = self._effective_memory_mode()[0]
         except Exception:
@@ -4776,8 +4570,6 @@ class DeployManager:
             notice = docker_status.detail or "当前用户没有 Docker 权限，请重新打开启动器以缓存 sudo 凭据。"
         elif deployed and running is False:
             notice = "部署已完成，但容器当前未运行。可在完成页启动服务。"
-        elif deployed and not official and not qq_logged_in:
-            notice = "请打开 noVNC，使用手机 QQ 扫码登录；如出现设备/短信/滑块验证，请在 QQ 官方界面完成。"
         else:
             notice = ""
 
@@ -4793,29 +4585,15 @@ class DeployManager:
             "deployment": {
                 "deployed": deployed,
                 "running": running,
-                "platform_mode": platform_mode,
-                "qq_account": str(config.get("qq_account") or ""),
+                "platform_mode": "official",
                 "qq_official_appid": str(config.get("qq_official_appid") or ""),
                 "model": MODEL_NAME,
                 "prompt": str(config.get("prompt") or DEFAULT_PROMPT),
                 "urls": urls,
-                "credentials": (
-                    {
-                        "astrbot_username": str(secrets_data.get("astrbot_username") or ""),
-                        "astrbot_password": str(secrets_data.get("astrbot_password") or ""),
-                    }
-                    if official
-                    else {
-                        "astrbot_username": str(secrets_data.get("astrbot_username") or ""),
-                        "astrbot_password": str(secrets_data.get("astrbot_password") or ""),
-                        "snowluma_username": "admin",
-                        "snowluma_password": snowluma_password,
-                        "vnc_password": str(secrets_data.get("vnc_password") or ""),
-                    }
-                ),
-                "onebot_connected": platform_connected if not official else None,
-                "platform_connected": platform_connected,
-                "qq_logged_in": qq_logged_in,
+                "credentials": {
+                    "astrbot_username": str(secrets_data.get("astrbot_username") or ""),
+                    "astrbot_password": str(secrets_data.get("astrbot_password") or ""),
+                },
                 "active_job_id": active_job_id,
                 "active_job_status": active_job_status,
                 "memory_mode": memory_mode,
@@ -4825,7 +4603,7 @@ class DeployManager:
         }
 
     def repair_containers(self) -> dict[str, Any]:
-        """Inspect and repair this instance's containers if they are unhealthy."""
+        """Inspect and repair this instance's AstrBot container if unhealthy."""
 
         config = self.store.load_config()
         result = {
@@ -4838,12 +4616,9 @@ class DeployManager:
             result["message"] = "尚未完成部署，跳过容器修复。"
             return result
         self.docker.require_ready()
-        official = str(config.get("platform_mode") or DEFAULT_PLATFORM_MODE) == "official"
         statuses = {
             self.astrbot_container: self.docker.container_status(self.astrbot_container),
         }
-        if not official:
-            statuses[self.snowluma_container] = self.docker.container_status(self.snowluma_container)
         health = {
             name: self.docker.container_health(name)
             for name in statuses
@@ -4864,8 +4639,6 @@ class DeployManager:
             repaired = {
                 self.astrbot_container: self.docker.container_status(self.astrbot_container),
             }
-            if not official:
-                repaired[self.snowluma_container] = self.docker.container_status(self.snowluma_container)
             repaired_health = {
                 name: self.docker.container_health(name)
                 for name, state_value in repaired.items()

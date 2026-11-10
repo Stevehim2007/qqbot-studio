@@ -85,7 +85,7 @@
           <li class="step-item" data-step-item="done">
             <button class="step-button" type="button" data-step="done">
               <span class="step-index" aria-hidden="true">4</span>
-              <span class="step-copy"><span class="step-label">完成与运行</span><span class="step-hint">扫码、连接与控制</span></span>
+              <span class="step-copy"><span class="step-label">完成与运行</span><span class="step-hint">连接与控制</span></span>
             </button>
           </li>
         </ol>
@@ -149,7 +149,7 @@
           <div class="welcome-copy">
             <span class="kicker"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>本机安全优先</span>
             <h2 id="env-heading" tabindex="-1">准备一台已安装 Docker 的 Ubuntu</h2>
-            <p id="env-intro">这个向导默认帮助你接入 QQ 官方机器人：启动 AstrBot 并填写开放平台 AppID/AppSecret。SnowLuma/noVNC 只用于旧实例兼容。所有操作均在本机浏览器与本地服务之间完成。</p>
+            <p id="env-intro">这个向导帮助你接入 QQ 官方机器人：启动 AstrBot 并填写开放平台 AppID/AppSecret。不需要 SnowLuma、noVNC 或扫码登录。所有操作均在本机浏览器与本地服务之间完成。</p>
             <p id="env-platform-note" class="field-hint"><strong>注意：</strong>官方机器人不需要扫码；请先在 QQ 开放平台配置机器人并把它加入测试群。重复运行 <code>./start.sh</code> 会创建新实例；管理已有实例请使用 <code>./console.sh</code>。</p>
           </div>
           <div class="welcome-orbit" aria-hidden="true">
@@ -210,17 +210,16 @@
               <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-user"></use></svg></span>
               <div>
                 <h3>QQ 接入方式</h3>
-                <p>官方机器人需要 AppID/AppSecret；SnowLuma 仅用于旧实例兼容。</p>
+                <p>官方机器人需要 AppID/AppSecret；不再需要扫码登录。</p>
               </div>
             </div>
 
             <div class="field">
               <label for="platform-mode">接入方式</label>
               <select id="platform-mode" name="platform_mode">
-                <option value="official" selected>QQ 官方机器人（推荐）</option>
-                <option value="snowluma">SnowLuma / OneBot（旧）</option>
+                <option value="official" selected>QQ 官方机器人</option>
               </select>
-              <p class="field-help">新部署请选择官方机器人；官方群需要群主开启“获取群内全部消息”。</p>
+              <p class="field-help">官方群需要群主开启“获取群内全部消息”；机器人只使用 AppID/AppSecret 连接。</p>
             </div>
 
             <div id="official-fields">
@@ -242,18 +241,6 @@
               </div>
             </div>
 
-            <div id="legacy-fields" hidden>
-              <div class="field">
-                <label for="qq-account">机器人 QQ 号 <span class="required-mark" aria-hidden="true">*</span></label>
-                <input id="qq-account" name="qq_account" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{5,12}" maxlength="12" placeholder="例如：123456789" aria-describedby="qq-account-help qq-account-error">
-                <p id="qq-account-help" class="field-help">SnowLuma 旧实例使用 5–12 位 QQ 号。</p>
-                <p id="qq-account-error" class="field-error" role="alert" hidden></p>
-              </div>
-              <div class="safety-inline">
-                <svg class="icon" aria-hidden="true"><use href="#i-qr"></use></svg>
-                <p><strong>扫码登录：</strong>部署完成后在 noVNC 中扫码登录 QQ；本工具不读取或保存 QQ 密码。</p>
-              </div>
-            </div>
           </div>
 
           <div class="card form-card">
@@ -448,7 +435,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
           <div>
             <strong>请保持页面开启</strong>
-            <p>部署期间请勿关闭本地启动器。官方接入完成后无需扫码；旧 SnowLuma 实例才需要进入 noVNC 完成 QQ 登录与安全验证。</p>
+            <p>部署期间请勿关闭本地启动器。官方接入完成后不需要扫码登录。</p>
           </div>
         </div>
       </section>
@@ -503,55 +490,33 @@
             </div>
           </div>
 
-          <div class="card endpoint-card legacy-only">
+          <div class="card endpoint-card endpoint-card--highlight">
             <div class="endpoint-heading">
-              <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg></span>
-              <div><h3>SnowLuma WebUI</h3><p>OneBot 协议端管理界面</p></div>
+              <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-robot"></use></svg></span>
+              <div><h3>QQ 官方机器人</h3><p>AppID / AppSecret 单容器接入</p></div>
             </div>
-            <p id="snowluma-url-text" class="url-text">未提供</p>
+            <p class="field-hint">AstrBot 直接连接 QQ 开放平台，不需要 noVNC、扫码登录或 OneBot 协议端。</p>
             <div class="credential-grid">
-              <div><span class="credential-label">用户名</span><code id="snowluma-username" class="credential-value">admin</code></div>
-              <div><span class="credential-label">初始密码</span><code id="snowluma-password" class="credential-value">未提供</code></div>
-            </div>
-            <p class="field-hint">如果首次登录时修改过密码，请使用你修改后的密码；这里显示的是部署时预置/日志中的初始密码。</p>
-            <div class="card-actions">
-              <a id="snowluma-open" class="btn btn-secondary btn-small" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">一键打开<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
-              <button id="snowluma-reset" class="btn btn-quiet btn-small" type="button">重置密码</button>
-              <button id="copy-snowluma" class="btn btn-quiet btn-small" type="button" data-copy-card="snowluma"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>复制登录信息</button>
-            </div>
-          </div>
-
-          <div class="card endpoint-card endpoint-card--highlight legacy-only">
-            <div class="endpoint-heading">
-              <span class="card-icon card-icon--amber"><svg class="icon" aria-hidden="true"><use href="#i-qr"></use></svg></span>
-              <div><h3>noVNC 桌面</h3><p>扫码与官方安全验证入口</p></div>
-            </div>
-            <p id="novnc-url-text" class="url-text">未提供</p>
-            <div class="credential-grid">
-              <div><span class="credential-label">VNC 密码</span><code id="novnc-password" class="credential-value">未提供</code></div>
+              <div><span class="credential-label">AppID</span><code id="official-appid-status" class="credential-value">未提供</code></div>
+              <div><span class="credential-label">连接状态</span><code id="official-connection-status" class="credential-value">检查中</code></div>
             </div>
             <div class="card-actions">
-              <a id="novnc-open" class="btn btn-primary btn-small" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">一键打开 noVNC<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
-              <button id="copy-novnc" class="btn btn-quiet btn-small" type="button" data-copy-card="novnc"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>复制登录信息</button>
+              <button id="refresh-official-status" class="btn btn-secondary btn-small" type="button">刷新连接状态</button>
             </div>
           </div>
         </div>
 
         <div class="card guide-card">
           <div class="guide-heading">
-            <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-qr"></use></svg></span>
-            <div><h3>扫码登录步骤</h3><p>QQ 登录必须在官方界面完成</p></div>
+            <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-robot"></use></svg></span>
+            <div><h3>官方机器人检查</h3><p>不需要扫码</p></div>
           </div>
           <ol class="guide-steps">
-            <li><span>1</span><p><strong>打开 noVNC</strong>：使用上方 VNC 密码进入桌面。</p></li>
-            <li><span>2</span><p><strong>启动 QQ 并扫码</strong>：在桌面中打开 QQ，使用手机 QQ 的“扫一扫”确认登录。</p></li>
-            <li><span>3</span><p><strong>完成官方安全验证</strong>：如果扫码后要求设备验证、短信验证、滑块或安全验证，必须在 noVNC 里按 QQ 官方提示操作；本工具不能绕过验证。</p></li>
-            <li><span>4</span><p><strong>检查连接</strong>：登录完成后回到这里，点击“刷新连接状态”，确认 QQ 登录与 OneBot 连接均为正常。</p></li>
+            <li><span>1</span><p><strong>确认 AppID/AppSecret</strong>：在 QQ 开放平台机器人详情页获取，填到上一步。</p></li>
+            <li><span>2</span><p><strong>邀请机器人进群</strong>：在目标群添加机器人。</p></li>
+            <li><span>3</span><p><strong>开启群权限</strong>：群主在群设置中开启“获取群内全部消息”和“机器人主动发言”。</p></li>
+            <li><span>4</span><p><strong>@ 机器人测试</strong>：在群里 @ 机器人发送消息，确认连接状态。</p></li>
           </ol>
-          <div class="safety-inline safety-inline--warm">
-            <svg class="icon" aria-hidden="true"><use href="#i-alert"></use></svg>
-            <p>不收集、不保存 QQ 密码；现代 QQ 需要扫码登录。第三方协议端存在账号风控/封禁风险，使用小号，遵守 QQ 协议与当地法律。</p>
-          </div>
         </div>
 
         <div class="dashboard-grid dashboard-grid--controls">
@@ -583,7 +548,6 @@
             </div>
             <div class="log-actions">
               <button class="btn btn-secondary btn-small log-service-btn" type="button" data-log-service="astrbot"><svg class="icon" aria-hidden="true"><use href="#i-server"></use></svg>AstrBot 日志</button>
-              <button class="btn btn-secondary btn-small log-service-btn" type="button" data-log-service="snowluma"><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg>SnowLuma 日志</button>
             </div>
             <div id="dashboard-logs" class="dashboard-logs" hidden>
               <div class="log-header">
@@ -603,14 +567,14 @@
           <svg class="icon disclaimer-icon" aria-hidden="true"><use href="#i-shield"></use></svg>
           <div>
             <h3>安全提示与免责声明</h3>
-            <p>本工具不收集、不保存 QQ 密码，API Key 仅写入本机 AstrBot 配置。第三方协议端存在账号风控/封禁风险，请务必使用小号，并遵守 QQ 用户协议与当地法律法规。设备验证、短信验证、滑块或安全验证必须在 noVNC 中按 QQ 官方提示完成，本工具不能绕过验证。因使用本工具造成的账号、数据或合规风险由使用者自行承担。</p>
+            <p>本工具不收集、不保存 QQ 密码，API Key 仅写入本机 AstrBot 配置。机器人使用 QQ 开放平台官方接口，不需要 noVNC。请遵守 QQ 开放平台协议与当地法律法规。因使用本工具造成的账号、数据或合规风险由使用者自行承担。</p>
           </div>
         </div>
       </section>
 
       <footer class="installer-footer">
         <div class="footer-brand"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg><span>本地优先 · 安全验证不可绕过</span></div>
-        <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek、AstrBot 与 SnowLuma 均为其各自权利人的产品或项目。</p>
+        <p>QQ Bot Studio 仅提供本地部署与控制界面。QQ、DeepSeek 与 AstrBot 均为其各自权利人的产品或项目。</p>
       </footer>
     </main>
   </div>

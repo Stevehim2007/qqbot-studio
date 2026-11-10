@@ -211,7 +211,7 @@ class RollbackSafetyTests(ReleaseRepoTestCase):
         instance = self.data / "instances" / "bot-1"
         instance.mkdir(parents=True)
         (instance / "config.json").write_text(
-            json.dumps({"schema_version": 2, "qq_account": "123"}), encoding="utf-8"
+            json.dumps({"schema_version": 2, "prompt": "legacy"}), encoding="utf-8"
         )
         (instance / "secrets.json").write_text('{"api_key": "sk-secret-value"}', encoding="utf-8")
         (instance / "instance.json").write_text('{"id": "bot-1"}', encoding="utf-8")

@@ -19,6 +19,8 @@ from qqbot_studio.configgen import (
 )
 from qqbot_studio.store import DEFAULT_CONFIG, Store, generate_password
 
+LEGACY_WORDS = ("snowluma", "novnc", "onebot", "vnc")
+
 
 def fake_secrets():
     return {
@@ -44,7 +46,14 @@ class StoreTests(unittest.TestCase):
             self.assertTrue(re.search(r"[A-Z]", first["astrbot_password"]))
             self.assertTrue(re.search(r"[a-z]", first["astrbot_password"]))
             self.assertTrue(re.search(r"\d", first["astrbot_password"]))
-            self.assertEqual(len(first["vnc_password"]), 8)
+            for key in (
+                "onebot_token",
+                "snowluma_http_token",
+                "snowluma_ws_token",
+                "snowluma_password",
+                "vnc_password",
+            ):
+                self.assertNotIn(key, first)
 
     def test_config_never_persists_sensitive_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -60,10 +69,29 @@ class StoreTests(unittest.TestCase):
             raw = store.config_path.read_text(encoding="utf-8")
             self.assertNotIn("sk-should-not-persist", raw)
             self.assertNotIn("also-secret", raw)
+            self.assertNotIn("qq_account", raw)
             loaded = store.load_config()
             self.assertNotIn("deepseek_api_key", loaded)
+            self.assertNotIn("qq_account", loaded)
+            self.assertEqual(loaded["platform_mode"], "official")
             self.assertEqual(loaded["nested"]["safe"], "yes")
             self.assertEqual(os.stat(store.config_path).st_mode & 0o777, 0o600)
+
+    def test_legacy_secrets_are_purged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp)
+            store.save_secrets(fake_secrets())
+            secrets = store.ensure_secrets()
+            for key in (
+                "onebot_token",
+                "snowluma_http_token",
+                "snowluma_ws_token",
+                "snowluma_password",
+                "vnc_password",
+            ):
+                self.assertNotIn(key, secrets)
+            self.assertIn("astrbot_username", secrets)
+            self.assertIn("qq_official_secret", secrets)
 
     def test_generated_password_meets_astrbot_policy(self):
         password = generate_password(24)
@@ -85,39 +113,32 @@ class ConfigGenerationTests(unittest.TestCase):
         self.assertEqual(prefixes[0], "custom.example/")
         self.assertEqual(prefixes[1], "docker.1ms.run/")
         self.assertIn("m.daocloud.io/docker.io/", prefixes)
-        images = image_names_for_prefix("docker.1ms.run")
-        self.assertEqual(images[0], "docker.1ms.run/soulter/astrbot:latest")
-        self.assertEqual(images[1], "docker.1ms.run/motricseven7/snowluma:latest")
+        image = image_names_for_prefix("docker.1ms.run")
+        self.assertEqual(image, "docker.1ms.run/soulter/astrbot:latest")
 
     def test_update_env_images_preserves_other_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / ".env"
             env_path.write_text(
                 "ASTRBOT_IMAGE=old/astrbot:latest\n"
-                "SNOWLUMA_IMAGE=old/snowluma:latest\n"
-                "NOVNC_PORT=6081\n",
+                "BIND_ADDRESS=127.0.0.1\n",
                 encoding="utf-8",
             )
-            set_image_names(env_path, "new/astrbot:latest", "new/snowluma:latest")
+            set_image_names(env_path, "new/astrbot:latest")
             content = env_path.read_text(encoding="utf-8")
             self.assertIn("ASTRBOT_IMAGE=new/astrbot:latest", content)
-            self.assertIn("SNOWLUMA_IMAGE=new/snowluma:latest", content)
-            self.assertIn("NOVNC_PORT=6081", content)
+            self.assertIn("BIND_ADDRESS=127.0.0.1", content)
             self.assertEqual(os.stat(env_path).st_mode & 0o777, 0o600)
 
-
-    def test_instance_port_blocks_are_adjacent_and_bounded(self):
+    def test_instance_port_blocks_are_single_and_bounded(self):
         first = allocate_instance_port_block(set(), host="127.0.0.1", probe=False)
         second = allocate_instance_port_block(set(first.values()), host="127.0.0.1", probe=False)
         for block in (first, second):
-            values = [block["astrbot_webui"], block["snowluma_webui"], block["novnc"]]
-            self.assertEqual(values, sorted(values))
-            self.assertEqual(values[1] - values[0], 1)
-            self.assertEqual(values[2] - values[1], 1)
-            self.assertGreaterEqual(values[0], PORT_RANGE_START)
-            self.assertLessEqual(values[2], PORT_RANGE_END)
+            self.assertEqual(list(block), ["astrbot_webui"])
+            self.assertGreaterEqual(block["astrbot_webui"], PORT_RANGE_START)
+            self.assertLessEqual(block["astrbot_webui"], PORT_RANGE_END)
         self.assertTrue(set(first.values()).isdisjoint(second.values()))
-        self.assertEqual(second["astrbot_webui"], first["astrbot_webui"] + 3)
+        self.assertEqual(second["astrbot_webui"], first["astrbot_webui"] + 1)
 
     def test_official_platform_generates_single_container(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,25 +146,27 @@ class ConfigGenerationTests(unittest.TestCase):
                 tmp,
                 api_key="sk-official-test",
                 prompt="官方机器人",
-                qq_account="",
                 use_mirror=False,
                 secrets_data=fake_secrets(),
                 ports=choose_ports(probe=False),
-                host_uid=1000,
-                host_gid=1000,
-                platform_mode="official",
                 official_appid="102091266",
                 official_secret="official-secret",
             )
             self.assertEqual(result["platform_mode"], "official")
-            self.assertIsNone(result["snowluma_config"])
-            self.assertNotIn("snowluma", result["compose"].read_text(encoding="utf-8"))
-            self.assertNotIn("SNOWLUMA", result["env"].read_text(encoding="utf-8"))
+            self.assertNotIn("snowluma_config", result)
+            compose = result["compose"].read_text(encoding="utf-8")
+            env = result["env"].read_text(encoding="utf-8")
+            for text in (compose, env):
+                lowered = text.lower()
+                for word in LEGACY_WORDS:
+                    self.assertNotIn(word, lowered)
+            self.assertNotIn("SNOWLUMA_IMAGE", env)
             astrbot = json.loads(result["astrbot_config"].read_text(encoding="utf-8"))
             self.assertEqual(astrbot["platform"][0]["type"], "qq_official")
             self.assertEqual(astrbot["platform"][0]["appid"], "102091266")
             self.assertEqual(astrbot["platform"][0]["secret"], "official-secret")
             self.assertFalse((result["root"] / "data" / "snowluma").exists())
+            self.assertEqual(list(result["ports"]), ["astrbot_webui"])
 
     def test_all_generated_files_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,57 +178,42 @@ class ConfigGenerationTests(unittest.TestCase):
                 tmp,
                 api_key=api_key,
                 prompt=prompt,
-                qq_account="12345678",
                 use_mirror=False,
                 secrets_data=secrets_data,
                 ports=ports,
-                host_uid=1000,
-                host_gid=1000,
             )
             self.assertNotIn(api_key, json.dumps({k: str(v) for k, v in result.items()}, ensure_ascii=False))
 
-            astrbot = json.loads(result["astrbot_config"].read_text(encoding="utf-8"))
+            astrbot_text = result["astrbot_config"].read_text(encoding="utf-8")
+            astrbot = json.loads(astrbot_text)
             provider = astrbot["provider"][0]
             self.assertEqual(provider["model"], "deepseek-flash")
             self.assertEqual(provider["api_base"], "https://api.deepseek.com/v1")
             self.assertEqual(provider["key"], [api_key])
             self.assertEqual(astrbot["agent_runner"]["config"]["model"]["provider_id"], "deepseek-flash")
             self.assertEqual(astrbot["agent_runner"]["config"]["persona"]["persona_id"], "qqbot-assistant")
-            self.assertEqual(astrbot["platform"][0]["type"], "aiocqhttp")
-            self.assertEqual(astrbot["platform"][0]["ws_reverse_port"], 6199)
-            self.assertEqual(astrbot["platform"][0]["ws_reverse_token"], secrets_data["onebot_token"])
+            self.assertEqual(astrbot["platform"][0]["type"], "qq_official")
             self.assertEqual(astrbot["dashboard"]["password"], md5_password(secrets_data["astrbot_password"]))
             self.assertTrue(astrbot["dashboard"]["pbkdf2_password"].startswith("pbkdf2_sha256$"))
             self.assertFalse(astrbot["dashboard"]["password_change_required"])
             self.assertTrue(astrbot["dashboard"]["password_storage_upgraded"])
-
-            snow = json.loads(result["snowluma_config"].read_text(encoding="utf-8"))
-            clients = snow["networks"]["wsClients"]
-            self.assertEqual(len(clients), 1)
-            self.assertEqual(clients[0]["url"], "ws://astrbot:6199/ws")
-            self.assertEqual(clients[0]["role"], "Universal")
-            self.assertEqual(clients[0]["accessToken"], secrets_data["onebot_token"])
-            self.assertEqual(clients[0]["messageFormat"], "array")
-            self.assertIs(snow["statusCommand"]["enabled"], False)
-            self.assertEqual(snow["statusCommand"]["trigger"], "#sl")
+            lowered_config = astrbot_text.lower()
+            for word in LEGACY_WORDS:
+                self.assertNotIn(word, lowered_config)
 
             compose = result["compose"].read_text(encoding="utf-8")
-            for fragment in ("SYS_PTRACE", "seccomp=unconfined", "shm_size: 1gb", "127.0.0.1:"):
+            for fragment in ("127.0.0.1:", "${ASTRBOT_WEBUI_PORT}:6185", "container_name:"):
                 self.assertIn(fragment, compose)
-            self.assertIn("SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: ${SNOWLUMA_WEBUI_PASSWORD}", compose)
             self.assertNotIn(api_key, compose)
 
             env = result["env"].read_text(encoding="utf-8")
-            self.assertIn("VNC_PASSWD=", env)
             self.assertIn("ASTRBOT_IMAGE=soulter/astrbot:latest", env)
-            webui_password = secrets_data["snowluma_password"]
-            self.assertTrue(webui_password)
-            self.assertIn(f"SNOWLUMA_WEBUI_PASSWORD={webui_password}", env)
+            self.assertIn("ASTRBOT_WEBUI_PORT=", env)
             self.assertNotIn(api_key, env)
+            for word in LEGACY_WORDS:
+                self.assertNotIn(word, env.lower())
             self.assertEqual(os.stat(result["env"]).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(result["astrbot_config"]).st_mode & 0o777, 0o600)
-            self.assertEqual(os.stat(result["snowluma_config"]).st_mode & 0o777, 0o600)
-
 
     def test_instance_specific_names_and_remote_bind(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,25 +221,17 @@ class ConfigGenerationTests(unittest.TestCase):
                 tmp,
                 api_key="sk-test",
                 prompt="prompt",
-                qq_account="12345678",
                 secrets_data=fake_secrets(),
                 ports=choose_ports(probe=False),
-                host_uid=1000,
-                host_gid=1000,
                 bind_address="0.0.0.0",
                 project_name="qqbot-studio-bot-1",
                 astrbot_container="qqbot-bot-1-astrbot",
-                snowluma_container="qqbot-bot-1-snowluma",
                 network_name="qqbot-studio-bot-1-net",
             )
             compose = result["compose"].read_text(encoding="utf-8")
             self.assertIn("container_name: qqbot-bot-1-astrbot", compose)
-            self.assertIn("container_name: qqbot-bot-1-snowluma", compose)
             self.assertIn("qqbot-studio-bot-1-net", compose)
             self.assertIn("${BIND_ADDRESS}:${ASTRBOT_WEBUI_PORT}:6185", compose)
-            self.assertIn("${BIND_ADDRESS}:${NOVNC_PORT}:6081", compose)
-            self.assertIn("${BIND_ADDRESS}:${SNOWLUMA_WEBUI_PORT_HOST}:5099", compose)
-            self.assertIn("SNOWLUMA_WEBUI_HOST: 0.0.0.0", compose)
             env = result["env"].read_text(encoding="utf-8")
             self.assertIn("BIND_ADDRESS=0.0.0.0", env)
             astrbot_config = json.loads(result["astrbot_config"].read_text(encoding="utf-8"))
@@ -243,19 +243,16 @@ class ConfigGenerationTests(unittest.TestCase):
                 tmp,
                 api_key="sk-test",
                 prompt="test prompt",
-                qq_account="12345678",
                 use_mirror=True,
                 secrets_data=fake_secrets(),
                 ports=choose_ports(probe=False),
-                host_uid=1000,
-                host_gid=1000,
             )
             env = result["env"].read_text(encoding="utf-8")
             self.assertIn("m.daocloud.io/docker.io/soulter/astrbot:latest", env)
-            self.assertIn("m.daocloud.io/docker.io/motricseven7/snowluma:latest", env)
             compose = result["compose"].read_text(encoding="utf-8")
             self.assertIn("${ASTRBOT_IMAGE}", compose)
-            self.assertIn("${SNOWLUMA_IMAGE}", compose)
+            for word in LEGACY_WORDS:
+                self.assertNotIn(word, (env + compose).lower())
 
 
 if __name__ == "__main__":

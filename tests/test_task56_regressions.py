@@ -1,4 +1,4 @@
-"""Regression tests for schema fallback, SnowLuma #sl, and prompt newlines."""
+"""Regression tests for schema fallback, prompt newlines, and previews."""
 
 from __future__ import annotations
 
@@ -9,9 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from qqbot_studio.configgen import _snowluma_config
 from qqbot_studio.deployer import DeployManager
-from qqbot_studio.dockerctl import DockerController, DockerStatus
+from qqbot_studio.dockerctl import DockerController
 from qqbot_studio.store import Store
 
 
@@ -229,107 +228,6 @@ class PluginSchemaFallbackTests(unittest.TestCase):
         self.assertEqual(stored["system_prompt"], prompt)
         reloaded = self.manager.get_plugin_config("qqbot_enhancer")
         self.assertEqual(reloaded["values"]["system_prompt"], prompt)
-
-
-class SnowLumaStatusCommandTests(unittest.TestCase):
-    def test_generated_config_has_disabled_status_command(self):
-        config = _snowluma_config(
-            onebot_token="onebot-token",
-            http_token="http-token",
-            ws_token="ws-token",
-        )
-        self.assertIs(config["statusCommand"]["enabled"], False)
-        self.assertEqual(config["statusCommand"]["trigger"], "#sl")
-
-    def test_old_onebot_files_are_migrated_without_losing_other_fields(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config_dir = root / "data" / "snowluma" / "config"
-            config_dir.mkdir(parents=True)
-            global_config = {
-                "networks": {"wsClients": [{"name": "keep"}]},
-                "statusCommand": {
-                    "enabled": True,
-                    "swallow": False,
-                    "cooldownSeconds": 9,
-                    "trigger": "#sl",
-                    "custom": "keep-me",
-                },
-                "historySync": {"enabled": False},
-            }
-            account_config = {
-                "uin": "10001",
-                "statusCommand": {"enabled": True, "trigger": "#sl", "x": 7},
-                "otherCommand": {"enabled": True, "trigger": "#other"},
-            }
-            global_path = config_dir / "onebot.json"
-            account_path = config_dir / "onebot_10001.json"
-            global_path.write_text(json.dumps(global_config), encoding="utf-8")
-            account_path.write_text(json.dumps(account_config), encoding="utf-8")
-
-            manager = DeployManager(
-                store=Store(root),
-                docker=DockerController(root),
-            )
-            migrated = manager.snowluma_status_migration
-            self.assertEqual(
-                sorted(Path(item).name for item in migrated["changed"]),
-                ["onebot.json", "onebot_10001.json"],
-            )
-            self.assertEqual(migrated["errors"], [])
-
-            saved_global = json.loads(global_path.read_text(encoding="utf-8"))
-            self.assertIs(saved_global["statusCommand"]["enabled"], False)
-            self.assertEqual(saved_global["statusCommand"]["trigger"], "#sl")
-            self.assertEqual(saved_global["statusCommand"]["cooldownSeconds"], 9)
-            self.assertEqual(saved_global["statusCommand"]["custom"], "keep-me")
-            self.assertEqual(saved_global["networks"], global_config["networks"])
-            self.assertEqual(saved_global["historySync"], {"enabled": False})
-
-            saved_account = json.loads(account_path.read_text(encoding="utf-8"))
-            self.assertIs(saved_account["statusCommand"]["enabled"], False)
-            self.assertEqual(saved_account["statusCommand"]["x"], 7)
-            self.assertEqual(
-                saved_account["otherCommand"],
-                {"enabled": True, "trigger": "#other"},
-            )
-            self.assertEqual(global_path.stat().st_mode & 0o777, 0o600)
-
-
-    def test_status_refresh_migrates_old_files_created_after_manager_start(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            manager = DeployManager(
-                store=Store(root),
-                docker=DockerController(root),
-            )
-            config_dir = root / "data" / "snowluma" / "config"
-            config_dir.mkdir(parents=True)
-            path = config_dir / "onebot.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "statusCommand": {
-                            "enabled": True,
-                            "trigger": "#sl",
-                            "keep": "yes",
-                        },
-                        "other": {"keep": True},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with mock.patch.object(
-                manager.docker,
-                "detect",
-                return_value=DockerStatus(False, False, False, False, detail="offline"),
-            ):
-                manager.get_status()
-            saved = json.loads(path.read_text(encoding="utf-8"))
-            self.assertIs(saved["statusCommand"]["enabled"], False)
-            self.assertEqual(saved["statusCommand"]["trigger"], "#sl")
-            self.assertEqual(saved["statusCommand"]["keep"], "yes")
-            self.assertEqual(saved["other"], {"keep": True})
 
 
 class PromptPreviewAndRoundTripTests(unittest.TestCase):

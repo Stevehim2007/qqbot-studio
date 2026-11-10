@@ -55,7 +55,7 @@ class StudioManagerTests(unittest.TestCase):
         self.assertEqual(manager.project_name, first["project_name"])
         self.assertEqual(manager.docker.project_name, first["project_name"])
         self.assertEqual(manager.docker.ASTRBOT_CONTAINER, first["astrbot_container"])
-        self.assertEqual(manager.docker.SNOWLUMA_CONTAINER, first["snowluma_container"])
+        self.assertFalse(hasattr(manager.docker, "SNOWLUMA_CONTAINER"))
         self.assertEqual(manager.bind_address, "0.0.0.0")
 
     def test_new_instances_get_distinct_ports(self):
@@ -67,21 +67,13 @@ class StudioManagerTests(unittest.TestCase):
         second_config = json.loads(
             (Path(self.tmp.name) / "instances" / second["id"] / "config.json").read_text(encoding="utf-8")
         )
-        first_ports = [
-            first_config["ports"]["astrbot_webui"],
-            first_config["ports"]["snowluma_webui"],
-            first_config["ports"]["novnc"],
-        ]
-        second_ports = [
-            second_config["ports"]["astrbot_webui"],
-            second_config["ports"]["snowluma_webui"],
-            second_config["ports"]["novnc"],
-        ]
-        self.assertEqual(first_ports, [first_ports[0], first_ports[0] + 1, first_ports[0] + 2])
-        self.assertEqual(second_ports, [second_ports[0], second_ports[0] + 1, second_ports[0] + 2])
-        self.assertGreaterEqual(first_ports[0], 5000)
-        self.assertLessEqual(second_ports[2], 10000)
-        self.assertTrue(set(first_ports).isdisjoint(second_ports))
+        first_port = first_config["ports"]["astrbot_webui"]
+        second_port = second_config["ports"]["astrbot_webui"]
+        self.assertEqual(set(first_config["ports"]), {"astrbot_webui"})
+        self.assertEqual(set(second_config["ports"]), {"astrbot_webui"})
+        self.assertNotEqual(first_port, second_port)
+        self.assertGreaterEqual(first_port, 5000)
+        self.assertLessEqual(second_port, 10000)
 
     def test_delete_instance_removes_its_directory(self):
         meta = self.studio.create_instance("待删除机器人")
@@ -157,7 +149,6 @@ class StudioManagerTests(unittest.TestCase):
 
 class FakeStatsDocker:
     ASTRBOT_CONTAINER = "qqbot-bot-1-astrbot"
-    SNOWLUMA_CONTAINER = "qqbot-bot-1-snowluma"
 
     def __init__(self):
         self.calls = []
@@ -173,14 +164,6 @@ class FakeStatsDocker:
                     "Name": self.ASTRBOT_CONTAINER,
                     "CPUPerc": "1.25%",
                     "MemUsage": "100MiB / 1GiB",
-                    "MemPerc": "9.77%",
-                }
-            ),
-            json.dumps(
-                {
-                    "Name": self.SNOWLUMA_CONTAINER,
-                    "CPUPerc": "2.50%",
-                    "MemUsage": "200MiB / 2GiB",
                     "MemPerc": "9.77%",
                 }
             ),
@@ -218,7 +201,7 @@ class StudioV3Tests(unittest.TestCase):
         self.assertEqual(instance["instance_id"], meta["id"])
         self.assertGreaterEqual(instance["data_dir_size_bytes"], 1536)
         self.assertGreaterEqual(instance["file_count"], 1)
-        self.assertEqual(len(stats["docker"]), 2)
+        self.assertEqual(len(stats["docker"]), 1)
         astrbot_stats = next(item for item in stats["docker"] if item["service"] == "astrbot")
         self.assertEqual(astrbot_stats["memory_usage_bytes"], 100 * 1024 * 1024)
         self.assertEqual(astrbot_stats["memory_limit_bytes"], 1024 * 1024 * 1024)
@@ -242,7 +225,7 @@ class StudioV3Tests(unittest.TestCase):
         with mock.patch.object(self.studio, "get_manager", return_value=OfflineManager()):
             stats = self.studio.get_stats(meta["id"], force_refresh=True)
         self.assertTrue(stats["ok"])
-        self.assertEqual(len(stats["docker"]), 2)
+        self.assertEqual(len(stats["docker"]), 1)
         self.assertTrue(all(item["error"] == "Docker 不可用" for item in stats["docker"]))
         self.assertIn("Docker 不可用", " ".join(stats["errors"]))
 
@@ -283,13 +266,8 @@ class StudioV3Tests(unittest.TestCase):
             old_config = json.dumps(
                 {
                     "schema_version": 1,
-                    "qq_account": "12345678",
                     "prompt": "旧提示词",
-                    "ports": {
-                        "astrbot_webui": 16185,
-                        "snowluma_webui": 15099,
-                        "novnc": 16081,
-                    },
+                    "ports": {"astrbot_webui": 16185},
                     "deployed": True,
                 }
             )
@@ -298,14 +276,12 @@ class StudioV3Tests(unittest.TestCase):
                 "services:\n"
                 "  astrbot:\n"
                 "    container_name: qqbot-astrbot\n"
-                "  snowluma:\n"
-                "    container_name: qqbot-snowluma\n"
                 "networks:\n"
                 "  qqbot-studio-net:\n"
                 "    name: qqbot-studio-net\n"
             )
             (root / "compose.yml").write_text(old_compose, encoding="utf-8")
-            (root / ".env").write_text("VNC_PASSWD=oldpass1\n", encoding="utf-8")
+            (root / ".env").write_text("LEGACY_LAYOUT=1\n", encoding="utf-8")
 
             studio = StudioManager(root)
             # V1 root layout is intentionally unsupported and must not be
@@ -313,7 +289,7 @@ class StudioV3Tests(unittest.TestCase):
             self.assertFalse((root / "instances" / "bot-1").exists())
             self.assertEqual((root / "config.json").read_text(encoding="utf-8"), old_config)
             self.assertEqual((root / "compose.yml").read_text(encoding="utf-8"), old_compose)
-            self.assertEqual((root / ".env").read_text(encoding="utf-8"), "VNC_PASSWD=oldpass1\n")
+            self.assertEqual((root / ".env").read_text(encoding="utf-8"), "LEGACY_LAYOUT=1\n")
 
             # Current v4 creation remains safe and isolated from the old files.
             created = studio.create_instance("v4")

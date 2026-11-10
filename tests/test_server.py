@@ -25,6 +25,7 @@ class FakeManager:
             "memory_mode": "direct",
         }
         self.plugin_config_set_calls = []
+        self.dependency_payload = None
         self.prompt_profiles = [
             {
                 "id": "default",
@@ -59,6 +60,10 @@ class FakeManager:
         result = self.get_prompt_profiles()
         result["message"] = "提示词已更新。"
         return result
+
+    def install_plugin_runtime_dependencies(self, payload):
+        self.dependency_payload = dict(payload or {})
+        return {"ok": True, "installed": ["Pillow>=10"], "manual_required": []}
 
     def get_plugins(self):
         return {
@@ -203,13 +208,12 @@ class FakeManager:
             "deployment": {
                 "deployed": False,
                 "running": False,
-                "qq_account": "12345678",
+                "platform_mode": "official",
+                "qq_official_appid": "12345678",
                 "model": "deepseek-flash",
                 "prompt": "测试提示词",
-                "urls": {"novnc": "http://10.0.0.2:6081"},
+                "urls": {"astrbot_webui": "http://10.0.0.2:6185"},
                 "credentials": {},
-                "onebot_connected": None,
-                "qq_logged_in": False,
                 "active_job_id": "job-1",
                 "active_job_status": "running",
             },
@@ -231,7 +235,9 @@ class FakeManager:
 
     def start_deploy(self, **kwargs):
         self.last_deploy = kwargs
-        assert kwargs["qq_account"] == "12345678"
+        assert kwargs["official_appid"] == "12345678"
+        assert kwargs["official_secret"] == "official-secret"
+        assert "qq_account" not in kwargs
         assert kwargs["mirror_candidates"] == ["mirror.example/", "m.daocloud.io/docker.io/"]
         return "job-1"
 
@@ -240,10 +246,6 @@ class FakeManager:
 
     def update_persona(self, prompt):
         return "提示词已更新"
-
-    def reset_snowluma_password(self):
-        return {"ok": True, "username": "admin", "password": "NewSnowPass123", "message": "reset"}
-
 
 class FakeStudio:
     def __init__(self):
@@ -264,7 +266,7 @@ class FakeStudio:
                 "created_at": "2026-01-01T00:00:00+00:00",
                 "deployed": False,
                 "running": False,
-                "qq_account": "",
+                "platform_mode": "official",
                 "urls": {},
                 "active_job_id": "job-1",
                 "active_job_status": "running",
@@ -295,7 +297,7 @@ class FakeStudio:
 
     def create_instance(self, name=None):
         meta = {"id": "bot-2", "name": name or "QQ 机器人 2", "created_at": "2026-01-02T00:00:00+00:00"}
-        self.instances.append({**meta, "deployed": False, "running": None, "qq_account": "", "urls": {}, "active_job_id": "", "active_job_status": None})
+        self.instances.append({**meta, "deployed": False, "running": None, "platform_mode": "official", "urls": {}, "active_job_id": "", "active_job_status": None})
         return meta
 
     def list_mirror_nodes(self):
@@ -1104,6 +1106,15 @@ class ServerTests(unittest.TestCase):
             status = exc.code
         self.assertEqual(status, 403)
 
+    def test_plugin_dependency_install_route_forwards_preview_token(self):
+        status, body = self._post(
+            "/api/instances/bot-1/plugin-dependencies/install",
+            {"preview_token": "preview-1", "confirm": True},
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.studio.manager.dependency_payload["preview_token"], "preview-1")
+        self.assertIn('"ok": true', body)
+
     def test_v3_plugin_memory_and_stats_routes(self):
         status, body = self._get("/api/instances/bot-1/plugins")
         self.assertEqual(status, 200)
@@ -1166,7 +1177,9 @@ class ServerTests(unittest.TestCase):
         status, body = self._post(
             "/api/deploy?instance=bot-1",
             {
-                "qq_account": "12345678",
+                "platform_mode": "official",
+                "official_appid": "12345678",
+                "official_secret": "official-secret",
                 "deepseek_api_key": "sk-test",
                 "prompt": "prompt",
                 "accept_risk": True,
@@ -1206,13 +1219,26 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
 
 
-    def test_snowluma_reset_contract(self):
-        status, body = self._post("/api/snowluma-reset?instance=bot-1", {})
-        self.assertEqual(status, 200)
+    def test_legacy_snowluma_deploy_contract_is_rejected(self):
+        status, body = self._post(
+            "/api/deploy?instance=bot-1",
+            {
+                "platform_mode": "snowluma",
+                "qq_account": "12345678",
+                "deepseek_api_key": "sk-test",
+                "prompt": "prompt",
+                "accept_risk": True,
+            },
+        )
+        self.assertEqual(status, 400)
         payload = json.loads(body)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["username"], "admin")
-        self.assertEqual(payload["password"], "NewSnowPass123")
+        self.assertFalse(payload["ok"])
+        self.assertIn("官方", payload["message"])
+        status, body = self._post("/api/snowluma-reset?instance=bot-1", {})
+        self.assertEqual(status, 404)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get("/api/logs?instance=bot-1&service=snowluma")
+        self.assertEqual(ctx.exception.code, 400)
 
     def test_update_check_and_apply_contract(self):
         with mock.patch(

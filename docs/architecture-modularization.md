@@ -1,5 +1,7 @@
 # QQ Bot Studio 模块化 / 接口化架构
 
+> 当前接入范围：仅 QQ 官方机器人。本文部分内容记录模块化演进历史；涉及 SnowLuma/OneBot/noVNC 的描述已不再代表当前运行路径。
+
 > 状态：Phase 0（后端契约/资源统计）、Phase 4 第二阶段（前端 service/component 低风险提取）已实现；Ponytail full 第一阶段与第二阶段低风险精简已完成（详见 [ponytail-audit.md](ponytail-audit.md)、[ponytail-optimization-phase2.md](ponytail-optimization-phase2.md)）。
 > 本文描述目标架构、现有耦合、分阶段迁移方案、回滚方式和兼容边界。
 > 所有阶段均**不改变**现有用户可见 API、页面 URL、实例数据、文件路径或安全策略。
@@ -35,12 +37,12 @@
 | 文件 | 当前职责 | 主要耦合 |
 |---|---|---|
 | [`qqbot_studio/server.py`](../qqbot_studio/server.py) | 本地 HTTP 服务、token、HTML 注入、所有 API 路由、错误映射、更新/实例/扩展/插件/统计入口 | 直接依赖 `StudioManager`、`DeployManager`、`DockerError`、`AstrBotAPIError`、静态文件 |
-| [`qqbot_studio/deployer.py`](../qqbot_studio/deployer.py) | 部署 job、线程/持久化、Compose 流程、AstrBot persona、SnowLuma、插件配置、日志、状态、回滚 | 直接持有 `Store`、`DockerController`、AstrBot HTTP 客户端工厂，同时承担较多领域逻辑 |
+| [`qqbot_studio/deployer.py`](../qqbot_studio/deployer.py) | 部署 job、线程/持久化、Compose 流程、AstrBot persona、QQ 官方平台、插件配置、日志、状态、回滚 | 直接持有 `Store`、`DockerController`、AstrBot HTTP 客户端工厂，同时承担较多领域逻辑 |
 | [`qqbot_studio/studio.py`](../qqbot_studio/studio.py) | 多实例目录、镜像节点、实例元数据、端口预留、状态汇总、资源统计、旧布局迁移 | 直接构造 `DeployManager`/`DockerController`；早期资源统计辅助函数曾内嵌于此 |
 | [`qqbot_studio/assistant_ext.py`](../qqbot_studio/assistant_ext.py) | 可选助手 B 的 clone/update、配置读写、启动/停止/健康检查 | Git 子进程、宿主进程、AstrBot 数据目录、HTTP health |
 | [`qqbot_studio/store.py`](../qqbot_studio/store.py) | config/secrets/state JSON、0600 原子写入、默认值和迁移 | 被 deployer/studio 直接创建，没有注入抽象 |
 | [`qqbot_studio/dockerctl.py`](../qqbot_studio/dockerctl.py) | Docker/Compose 检测与命令、sudo 降级、容器状态、日志 | 可以直接由 `RuntimeBackend` 适配 |
-| [`qqbot_studio/configgen.py`](../qqbot_studio/configgen.py) | Compose/.env/AstrBot/SnowLuma 配置生成、端口分配 | 文件生成逻辑与部署流程结合较紧 |
+| [`qqbot_studio/configgen.py`](../qqbot_studio/configgen.py) | Compose/.env/AstrBot/QQ 官方平台配置生成、端口分配 | 文件生成逻辑与部署流程结合较紧 |
 | [`qqbot_studio/astrbot_api.py`](../qqbot_studio/astrbot_api.py) | AstrBot 登录、persona、插件 HTTP 接口底层 | HTTP 细节与部署编排通过 client factory 组装 |
 | [`qqbot_studio/launcher.py`](../qqbot_studio/launcher.py) | 命令行导入/部署/控制台启动、后台服务 | 直接创建 `StudioManager`/`DockerController` |
 | [`qqbot_studio/contracts.py`](../qqbot_studio/contracts.py) | **第一阶段新增**：运行时、部署、扩展、状态、统计、配置、AstrBot、UI 契约 | 仅依赖标准库 typing/dataclasses |
@@ -246,8 +248,7 @@ Windows launcher
 
 Native 版本不能依赖 `/proc`、`sudo`、`/etc/localtime`、Compose 服务名：
 - 进程启动/停止/PID/日志改为 Windows 进程 API；
-- AstrBot/SnowLuma 的 OneBot URL 改为 `ws://127.0.0.1:<port>/ws`；
-- 端口分配、防火墙提示和 noVNC/WebUI URL 由平台适配器给出；
+- AstrBot WebUI 端口、防火墙提示和访问 URL 由平台适配器给出；
 - 仍需保持旧实例/数据目录兼容，必要时只读导入。
 
 ## 5. 分阶段迁移计划与回滚
@@ -366,7 +367,7 @@ Native 版本不能依赖 `/proc`、`sudo`、`/etc/localtime`、Compose 服务�
 
 1. **API 不变**：不删除/重命名字段；新增字段必须可选；旧错误码/错误 JSON 形状尽量保持。
 2. **数据不变**：实例根目录、`config.json`、`secrets.json`、`deploy-state.json`、
-   `compose.yml`、`.env`、AstrBot/SnowLuma 数据路径不迁移。
+   `compose.yml`、`.env`、AstrBot 数据路径不迁移。
 3. **旧实例可启动**：v1/v2 兼容迁移逻辑不能被新适配器绕过。
 4. **文件权限**：含凭据文件 0600；数据目录 0700；Windows 平台按平台策略降级但不得错误放宽。
 5. **Key 不泄漏**：任何 GET/状态/错误/日志/来源摘要不得返回 API Key、token、password、secret。
@@ -402,7 +403,7 @@ python3 -m py_compile qqbot_studio/*.py tests/*.py
 ## 8. 剩余架构债务
 
 - `server.py`、`deployer.py`、`studio.py` 仍是较大的聚合模块；本阶段只做了低风险统计提取。
-- `DeployManager` 仍同时负责 job、Configgen、AstrBot、SnowLuma 和插件配置，Phase 1/2 继续拆。
+- `DeployManager` 仍同时负责 job、Configgen、AstrBot、QQ 官方平台和插件配置，Phase 1/2 继续拆。
 - `assistant_ext.py` 仍将 Git 扩展管理、配置和进程生命周期放在一起；后续可拆
   `ExtensionInstaller` / `AssistantConfigStore` / `AssistantProcessRuntime`。
 - `Store` 尚未替换为 Windows Credential/DPAPI 实现。
