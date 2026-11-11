@@ -758,6 +758,7 @@ class AssistantExtensionManager:
         try:
             with socket.socket(family, socket.SOCK_STREAM) as sock:
                 sock.settimeout(0.5)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind((probe, int(port)))
             return True
         except OSError:

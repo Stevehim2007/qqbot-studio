@@ -46,8 +46,9 @@ class StoreTests(unittest.TestCase):
             self.assertTrue(re.search(r"[A-Z]", first["astrbot_password"]))
             self.assertTrue(re.search(r"[a-z]", first["astrbot_password"]))
             self.assertTrue(re.search(r"\d", first["astrbot_password"]))
+            self.assertIn("onebot_token", first)
+            self.assertGreaterEqual(len(first["onebot_token"]), 24)
             for key in (
-                "onebot_token",
                 "snowluma_http_token",
                 "snowluma_ws_token",
                 "snowluma_password",
@@ -82,8 +83,9 @@ class StoreTests(unittest.TestCase):
             store = Store(tmp)
             store.save_secrets(fake_secrets())
             secrets = store.ensure_secrets()
+            self.assertIn("onebot_token", secrets)
+            self.assertEqual(secrets["onebot_token"], "onebot-test-token-abcdefghijklmnopqrstuvwxyz")
             for key in (
-                "onebot_token",
                 "snowluma_http_token",
                 "snowluma_ws_token",
                 "snowluma_password",
@@ -167,6 +169,33 @@ class ConfigGenerationTests(unittest.TestCase):
             self.assertEqual(astrbot["platform"][0]["secret"], "official-secret")
             self.assertFalse((result["root"] / "data" / "snowluma").exists())
             self.assertEqual(list(result["ports"]), ["astrbot_webui"])
+
+    def test_onebot_platform_generates_single_container_and_ws_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generate_artifacts(
+                tmp,
+                api_key="sk-onebot-test",
+                prompt="OneBot",
+                use_mirror=False,
+                secrets_data=fake_secrets(),
+                ports=choose_ports(probe=False),
+                platform_mode="onebot",
+                onebot_ws_port=6201,
+                onebot_token="onebot-token-for-test",
+            )
+            self.assertEqual(result["platform_mode"], "onebot")
+            self.assertEqual(result["onebot_ws_port"], 6201)
+            compose = result["compose"].read_text(encoding="utf-8")
+            env = result["env"].read_text(encoding="utf-8")
+            self.assertIn("${BIND_ADDRESS}:${ASTRBOT_ONEBOT_PORT}:6199", compose)
+            self.assertIn("ASTRBOT_ONEBOT_PORT=6201", env)
+            astrbot = json.loads(result["astrbot_config"].read_text(encoding="utf-8"))
+            platform = astrbot["platform"][0]
+            self.assertEqual(platform["type"], "aiocqhttp")
+            self.assertEqual(platform["ws_reverse_port"], 6199)
+            self.assertEqual(platform["ws_reverse_token"], "onebot-token-for-test")
+            self.assertNotIn("qq_official", json.dumps(platform))
+            self.assertFalse((result["root"] / "data" / "snowluma").exists())
 
     def test_all_generated_files_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:

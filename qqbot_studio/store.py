@@ -21,7 +21,7 @@ PROJECT_NAME = "qqbot-studio"
 CONFIG_SCHEMA_VERSION = 2
 DEFAULT_MEMORY_MODE = "direct"
 MEMORY_MODES = ("direct", "astrbot")
-PLATFORM_MODES = ("official",)
+PLATFORM_MODES = ("official", "onebot")
 DEFAULT_PLATFORM_MODE = "official"
 
 DEFAULT_PROMPT = """你是一位友好、真诚、有边界感的 QQ 聊天助手。
@@ -39,6 +39,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": CONFIG_SCHEMA_VERSION,
     "platform_mode": DEFAULT_PLATFORM_MODE,
     "qq_official_appid": "",
+    "onebot_ws_port": 0,
     "model": MODEL_NAME,
     "prompt": DEFAULT_PROMPT,
     "prompt_profiles": [],
@@ -64,13 +65,13 @@ SENSITIVE_CONFIG_KEYS = {
     "qq_password",
     "password",
     "qq_official_secret",
+    "onebot_token",
 }
 
 # Official-only deployments no longer use these legacy fields. They are
 # removed on load/save so a stale config cannot reintroduce another platform.
 LEGACY_CONFIG_KEYS = {"qq_account"}
 LEGACY_SECRET_KEYS = {
-    "onebot_token",
     "snowluma_http_token",
     "snowluma_ws_token",
     "snowluma_password",
@@ -260,6 +261,7 @@ class Store:
             "astrbot_password": generate_password,
             "astrbot_jwt_secret": lambda: generate_token(32),
             "qq_official_secret": lambda: "",
+            "onebot_token": lambda: generate_token(32),
         }
         for key, factory in defaults.items():
             value = secrets_data.get(key)
@@ -301,7 +303,7 @@ class Store:
             if key in migrated:
                 migrated.pop(key, None)
                 changed = True
-        if migrated.get("platform_mode") != DEFAULT_PLATFORM_MODE:
+        if migrated.get("platform_mode") not in PLATFORM_MODES:
             migrated["platform_mode"] = DEFAULT_PLATFORM_MODE
             changed = True
         for key, value in DEFAULT_CONFIG.items():

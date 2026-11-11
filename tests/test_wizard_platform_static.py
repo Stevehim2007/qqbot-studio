@@ -235,6 +235,24 @@ class WizardPlatformStaticTests(unittest.TestCase):
             r"else if \(summary\.ready\) \{[\s\S]{0,700}?nextButton\.disabled = false;",
         )
 
+    def test_dual_platform_wizard_fields_contract(self) -> None:
+        for element_id in (
+            "platform-mode", "official-fields", "onebot-fields",
+            "onebot-ws-port", "onebot-token",
+            "onebot-ws-port-error", "onebot-token-error",
+        ):
+            self.assertIn(f'id="{element_id}"', self.index_html)
+        self.assertIn("外部 OneBot v11 网关", self.index_html)
+        self.assertIn("反向 WebSocket 端口", self.index_html)
+        self.assertIn("留空自动生成", self.index_html)
+        for token in (
+            "syncPlatformModeFields",
+            "onebot_ws_port",
+            "onebot_token",
+            "validateConfigForm",
+        ):
+            self.assertIn(token, self.app_js)
+
     def test_wizard_prompt_is_read_only_and_template_managed_elsewhere(self) -> None:
         for element_id in (
             "prompt-preview", "prompt-help", "prompt-error",

@@ -210,16 +210,17 @@
               <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-user"></use></svg></span>
               <div>
                 <h3>QQ 接入方式</h3>
-                <p>官方机器人需要 AppID/AppSecret。</p>
+                <p>官方机器人填 AppID/AppSecret；OneBot 模式连接外部 v11 网关。</p>
               </div>
             </div>
 
             <div class="field">
               <label for="platform-mode">接入方式</label>
               <select id="platform-mode" name="platform_mode">
-                <option value="official" selected>QQ 官方机器人</option>
+                <option value="official" selected>QQ 官方机器人（推荐）</option>
+                <option value="onebot">外部 OneBot v11 网关</option>
               </select>
-              <p class="field-help">官方群需要群主开启“获取群内全部消息”；机器人只使用 AppID/AppSecret 连接。</p>
+              <p class="field-help">官方群需要群主开启“获取群内全部消息”；OneBot 模式由你运行 NapCat/Lagrange/LLOneBot 等网关，AstrBot 提供反向 WebSocket。</p>
             </div>
 
             <div id="official-fields">
@@ -238,6 +239,25 @@
               <div class="safety-inline">
                 <svg class="icon" aria-hidden="true"><use href="#i-qr"></use></svg>
                 <p><strong>官方群权限：</strong>请群主在 QQ 群设置中开启“机器人可获取群聊消息范围：群内全部消息”和“机器人主动发言”，否则非 @ 消息不会推送。</p>
+              </div>
+            </div>
+
+            <div id="onebot-fields" hidden>
+              <div class="field">
+                <label for="onebot-ws-port">反向 WebSocket 端口</label>
+                <input id="onebot-ws-port" name="onebot_ws_port" type="number" inputmode="numeric" min="1" max="65535" placeholder="留空自动分配">
+                <p class="field-help">OneBot 网关连接到 <code>ws://本机地址:该端口/ws</code>；留空会自动分配一个空闲端口。</p>
+                <p id="onebot-ws-port-error" class="field-error" role="alert" hidden></p>
+              </div>
+              <div class="field">
+                <label for="onebot-token">WebSocket Token</label>
+                <input id="onebot-token" name="onebot_token" type="password" autocomplete="new-password" placeholder="留空自动生成">
+                <p class="field-help">留空会自动生成 32 字节 token；部署完成后可在状态页复制给网关。</p>
+                <p id="onebot-token-error" class="field-error" role="alert" hidden></p>
+              </div>
+              <div class="safety-inline">
+                <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+                <p><strong>OneBot 模式：</strong>不内置 SnowLuma；需要你有一个能主动连接 AstrBot 的 OneBot v11 网关。群权限、登录和风控由该网关负责。</p>
               </div>
             </div>
 

@@ -2385,8 +2385,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/deploy":
                 mode = str(payload.get("platform_mode") or "official").strip().lower()
-                if mode != "official":
-                    self._error(HTTPStatus.BAD_REQUEST, "仅支持 QQ 官方机器人接入方式。")
+                if mode not in {"official", "onebot"}:
+                    self._error(HTTPStatus.BAD_REQUEST, "接入方式只能是 official（官方机器人）或 onebot（外部网关）。")
                     return
                 legacy_fields = sorted(
                     key
@@ -2395,7 +2395,6 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     or key.startswith("snowluma")
                     or key.startswith("novnc")
                     or key.startswith("vnc")
-                    or key.startswith("onebot")
                 )
                 if legacy_fields:
                     self._error(
@@ -2410,6 +2409,9 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     mirror_candidates=ctx.studio.candidate_mirror_prefixes(),
                     official_appid=str(payload.get("official_appid") or ""),
                     official_secret=str(payload.get("official_secret") or ""),
+                    platform_mode=mode,
+                    onebot_ws_port=int(payload.get("onebot_ws_port") or 0),
+                    onebot_token=str(payload.get("onebot_token") or ""),
                 )
                 self._json(HTTPStatus.OK, {"ok": True, "job_id": job_id})
                 return

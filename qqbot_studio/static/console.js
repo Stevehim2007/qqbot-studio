@@ -3340,10 +3340,19 @@
       for (const [name, spec] of Object.entries(schema || {})) {
         const field = card.querySelector(`[data-policy-param="${CSS.escape(name)}"]`);
         if (!field) continue;
-        if (normalizePolicyKind(spec.kind) === 'boolean') {
+        const kind = normalizePolicyKind(spec.kind);
+        if (kind === 'boolean') {
           params[name] = Boolean(field.checked);
         } else if (field.value !== '') {
-          params[name] = field.value;
+          if (kind === 'integer') {
+            const parsed = Number.parseInt(field.value, 10);
+            if (Number.isFinite(parsed)) params[name] = parsed;
+          } else if (kind === 'number') {
+            const parsed = Number(field.value);
+            if (Number.isFinite(parsed)) params[name] = parsed;
+          } else {
+            params[name] = field.value;
+          }
         }
       }
       return params;
@@ -3523,10 +3532,13 @@
         save.addEventListener('click', async () => {
           setStatus('正在保存…');
           try {
-            await apiRequest(scopePath(scope, encodeURIComponent(pluginId)), {
+            const result = await apiRequest(scopePath(scope, encodeURIComponent(pluginId)), {
               method: 'POST',
               body: { enabled: enabled.checked, params: collectParams(card, schema), expected_revision: data.revision }
             });
+            if (result && result.ok === false) {
+              throw new Error(result.message || result.error || 'save failed');
+            }
             setStatus(`${pluginId} 已保存。`, 'success');
             await loadScope();
           } catch (error) {

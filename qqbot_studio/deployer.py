@@ -526,13 +526,31 @@ class DeployManager:
         mirror_candidates: list[str] | None = None,
         official_appid: str = "",
         official_secret: str = "",
+        platform_mode: str = "official",
+        onebot_ws_port: int = 0,
+        onebot_token: str = "",
     ) -> str:
+        mode = str(platform_mode or "official").strip().lower()
+        if mode not in {"official", "onebot"}:
+            raise DeploymentError("接入方式只能是 official（官方机器人）或 onebot（外部网关）。")
         appid = str(official_appid or "").strip()
         appsecret = str(official_secret or "").strip()
-        if not re.fullmatch(r"\d{5,32}", appid):
-            raise DeploymentError("QQ 官方机器人 AppID 必须为 5–32 位数字。")
-        if not appsecret:
-            raise DeploymentError("请填写 QQ 官方机器人 AppSecret。")
+        if mode == "official":
+            if not re.fullmatch(r"\d{5,32}", appid):
+                raise DeploymentError("QQ 官方机器人 AppID 必须为 5–32 位数字。")
+            if not appsecret:
+                raise DeploymentError("请填写 QQ 官方机器人 AppSecret。")
+        else:
+            appid = ""
+            appsecret = ""
+            if onebot_ws_port:
+                try:
+                    onebot_ws_port = int(onebot_ws_port)
+                except (TypeError, ValueError) as exc:
+                    raise DeploymentError("OneBot WebSocket 端口必须是数字。") from exc
+                if not (1 <= onebot_ws_port <= 65535):
+                    raise DeploymentError("OneBot WebSocket 端口必须在 1–65535 之间。")
+            onebot_token = str(onebot_token or "").strip()
         text_prompt = self._validate_prompt(prompt)
         api_key = str(deepseek_api_key or "").strip()
         if not api_key:
@@ -565,8 +583,9 @@ class DeployManager:
         try:
             config = self.store.load_config()
             config["last_job_id"] = job_id
-            config["platform_mode"] = "official"
+            config["platform_mode"] = mode
             config["qq_official_appid"] = appid
+            config["onebot_ws_port"] = int(onebot_ws_port or 0)
             config["prompt"] = text_prompt
             config["use_mirror"] = bool(configured_prefixes)
             config["mirror_candidates"] = configured_prefixes
@@ -585,7 +604,7 @@ class DeployManager:
             target=self._run_deploy,
             name=f"qqbot-deploy-{job_id}",
             daemon=True,
-            args=(job_id, api_key, text_prompt, configured_prefixes, appid, appsecret),
+            args=(job_id, api_key, text_prompt, configured_prefixes, appid, appsecret, mode, onebot_ws_port, onebot_token),
         )
         try:
             thread.start()
@@ -615,6 +634,9 @@ class DeployManager:
         mirror_candidates: list[str],
         official_appid: str = "",
         official_secret: str = "",
+        platform_mode: str = "official",
+        onebot_ws_port: int = 0,
+        onebot_token: str = "",
     ) -> None:
         job = self._jobs[job_id]
         # Keep a redactor available even if secrets.json was corrupted or is
@@ -623,7 +645,10 @@ class DeployManager:
         redact: Callable[[str], str] = lambda text: str(text).replace(api_key, "***") if api_key else str(text)
         try:
             redact = self._redactor(api_key)
-            self._deploy_impl(job, api_key, prompt, mirror_candidates, redact, official_appid, official_secret)
+            self._deploy_impl(
+                job, api_key, prompt, mirror_candidates, redact,
+                official_appid, official_secret, platform_mode, onebot_ws_port, onebot_token,
+            )
         except Exception as exc:  # noqa: BLE001 - report all failures to the UI
             message = redact(str(exc) or exc.__class__.__name__)
             if not isinstance(exc, (DeploymentError, DockerError, AstrBotAPIError, ValueError)):
@@ -641,10 +666,14 @@ class DeployManager:
                 job.status = "success"
                 job.progress = 100
                 job.step = "部署完成"
-                job.message = "AstrBot 与 DeepSeek 已配置完成。QQ 官方机器人将直接连接，无需扫码。"
+                job.message = (
+                    "AstrBot 与 DeepSeek 已配置完成。QQ 官方机器人将直接连接，无需扫码。"
+                    if platform_mode == "official"
+                    else "AstrBot 已配置完成。请让外部 OneBot v11 网关连接页面显示的 WebSocket 地址。"
+                )
                 job.error = ""
                 job.updated_at = utc_now()
-                self._append_log(job, "[完成] 部署成功。QQ 官方机器人已配置。")
+                self._append_log(job, f"[完成] 部署成功。接入方式：{platform_mode}。")
                 self._persist_job(job, force=True)
         finally:
             with self._lock:
@@ -660,6 +689,9 @@ class DeployManager:
         redact: Callable[[str], str],
         official_appid: str = "",
         official_secret: str = "",
+        platform_mode: str = "official",
+        onebot_ws_port: int = 0,
+        onebot_token: str = "",
     ) -> None:
         add_log = lambda text: self._append_log(job, redact(text))  # noqa: E731
 
@@ -676,9 +708,14 @@ class DeployManager:
         if not ok:
             add_log("警告：DeepSeek 预检未能完成，将继续部署；请在部署后通过 AstrBot WebUI 检查模型配置。")
 
-        self._set_job(job, step="生成本地配置", progress=14, message="正在生成 Docker Compose、QQ 官方机器人与模型配置…")
+        mode_label = "QQ 官方机器人" if platform_mode == "official" else "外部 OneBot v11 网关"
+        self._set_job(job, step="生成本地配置", progress=14, message=f"正在生成 Docker Compose、{mode_label} 与模型配置…")
         secrets_data = self.store.ensure_secrets()
-        secrets_data["qq_official_secret"] = official_secret
+        if platform_mode == "official":
+            secrets_data["qq_official_secret"] = official_secret
+        else:
+            onebot_token = onebot_token or secrets_data.get("onebot_token") or generate_token(32)
+            secrets_data["onebot_token"] = onebot_token
         artifacts = generate_artifacts(
             self.data_dir,
             api_key=api_key,
@@ -693,6 +730,9 @@ class DeployManager:
             network_name=self.network_name,
             official_appid=official_appid,
             official_secret=official_secret,
+            platform_mode=platform_mode,
+            onebot_ws_port=onebot_ws_port,
+            onebot_token=onebot_token,
         )
         ports = artifacts["ports"]
         assert isinstance(ports, dict)
@@ -701,8 +741,9 @@ class DeployManager:
         config = self.store.load_config()
         config.update(
             {
-                "platform_mode": "official",
+                "platform_mode": platform_mode,
                 "qq_official_appid": official_appid,
+                "onebot_ws_port": int(artifacts.get("onebot_ws_port") or 0),
                 "prompt": prompt,
                 "use_mirror": bool(mirror_candidates),
                 "mirror_candidates": list(mirror_candidates),
@@ -4691,6 +4732,21 @@ class DeployManager:
                     [], "", "更新提示词失败；主控制台不受影响。", str(exc)
                 )
 
+    def _detect_platform_connection(self, platform_mode: str) -> bool | None:
+        try:
+            raw = self.docker.logs("astrbot", 200)
+        except Exception:
+            return None
+        if not raw:
+            return None
+        if platform_mode == "onebot":
+            if "aiocqhttp" in raw and ("适配器已连接" in raw or "adapter" in raw.lower()):
+                return True
+            return False
+        if "qq_official" in raw and ("Websocket session starting" in raw or "适配器已连接" in raw):
+            return True
+        return False
+
     def get_status(self) -> dict[str, Any]:
         config = self.store.load_config()
         secrets_data = self.store.load_secrets()
@@ -4718,6 +4774,9 @@ class DeployManager:
         urls = {
             "astrbot_webui": f"http://{url_host}:{ports['astrbot_webui']}" if ports.get("astrbot_webui") else "",
         }
+        platform_mode = str(config.get("platform_mode") or "official")
+        if platform_mode == "onebot" and config.get("onebot_ws_port"):
+            urls["onebot_ws"] = f"ws://{url_host}:{config.get('onebot_ws_port')}/ws"
         with self._lock:
             active_job_id = self._active_job_id
             active_job = self._jobs.get(active_job_id)
@@ -4761,8 +4820,12 @@ class DeployManager:
             "deployment": {
                 "deployed": deployed,
                 "running": running,
-                "platform_mode": "official",
+                "platform_mode": platform_mode,
                 "qq_official_appid": str(config.get("qq_official_appid") or ""),
+                "onebot_ws_port": int(config.get("onebot_ws_port") or 0),
+                "onebot_ws_url": urls.get("onebot_ws", ""),
+                "onebot_token": str(secrets_data.get("onebot_token") or "") if platform_mode == "onebot" else "",
+                "platform_connected": self._detect_platform_connection(platform_mode),
                 "model": MODEL_NAME,
                 "prompt": str(config.get("prompt") or DEFAULT_PROMPT),
                 "urls": urls,

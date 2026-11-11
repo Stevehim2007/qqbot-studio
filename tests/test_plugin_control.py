@@ -17,6 +17,7 @@ from qqbot_studio.plugin_control import (
     ControlBridge,
     ControlClient,
     ControlExpiredError,
+    ControlError,
     ControlInstanceError,
     ControlMethodError,
     ControlPolicy,
@@ -189,6 +190,19 @@ class PluginControlTests(unittest.TestCase):
             client.call("os.system")
         with self.assertRaises(ControlScopeError):
             client.call("tool.catalog", scope=("admin",))
+
+    def test_plugin_error_response_is_not_misreported_as_protocol_version(self):
+        client = ControlClient(
+            self.secret,
+            lambda _payload: json.dumps(
+                {"ok": False, "error": "scope_not_allowed", "message": "nope"}
+            ).encode("utf-8"),
+            instance_id="bot-1",
+            actor_id="admin",
+        )
+        with self.assertRaises(ControlError) as ctx:
+            client.call("tool.catalog", scope=("admin", "global"))
+        self.assertEqual(ctx.exception.code, "scope_not_allowed")
 
     def test_client_reports_bridge_unavailable_without_fake_success(self):
         client = ControlClient(

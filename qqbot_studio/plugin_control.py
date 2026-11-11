@@ -1233,8 +1233,9 @@ class ControlClient:
     def _verify_response(self, response: Mapping[str, Any], request_id: str) -> dict[str, Any]:
         if not isinstance(response, Mapping):
             raise ControlResponseError("控制桥响应格式异常。")
-        if "result" in response and "ok" in response and "signature" not in response:
-            if str(response.get("request_id") or "") != str(request_id):
+        if "ok" in response and "signature" not in response and "version" not in response:
+            response_request_id = str(response.get("request_id") or "")
+            if response_request_id and response_request_id != str(request_id):
                 raise ControlResponseError("控制桥响应 request_id 不匹配。")
             if not bool(response.get("ok")):
                 code = str(response.get("error") or response.get("code") or "control_remote_error")
@@ -1286,7 +1287,9 @@ def _remote_error(code: str, message: str) -> ControlError:
         "bridge_unavailable": ControlUnavailable,
     }
     cls = mapping.get(str(code), ControlError)
-    return cls(message)
+    error = cls(message)
+    error.code = str(code or error.code)
+    return error
 
 
 class _ControlHTTPRequestHandler(BaseHTTPRequestHandler):

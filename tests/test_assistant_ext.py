@@ -538,7 +538,7 @@ class AssistantConfigStartTests(unittest.TestCase):
             {
                 "key_source": "independent",
                 "api_key": secret,
-                "port": 8772,
+                "port": 8972,
                 "host": "127.0.0.1",
             }
         )
@@ -585,7 +585,7 @@ class AssistantConfigStartTests(unittest.TestCase):
             {
                 "key_source": "independent",
                 "api_key": "sk-failing-start-123456",
-                "port": 8773,
+                "port": 8973,
             }
         )
         result = manager.start()
@@ -638,18 +638,18 @@ class AssistantConfigStartTests(unittest.TestCase):
                 "api_key": secret,
                 "host": "0.0.0.0",
                 "public_host": "bot.example.com",
-                "port": 8782,
+                "port": 8982,
             }
         )
         self.assertTrue(configured["ok"], configured.get("error"))
         started = manager.start()
         self.assertTrue(started["ok"], started.get("error"))
-        self.assertEqual(started["url"], "http://bot.example.com:8782/")
-        self.assertEqual(started["health_url"], "http://127.0.0.1:8782/")
+        self.assertEqual(started["url"], "http://bot.example.com:8982/")
+        self.assertEqual(started["health_url"], "http://127.0.0.1:8982/")
         self.assertNotIn("0.0.0.0", started["url"])
         self.assertIn("安全组", started["access_note"])
         self.assertTrue(health_urls)
-        self.assertTrue(all(url == "http://127.0.0.1:8782/" for url in health_urls))
+        self.assertTrue(all(url == "http://127.0.0.1:8982/" for url in health_urls))
         self._assert_no_key(started, secret)
 
     def test_stop_uses_tracked_pid_and_is_clean(self):
@@ -669,7 +669,7 @@ class AssistantConfigStartTests(unittest.TestCase):
             {
                 "key_source": "independent",
                 "api_key": "sk-stop-test-123456789",
-                "port": 8774,
+                "port": 8974,
             }
         )
         started = manager.start()
@@ -839,7 +839,7 @@ class AssistantConfigStartTests(unittest.TestCase):
                 "api_key": secret,
                 "host": "0.0.0.0",
                 "public_host": "bot.example.com",
-                "port": 8783,
+                "port": 8983,
             }
         )
         self.assertTrue(configured["ok"], configured.get("error"))

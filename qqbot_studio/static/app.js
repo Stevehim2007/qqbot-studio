@@ -462,8 +462,21 @@
 
   function validateConfigForm() {
     clearFormError();
+    const modeSelect = $('platform-mode');
+    const platformMode = modeSelect ? modeSelect.value : 'official';
+    const platformSelect = $('platform-mode');
+    if (platformSelect) {
+      platformSelect.addEventListener('change', () => {
+        syncPlatformModeFields();
+        clearFormError();
+      });
+      syncPlatformModeFields();
+    }
+
     const appidInput = $('official-appid');
     const secretInput = $('official-secret');
+    const onebotPortInput = $('onebot-ws-port');
+    const onebotTokenInput = $('onebot-token');
     const keyInput = $('deepseek-key');
     const promptPreview = $('prompt-preview');
     const riskInput = $('accept-risk');
@@ -471,27 +484,36 @@
 
     clearFieldError(appidInput, $('official-appid-error'));
     clearFieldError(secretInput, $('official-secret-error'));
+    clearFieldError(onebotPortInput, $('onebot-ws-port-error'));
+    clearFieldError(onebotTokenInput, $('onebot-token-error'));
     clearFieldError(keyInput, $('deepseek-key-error'));
     clearFieldError(promptPreview, $('prompt-error'));
     clearFieldError(riskInput, $('risk-error'));
 
     const officialAppid = appidInput ? appidInput.value.trim() : '';
     const officialSecret = secretInput ? secretInput.value.trim() : '';
+    const onebotPort = onebotPortInput ? onebotPortInput.value.trim() : '';
+    const onebotToken = onebotTokenInput ? onebotTokenInput.value.trim() : '';
     const apiKey = keyInput ? keyInput.value.trim() : '';
     const prompt = currentWizardPrompt();
     const promptText = prompt.trim();
     const promptLength = Array.from(prompt).length;
 
-    if (!officialAppid) {
-      setFieldError(appidInput, $('official-appid-error'), '请输入 QQ 官方机器人 AppID。');
-      invalidFields.push(appidInput);
-    } else if (!/^[0-9]{5,32}$/.test(officialAppid)) {
-      setFieldError(appidInput, $('official-appid-error'), 'AppID 必须为 5–32 位数字。');
-      invalidFields.push(appidInput);
-    }
-    if (!officialSecret) {
-      setFieldError(secretInput, $('official-secret-error'), '请输入 QQ 官方机器人 AppSecret。');
-      invalidFields.push(secretInput);
+    if (platformMode === 'official') {
+      if (!officialAppid) {
+        setFieldError(appidInput, $('official-appid-error'), '请输入 QQ 官方机器人 AppID。');
+        invalidFields.push(appidInput);
+      } else if (!/^[0-9]{5,32}$/.test(officialAppid)) {
+        setFieldError(appidInput, $('official-appid-error'), 'AppID 必须为 5–32 位数字。');
+        invalidFields.push(appidInput);
+      }
+      if (!officialSecret) {
+        setFieldError(secretInput, $('official-secret-error'), '请输入 QQ 官方机器人 AppSecret。');
+        invalidFields.push(secretInput);
+      }
+    } else if (onebotPort && (!/^[0-9]+$/.test(onebotPort) || Number(onebotPort) < 1 || Number(onebotPort) > 65535)) {
+      setFieldError(onebotPortInput, $('onebot-ws-port-error'), '端口必须是 1–65535 的整数。');
+      invalidFields.push(onebotPortInput);
     }
 
     if (!apiKey) {
@@ -522,9 +544,11 @@
     }
 
     return {
-      platform_mode: 'official',
-      official_appid: officialAppid,
-      official_secret: officialSecret,
+      platform_mode: platformMode,
+      official_appid: platformMode === 'official' ? officialAppid : '',
+      official_secret: platformMode === 'official' ? officialSecret : '',
+      onebot_ws_port: platformMode === 'onebot' && onebotPort ? Number(onebotPort) : 0,
+      onebot_token: platformMode === 'onebot' ? onebotToken : '',
       deepseek_api_key: apiKey,
       prompt,
       accept_risk: true
@@ -581,6 +605,15 @@
       return { kind: 'linux-other', display, label: '其它 Linux' };
     }
     return { kind: 'unknown', display, label: '未知系统' };
+  }
+
+  function syncPlatformModeFields() {
+    const select = $('platform-mode');
+    const onebot = $('onebot-fields');
+    const official = $('official-fields');
+    const mode = select ? select.value : 'official';
+    if (official) official.hidden = mode !== 'official';
+    if (onebot) onebot.hidden = mode !== 'onebot';
   }
 
   function getOsRequirementConfig(platform, osValue) {
@@ -1908,12 +1941,19 @@
     );
 
     const platformConnected = deployment.platform_connected;
-    setStatusValue($('qq-login-status'), '官方机器人', 'success');
+    const isOneBot = deployment.platform_mode === 'onebot';
+    setStatusValue($('qq-login-status'), isOneBot ? 'OneBot 网关' : '官方机器人', 'success');
     setStatusValue(
       $('official-status'),
-      platformConnected === true ? '官方适配器已连接' : platformConnected === false ? '官方适配器未连接' : '等待连接',
+      isOneBot
+        ? (platformConnected === true ? 'OneBot 已连接' : platformConnected === false ? '等待 OneBot 连接' : '连接状态未知')
+        : (platformConnected === true ? '官方适配器已连接' : platformConnected === false ? '官方适配器未连接' : '等待连接'),
       platformConnected === true ? 'success' : platformConnected === false ? 'warning' : ''
     );
+    setText('official-appid-status', isOneBot ? (deployment.onebot_ws_url || '未配置') : (deployment.qq_official_appid || '未提供'));
+    if (isOneBot) {
+      setText('official-connection-status', deployment.onebot_token ? 'Token 已生成，可在状态接口查看' : 'Token 未生成');
+    }
 
     setText('astrbot-url-text', fallbackDisplay(urls.astrbot_webui));
     setText('astrbot-username', fallbackDisplay(credentials.astrbot_username));
