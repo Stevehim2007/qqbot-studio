@@ -3264,6 +3264,13 @@
     'help_command_enabled': ['/help 开关', '是否允许 AstrBot 内置 /help 命令；不影响普通聊天。']
   };
 
+  function normalizePolicyKind(kind) {
+    if (kind === 'bool') return 'boolean';
+    if (kind === 'int') return 'integer';
+    if (kind === 'float') return 'number';
+    return kind || 'str';
+  }
+
   function groupPolicyParamMeta(name, spec) {
     const known = GROUP_POLICY_PARAM_META[name];
     const label = known ? known[0] : name;
@@ -3333,7 +3340,7 @@
       for (const [name, spec] of Object.entries(schema || {})) {
         const field = card.querySelector(`[data-policy-param="${CSS.escape(name)}"]`);
         if (!field) continue;
-        if (spec.kind === 'boolean') {
+        if (normalizePolicyKind(spec.kind) === 'boolean') {
           params[name] = Boolean(field.checked);
         } else if (field.value !== '') {
           params[name] = field.value;
@@ -3473,11 +3480,12 @@
           label.title = paramMeta.title;
           label.appendChild(makeElement('span', 'group-policy-field-label', paramMeta.label));
           let field;
-          if (spec.kind === 'boolean') {
+          const fieldKind = normalizePolicyKind(spec.kind);
+          if (fieldKind === 'boolean') {
             field = document.createElement('input');
             field.type = 'checkbox';
             field.checked = rawParams[name] !== undefined ? Boolean(rawParams[name]) : Boolean(inheritedValue(name));
-          } else if (spec.kind === 'enum') {
+          } else if (fieldKind === 'enum') {
             field = document.createElement('select');
             const empty = document.createElement('option');
             empty.value = '';
@@ -3492,7 +3500,7 @@
             field.value = rawParams[name] !== undefined ? String(rawParams[name]) : '';
           } else {
             field = document.createElement('input');
-            field.type = spec.kind === 'integer' || spec.kind === 'number' ? 'number' : 'text';
+            field.type = fieldKind === 'integer' || fieldKind === 'number' ? 'number' : 'text';
             if (spec.minimum !== null && spec.minimum !== undefined) field.min = spec.minimum;
             if (spec.maximum !== null && spec.maximum !== undefined) field.max = spec.maximum;
             field.value = rawParams[name] !== undefined ? String(rawParams[name]) : '';
