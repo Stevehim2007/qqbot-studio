@@ -1,5 +1,12 @@
 # 更新日志
 
+## v5.0.0-beta.5（测试版）— OneBot QQ 号语义修正
+
+- 外部 OneBot v11 模式新增机器人 QQ 号字段（5–12 位数字），保存到实例配置并在状态页显示。
+- 官方模式继续使用 AppID/AppSecret + openid，不再允许 `qq_account`，避免两种接入语义混用。
+- OneBot 模式接受 `qq_account`，官方模式在 Studio/API 层拒绝该字段。
+- 新增 store/deployer/server/wizard 回归测试。
+
 ## v5.0.0-beta.4（测试版）— 双接入框架
 
 - 新增外部 OneBot v11 网关模式：单 AstrBot 容器、`aiocqhttp` 反向 WebSocket、自动分配端口与自动生成 Token。

@@ -235,9 +235,13 @@ class FakeManager:
 
     def start_deploy(self, **kwargs):
         self.last_deploy = kwargs
-        assert kwargs["official_appid"] == "12345678"
-        assert kwargs["official_secret"] == "official-secret"
-        assert "qq_account" not in kwargs
+        if kwargs["platform_mode"] == "official":
+            assert kwargs["official_appid"] == "12345678"
+            assert kwargs["official_secret"] == "official-secret"
+            assert kwargs["qq_account"] == ""
+        else:
+            assert kwargs["platform_mode"] == "onebot"
+            assert kwargs["qq_account"] == "12345678"
         assert kwargs["mirror_candidates"] == ["mirror.example/", "m.daocloud.io/docker.io/"]
         return "job-1"
 
@@ -1192,6 +1196,39 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["status"], "running")
         status, body = self._get("/api/logs?instance=bot-1&service=astrbot&lines=50")
         self.assertTrue(json.loads(body)["ok"])
+
+    def test_post_deploy_onebot_accepts_qq_account(self):
+        status, body = self._post(
+            "/api/deploy?instance=bot-1",
+            {
+                "platform_mode": "onebot",
+                "qq_account": "12345678",
+                "onebot_ws_port": 6201,
+                "deepseek_api_key": "sk-test",
+                "prompt": "prompt",
+                "accept_risk": True,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["job_id"], "job-1")
+        self.assertEqual(self.studio.manager.last_deploy["qq_account"], "12345678")
+        self.assertEqual(self.studio.manager.last_deploy["platform_mode"], "onebot")
+
+    def test_post_deploy_official_rejects_qq_account(self):
+        status, body = self._post(
+            "/api/deploy?instance=bot-1",
+            {
+                "platform_mode": "official",
+                "qq_account": "12345678",
+                "official_appid": "12345678",
+                "official_secret": "official-secret",
+                "deepseek_api_key": "sk-test",
+                "prompt": "prompt",
+                "accept_risk": True,
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertFalse(json.loads(body)["ok"])
 
     def test_post_without_token_is_forbidden(self):
         status, body = self._post("/api/test-key?instance=bot-1", {"deepseek_api_key": "sk-test"}, token=False)

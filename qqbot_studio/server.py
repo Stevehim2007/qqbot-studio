@@ -2391,7 +2391,7 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 legacy_fields = sorted(
                     key
                     for key in payload
-                    if key in {"qq_account"}
+                    if (key == "qq_account" and mode != "onebot")
                     or key.startswith("snowluma")
                     or key.startswith("novnc")
                     or key.startswith("vnc")
@@ -2410,6 +2410,7 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     official_appid=str(payload.get("official_appid") or ""),
                     official_secret=str(payload.get("official_secret") or ""),
                     platform_mode=mode,
+                    qq_account=str(payload.get("qq_account") or ""),
                     onebot_ws_port=int(payload.get("onebot_ws_port") or 0),
                     onebot_token=str(payload.get("onebot_token") or ""),
                 )

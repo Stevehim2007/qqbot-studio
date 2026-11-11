@@ -416,7 +416,8 @@ class DeployerTests(unittest.TestCase):
         self.assertFalse(deployment["platform_connected"])
         self.assertEqual(deployment["onebot_ws_port"], 0)
         self.assertEqual(deployment["onebot_ws_url"], "")
-        for absent in ("qq_account", "onebot_connected", "qq_logged_in"):
+        self.assertEqual(deployment["qq_account"], "")
+        for absent in ("onebot_connected", "qq_logged_in"):
             self.assertNotIn(absent, deployment)
         for absent in ("snowluma_username", "snowluma_password", "vnc_password"):
             self.assertNotIn(absent, deployment["credentials"])
@@ -428,6 +429,7 @@ class DeployerTests(unittest.TestCase):
         job_id = self.manager.start_deploy(
             platform_mode="onebot",
             onebot_ws_port=6201,
+            qq_account="12345678",
             deepseek_api_key="sk-onebot-test-secret",
             prompt="你是测试 QQ 机器人。",
             use_mirror=False,
@@ -437,6 +439,7 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(job["status"], "success", job.get("error"))
         config = self.store.load_config()
         self.assertEqual(config["platform_mode"], "onebot")
+        self.assertEqual(config["qq_account"], "12345678")
         self.assertEqual(config["onebot_ws_port"], 6201)
         token = self.store.load_secrets()["onebot_token"]
         self.assertGreaterEqual(len(token), 24)
@@ -447,12 +450,24 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(astrbot["platform"][0]["type"], "aiocqhttp")
         self.assertEqual(astrbot["platform"][0]["ws_reverse_token"], token)
 
+    def test_onebot_deployment_requires_qq_account(self):
+        with self.assertRaises(DeploymentError):
+            self.manager.start_deploy(
+                platform_mode="onebot",
+                onebot_ws_port=6201,
+                qq_account="",
+                deepseek_api_key="sk-onebot-test-secret",
+                prompt="你是测试 QQ 机器人。",
+                accept_risk=True,
+            )
+
     def test_onebot_deployment_status_exposes_ws_endpoint(self):
         config = self.store.load_config()
         config.update(
             {
                 "deployed": True,
                 "platform_mode": "onebot",
+                "qq_account": "12345678",
                 "onebot_ws_port": 6201,
                 "ports": {"astrbot_webui": 6185},
             }
@@ -464,6 +479,7 @@ class DeployerTests(unittest.TestCase):
         self.docker.logs_by_service["astrbot"] = "aiocqhttp 适配器已连接。\n"
         deployment = self.manager.get_status()["deployment"]
         self.assertEqual(deployment["platform_mode"], "onebot")
+        self.assertEqual(deployment["qq_account"], "12345678")
         self.assertEqual(deployment["onebot_ws_port"], 6201)
         self.assertEqual(deployment["onebot_ws_url"], "ws://127.0.0.1:6201/ws")
         self.assertEqual(deployment["onebot_token"], "onebot-status-token")

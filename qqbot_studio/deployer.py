@@ -529,6 +529,7 @@ class DeployManager:
         platform_mode: str = "official",
         onebot_ws_port: int = 0,
         onebot_token: str = "",
+        qq_account: str = "",
     ) -> str:
         mode = str(platform_mode or "official").strip().lower()
         if mode not in {"official", "onebot"}:
@@ -551,6 +552,11 @@ class DeployManager:
                 if not (1 <= onebot_ws_port <= 65535):
                     raise DeploymentError("OneBot WebSocket 端口必须在 1–65535 之间。")
             onebot_token = str(onebot_token or "").strip()
+            qq_account = str(qq_account or "").strip()
+            if not re.fullmatch(r"\d{5,12}", qq_account):
+                raise DeploymentError("外部 OneBot 模式请填写机器人 QQ 号（5–12 位数字）。")
+        if mode == "official":
+            qq_account = ""
         text_prompt = self._validate_prompt(prompt)
         api_key = str(deepseek_api_key or "").strip()
         if not api_key:
@@ -585,6 +591,7 @@ class DeployManager:
             config["last_job_id"] = job_id
             config["platform_mode"] = mode
             config["qq_official_appid"] = appid
+            config["qq_account"] = qq_account
             config["onebot_ws_port"] = int(onebot_ws_port or 0)
             config["prompt"] = text_prompt
             config["use_mirror"] = bool(configured_prefixes)
@@ -604,7 +611,7 @@ class DeployManager:
             target=self._run_deploy,
             name=f"qqbot-deploy-{job_id}",
             daemon=True,
-            args=(job_id, api_key, text_prompt, configured_prefixes, appid, appsecret, mode, onebot_ws_port, onebot_token),
+            args=(job_id, api_key, text_prompt, configured_prefixes, appid, appsecret, mode, onebot_ws_port, onebot_token, qq_account),
         )
         try:
             thread.start()
@@ -637,6 +644,7 @@ class DeployManager:
         platform_mode: str = "official",
         onebot_ws_port: int = 0,
         onebot_token: str = "",
+        qq_account: str = "",
     ) -> None:
         job = self._jobs[job_id]
         # Keep a redactor available even if secrets.json was corrupted or is
@@ -647,7 +655,7 @@ class DeployManager:
             redact = self._redactor(api_key)
             self._deploy_impl(
                 job, api_key, prompt, mirror_candidates, redact,
-                official_appid, official_secret, platform_mode, onebot_ws_port, onebot_token,
+                official_appid, official_secret, platform_mode, onebot_ws_port, onebot_token, qq_account,
             )
         except Exception as exc:  # noqa: BLE001 - report all failures to the UI
             message = redact(str(exc) or exc.__class__.__name__)
@@ -692,6 +700,7 @@ class DeployManager:
         platform_mode: str = "official",
         onebot_ws_port: int = 0,
         onebot_token: str = "",
+        qq_account: str = "",
     ) -> None:
         add_log = lambda text: self._append_log(job, redact(text))  # noqa: E731
 
@@ -743,6 +752,7 @@ class DeployManager:
             {
                 "platform_mode": platform_mode,
                 "qq_official_appid": official_appid,
+                "qq_account": qq_account if platform_mode == "onebot" else "",
                 "onebot_ws_port": int(artifacts.get("onebot_ws_port") or 0),
                 "prompt": prompt,
                 "use_mirror": bool(mirror_candidates),
@@ -4822,6 +4832,7 @@ class DeployManager:
                 "running": running,
                 "platform_mode": platform_mode,
                 "qq_official_appid": str(config.get("qq_official_appid") or ""),
+                "qq_account": str(config.get("qq_account") or "") if platform_mode == "onebot" else "",
                 "onebot_ws_port": int(config.get("onebot_ws_port") or 0),
                 "onebot_ws_url": urls.get("onebot_ws", ""),
                 "onebot_token": str(secrets_data.get("onebot_token") or "") if platform_mode == "onebot" else "",

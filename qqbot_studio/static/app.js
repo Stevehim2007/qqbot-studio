@@ -126,6 +126,8 @@
         running: boolOrUndefined(deployment.running),
         platform_mode: textValue(deployment.platform_mode, 'official'),
         qq_official_appid: textValue(deployment.qq_official_appid, ''),
+        qq_account: textValue(deployment.qq_account, ''),
+        onebot_ws_url: textValue(deployment.onebot_ws_url, ''),
         active_job_id: textValue(deployment.active_job_id, ''),
         active_job_status: textValue(deployment.active_job_status, ''),
         model: textValue(deployment.model, ''),
@@ -475,6 +477,7 @@
 
     const appidInput = $('official-appid');
     const secretInput = $('official-secret');
+    const onebotQqInput = $('onebot-qq');
     const onebotPortInput = $('onebot-ws-port');
     const onebotTokenInput = $('onebot-token');
     const keyInput = $('deepseek-key');
@@ -484,6 +487,7 @@
 
     clearFieldError(appidInput, $('official-appid-error'));
     clearFieldError(secretInput, $('official-secret-error'));
+    clearFieldError(onebotQqInput, $('onebot-qq-error'));
     clearFieldError(onebotPortInput, $('onebot-ws-port-error'));
     clearFieldError(onebotTokenInput, $('onebot-token-error'));
     clearFieldError(keyInput, $('deepseek-key-error'));
@@ -492,6 +496,7 @@
 
     const officialAppid = appidInput ? appidInput.value.trim() : '';
     const officialSecret = secretInput ? secretInput.value.trim() : '';
+    const onebotQq = onebotQqInput ? onebotQqInput.value.trim() : '';
     const onebotPort = onebotPortInput ? onebotPortInput.value.trim() : '';
     const onebotToken = onebotTokenInput ? onebotTokenInput.value.trim() : '';
     const apiKey = keyInput ? keyInput.value.trim() : '';
@@ -511,9 +516,15 @@
         setFieldError(secretInput, $('official-secret-error'), '请输入 QQ 官方机器人 AppSecret。');
         invalidFields.push(secretInput);
       }
-    } else if (onebotPort && (!/^[0-9]+$/.test(onebotPort) || Number(onebotPort) < 1 || Number(onebotPort) > 65535)) {
-      setFieldError(onebotPortInput, $('onebot-ws-port-error'), '端口必须是 1–65535 的整数。');
-      invalidFields.push(onebotPortInput);
+    } else {
+      if (!/^[0-9]{5,12}$/.test(onebotQq)) {
+        setFieldError(onebotQqInput, $('onebot-qq-error'), '请输入 5–12 位数字的机器人 QQ 号。');
+        invalidFields.push(onebotQqInput);
+      }
+      if (onebotPort && (!/^[0-9]+$/.test(onebotPort) || Number(onebotPort) < 1 || Number(onebotPort) > 65535)) {
+        setFieldError(onebotPortInput, $('onebot-ws-port-error'), '端口必须是 1–65535 的整数。');
+        invalidFields.push(onebotPortInput);
+      }
     }
 
     if (!apiKey) {
@@ -547,6 +558,7 @@
       platform_mode: platformMode,
       official_appid: platformMode === 'official' ? officialAppid : '',
       official_secret: platformMode === 'official' ? officialSecret : '',
+      qq_account: platformMode === 'onebot' ? onebotQq : '',
       onebot_ws_port: platformMode === 'onebot' && onebotPort ? Number(onebotPort) : 0,
       onebot_token: platformMode === 'onebot' ? onebotToken : '',
       deepseek_api_key: apiKey,
@@ -1433,6 +1445,10 @@
     if (appidInput && nextState.deployment.qq_official_appid && !appidInput.value.trim()) {
       appidInput.value = nextState.deployment.qq_official_appid;
     }
+    const onebotQqInput = $('onebot-qq');
+    if (onebotQqInput && nextState.deployment.qq_account && !onebotQqInput.value.trim()) {
+      onebotQqInput.value = nextState.deployment.qq_account;
+    }
 
     const deployment = nextState.deployment;
     const stateJobKind = statusKind(deployment.active_job_status);
@@ -1950,9 +1966,11 @@
         : (platformConnected === true ? '官方适配器已连接' : platformConnected === false ? '官方适配器未连接' : '等待连接'),
       platformConnected === true ? 'success' : platformConnected === false ? 'warning' : ''
     );
-    setText('official-appid-status', isOneBot ? (deployment.onebot_ws_url || '未配置') : (deployment.qq_official_appid || '未提供'));
+    setText('platform-account-label', isOneBot ? 'QQ 号' : 'AppID');
+    setText('official-appid-status', isOneBot ? (deployment.qq_account || '未填写') : (deployment.qq_official_appid || '未提供'));
     if (isOneBot) {
-      setText('official-connection-status', deployment.onebot_token ? 'Token 已生成，可在状态接口查看' : 'Token 未生成');
+      const ws = deployment.onebot_ws_url || '未配置';
+      setText('official-connection-status', `${ws}${deployment.onebot_token ? ' · Token 已生成' : ' · Token 未生成'}`);
     }
 
     setText('astrbot-url-text', fallbackDisplay(urls.astrbot_webui));

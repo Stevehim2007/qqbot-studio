@@ -238,15 +238,17 @@ class WizardPlatformStaticTests(unittest.TestCase):
     def test_dual_platform_wizard_fields_contract(self) -> None:
         for element_id in (
             "platform-mode", "official-fields", "onebot-fields",
-            "onebot-ws-port", "onebot-token",
-            "onebot-ws-port-error", "onebot-token-error",
+            "onebot-qq", "onebot-ws-port", "onebot-token",
+            "onebot-qq-error", "onebot-ws-port-error", "onebot-token-error",
         ):
             self.assertIn(f'id="{element_id}"', self.index_html)
         self.assertIn("外部 OneBot v11 网关", self.index_html)
         self.assertIn("反向 WebSocket 端口", self.index_html)
         self.assertIn("留空自动生成", self.index_html)
+        self.assertIn("机器人 QQ 号", self.index_html)
         for token in (
             "syncPlatformModeFields",
+            "qq_account",
             "onebot_ws_port",
             "onebot_token",
             "validateConfigForm",

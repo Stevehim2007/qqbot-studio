@@ -39,6 +39,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": CONFIG_SCHEMA_VERSION,
     "platform_mode": DEFAULT_PLATFORM_MODE,
     "qq_official_appid": "",
+    "qq_account": "",
     "onebot_ws_port": 0,
     "model": MODEL_NAME,
     "prompt": DEFAULT_PROMPT,
@@ -68,9 +69,11 @@ SENSITIVE_CONFIG_KEYS = {
     "onebot_token",
 }
 
-# Official-only deployments no longer use these legacy fields. They are
-# removed on load/save so a stale config cannot reintroduce another platform.
-LEGACY_CONFIG_KEYS = {"qq_account"}
+# OneBot deployments use a real QQ account; official deployments do not.
+# Keep the account when the instance is in OneBot mode, and purge it when the
+# instance is official so stale credentials cannot leak across modes.
+OFFICIAL_ONLY_CONFIG_KEYS = {"qq_account"}
+LEGACY_CONFIG_KEYS: set[str] = set()
 LEGACY_SECRET_KEYS = {
     "snowluma_http_token",
     "snowluma_ws_token",
@@ -169,7 +172,11 @@ def generate_token(nbytes: int = 32) -> str:
 
 
 def _strip_legacy_config_keys(config: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in config.items() if key not in LEGACY_CONFIG_KEYS}
+    clean = {key: value for key, value in config.items() if key not in LEGACY_CONFIG_KEYS}
+    if clean.get("platform_mode") != "onebot":
+        for key in OFFICIAL_ONLY_CONFIG_KEYS:
+            clean.pop(key, None)
+    return clean
 
 
 class Store:
@@ -306,6 +313,11 @@ class Store:
         if migrated.get("platform_mode") not in PLATFORM_MODES:
             migrated["platform_mode"] = DEFAULT_PLATFORM_MODE
             changed = True
+        if migrated.get("platform_mode") != "onebot":
+            for key in OFFICIAL_ONLY_CONFIG_KEYS:
+                if key in migrated:
+                    migrated.pop(key, None)
+                    changed = True
         for key, value in DEFAULT_CONFIG.items():
             if key not in migrated:
                 migrated[key] = value

@@ -244,6 +244,12 @@
 
             <div id="onebot-fields" hidden>
               <div class="field">
+                <label for="onebot-qq">机器人 QQ 号</label>
+                <input id="onebot-qq" name="qq_account" type="text" inputmode="numeric" autocomplete="off" placeholder="例如 123456789">
+                <p class="field-help">外部 OneBot 网关登录的 QQ 号（5–12 位数字）；AstrBot 通过反向 WebSocket 接收该网关的事件。</p>
+                <p id="onebot-qq-error" class="field-error" role="alert" hidden></p>
+              </div>
+              <div class="field">
                 <label for="onebot-ws-port">反向 WebSocket 端口</label>
                 <input id="onebot-ws-port" name="onebot_ws_port" type="number" inputmode="numeric" min="1" max="65535" placeholder="留空自动分配">
                 <p class="field-help">OneBot 网关连接到 <code>ws://本机地址:该端口/ws</code>；留空会自动分配一个空闲端口。</p>
@@ -517,7 +523,7 @@
             </div>
             <p class="field-hint">AstrBot 直接连接 QQ 开放平台。</p>
             <div class="credential-grid">
-              <div><span class="credential-label">AppID</span><code id="official-appid-status" class="credential-value">未提供</code></div>
+              <div><span class="credential-label" id="platform-account-label">AppID</span><code id="official-appid-status" class="credential-value">未提供</code></div>
               <div><span class="credential-label">连接状态</span><code id="official-connection-status" class="credential-value">检查中</code></div>
             </div>
             <div class="card-actions">

@@ -78,6 +78,14 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(loaded["nested"]["safe"], "yes")
             self.assertEqual(os.stat(store.config_path).st_mode & 0o777, 0o600)
 
+    def test_onebot_preserves_qq_account_and_official_purges_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp)
+            store.save_config({**DEFAULT_CONFIG, "platform_mode": "onebot", "qq_account": "12345678"})
+            self.assertEqual(store.load_config()["qq_account"], "12345678")
+            store.save_config({**store.load_config(), "platform_mode": "official"})
+            self.assertNotIn("qq_account", store.load_config())
+
     def test_legacy_secrets_are_purged(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = Store(tmp)
