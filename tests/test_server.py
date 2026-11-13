@@ -1214,6 +1214,24 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.studio.manager.last_deploy["qq_account"], "12345678")
         self.assertEqual(self.studio.manager.last_deploy["platform_mode"], "onebot")
 
+    def test_post_deploy_builtin_onebot_gateway_contract(self):
+        status, body = self._post(
+            "/api/deploy?instance=bot-1",
+            {
+                "platform_mode": "onebot",
+                "qq_account": "12345678",
+                "onebot_gateway": "builtin",
+                "napcat_webui_port": 6202,
+                "deepseek_api_key": "sk-test",
+                "prompt": "prompt",
+                "accept_risk": True,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["job_id"], "job-1")
+        self.assertEqual(self.studio.manager.last_deploy["onebot_gateway"], "builtin")
+        self.assertEqual(self.studio.manager.last_deploy["napcat_webui_port"], 6202)
+
     def test_post_deploy_official_rejects_qq_account(self):
         status, body = self._post(
             "/api/deploy?instance=bot-1",

@@ -530,6 +530,8 @@ class DeployManager:
         onebot_ws_port: int = 0,
         onebot_token: str = "",
         qq_account: str = "",
+        onebot_gateway: str = "external",
+        napcat_webui_port: int = 0,
     ) -> str:
         mode = str(platform_mode or "official").strip().lower()
         if mode not in {"official", "onebot"}:
@@ -554,7 +556,17 @@ class DeployManager:
             onebot_token = str(onebot_token or "").strip()
             qq_account = str(qq_account or "").strip()
             if not re.fullmatch(r"\d{5,12}", qq_account):
-                raise DeploymentError("外部 OneBot 模式请填写机器人 QQ 号（5–12 位数字）。")
+                raise DeploymentError("OneBot 模式请填写机器人 QQ 号（5–12 位数字）。")
+            onebot_gateway = str(onebot_gateway or "external").strip().lower()
+            if onebot_gateway not in {"external", "builtin"}:
+                raise DeploymentError("OneBot 网关只能是 external（外部网关）或 builtin（内置 NapCat）。")
+            if napcat_webui_port:
+                try:
+                    napcat_webui_port = int(napcat_webui_port)
+                except (TypeError, ValueError) as exc:
+                    raise DeploymentError("NapCat WebUI 端口必须是数字。") from exc
+                if not (1 <= napcat_webui_port <= 65535):
+                    raise DeploymentError("NapCat WebUI 端口必须在 1–65535 之间。")
         if mode == "official":
             qq_account = ""
         text_prompt = self._validate_prompt(prompt)
@@ -593,6 +605,8 @@ class DeployManager:
             config["qq_official_appid"] = appid
             config["qq_account"] = qq_account
             config["onebot_ws_port"] = int(onebot_ws_port or 0)
+            config["onebot_gateway"] = onebot_gateway if mode == "onebot" else "external"
+            config["napcat_webui_port"] = int(napcat_webui_port or 0) if mode == "onebot" else 0
             config["prompt"] = text_prompt
             config["use_mirror"] = bool(configured_prefixes)
             config["mirror_candidates"] = configured_prefixes
@@ -611,7 +625,7 @@ class DeployManager:
             target=self._run_deploy,
             name=f"qqbot-deploy-{job_id}",
             daemon=True,
-            args=(job_id, api_key, text_prompt, configured_prefixes, appid, appsecret, mode, onebot_ws_port, onebot_token, qq_account),
+            args=(job_id, api_key, text_prompt, configured_prefixes, appid, appsecret, mode, onebot_ws_port, onebot_token, qq_account, onebot_gateway, napcat_webui_port),
         )
         try:
             thread.start()
@@ -645,6 +659,8 @@ class DeployManager:
         onebot_ws_port: int = 0,
         onebot_token: str = "",
         qq_account: str = "",
+        onebot_gateway: str = "external",
+        napcat_webui_port: int = 0,
     ) -> None:
         job = self._jobs[job_id]
         # Keep a redactor available even if secrets.json was corrupted or is
@@ -656,6 +672,7 @@ class DeployManager:
             self._deploy_impl(
                 job, api_key, prompt, mirror_candidates, redact,
                 official_appid, official_secret, platform_mode, onebot_ws_port, onebot_token, qq_account,
+                onebot_gateway, napcat_webui_port,
             )
         except Exception as exc:  # noqa: BLE001 - report all failures to the UI
             message = redact(str(exc) or exc.__class__.__name__)
@@ -674,11 +691,12 @@ class DeployManager:
                 job.status = "success"
                 job.progress = 100
                 job.step = "部署完成"
-                job.message = (
-                    "AstrBot 与 DeepSeek 已配置完成。QQ 官方机器人将直接连接，无需扫码。"
-                    if platform_mode == "official"
-                    else "AstrBot 已配置完成。请让外部 OneBot v11 网关连接页面显示的 WebSocket 地址。"
-                )
+                if platform_mode == "official":
+                    job.message = "AstrBot 与 DeepSeek 已配置完成。QQ 官方机器人将直接连接，无需扫码。"
+                elif onebot_gateway == "builtin":
+                    job.message = "AstrBot 与内置 NapCat 已配置完成。请打开 NapCat WebUI 扫码登录 QQ。"
+                else:
+                    job.message = "AstrBot 已配置完成。请让外部 OneBot v11 网关连接页面显示的 WebSocket 地址。"
                 job.error = ""
                 job.updated_at = utc_now()
                 self._append_log(job, f"[完成] 部署成功。接入方式：{platform_mode}。")
@@ -701,6 +719,8 @@ class DeployManager:
         onebot_ws_port: int = 0,
         onebot_token: str = "",
         qq_account: str = "",
+        onebot_gateway: str = "external",
+        napcat_webui_port: int = 0,
     ) -> None:
         add_log = lambda text: self._append_log(job, redact(text))  # noqa: E731
 
@@ -717,7 +737,12 @@ class DeployManager:
         if not ok:
             add_log("警告：DeepSeek 预检未能完成，将继续部署；请在部署后通过 AstrBot WebUI 检查模型配置。")
 
-        mode_label = "QQ 官方机器人" if platform_mode == "official" else "外部 OneBot v11 网关"
+        if platform_mode == "official":
+            mode_label = "QQ 官方机器人"
+        elif onebot_gateway == "builtin":
+            mode_label = "内置 NapCat OneBot 网关"
+        else:
+            mode_label = "外部 OneBot v11 网关"
         self._set_job(job, step="生成本地配置", progress=14, message=f"正在生成 Docker Compose、{mode_label} 与模型配置…")
         secrets_data = self.store.ensure_secrets()
         if platform_mode == "official":
@@ -725,6 +750,9 @@ class DeployManager:
         else:
             onebot_token = onebot_token or secrets_data.get("onebot_token") or generate_token(32)
             secrets_data["onebot_token"] = onebot_token
+            if onebot_gateway == "builtin":
+                napcat_webui_token = str(secrets_data.get("napcat_webui_token") or generate_token(24))
+                secrets_data["napcat_webui_token"] = napcat_webui_token
         artifacts = generate_artifacts(
             self.data_dir,
             api_key=api_key,
@@ -742,6 +770,10 @@ class DeployManager:
             platform_mode=platform_mode,
             onebot_ws_port=onebot_ws_port,
             onebot_token=onebot_token,
+            onebot_gateway=onebot_gateway,
+            qq_account=qq_account,
+            napcat_webui_port=napcat_webui_port,
+            napcat_webui_token=str(secrets_data.get("napcat_webui_token") or ""),
         )
         ports = artifacts["ports"]
         assert isinstance(ports, dict)
@@ -754,6 +786,8 @@ class DeployManager:
                 "qq_official_appid": official_appid,
                 "qq_account": qq_account if platform_mode == "onebot" else "",
                 "onebot_ws_port": int(artifacts.get("onebot_ws_port") or 0),
+                "onebot_gateway": onebot_gateway if platform_mode == "onebot" else "external",
+                "napcat_webui_port": int(artifacts.get("napcat_webui_port") or 0),
                 "prompt": prompt,
                 "use_mirror": bool(mirror_candidates),
                 "mirror_candidates": list(mirror_candidates),
@@ -4785,8 +4819,11 @@ class DeployManager:
             "astrbot_webui": f"http://{url_host}:{ports['astrbot_webui']}" if ports.get("astrbot_webui") else "",
         }
         platform_mode = str(config.get("platform_mode") or "official")
-        if platform_mode == "onebot" and config.get("onebot_ws_port"):
+        onebot_gateway = str(config.get("onebot_gateway") or "external") if platform_mode == "onebot" else "external"
+        if platform_mode == "onebot" and onebot_gateway == "external" and config.get("onebot_ws_port"):
             urls["onebot_ws"] = f"ws://{url_host}:{config.get('onebot_ws_port')}/ws"
+        if platform_mode == "onebot" and onebot_gateway == "builtin" and config.get("napcat_webui_port"):
+            urls["napcat_webui"] = f"http://{url_host}:{config.get('napcat_webui_port')}/webui/"
         with self._lock:
             active_job_id = self._active_job_id
             active_job = self._jobs.get(active_job_id)
@@ -4833,9 +4870,13 @@ class DeployManager:
                 "platform_mode": platform_mode,
                 "qq_official_appid": str(config.get("qq_official_appid") or ""),
                 "qq_account": str(config.get("qq_account") or "") if platform_mode == "onebot" else "",
+                "onebot_gateway": onebot_gateway,
                 "onebot_ws_port": int(config.get("onebot_ws_port") or 0),
                 "onebot_ws_url": urls.get("onebot_ws", ""),
-                "onebot_token": str(secrets_data.get("onebot_token") or "") if platform_mode == "onebot" else "",
+                "onebot_token": str(secrets_data.get("onebot_token") or "") if platform_mode == "onebot" and onebot_gateway == "external" else "",
+                "napcat_webui_port": int(config.get("napcat_webui_port") or 0),
+                "napcat_webui_url": urls.get("napcat_webui", ""),
+                "napcat_webui_token": str(secrets_data.get("napcat_webui_token") or "") if platform_mode == "onebot" and onebot_gateway == "builtin" else "",
                 "platform_connected": self._detect_platform_connection(platform_mode),
                 "model": MODEL_NAME,
                 "prompt": str(config.get("prompt") or DEFAULT_PROMPT),

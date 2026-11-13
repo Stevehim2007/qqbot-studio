@@ -486,6 +486,32 @@ class DeployerTests(unittest.TestCase):
         self.assertTrue(deployment["platform_connected"])
         self.assertIn("onebot_ws", deployment["urls"])
 
+    def test_builtin_napcat_status_exposes_webui(self):
+        config = self.store.load_config()
+        config.update(
+            {
+                "deployed": True,
+                "platform_mode": "onebot",
+                "onebot_gateway": "builtin",
+                "qq_account": "12345678",
+                "napcat_webui_port": 6202,
+                "ports": {"astrbot_webui": 6185},
+            }
+        )
+        self.store.save_config(config)
+        secrets_data = self.store.load_secrets()
+        secrets_data["napcat_webui_token"] = "napcat-status-token"
+        self.store.save_secrets(secrets_data)
+        self.docker.logs_by_service["astrbot"] = "aiocqhttp 适配器已连接。\n"
+        deployment = self.manager.get_status()["deployment"]
+        self.assertEqual(deployment["onebot_gateway"], "builtin")
+        self.assertEqual(deployment["qq_account"], "12345678")
+        self.assertEqual(deployment["napcat_webui_port"], 6202)
+        self.assertEqual(deployment["napcat_webui_url"], "http://127.0.0.1:6202/webui/")
+        self.assertEqual(deployment["napcat_webui_token"], "napcat-status-token")
+        self.assertEqual(deployment["onebot_ws_url"], "")
+        self.assertIn("napcat_webui", deployment["urls"])
+
     def test_container_actions(self):
         config = self.store.load_config()
         config["deployed"] = True

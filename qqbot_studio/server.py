@@ -2402,6 +2402,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         "不支持旧版扫码部署参数：" + "、".join(legacy_fields),
                     )
                     return
+                onebot_gateway = str(payload.get("onebot_gateway") or "external").strip().lower()
+                if mode == "onebot" and onebot_gateway not in {"external", "builtin"}:
+                    self._error(HTTPStatus.BAD_REQUEST, "OneBot 网关只能是 external 或 builtin。")
+                    return
+                try:
+                    napcat_webui_port = int(payload.get("napcat_webui_port") or 0)
+                except (TypeError, ValueError):
+                    self._error(HTTPStatus.BAD_REQUEST, "NapCat WebUI 端口必须是数字。")
+                    return
                 job_id = manager.start_deploy(
                     deepseek_api_key=str(payload.get("deepseek_api_key") or ""),
                     prompt=str(payload.get("prompt") or ""),
@@ -2413,6 +2422,8 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     qq_account=str(payload.get("qq_account") or ""),
                     onebot_ws_port=int(payload.get("onebot_ws_port") or 0),
                     onebot_token=str(payload.get("onebot_token") or ""),
+                    onebot_gateway=onebot_gateway,
+                    napcat_webui_port=napcat_webui_port,
                 )
                 self._json(HTTPStatus.OK, {"ok": True, "job_id": job_id})
                 return

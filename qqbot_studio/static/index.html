@@ -244,26 +244,36 @@
 
             <div id="onebot-fields" hidden>
               <div class="field">
-                <label for="onebot-qq">机器人 QQ 号</label>
+                <label for="onebot-qq">机器人 QQ 号 <span class="required-mark" aria-hidden="true">*</span></label>
                 <input id="onebot-qq" name="qq_account" type="text" inputmode="numeric" autocomplete="off" placeholder="例如 123456789">
-                <p class="field-help">外部 OneBot 网关登录的 QQ 号（5–12 位数字）；AstrBot 通过反向 WebSocket 接收该网关的事件。</p>
+                <p class="field-help">该 QQ 号用于登录 OneBot 网关；AstrBot 通过反向 WebSocket 接收网关事件。</p>
                 <p id="onebot-qq-error" class="field-error" role="alert" hidden></p>
               </div>
               <div class="field">
-                <label for="onebot-ws-port">反向 WebSocket 端口</label>
-                <input id="onebot-ws-port" name="onebot_ws_port" type="number" inputmode="numeric" min="1" max="65535" placeholder="留空自动分配">
-                <p class="field-help">OneBot 网关连接到 <code>ws://本机地址:该端口/ws</code>；留空会自动分配一个空闲端口。</p>
-                <p id="onebot-ws-port-error" class="field-error" role="alert" hidden></p>
+                <label for="onebot-gateway">OneBot 网关</label>
+                <select id="onebot-gateway" name="onebot_gateway">
+                  <option value="builtin" selected>内置 NapCat（推荐，扫码登录）</option>
+                  <option value="external">外部网关（NapCat/LLOneBot/Lagrange）</option>
+                </select>
+                <p id="onebot-gateway-help" class="field-help">内置网关会随实例启动 NapCat，部署完成后打开 WebUI 扫码登录 QQ。</p>
               </div>
-              <div class="field">
-                <label for="onebot-token">WebSocket Token</label>
-                <input id="onebot-token" name="onebot_token" type="password" autocomplete="new-password" placeholder="留空自动生成">
-                <p class="field-help">留空会自动生成 32 字节 token；部署完成后可在状态页复制给网关。</p>
-                <p id="onebot-token-error" class="field-error" role="alert" hidden></p>
+              <div id="onebot-external-fields" hidden>
+                <div class="field">
+                  <label for="onebot-ws-port">反向 WebSocket 端口</label>
+                  <input id="onebot-ws-port" name="onebot_ws_port" type="number" inputmode="numeric" min="1" max="65535" placeholder="留空自动分配">
+                  <p class="field-help">外部网关连接到 <code>ws://本机地址:该端口/ws</code>；留空会自动分配一个空闲端口。</p>
+                  <p id="onebot-ws-port-error" class="field-error" role="alert" hidden></p>
+                </div>
+                <div class="field">
+                  <label for="onebot-token">WebSocket Token</label>
+                  <input id="onebot-token" name="onebot_token" type="password" autocomplete="new-password" placeholder="留空自动生成">
+                  <p class="field-help">留空会自动生成 32 字节 token；部署完成后可在状态页复制给网关。</p>
+                  <p id="onebot-token-error" class="field-error" role="alert" hidden></p>
+                </div>
               </div>
               <div class="safety-inline">
                 <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
-                <p><strong>OneBot 模式：</strong>不内置 SnowLuma；需要你有一个能主动连接 AstrBot 的 OneBot v11 网关。群权限、登录和风控由该网关负责。</p>
+                <p><strong>OneBot 模式：</strong>内置网关使用 NapCat 扫码登录；外部网关需要你自行运行 NapCat/LLOneBot/Lagrange。群权限、登录和风控由网关负责。</p>
               </div>
             </div>
 
@@ -519,7 +529,7 @@
           <div class="card endpoint-card endpoint-card--highlight">
             <div class="endpoint-heading">
               <span class="card-icon card-icon--mint"><svg class="icon" aria-hidden="true"><use href="#i-robot"></use></svg></span>
-              <div><h3>QQ 官方机器人</h3><p>AppID / AppSecret 单容器接入</p></div>
+              <div><h3 id="platform-card-title">QQ 官方机器人</h3><p id="platform-card-subtitle">AppID / AppSecret 单容器接入</p></div>
             </div>
             <p class="field-hint">AstrBot 直接连接 QQ 开放平台。</p>
             <div class="credential-grid">
@@ -527,6 +537,7 @@
               <div><span class="credential-label">连接状态</span><code id="official-connection-status" class="credential-value">检查中</code></div>
             </div>
             <div class="card-actions">
+              <a id="napcat-open" class="btn btn-secondary btn-small" href="#" target="_blank" rel="noopener noreferrer" hidden>打开 NapCat 登录<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
               <button id="refresh-official-status" class="btn btn-secondary btn-small" type="button">刷新连接状态</button>
             </div>
           </div>

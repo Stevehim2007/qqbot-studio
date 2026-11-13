@@ -23,6 +23,8 @@ DEFAULT_MEMORY_MODE = "direct"
 MEMORY_MODES = ("direct", "astrbot")
 PLATFORM_MODES = ("official", "onebot")
 DEFAULT_PLATFORM_MODE = "official"
+ONEBOT_GATEWAYS = ("external", "builtin")
+DEFAULT_ONEBOT_GATEWAY = "external"
 
 DEFAULT_PROMPT = """你是一位友好、真诚、有边界感的 QQ 聊天助手。
 请使用简洁自然的中文回复；避免机械感、刷屏、重复内容和不必要的 @。
@@ -41,6 +43,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "qq_official_appid": "",
     "qq_account": "",
     "onebot_ws_port": 0,
+    "onebot_gateway": DEFAULT_ONEBOT_GATEWAY,
+    "napcat_webui_port": 0,
     "model": MODEL_NAME,
     "prompt": DEFAULT_PROMPT,
     "prompt_profiles": [],
@@ -67,6 +71,7 @@ SENSITIVE_CONFIG_KEYS = {
     "password",
     "qq_official_secret",
     "onebot_token",
+    "napcat_webui_token",
 }
 
 # OneBot deployments use a real QQ account; official deployments do not.
@@ -269,6 +274,7 @@ class Store:
             "astrbot_jwt_secret": lambda: generate_token(32),
             "qq_official_secret": lambda: "",
             "onebot_token": lambda: generate_token(32),
+            "napcat_webui_token": lambda: generate_token(24),
         }
         for key, factory in defaults.items():
             value = secrets_data.get(key)
@@ -312,6 +318,8 @@ class Store:
                 changed = True
         if migrated.get("platform_mode") not in PLATFORM_MODES:
             migrated["platform_mode"] = DEFAULT_PLATFORM_MODE
+        if migrated.get("onebot_gateway") not in ONEBOT_GATEWAYS:
+            migrated["onebot_gateway"] = DEFAULT_ONEBOT_GATEWAY
             changed = True
         if migrated.get("platform_mode") != "onebot":
             for key in OFFICIAL_ONLY_CONFIG_KEYS:

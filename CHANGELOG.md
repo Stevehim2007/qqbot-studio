@@ -1,5 +1,12 @@
 # 更新日志
 
+## v5.0.0-beta.6（测试版）— 内置 NapCat 网关与扫码登录
+
+- 部署向导 OneBot 模式新增「内置 NapCat / 外部网关」二选一。
+- 内置 NapCat 自动生成反向 WebSocket 配置、Token、端口和 `onebot11_<QQ>.json`，部署完成页可直接打开 WebUI 扫码登录。
+- 外部 OneBot 继续使用 QQ 号 + 端口/Token。
+- 修复 QQ 号在 OneBot 模式下被当作 legacy 字段清理的问题。
+
 ## v5.0.0-beta.5（测试版）— OneBot QQ 号语义修正
 
 - 外部 OneBot v11 模式新增机器人 QQ 号字段（5–12 位数字），保存到实例配置并在状态页显示。

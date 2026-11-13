@@ -205,6 +205,41 @@ class ConfigGenerationTests(unittest.TestCase):
             self.assertNotIn("qq_official", json.dumps(platform))
             self.assertFalse((result["root"] / "data" / "snowluma").exists())
 
+    def test_builtin_onebot_gateway_generates_napcat_service_and_client_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generate_artifacts(
+                tmp,
+                api_key="sk-onebot-builtin",
+                prompt="内置 OneBot",
+                use_mirror=False,
+                secrets_data=fake_secrets(),
+                ports=choose_ports(probe=False),
+                platform_mode="onebot",
+                onebot_gateway="builtin",
+                qq_account="12345678",
+                onebot_token="onebot-token-for-test",
+                napcat_webui_port=6202,
+                napcat_webui_token="napcat-webui-token",
+            )
+            self.assertEqual(result["onebot_gateway"], "builtin")
+            self.assertEqual(result["qq_account"], "12345678")
+            self.assertEqual(result["napcat_webui_port"], 6202)
+            compose = result["compose"].read_text(encoding="utf-8")
+            env = result["env"].read_text(encoding="utf-8")
+            self.assertIn("napcat:", compose)
+            self.assertIn("mlikiowa/napcat-docker", env)
+            self.assertIn("NAPCAT_WEBUI_PORT=6202", env)
+            self.assertIn("NAPCAT_WEBUI_TOKEN=napcat-webui-token", env)
+            self.assertNotIn("ASTRBOT_ONEBOT_PORT", env)
+            client = json.loads(
+                (result["root"] / "data" / "napcat" / "config" / "onebot11_12345678.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(client["url"], "ws://astrbot:6199/ws")
+            self.assertEqual(client["token"], "onebot-token-for-test")
+            self.assertTrue(client["enable"])
+            astrbot = json.loads(result["astrbot_config"].read_text(encoding="utf-8"))
+            self.assertEqual(astrbot["platform"][0]["type"], "aiocqhttp")
+
     def test_all_generated_files_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             secrets_data = fake_secrets()

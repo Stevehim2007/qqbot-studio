@@ -127,7 +127,10 @@
         platform_mode: textValue(deployment.platform_mode, 'official'),
         qq_official_appid: textValue(deployment.qq_official_appid, ''),
         qq_account: textValue(deployment.qq_account, ''),
+        onebot_gateway: textValue(deployment.onebot_gateway, 'external'),
         onebot_ws_url: textValue(deployment.onebot_ws_url, ''),
+        napcat_webui_url: textValue(deployment.napcat_webui_url, ''),
+        napcat_webui_token: textValue(deployment.napcat_webui_token, ''),
         active_job_id: textValue(deployment.active_job_id, ''),
         active_job_status: textValue(deployment.active_job_status, ''),
         model: textValue(deployment.model, ''),
@@ -474,10 +477,18 @@
       });
       syncPlatformModeFields();
     }
+    const gatewaySelect = $('onebot-gateway');
+    if (gatewaySelect) {
+      gatewaySelect.addEventListener('change', () => {
+        syncPlatformModeFields();
+        clearFormError();
+      });
+    }
 
     const appidInput = $('official-appid');
     const secretInput = $('official-secret');
     const onebotQqInput = $('onebot-qq');
+    const onebotGatewayInput = $('onebot-gateway');
     const onebotPortInput = $('onebot-ws-port');
     const onebotTokenInput = $('onebot-token');
     const keyInput = $('deepseek-key');
@@ -497,6 +508,7 @@
     const officialAppid = appidInput ? appidInput.value.trim() : '';
     const officialSecret = secretInput ? secretInput.value.trim() : '';
     const onebotQq = onebotQqInput ? onebotQqInput.value.trim() : '';
+    const onebotGateway = onebotGatewayInput ? onebotGatewayInput.value : 'builtin';
     const onebotPort = onebotPortInput ? onebotPortInput.value.trim() : '';
     const onebotToken = onebotTokenInput ? onebotTokenInput.value.trim() : '';
     const apiKey = keyInput ? keyInput.value.trim() : '';
@@ -521,7 +533,7 @@
         setFieldError(onebotQqInput, $('onebot-qq-error'), '请输入 5–12 位数字的机器人 QQ 号。');
         invalidFields.push(onebotQqInput);
       }
-      if (onebotPort && (!/^[0-9]+$/.test(onebotPort) || Number(onebotPort) < 1 || Number(onebotPort) > 65535)) {
+      if (onebotGateway === 'external' && onebotPort && (!/^[0-9]+$/.test(onebotPort) || Number(onebotPort) < 1 || Number(onebotPort) > 65535)) {
         setFieldError(onebotPortInput, $('onebot-ws-port-error'), '端口必须是 1–65535 的整数。');
         invalidFields.push(onebotPortInput);
       }
@@ -1958,6 +1970,19 @@
 
     const platformConnected = deployment.platform_connected;
     const isOneBot = deployment.platform_mode === 'onebot';
+    const builtinGateway = isOneBot && deployment.onebot_gateway === 'builtin';
+    setText('platform-card-title', builtinGateway ? '内置 NapCat 网关' : isOneBot ? '外部 OneBot 网关' : 'QQ 官方机器人');
+    setText('platform-card-subtitle', builtinGateway ? '扫码登录 QQ，自动连接 AstrBot' : isOneBot ? 'QQ 号 + 外部 OneBot v11 网关' : 'AppID / AppSecret 单容器接入');
+    const napcatOpen = $('napcat-open');
+    if (napcatOpen) {
+      const loginUrl = deployment.napcat_webui_url || '';
+      if (builtinGateway && loginUrl) {
+        napcatOpen.hidden = false;
+        setOpenLink(napcatOpen, loginUrl);
+      } else {
+        napcatOpen.hidden = true;
+      }
+    }
     setStatusValue($('qq-login-status'), isOneBot ? 'OneBot 网关' : '官方机器人', 'success');
     setStatusValue(
       $('official-status'),
@@ -1970,7 +1995,12 @@
     setText('official-appid-status', isOneBot ? (deployment.qq_account || '未填写') : (deployment.qq_official_appid || '未提供'));
     if (isOneBot) {
       const ws = deployment.onebot_ws_url || '未配置';
-      setText('official-connection-status', `${ws}${deployment.onebot_token ? ' · Token 已生成' : ' · Token 未生成'}`);
+      if (deployment.onebot_gateway === 'builtin') {
+        const webui = deployment.napcat_webui_url || '未配置';
+        setText('official-connection-status', `${webui}${deployment.napcat_webui_token ? ' · WebUI Token 已生成' : ''}`);
+      } else {
+        setText('official-connection-status', `${ws}${deployment.onebot_token ? ' · Token 已生成' : ' · Token 未生成'}`);
+      }
     }
 
     setText('astrbot-url-text', fallbackDisplay(urls.astrbot_webui));
