@@ -1,5 +1,10 @@
 # 更新日志
 
+## v5.0.0-beta.8（测试版）— 向导 OneBot 网关字段接线
+
+- 修正部署向导选择 OneBot 后内置/外部网关字段不切换、payload 缺失 `onebot_gateway` 的问题。
+- 内置 NapCat 模式隐藏外部端口/Token 字段，外部网关模式才显示。
+
 ## v5.0.0-beta.7（测试版）— NapCat 一键登录链接
 
 - NapCat WebUI 状态链接自动带上 token，部署完成页可直接打开扫码登录。

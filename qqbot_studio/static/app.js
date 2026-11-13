@@ -571,7 +571,9 @@
       official_appid: platformMode === 'official' ? officialAppid : '',
       official_secret: platformMode === 'official' ? officialSecret : '',
       qq_account: platformMode === 'onebot' ? onebotQq : '',
-      onebot_ws_port: platformMode === 'onebot' && onebotPort ? Number(onebotPort) : 0,
+      onebot_gateway: platformMode === 'onebot' ? (onebotGatewayInput ? (onebotGatewayInput.value || 'builtin') : 'builtin') : 'external',
+      onebot_ws_port: platformMode === 'onebot' && (onebotGatewayInput ? onebotGatewayInput.value === 'external' : false) && onebotPort ? Number(onebotPort) : 0,
+      napcat_webui_port: 0,
       onebot_token: platformMode === 'onebot' ? onebotToken : '',
       deepseek_api_key: apiKey,
       prompt,
@@ -635,9 +637,21 @@
     const select = $('platform-mode');
     const onebot = $('onebot-fields');
     const official = $('official-fields');
+    const gatewaySelect = $('onebot-gateway');
     const mode = select ? select.value : 'official';
+    const gateway = gatewaySelect ? gatewaySelect.value : 'builtin';
     if (official) official.hidden = mode !== 'official';
     if (onebot) onebot.hidden = mode !== 'onebot';
+    const externalFields = $('onebot-external-fields');
+    if (externalFields) externalFields.hidden = !(mode === 'onebot' && gateway === 'external');
+    const help = $('onebot-gateway-help');
+    if (help) {
+      help.textContent = gateway === 'external'
+        ? '外部网关需要你自己运行 NapCat/LLOneBot/Lagrange，并把反向 WebSocket 指向下面地址。'
+        : '内置网关会随实例启动 NapCat，部署完成后打开 WebUI 扫码登录 QQ。';
+    }
+    const napcatNote = $('onebot-napcat-note');
+    if (napcatNote) napcatNote.hidden = !(mode === 'onebot' && gateway === 'builtin');
   }
 
   function getOsRequirementConfig(platform, osValue) {
