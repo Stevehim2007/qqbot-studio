@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tempfile
 import unittest
@@ -213,6 +214,11 @@ class PluginControlTests(unittest.TestCase):
         )
         with self.assertRaises(ControlUnavailable):
             client.call("tool.catalog", scope=("admin", "global"))
+
+    def test_generated_secret_uses_text_form_not_hex(self):
+        secret = generate_control_secret()
+        self.assertEqual(len(secret), 64)
+        self.assertIsNone(re.fullmatch(r"[0-9a-fA-F]{64}", secret))
 
     def test_secret_store_is_0600_atomic_and_does_not_expose_secret(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -321,9 +321,14 @@ def _secret_bytes(secret: str | bytes) -> bytes:
 
 
 def generate_control_secret() -> str:
-    """Return a new 32-byte secret as 64 lowercase hex characters."""
+    """Return a new 64-character URL-safe secret text.
 
-    return secrets.token_bytes(CONTROL_SECRET_BYTES).hex()
+    The plugin-side control server treats the file contents as text; keeping
+    the host-side representation identical avoids HMAC key mismatches caused
+    by interpreting a 64-character hex value as 32 raw bytes.
+    """
+
+    return secrets.token_urlsafe(48)
 
 
 def _bounded_string(value: Any, name: str, *, max_len: int = 128, required: bool = True) -> str:

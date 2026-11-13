@@ -245,6 +245,19 @@ class DeployerTests(unittest.TestCase):
             time.sleep(0.05)
         self.fail("deployment job did not finish")
 
+    def test_control_bridge_config_is_seeded_per_instance(self):
+        import json
+        astrbot = Path(self.tmp.name) / "data" / "astrbot"
+        self.manager._seed_safe_tools_control_bridge(astrbot, "bot-9", lambda _text: None)
+        path = astrbot / "config" / "qqbot_safe_tools_config.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(data["control_bridge_enabled"])
+        self.assertEqual(data["control_bridge_actor_allowlist"], "studio-admin")
+        self.assertEqual(data["control_bridge_scope_allowlist"], "global,admin")
+        self.assertEqual(data["control_bridge_instance_allowlist"], "bot-9")
+        self.assertEqual(data["instance_id"], "bot-9")
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_runtime_dependency_check_and_python_install(self):
         requirements = {
             "python": [{"name": "Pillow", "spec": ">=10", "module": "PIL", "description": "图片"}],

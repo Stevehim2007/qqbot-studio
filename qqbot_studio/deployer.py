@@ -707,6 +707,44 @@ class DeployManager:
                 if self._active_job_id == job_id:
                     self._active_job_id = ""
 
+    def _seed_safe_tools_control_bridge(
+        self,
+        astrbot_data: Path,
+        instance_id: str,
+        add_log: Callable[[str], None],
+    ) -> None:
+        """Prepare the per-instance Studio control bridge before AstrBot starts."""
+        path = astrbot_data / "config" / "qqbot_safe_tools_config.json"
+        payload: dict[str, object] = {}
+        if path.exists():
+            try:
+                raw_text = path.read_text(encoding="utf-8-sig")
+                parsed = json.loads(raw_text) if raw_text.strip() else {}
+                if isinstance(parsed, dict):
+                    payload.update(parsed)
+            except (OSError, ValueError) as exc:
+                add_log(f"警告：无法读取 safe_tools 配置，将重建控制桥字段：{exc}")
+                payload = {}
+        payload.update(
+            {
+                "control_bridge_enabled": True,
+                "control_bridge_actor_allowlist": "studio-admin",
+                "control_bridge_scope_allowlist": "global,admin",
+                "control_bridge_instance_allowlist": instance_id,
+                "instance_id": instance_id,
+                "auth_admin_actor_ids": "studio-admin",
+            }
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+        add_log("safe_tools 控制桥配置已写入。")
+
     def _deploy_impl(
         self,
         job: Job,
@@ -799,6 +837,11 @@ class DeployManager:
         )
         self.store.save_config(config)
         self._seed_final_reply_config(Path(artifacts["astrbot_data"]), prompt, add_log)
+        self._seed_safe_tools_control_bridge(
+            Path(artifacts["astrbot_data"]),
+            self.instance_id or self.data_dir.name,
+            add_log,
+        )
         _, unique_default_error = self._ensure_unique_session_default()
         if unique_default_error:
             add_log("警告：" + unique_default_error)
@@ -842,6 +885,13 @@ class DeployManager:
             raise DeploymentError(f"拉取镜像失败，已尝试的镜像源均不可用。{suggestion}{detail}")
 
         self._set_job(job, step="启动容器", progress=46, message="正在创建并启动 AstrBot 容器…")
+        try:
+            from .plugin_control import ControlSecretStore
+
+            ControlSecretStore(self.data_dir).ensure()
+            add_log("插件控制桥密钥已初始化。")
+        except Exception as exc:  # noqa: BLE001 - never block the bot on an optional bridge
+            add_log(f"警告：插件控制桥密钥初始化失败，控制台策略操作可能不可用：{exc}")
         up_result = self.docker.up()
         add_log(self.docker._tail(up_result.output, 3000) or "容器启动命令已完成。")
 
@@ -986,6 +1036,8 @@ class DeployManager:
         target = astrbot_data / "config" / "qqbot_core_reply_config.json"
         try:
             existing = DeployManager._read_json_object(target) or {}
+            existing.setdefault("enabled", True)
+            existing.setdefault("memory_mode", "astrbot")
             existing["system_prompt"] = str(prompt or "")
             DeployManager._write_private_json(target, existing)
         except OSError as exc:
