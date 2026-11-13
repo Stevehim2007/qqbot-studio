@@ -1046,7 +1046,7 @@ class HttpControlTransport:
 # response JSON.  The container name is the only interpolated value and is
 # validated before this script is used.
 _DOCKER_CLIENT_SCRIPT = r"""
-import json, sys, urllib.request
+import json, sys, urllib.error, urllib.request
 try:
     payload = sys.stdin.buffer.read(262145)
     if not payload or len(payload) > 262144:
@@ -1063,6 +1063,16 @@ try:
         raise ValueError("response too large")
     json.loads(body.decode("utf-8"))
     sys.stdout.buffer.write(body)
+except urllib.error.HTTPError as exc:
+    body = exc.read(524289)
+    if len(body) > 524288:
+        body = b'{"ok":false,"code":"response_too_large","message":"response too large"}'
+    try:
+        json.loads(body.decode("utf-8"))
+    except Exception:
+        body = json.dumps({"ok": False, "code": "bridge_unavailable", "message": type(exc).__name__}).encode()
+    sys.stdout.buffer.write(body)
+    raise SystemExit(1)
 except Exception as exc:
     sys.stdout.write(json.dumps({"ok": False, "code": "bridge_unavailable", "message": type(exc).__name__}))
     raise SystemExit(1)
