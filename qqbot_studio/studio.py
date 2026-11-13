@@ -536,20 +536,36 @@ class StudioManager:
 
     def create_instance(self, name: str | None = None) -> dict[str, Any]:
         settings = self.load_settings()
-        # Reuse the smallest free numeric id.  Deleting bot-1 must not leave a
-        # permanent hole that turns the next instance into bot-10.
-        seq = 1
-        instance_id = f"bot-{seq}"
-        path = self._instance_path(instance_id)
-        while path.exists():
-            seq += 1
-            instance_id = f"bot-{seq}"
-            path = self._instance_path(instance_id)
+        # Reuse the newest free numeric id below the high-water mark.  Deleting
+        # bot-9 must not turn the next instance into bot-10 when bot-10 is free.
         try:
-            previous_seq = int(settings.get("next_instance_seq") or 1)
+            high_water = int(settings.get("next_instance_seq") or 1)
         except (TypeError, ValueError):
-            previous_seq = 1
-        settings["next_instance_seq"] = max(previous_seq, seq + 1)
+            high_water = 1
+        high_water = max(1, high_water)
+        max_existing = 0
+        if self.instances_dir.exists():
+            for child in self.instances_dir.iterdir():
+                if not child.is_dir() or not child.name.startswith("bot-"):
+                    continue
+                try:
+                    max_existing = max(max_existing, int(child.name[4:]))
+                except ValueError:
+                    continue
+        high_water = max(high_water, max_existing + 1)
+        seq = max(1, high_water - 1)
+        path = self._instance_path(f"bot-{seq}")
+        while path.exists() and seq > 1:
+            seq -= 1
+            path = self._instance_path(f"bot-{seq}")
+        if path.exists():
+            seq = high_water
+            path = self._instance_path(f"bot-{seq}")
+            while path.exists():
+                seq += 1
+                path = self._instance_path(f"bot-{seq}")
+        instance_id = f"bot-{seq}"
+        settings["next_instance_seq"] = max(high_water, seq + 1)
         self.save_settings(settings)
         path.mkdir(parents=True, exist_ok=False)
         chmod_best_effort(path, 0o700)
