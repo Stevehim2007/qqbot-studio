@@ -1,5 +1,10 @@
 # 更新日志
 
+## v5.0.0-beta.9（测试版）— NapCat 运行状态与容器修复
+
+- 实例状态返回内置 NapCat 运行状态；NapCat 停止时提示修复。
+- “修复容器”现在同时检查/启动内置 NapCat。
+
 ## v5.0.0-beta.8（测试版）— 向导 OneBot 网关字段接线
 
 - 修正部署向导选择 OneBot 后内置/外部网关字段不切换、payload 缺失 `onebot_gateway` 的问题。

@@ -131,6 +131,7 @@
         onebot_ws_url: textValue(deployment.onebot_ws_url, ''),
         napcat_webui_url: textValue(deployment.napcat_webui_url, ''),
         napcat_webui_token: textValue(deployment.napcat_webui_token, ''),
+        napcat_running: boolOrUndefined(deployment.napcat_running),
         active_job_id: textValue(deployment.active_job_id, ''),
         active_job_status: textValue(deployment.active_job_status, ''),
         model: textValue(deployment.model, ''),
@@ -1986,7 +1987,9 @@
     const isOneBot = deployment.platform_mode === 'onebot';
     const builtinGateway = isOneBot && deployment.onebot_gateway === 'builtin';
     setText('platform-card-title', builtinGateway ? '内置 NapCat 网关' : isOneBot ? '外部 OneBot 网关' : 'QQ 官方机器人');
-    setText('platform-card-subtitle', builtinGateway ? '扫码登录 QQ，自动连接 AstrBot' : isOneBot ? 'QQ 号 + 外部 OneBot v11 网关' : 'AppID / AppSecret 单容器接入');
+    setText('platform-card-subtitle', builtinGateway
+      ? (deployment.napcat_running === false ? 'NapCat 未运行，可点击“修复容器”或重新部署' : '扫码登录 QQ，自动连接 AstrBot')
+      : isOneBot ? 'QQ 号 + 外部 OneBot v11 网关' : 'AppID / AppSecret 单容器接入');
     const napcatOpen = $('napcat-open');
     if (napcatOpen) {
       const loginUrl = deployment.napcat_webui_url || '';

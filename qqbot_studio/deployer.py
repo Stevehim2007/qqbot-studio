@@ -249,6 +249,7 @@ class DeployManager:
         self.instance_id = str(instance_id or "").strip()
         self.project_name = str(project_name or "qqbot-studio")
         self.astrbot_container = str(astrbot_container or "qqbot-astrbot")
+        self.napcat_container = self.astrbot_container.replace("astrbot", "napcat")
         self.network_name = str(network_name or "qqbot-studio-net")
         self.docker = docker or DockerController(
             self.data_dir,
@@ -4791,6 +4792,12 @@ class DeployManager:
             return True
         return False
 
+    def _container_running(self, name: str) -> bool:
+        try:
+            return self.docker.container_status(name) == "running"
+        except Exception:
+            return False
+
     def get_status(self) -> dict[str, Any]:
         config = self.store.load_config()
         secrets_data = self.store.load_secrets()
@@ -4879,6 +4886,7 @@ class DeployManager:
                 "napcat_webui_port": int(config.get("napcat_webui_port") or 0),
                 "napcat_webui_url": urls.get("napcat_webui", ""),
                 "napcat_webui_token": str(secrets_data.get("napcat_webui_token") or "") if platform_mode == "onebot" and onebot_gateway == "builtin" else "",
+                "napcat_running": self._container_running(self.napcat_container) if platform_mode == "onebot" and onebot_gateway == "builtin" else None,
                 "platform_connected": self._detect_platform_connection(platform_mode),
                 "model": MODEL_NAME,
                 "prompt": str(config.get("prompt") or DEFAULT_PROMPT),
@@ -4912,6 +4920,8 @@ class DeployManager:
         statuses = {
             self.astrbot_container: self.docker.container_status(self.astrbot_container),
         }
+        if config.get("platform_mode") == "onebot" and config.get("onebot_gateway") == "builtin":
+            statuses[self.napcat_container] = self.docker.container_status(self.napcat_container)
         health = {
             name: self.docker.container_health(name)
             for name in statuses
@@ -4930,7 +4940,8 @@ class DeployManager:
                 self.docker.restart()
             # Re-check after repair.
             repaired = {
-                self.astrbot_container: self.docker.container_status(self.astrbot_container),
+                name: self.docker.container_status(name)
+                for name in statuses
             }
             repaired_health = {
                 name: self.docker.container_health(name)
