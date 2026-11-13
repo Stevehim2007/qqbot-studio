@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.0.0-beta.7（测试版）— NapCat 一键登录链接
+
+- NapCat WebUI 状态链接自动带上 token，部署完成页可直接打开扫码登录。
+
 ## v5.0.0-beta.6（测试版）— 内置 NapCat 网关与扫码登录
 
 - 部署向导 OneBot 模式新增「内置 NapCat / 外部网关」二选一。

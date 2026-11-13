@@ -4823,7 +4823,9 @@ class DeployManager:
         if platform_mode == "onebot" and onebot_gateway == "external" and config.get("onebot_ws_port"):
             urls["onebot_ws"] = f"ws://{url_host}:{config.get('onebot_ws_port')}/ws"
         if platform_mode == "onebot" and onebot_gateway == "builtin" and config.get("napcat_webui_port"):
-            urls["napcat_webui"] = f"http://{url_host}:{config.get('napcat_webui_port')}/webui/"
+            napcat_token = str(secrets_data.get("napcat_webui_token") or "")
+            token_query = f"?token={napcat_token}" if napcat_token else ""
+            urls["napcat_webui"] = f"http://{url_host}:{config.get('napcat_webui_port')}/webui/{token_query}"
         with self._lock:
             active_job_id = self._active_job_id
             active_job = self._jobs.get(active_job_id)

@@ -507,7 +507,7 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(deployment["onebot_gateway"], "builtin")
         self.assertEqual(deployment["qq_account"], "12345678")
         self.assertEqual(deployment["napcat_webui_port"], 6202)
-        self.assertEqual(deployment["napcat_webui_url"], "http://127.0.0.1:6202/webui/")
+        self.assertEqual(deployment["napcat_webui_url"], "http://127.0.0.1:6202/webui/?token=napcat-status-token")
         self.assertEqual(deployment["napcat_webui_token"], "napcat-status-token")
         self.assertEqual(deployment["onebot_ws_url"], "")
         self.assertIn("napcat_webui", deployment["urls"])
