@@ -89,6 +89,18 @@ class StudioManagerTests(unittest.TestCase):
         self.assertFalse(instance_dir.exists())
         fake_manager.docker.down.assert_called_once()
 
+    def test_deleted_instance_id_is_reused(self):
+        first = self.studio.create_instance("一号机器人")
+        second = self.studio.create_instance("二号机器人")
+        fake_manager = mock.MagicMock()
+        fake_manager._active_job_id = ""
+        fake_manager.docker.down.return_value = None
+        with mock.patch.object(self.studio, "get_manager", return_value=fake_manager):
+            self.studio.delete_instance(first["id"])
+        third = self.studio.create_instance("三号机器人")
+        self.assertEqual(third["id"], "bot-1")
+        self.assertNotEqual(second["id"], third["id"])
+
     def test_instance_id_validation(self):
         with self.assertRaises(ValueError):
             self.studio.get_instance_meta("../bad")

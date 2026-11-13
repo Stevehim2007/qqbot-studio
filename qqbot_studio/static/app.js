@@ -470,21 +470,6 @@
     clearFormError();
     const modeSelect = $('platform-mode');
     const platformMode = modeSelect ? modeSelect.value : 'official';
-    const platformSelect = $('platform-mode');
-    if (platformSelect) {
-      platformSelect.addEventListener('change', () => {
-        syncPlatformModeFields();
-        clearFormError();
-      });
-      syncPlatformModeFields();
-    }
-    const gatewaySelect = $('onebot-gateway');
-    if (gatewaySelect) {
-      gatewaySelect.addEventListener('change', () => {
-        syncPlatformModeFields();
-        clearFormError();
-      });
-    }
 
     const appidInput = $('official-appid');
     const secretInput = $('official-secret');
@@ -2170,6 +2155,22 @@
 
     const form = $('config-form');
     if (form) form.addEventListener('submit', handleDeploySubmit);
+
+    const platformModeSelect = $('platform-mode');
+    if (platformModeSelect) {
+      platformModeSelect.addEventListener('change', () => {
+        syncPlatformModeFields();
+        clearFormError();
+      });
+    }
+    const onebotGatewaySelect = $('onebot-gateway');
+    if (onebotGatewaySelect) {
+      onebotGatewaySelect.addEventListener('change', () => {
+        syncPlatformModeFields();
+        clearFormError();
+      });
+    }
+    syncPlatformModeFields();
 
     const appidInput = $('official-appid');
     if (appidInput) {

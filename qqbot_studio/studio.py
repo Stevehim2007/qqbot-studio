@@ -536,14 +536,20 @@ class StudioManager:
 
     def create_instance(self, name: str | None = None) -> dict[str, Any]:
         settings = self.load_settings()
-        seq = int(settings.get("next_instance_seq") or 1)
+        # Reuse the smallest free numeric id.  Deleting bot-1 must not leave a
+        # permanent hole that turns the next instance into bot-10.
+        seq = 1
         instance_id = f"bot-{seq}"
         path = self._instance_path(instance_id)
         while path.exists():
             seq += 1
             instance_id = f"bot-{seq}"
             path = self._instance_path(instance_id)
-        settings["next_instance_seq"] = seq + 1
+        try:
+            previous_seq = int(settings.get("next_instance_seq") or 1)
+        except (TypeError, ValueError):
+            previous_seq = 1
+        settings["next_instance_seq"] = max(previous_seq, seq + 1)
         self.save_settings(settings)
         path.mkdir(parents=True, exist_ok=False)
         chmod_best_effort(path, 0o700)
