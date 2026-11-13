@@ -230,10 +230,15 @@ class ConfigGenerationTests(unittest.TestCase):
             self.assertIn("mlikiowa/napcat-docker", env)
             self.assertIn("NAPCAT_WEBUI_PORT=6202", env)
             self.assertIn("NAPCAT_WEBUI_TOKEN=napcat-webui-token", env)
+            self.assertIn("NAPCAT_ACCOUNT=12345678", env)
+            self.assertIn("ACCOUNT: ${NAPCAT_ACCOUNT}", compose)
             self.assertNotIn("ASTRBOT_ONEBOT_PORT", env)
-            client = json.loads(
+            document = json.loads(
                 (result["root"] / "data" / "napcat" / "config" / "onebot11_12345678.json").read_text(encoding="utf-8")
             )
+            client = document["network"]["websocketClients"][0]
+            global_doc = json.loads((result["root"] / "data" / "napcat" / "config" / "onebot11.json").read_text(encoding="utf-8"))
+            self.assertEqual(global_doc["network"]["websocketClients"][0]["token"], "onebot-token-for-test")
             self.assertEqual(client["url"], "ws://astrbot:6199/ws")
             self.assertEqual(client["token"], "onebot-token-for-test")
             self.assertTrue(client["enable"])

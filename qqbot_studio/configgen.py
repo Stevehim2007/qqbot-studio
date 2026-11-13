@@ -268,6 +268,7 @@ def _compose_yaml(
     onebot_gateway: str = "external",
     napcat_webui_port: int | None = None,
     napcat_container: str = "qqbot-napcat",
+    napcat_account: str = "",
 ) -> str:
     """Return the Compose file for the selected QQ platform."""
 
@@ -298,6 +299,7 @@ def _compose_yaml(
       TZ: Asia/Shanghai
       MODE: astrbot
       WEBUI_TOKEN: ${{NAPCAT_WEBUI_TOKEN}}
+      ACCOUNT: ${{NAPCAT_ACCOUNT}}
       NAPCAT_UID: ${{NAPCAT_UID:-1000}}
       NAPCAT_GID: ${{NAPCAT_GID:-1000}}
     volumes:
@@ -346,6 +348,7 @@ def _env_file(
     onebot_gateway: str = "external",
     napcat_webui_port: int | None = None,
     napcat_token: str = "",
+    napcat_account: str = "",
 ) -> str:
     astrbot_image = image_names_for_prefix(mirror_prefix)
     values = [
@@ -360,6 +363,7 @@ def _env_file(
             ("NAPCAT_IMAGE", napcat_image_names_for_prefix(mirror_prefix)),
             ("NAPCAT_WEBUI_PORT", str(napcat_webui_port)),
             ("NAPCAT_WEBUI_TOKEN", str(napcat_token)),
+            ("NAPCAT_ACCOUNT", str(napcat_account)),
             ("NAPCAT_UID", str(getattr(os, "getuid", lambda: 1000)())),
             ("NAPCAT_GID", str(getattr(os, "getgid", lambda: 1000)())),
         ])
@@ -573,6 +577,7 @@ def generate_artifacts(
             onebot_gateway=onebot_gateway,
             napcat_webui_port=napcat_webui_port or None,
             napcat_container=astrbot_container.replace("astrbot", "napcat"),
+            napcat_account=qq_account if onebot_gateway == "builtin" else "",
         ),
         mode=0o644,
     )
@@ -587,6 +592,7 @@ def generate_artifacts(
             onebot_gateway=onebot_gateway,
             napcat_webui_port=napcat_webui_port or None,
             napcat_token=napcat_webui_token,
+            napcat_account=qq_account if onebot_gateway == "builtin" else "",
         ),
         mode=0o600,
     )
@@ -615,11 +621,24 @@ def generate_artifacts(
             "reconnectInterval": 5000,
             "heartInterval": 30000,
         }
-        _atomic_write_text(
+        napcat_config = {
+            "network": {
+                "httpServers": [],
+                "httpSseServers": [],
+                "httpClients": [],
+                "websocketServers": [],
+                "websocketClients": [onebot_client],
+            },
+            "musicSignUrl": "",
+            "enableLocalFile2Url": False,
+            "parseMultMsg": False,
+        }
+        napcat_payload = json.dumps(napcat_config, ensure_ascii=False, indent=2) + "\n"
+        for path in (
+            napcat_config_dir / "onebot11.json",
             napcat_config_dir / f"onebot11_{qq_account}.json",
-            json.dumps(onebot_client, ensure_ascii=False, indent=2) + "\n",
-            mode=0o600,
-        )
+        ):
+            _atomic_write_text(path, napcat_payload, mode=0o600)
 
     astrbot_config = _astrbot_config(
         api_key=api_key,

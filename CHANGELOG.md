@@ -1,5 +1,12 @@
 # 更新日志
 
+## v5.0.0-beta.13（测试版）— 内置 NapCat 快速登录与 OneBot 配置修复
+
+- 内置 NapCat 注入 `ACCOUNT`，已有登录态时自动快速登录，不再每次落到二维码。
+- NapCat OneBot 配置同时写入全局 `onebot11.json` 与按 QQ 的配置文件，使用 `network.websocketClients` 标准结构。
+- 修复全局配置 token 为空导致反向 WS 鉴权失败、AstrBot 收不到事件的问题。
+- 生产 bot-11 已验证：快速登录成功、OneBot11 网络配置加载、`aiocqhttp` 适配器已连接。
+
 ## v5.0.0-beta.12（测试版）— 官方 openid 与 OneBot 数字 ID 适配
 
 - 群人格配置同时接受官方 32 位 openid 与 OneBot 数字群号，拒绝其他格式。
