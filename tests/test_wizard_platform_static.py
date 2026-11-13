@@ -246,7 +246,7 @@ class WizardPlatformStaticTests(unittest.TestCase):
         self.assertIn("外部 OneBot v11 网关", self.index_html)
         self.assertIn("反向 WebSocket 端口", self.index_html)
         self.assertIn("留空自动生成", self.index_html)
-        self.assertIn("机器人 QQ 号", self.index_html)
+        self.assertIn("第三方 QQ 号（OneBot）", self.index_html)
         self.assertIn("内置 NapCat", self.index_html)
         self.assertIn("扫码登录", self.index_html)
         for token in (

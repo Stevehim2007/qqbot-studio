@@ -557,7 +557,7 @@ class DeployManager:
             onebot_token = str(onebot_token or "").strip()
             qq_account = str(qq_account or "").strip()
             if not re.fullmatch(r"\d{5,12}", qq_account):
-                raise DeploymentError("OneBot 模式请填写机器人 QQ 号（5–12 位数字）。")
+                raise DeploymentError("OneBot 模式请填写第三方 QQ 号（5–12 位数字，用于 NapCat/外部网关登录）。")
             onebot_gateway = str(onebot_gateway or "external").strip().lower()
             if onebot_gateway not in {"external", "builtin"}:
                 raise DeploymentError("OneBot 网关只能是 external（外部网关）或 builtin（内置 NapCat）。")
@@ -3839,7 +3839,7 @@ class DeployManager:
                         "ui_group": "群组白名单",
                     }
                     public_schema["group_whitelist_ids"] = {
-                        "description": "每行一个 QQ 群号；私聊不受此白名单影响。",
+                        "description": "每行一个群 ID：官方机器人填 32 位 openid，OneBot 填数字群号；两者不要混用。私聊不受此白名单影响。",
                         "type": "text",
                         "default": "",
                         "ui_group": "群组白名单",

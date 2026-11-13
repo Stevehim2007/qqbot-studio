@@ -50,7 +50,7 @@
     },
     config: {
       title: '连接账号与模型',
-      subtitle: '填写 QQ 官方机器人 AppID / AppSecret 与 DeepSeek API Key。',
+      subtitle: '填写 QQ 官方机器人 AppID/AppSecret，或第三方 OneBot QQ 号，再填 DeepSeek API Key。',
       index: 1
     },
     deploy: {
@@ -516,7 +516,7 @@
       }
     } else {
       if (!/^[0-9]{5,12}$/.test(onebotQq)) {
-        setFieldError(onebotQqInput, $('onebot-qq-error'), '请输入 5–12 位数字的机器人 QQ 号。');
+        setFieldError(onebotQqInput, $('onebot-qq-error'), '请输入 5–12 位数字的第三方 QQ 号。');
         invalidFields.push(onebotQqInput);
       }
       if (onebotGateway === 'external' && onebotPort && (!/^[0-9]+$/.test(onebotPort) || Number(onebotPort) < 1 || Number(onebotPort) > 65535)) {

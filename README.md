@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、QQ 官方机器人开放平台、DeepSeek AI 聊天。当前版本支持 QQ 官方机器人，也可选外部 OneBot v11 网关。
 
-当前主项目版本：**5.0.0-beta.11（测试版）**。支持 QQ 官方机器人，或内置 NapCat / 外部 OneBot v11 网关；AstrBot 单容器运行；包含长期记忆与群策略、记忆卡片 v3、插件市场/分组、最小三插件默认集、七个核心 QQ 插件与定时/运势/天气三个工具插件、统一安全工具入口、运行时依赖检查、Food 地点解析与更新/回退功能。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**5.0.0-beta.12（测试版）**。支持 QQ 官方机器人，或内置 NapCat / 外部 OneBot v11 网关；AstrBot 单容器运行；包含长期记忆与群策略、记忆卡片 v3、插件市场/分组、最小三插件默认集、七个核心 QQ 插件与定时/运势/天气三个工具插件、统一安全工具入口、运行时依赖检查、Food 地点解析与更新/回退功能。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **升级提醒**：5.0.0 是 QQ 官方机器人接入后的测试线；升级前请备份实例 `data/`，并先在测试实例验证。长期记忆是独立 SQLite sidecar，启用前同样先备份。
 
@@ -113,7 +113,7 @@ http://服务器IP:8765/console
 
 #### 内置 NapCat（推荐，扫码即用）
 
-1. 填写机器人 **QQ 号**（5–12 位数字），网关选择 **内置 NapCat**。
+1. 填写要登录的**第三方 QQ 号**（5–12 位数字，不是官方机器人 AppID），网关选择 **内置 NapCat**。
 2. 部署会同时启动 AstrBot 与 NapCat；反向 WebSocket、Token 和 `onebot11_<QQ>.json` 自动生成，无需手动配置。
 3. 部署完成后，在完成页点击 **打开 NapCat 登录**，用手机 QQ 扫码登录。
 4. 登录后 NapCat 会自动连接 AstrBot；NapCat WebUI 默认只绑定 `127.0.0.1`，不要直接暴露到公网。
@@ -123,11 +123,13 @@ http://服务器IP:8765/console
 
 如果使用自己的 NapCat、LLOneBot、Lagrange 等网关：
 
-1. 填写该网关登录的机器人 **QQ 号**。
+1. 填写该网关登录的**第三方 QQ 号**（数字 QQ 号，不是官方机器人 AppID）。
 2. 反向 WebSocket 端口可留空自动分配；Token 可留空自动生成。
 3. 部署完成后，向导/控制台会显示 `ws://<主机>:<端口>/ws` 和 Token。
 4. 在外部网关中填写该地址与 Token，让网关连接 AstrBot；不要同时启用官方机器人与 OneBot，避免重复回复。
 5. OneBot 模式使用网关登录的 QQ 号和数字群号；官方模式使用 AppID/AppSecret 和 openid，两者不要混用。本项目不内置 SnowLuma，也不收集 QQ 密码。
+
+> **平台 ID 不能混用：** 官方机器人的群/用户 ID 是 32 位 openid（如 `6D71B9EAD547FAF9F8970A1C31C22043`），OneBot 的群/用户 ID 是数字 QQ 群号/QQ 号。群白名单、群策略、记忆 scope、人格分组必须按当前平台填写；本项目不会把 openid 和数字群号互相转换。
 
 <a id="console"></a>
 ### 1.4 打开管理控制台

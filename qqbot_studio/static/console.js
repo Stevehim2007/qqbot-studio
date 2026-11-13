@@ -3311,7 +3311,7 @@
     const scopeInput = document.createElement('input');
     scopeInput.type = 'text';
     scopeInput.className = 'group-policy-scope-id';
-    scopeInput.placeholder = '群 openid 或用户 openid';
+    scopeInput.placeholder = '官方：32 位 openid；OneBot：数字群号/QQ 号';
     scopeInput.autocomplete = 'off';
     const loadButton = makeElement('button', 'btn btn-secondary btn-small', '加载策略');
     loadButton.type = 'button';
@@ -3386,7 +3386,13 @@
       content.replaceChildren();
       const templates = Array.isArray(data.templates) ? data.templates : [];
       const summary = makeElement('div', 'group-policy-summary');
-      summary.appendChild(makeElement('span', '', `revision ${data.revision} · ${data.available_plugins.length} 个插件`));
+      const scopeKindLabel = {
+        official_openid: '官方 openid',
+        onebot_numeric: 'OneBot 数字 ID',
+        platform_prefixed: '平台前缀 ID',
+        custom: '自定义 ID',
+      }[data.scope_kind] || '群 ID';
+      summary.appendChild(makeElement('span', '', `${scopeKindLabel} · revision ${data.revision} · ${data.available_plugins.length} 个插件`));
       if (data.degraded) summary.appendChild(makeElement('span', 'group-policy-degraded', '策略库降级，写操作已关闭'));
       content.appendChild(summary);
 
@@ -3569,7 +3575,7 @@
     const loadScope = async () => {
       const scope = currentScope();
       if (!scope.id) {
-        setStatus('请输入群 openid 或用户 openid。', 'error');
+        setStatus('请输入群 ID：官方填 32 位 openid，OneBot 填数字群号/QQ 号。', 'error');
         return;
       }
       setStatus('正在读取策略…');
@@ -3747,7 +3753,7 @@
     heading.appendChild(icon);
     const headingCopy = makeElement('div', 'instance-v3-section-copy');
     headingCopy.appendChild(makeElement('h4', '', '群组白名单'));
-    headingCopy.appendChild(makeElement('p', '', '控制 AstrBot 是否只处理白名单中的群 openid；私聊不受此项影响。'));
+    headingCopy.appendChild(makeElement('p', '', '控制 AstrBot 是否只处理名单中的群 ID：官方机器人是 openid，OneBot 是数字群号；私聊不受影响。'));
     heading.appendChild(headingCopy);
     section.appendChild(heading);
 
@@ -3764,11 +3770,11 @@
     toggleLabel.appendChild(toggleCopy);
     form.appendChild(toggleLabel);
 
-    const idLabel = makeElement('label', 'group-whitelist-label', '群 openid（每行一个）');
+    const idLabel = makeElement('label', 'group-whitelist-label', '群 ID（官方 openid / OneBot 数字群号，每行一个）');
     const ids = document.createElement('textarea');
     ids.rows = 5;
-    ids.placeholder = '例如：\n123456789\n987654321';
-    ids.setAttribute('aria-label', '群 openid 列表');
+    ids.placeholder = '官方 openid 示例：\n6D71B9EAD547FAF9F8970A1C31C22043\nOneBot 数字群号示例：\n123456789';
+    ids.setAttribute('aria-label', '群 ID 列表');
     ids.className = 'group-whitelist-ids';
     idLabel.appendChild(ids);
     form.appendChild(idLabel);
@@ -4995,11 +5001,11 @@
       fields.hidden = true;
 
       const idField = makeElement('label', 'memory-policy-field');
-      idField.appendChild(makeElement('span', 'memory-policy-label', '群 openid'));
+      idField.appendChild(makeElement('span', 'memory-policy-label', '群 ID（openid / 数字群号）'));
       const idInput = document.createElement('input');
       idInput.type = 'text';
       idInput.dataset.field = 'group-id';
-      idInput.placeholder = '如 838796241 或 aiocqhttp:838796241';
+      idInput.placeholder = '官方 openid 或 OneBot 数字群号';
       idInput.value = row.groupId || '';
       idInput.disabled = disabled;
       idField.appendChild(idInput);
@@ -5195,7 +5201,7 @@
         });
       }
       if (firstInvalid) {
-        setPolicyError('请填写每一行群策略的群 openid，或删除该行。');
+        setPolicyError('请填写每一行群策略的群 ID（官方 openid 或 OneBot 数字群号），或删除该行。');
         if (typeof firstInvalid.focus === 'function') firstInvalid.focus();
         return;
       }
@@ -5434,9 +5440,9 @@
       .map((row) => textValue(row && row.group_id, ''))
       .filter((value) => value);
     if (!ids.length) {
-      return 'scope_id 形如 <平台>:<群 openid> 或 <平台>:<用户 openid>（例如 qq_official:6D71...）。';
+      return 'scope_id 形如 平台:ID。官方示例 qq_official:6D71...；OneBot 示例 aiocqhttp:123456789。';
     }
-    return `scope_id 形如 <平台>:<群 openid>；已配置的群 openid：${ids.slice(0, 6).join('、')}（平台名以 AstrBot 适配器为准）。`;
+    return `scope_id 形如 平台:ID；已配置的群 ID：${ids.slice(0, 6).join('、')}（平台名以 AstrBot 适配器为准）。`;
   }
 
   function memoryContentDatalist(instance) {
@@ -6076,7 +6082,7 @@
     scopeInput.type = 'text';
     scopeInput.className = 'memory-content-input';
     scopeInput.value = state.scopeId;
-    scopeInput.placeholder = '群 openid 或 qq_official:群 openid；group_member 填 qq_official:群 openid:用户 openid';
+    scopeInput.placeholder = '官方：qq_official:openid；OneBot：aiocqhttp:数字群号；group_member 再加 :用户 ID';
     scopeInput.setAttribute('list', 'memory-content-scope-ids');
     scopeInput.dataset.memoryContentField = 'scope-id';
     controls.appendChild(memoryContentField(state, 'scope-id', 'Scope ID', scopeInput));

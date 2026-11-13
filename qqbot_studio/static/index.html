@@ -149,7 +149,7 @@
           <div class="welcome-copy">
             <span class="kicker"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>本机安全优先</span>
             <h2 id="env-heading" tabindex="-1">准备一台已安装 Docker 的 Ubuntu</h2>
-            <p id="env-intro">这个向导帮助你接入 QQ 官方机器人：启动 AstrBot 并填写开放平台 AppID/AppSecret。所有操作均在本机浏览器与本地服务之间完成。</p>
+            <p id="env-intro">这个向导帮助你接入 QQ 机器人：官方机器人使用开放平台 AppID/AppSecret；OneBot 使用第三方 QQ 号 + NapCat/外部网关。所有操作均在本机浏览器与本地服务之间完成。</p>
             <p id="env-platform-note" class="field-hint"><strong>注意：</strong>请先在 QQ 开放平台配置机器人并把它加入测试群。重复运行 <code>./start.sh</code> 会创建新实例；管理已有实例请使用 <code>./console.sh</code>。</p>
           </div>
           <div class="welcome-orbit" aria-hidden="true">
@@ -210,7 +210,7 @@
               <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-user"></use></svg></span>
               <div>
                 <h3>QQ 接入方式</h3>
-                <p>官方机器人填 AppID/AppSecret；OneBot 模式连接外部 v11 网关。</p>
+                <p>官方机器人填 AppID/AppSecret；OneBot 模式填第三方 QQ 号，并选择内置 NapCat 或外部 v11 网关。</p>
               </div>
             </div>
 
@@ -220,7 +220,7 @@
                 <option value="official" selected>QQ 官方机器人（推荐）</option>
                 <option value="onebot">外部 OneBot v11 网关</option>
               </select>
-              <p class="field-help">官方群需要群主开启“获取群内全部消息”；OneBot 模式由你运行 NapCat/Lagrange/LLOneBot 等网关，AstrBot 提供反向 WebSocket。</p>
+              <p class="field-help">官方群的群 ID 是 openid，且需要群主开启“获取群内全部消息”；OneBot 的群 ID 是数字群号，由内置 NapCat 或你运行的外部网关登录第三方 QQ。</p>
             </div>
 
             <div id="official-fields">
@@ -244,9 +244,9 @@
 
             <div id="onebot-fields" hidden>
               <div class="field">
-                <label for="onebot-qq">机器人 QQ 号 <span class="required-mark" aria-hidden="true">*</span></label>
+                <label for="onebot-qq">第三方 QQ 号（OneBot）<span class="required-mark" aria-hidden="true">*</span></label>
                 <input id="onebot-qq" name="qq_account" type="text" inputmode="numeric" autocomplete="off" placeholder="例如 123456789">
-                <p class="field-help">该 QQ 号用于登录 OneBot 网关；AstrBot 通过反向 WebSocket 接收网关事件。</p>
+                <p class="field-help">这是要用 NapCat/外部网关登录的个人 QQ 号，不是 QQ 官方机器人 AppID。</p>
                 <p id="onebot-qq-error" class="field-error" role="alert" hidden></p>
               </div>
               <div class="field">

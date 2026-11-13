@@ -1,5 +1,12 @@
 # 更新日志
 
+## v5.0.0-beta.12（测试版）— 官方 openid 与 OneBot 数字 ID 适配
+
+- 群人格配置同时接受官方 32 位 openid 与 OneBot 数字群号，拒绝其他格式。
+- 群策略快照返回 `scope_kind`，Studio 显示“官方 openid / OneBot 数字 ID / 自定义 ID”。
+- 群白名单、群策略、记忆 scope、Food 群位置的文案区分 openid 与数字群号。
+- OneBot 向导明确第三方 QQ 号不是官方机器人 AppID；README 增加平台 ID 不混用说明。
+
 ## v5.0.0-beta.11（测试版）— 实例号按高水位复用
 
 - 新建实例优先复用高水位之下最近的空闲编号；已有 bot-1..7、bot-11 时，下一个是 bot-10。
