@@ -536,6 +536,14 @@
               <div><span class="credential-label" id="platform-account-label">AppID</span><code id="official-appid-status" class="credential-value">未提供</code></div>
               <div><span class="credential-label">连接状态</span><code id="official-connection-status" class="credential-value">检查中</code></div>
             </div>
+            <div id="napcat-login-panel" class="napcat-login-panel" hidden>
+              <img id="napcat-login-qr" class="napcat-login-qr" alt="NapCat 登录二维码" width="180" height="180">
+              <p id="napcat-login-message" class="field-hint">正在读取登录状态…</p>
+              <div class="card-actions">
+                <button id="napcat-login-refresh" class="btn btn-secondary btn-small" type="button">刷新二维码</button>
+                <button id="napcat-login-reset" class="btn btn-quiet btn-small" type="button">重新登录</button>
+              </div>
+            </div>
             <div class="card-actions">
               <a id="napcat-open" class="btn btn-secondary btn-small" href="#" target="_blank" rel="noopener noreferrer" hidden>打开 NapCat 登录<svg class="icon icon-end" aria-hidden="true"><use href="#i-external"></use></svg></a>
               <button id="refresh-official-status" class="btn btn-secondary btn-small" type="button">刷新连接状态</button>

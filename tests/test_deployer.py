@@ -525,6 +525,36 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(deployment["onebot_ws_url"], "")
         self.assertIn("napcat_webui", deployment["urls"])
 
+    def test_napcat_login_state_and_reset(self):
+        config = self.store.load_config()
+        config.update(
+            {
+                "deployed": True,
+                "platform_mode": "onebot",
+                "onebot_gateway": "builtin",
+                "qq_account": "12345678",
+                "napcat_webui_port": 6202,
+                "ports": {"astrbot_webui": 6185},
+            }
+        )
+        self.store.save_config(config)
+        self.manager._container_running = lambda name: True
+        self.manager.get_status = lambda: {"platform_mode": "onebot", "onebot_gateway": "builtin", "napcat_webui_url": "http://127.0.0.1:6202/webui/"}
+        self.manager._napcat_qr_data_url = lambda: "data:image/png;base64,AAAA"
+        state = self.manager.get_napcat_login()
+        self.assertEqual(state["state"], "qr_waiting")
+        self.assertEqual(state["qr_data_url"], "data:image/png;base64,AAAA")
+        qq_dir = self.manager.data_dir / "data" / "napcat" / "qq"
+        qq_dir.mkdir(parents=True, exist_ok=True)
+        (qq_dir / "login.json").write_text("{}", encoding="utf-8")
+        calls = []
+        self.manager.docker.compose = lambda argv, **kwargs: calls.append(tuple(argv))
+        result = self.manager.reset_napcat_login()
+        self.assertTrue(result["ok"])
+        self.assertIn(("restart", "napcat"), calls)
+        self.assertTrue(result["backup"])
+        self.assertFalse(any(qq_dir.iterdir()))
+
     def test_container_actions(self):
         config = self.store.load_config()
         config["deployed"] = True

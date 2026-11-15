@@ -65,6 +65,15 @@ class FakeManager:
         self.dependency_payload = dict(payload or {})
         return {"ok": True, "installed": ["Pillow>=10"], "manual_required": []}
 
+    def get_napcat_login(self):
+        return {"ok": True, "state": "qr_waiting", "qr_data_url": "data:image/png;base64,AAAA"}
+
+    def start_napcat_login(self):
+        return {"ok": True, "state": "starting"}
+
+    def reset_napcat_login(self):
+        return {"ok": True, "state": "qr_waiting", "backup": "/tmp/backup"}
+
     def get_plugins(self):
         return {
             "ok": True,
@@ -899,6 +908,20 @@ class ServerTests(unittest.TestCase):
             "/api/instances/bot-1/aux-budget", {"enabled": "yes"}
         )
         self.assertEqual(status, 400)
+    def test_napcat_login_routes(self):
+        status, body = self._get("/api/instances/bot-1/napcat/login")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["state"], "qr_waiting")
+        status, body = self._post("/api/instances/bot-1/napcat/login/start", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["state"], "starting")
+        status, body = self._post("/api/instances/bot-1/napcat/login/reset", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["backup"], "/tmp/backup")
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get("/api/instances/bot-1/napcat/login", token=False)
+        self.assertEqual(ctx.exception.code, 403)
+
     def test_group_policy_routes_contract_and_token_protection(self):
         calls = []
 

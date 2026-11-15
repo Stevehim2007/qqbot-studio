@@ -2407,3 +2407,5 @@ body.console-modal-open { overflow: hidden; }
   margin-left: auto;
   margin-right: 8px;
 }
+
+.napcat-login-panel{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:12px 0}.napcat-login-qr{background:#fff;border:1px solid var(--border,#d8dee9);border-radius:8px;padding:6px;image-rendering:pixelated}.napcat-login-panel .card-actions{margin:0}

@@ -263,6 +263,17 @@ class AssistantExtensionTests(unittest.TestCase):
 
 
 class AssistantConfigStartTests(unittest.TestCase):
+    @staticmethod
+    def _free_port() -> int:
+        for port in range(9000, 10000):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                try:
+                    sock.bind(("127.0.0.1", port))
+                except OSError:
+                    continue
+                return port
+        raise RuntimeError("no free assistant test port")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -534,11 +545,12 @@ class AssistantConfigStartTests(unittest.TestCase):
             poll_interval=0.01,
         )
         secret = "sk-start-secret-abcdefghijklmnop"
+        free_port = self._free_port()
         configured = manager.save_config(
             {
                 "key_source": "independent",
                 "api_key": secret,
-                "port": 8972,
+                "port": free_port,
                 "host": "127.0.0.1",
             }
         )
@@ -585,7 +597,7 @@ class AssistantConfigStartTests(unittest.TestCase):
             {
                 "key_source": "independent",
                 "api_key": "sk-failing-start-123456",
-                "port": 8973,
+                "port": self._free_port(),
             }
         )
         result = manager.start()
@@ -632,24 +644,25 @@ class AssistantConfigStartTests(unittest.TestCase):
             },
         )
         secret = "sk-public-start-secret-123456"
+        public_port = self._free_port()
         configured = manager.save_config(
             {
                 "key_source": "independent",
                 "api_key": secret,
                 "host": "0.0.0.0",
                 "public_host": "bot.example.com",
-                "port": 8982,
+                "port": public_port,
             }
         )
         self.assertTrue(configured["ok"], configured.get("error"))
         started = manager.start()
         self.assertTrue(started["ok"], started.get("error"))
-        self.assertEqual(started["url"], "http://bot.example.com:8982/")
-        self.assertEqual(started["health_url"], "http://127.0.0.1:8982/")
+        self.assertEqual(started["url"], f"http://bot.example.com:{public_port}/")
+        self.assertEqual(started["health_url"], f"http://127.0.0.1:{public_port}/")
         self.assertNotIn("0.0.0.0", started["url"])
         self.assertIn("安全组", started["access_note"])
         self.assertTrue(health_urls)
-        self.assertTrue(all(url == "http://127.0.0.1:8982/" for url in health_urls))
+        self.assertTrue(all(url == f"http://127.0.0.1:{public_port}/" for url in health_urls))
         self._assert_no_key(started, secret)
 
     def test_stop_uses_tracked_pid_and_is_clean(self):
@@ -669,7 +682,7 @@ class AssistantConfigStartTests(unittest.TestCase):
             {
                 "key_source": "independent",
                 "api_key": "sk-stop-test-123456789",
-                "port": 8974,
+                "port": self._free_port(),
             }
         )
         started = manager.start()
@@ -839,7 +852,7 @@ class AssistantConfigStartTests(unittest.TestCase):
                 "api_key": secret,
                 "host": "0.0.0.0",
                 "public_host": "bot.example.com",
-                "port": 8983,
+                "port": self._free_port(),
             }
         )
         self.assertTrue(configured["ok"], configured.get("error"))

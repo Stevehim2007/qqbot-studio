@@ -544,6 +544,15 @@ class WizardPlatformStaticTests(unittest.TestCase):
         self.assertIn("done", data["shown"])
         self.assertEqual(data["currentStep"], "done")
 
+    def test_napcat_qr_login_ui_contract(self) -> None:
+        self.assertIn('id="napcat-login-panel"', self.index_html)
+        self.assertIn('id="napcat-login-qr"', self.index_html)
+        self.assertIn('id="napcat-login-refresh"', self.index_html)
+        self.assertIn('id="napcat-login-reset"', self.index_html)
+        self.assertIn("refreshNapcatLogin", self.app_js)
+        self.assertIn("/napcat/login/", self.app_js)
+        self.assertIn(".napcat-login-qr", self.styles_css)
+
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_app_javascript_syntax(self) -> None:
         subprocess.run(["node", "--check", str(APP)], check=True)

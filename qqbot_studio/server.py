@@ -1403,6 +1403,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._serve_plugin_api_result(lambda: getter(operation_id))
                     return
+                if subroute == "napcat/login":
+                    getter = getattr(manager, "get_napcat_login", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供 NapCat 登录接口。")
+                        return
+                    self._json(HTTPStatus.OK, getter())
+                    return
                 if subroute == "memory-cards":
                     getter = getattr(manager, "get_memory_cards", None)
                     if not callable(getter):
@@ -1858,6 +1865,22 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 instance_id, subroute = nested
                 ctx.studio.get_instance_meta(instance_id)
                 manager = ctx.studio.get_manager(instance_id)
+                if subroute == "napcat/login/start":
+                    starter = getattr(manager, "start_napcat_login", None)
+                    if not callable(starter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供 NapCat 登录接口。")
+                        return
+                    result = starter()
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "napcat/login/reset":
+                    resetter = getattr(manager, "reset_napcat_login", None)
+                    if not callable(resetter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供 NapCat 登录接口。")
+                        return
+                    result = resetter()
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
                 if self._group_policy_write(manager, subroute, payload):
                     return
                 if subroute == "plugin-migration-plans":

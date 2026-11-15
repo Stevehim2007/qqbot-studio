@@ -1944,6 +1944,56 @@
     return text || fallback;
   }
 
+  let napcatLoginTimer = null;
+
+  async function refreshNapcatLogin(showError = false) {
+    if (napcatLoginTimer) {
+      clearTimeout(napcatLoginTimer);
+      napcatLoginTimer = null;
+    }
+    const panel = $('napcat-login-panel');
+    const deployment = app.state.deployment || {};
+    const builtin = deployment.platform_mode === 'onebot' && deployment.onebot_gateway === 'builtin';
+    if (!panel || !builtin || !INSTANCE_ID) {
+      if (panel) panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    try {
+      const data = await apiRequest(`/api/instances/${encodeURIComponent(INSTANCE_ID)}/napcat/login`);
+      const qr = $('napcat-login-qr');
+      const message = $('napcat-login-message');
+      if (qr) {
+        if (data.qr_data_url) {
+          qr.src = data.qr_data_url;
+          qr.hidden = false;
+        } else {
+          qr.removeAttribute('src');
+          qr.hidden = true;
+        }
+      }
+      if (message) message.textContent = data.message || '等待 NapCat 登录状态…';
+      const state = String(data.state || '');
+      if (state === 'starting' || state === 'qr_waiting') {
+        napcatLoginTimer = setTimeout(() => void refreshNapcatLogin(false), 5000);
+      }
+    } catch (error) {
+      if (showError) showToast(formatError(error, '读取 NapCat 登录状态失败。'), 'error', 5000);
+    }
+  }
+
+  async function handleNapcatLogin(action) {
+    if (!INSTANCE_ID) return;
+    try {
+      const data = await apiRequest(`/api/instances/${encodeURIComponent(INSTANCE_ID)}/napcat/login/${action}`, { method: 'POST', body: {} });
+      if (data && data.ok === false) throw new ApiError(textValue(data.error, '操作失败。'));
+      showToast(action === 'reset' ? '已重置 NapCat 登录，请扫描新二维码。' : '已请求 NapCat 刷新登录。', 'success', 3500);
+      await refreshNapcatLogin(true);
+    } catch (error) {
+      showToast(formatError(error, 'NapCat 登录操作失败。'), 'error', 6000);
+    }
+  }
+
   function renderDashboard() {
     const deployment = app.state.deployment;
     const urls = deployment.urls;
@@ -2015,6 +2065,12 @@
       promptPreview.textContent = deployment.prompt || '尚未读取提示词。提示词模板请在控制台提示词模板库管理。';
     }
 
+    if (isOneBot && builtinGateway) {
+      void refreshNapcatLogin(false);
+    } else {
+      const napcatPanel = $('napcat-login-panel');
+      if (napcatPanel) napcatPanel.hidden = true;
+    }
     updateActionButtons();
   }
 
@@ -2261,6 +2317,10 @@
 
     const refreshConnection = $('refresh-connection');
     if (refreshConnection) refreshConnection.addEventListener('click', () => loadState({ silent: false }));
+    const napcatLoginRefresh = $('napcat-login-refresh');
+    if (napcatLoginRefresh) napcatLoginRefresh.addEventListener('click', () => void handleNapcatLogin('start'));
+    const napcatLoginReset = $('napcat-login-reset');
+    if (napcatLoginReset) napcatLoginReset.addEventListener('click', () => void handleNapcatLogin('reset'));
 
     $$('[data-service-action]').forEach((button) => {
       button.addEventListener('click', () => handleServiceAction(button.dataset.serviceAction));

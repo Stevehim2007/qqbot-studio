@@ -2423,6 +2423,98 @@ class DeployManager:
             payload["error"] = f"读取记忆卡片失败：{exc}"
         return payload
 
+    def _napcat_builtin(self) -> bool:
+        config = self.store.load_config()
+        return (
+            str(config.get("platform_mode") or "") == "onebot"
+            and str(config.get("onebot_gateway") or "") == "builtin"
+        )
+
+    def _napcat_qr_data_url(self) -> str:
+        if not self._napcat_builtin() or not self._container_running(self.napcat_container):
+            return ""
+        try:
+            result = self.docker.exec_in_container(
+                self.napcat_container,
+                ["base64", "-w", "0", "/app/napcat/cache/qrcode.png"],
+                timeout=10,
+            )
+        except Exception:  # noqa: BLE001
+            return ""
+        if result.returncode != 0:
+            return ""
+        try:
+            raw = base64.b64decode(str(result.stdout or "").strip(), validate=True)
+        except (ValueError, TypeError):
+            return ""
+        if not raw.startswith(b"\x89PNG"):
+            return ""
+        return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+
+    def get_napcat_login(self) -> dict[str, Any]:
+        status = self.get_status()
+        running = bool(self._container_running(self.napcat_container))
+        connected = bool(status.get("platform_connected"))
+        qr = self._napcat_qr_data_url() if running and not connected else ""
+        if connected:
+            state = "online"
+        elif not running:
+            state = "offline"
+        elif qr:
+            state = "qr_waiting"
+        else:
+            state = "starting"
+        return {
+            "ok": True,
+            "platform_mode": status.get("platform_mode", ""),
+            "gateway": status.get("onebot_gateway", ""),
+            "running": running,
+            "connected": connected,
+            "state": state,
+            "qr_data_url": qr,
+            "webui_url": status.get("napcat_webui_url", ""),
+            "message": {
+                "online": "NapCat 已登录，OneBot 反向 WS 已连接。",
+                "offline": "NapCat 未运行，请点击登录/修复容器。",
+                "qr_waiting": "请用手机 QQ 扫描下方二维码登录。",
+                "starting": "NapCat 正在启动或生成二维码，请稍后刷新。",
+            }.get(state, ""),
+        }
+
+    def start_napcat_login(self) -> dict[str, Any]:
+        if not self._napcat_builtin():
+            return {"ok": False, "error": "当前实例不是内置 NapCat 模式。"}
+        try:
+            if self._container_running(self.napcat_container):
+                self.docker.compose(["restart", "napcat"], timeout=180)
+            else:
+                self.docker.compose(["up", "-d", "napcat"], timeout=180)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"启动 NapCat 失败：{exc}"}
+        time.sleep(3)
+        return self.get_napcat_login()
+
+    def reset_napcat_login(self) -> dict[str, Any]:
+        if not self._napcat_builtin():
+            return {"ok": False, "error": "当前实例不是内置 NapCat 模式。"}
+        qq_dir = self.data_dir / "data" / "napcat" / "qq"
+        backup = self.data_dir / "data" / "napcat" / f"qq-bak-{int(time.time())}"
+        try:
+            if qq_dir.exists():
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(qq_dir), str(backup))
+            qq_dir.mkdir(parents=True, exist_ok=True)
+            if self._container_running(self.napcat_container):
+                self.docker.compose(["restart", "napcat"], timeout=180)
+            else:
+                self.docker.compose(["up", "-d", "napcat"], timeout=180)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"重置 NapCat 登录失败：{exc}"}
+        time.sleep(3)
+        result = self.get_napcat_login()
+        result["backup"] = str(backup) if backup.exists() else ""
+        return result
+
     def get_memory_policy(self) -> dict[str, Any]:
         """Return the stored per-group long-term memory policy (config only)."""
 

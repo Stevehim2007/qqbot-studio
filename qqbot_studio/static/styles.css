@@ -1324,3 +1324,5 @@ code, pre { font-family: var(--mono); }
     zoom: 1.1;
   }
 }
+
+.napcat-login-panel{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:12px 0}.napcat-login-qr{background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:6px;image-rendering:pixelated}.napcat-login-panel .card-actions{margin:0}
