@@ -2376,6 +2376,7 @@ class DeployManager:
             "limit": max(1, min(100, int(limit or 50))),
             "stats": {},
             "cards": [],
+            "session_state": None,
             "error": "",
         }
         if not db_path.is_file():
@@ -2396,11 +2397,25 @@ class DeployManager:
                 where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
                 rows = connection.execute(
                     f"SELECT id, scope, kind, subtype, title, content, importance, confidence, "
-                    f"clarity, status, updated_at, last_used_at, revision FROM card {where} "
-                    "ORDER BY updated_at DESC LIMIT ?",
+                    f"clarity, status, source_key, polarity, tags, relationship_target, "
+                    f"relationship_kind, source_kind, pinned, use_count, source_turn_ids, "
+                    f"merged_into, expires_at, created_at, updated_at, last_used_at, revision "
+                    f"FROM card {where} ORDER BY updated_at DESC LIMIT ?",
                     (*params, payload["limit"]),
                 ).fetchall()
                 payload["cards"] = [dict(row) for row in rows]
+                if scope:
+                    state_row = connection.execute(
+                        "SELECT conversation_id, session_revision, phase_summary, phase_updated_at, "
+                        "open_topics_json, purpose_json, last_wrapup_revision, updated_at "
+                        "FROM session_state WHERE conversation_id = ?",
+                        (str(scope),),
+                    ).fetchone()
+                    if state_row is not None:
+                        state = dict(state_row)
+                        state["open_topics"] = json.loads(state.pop("open_topics_json") or "[]")
+                        state["purpose"] = json.loads(state.pop("purpose_json") or "{}")
+                        payload["session_state"] = state
             finally:
                 connection.close()
         except (sqlite3.Error, OSError) as exc:

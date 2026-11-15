@@ -4621,7 +4621,12 @@
   function buildMemoryCardsSection(instance) {
     const box = makeElement('div', 'memory-cards-panel');
     const heading = makeElement('div', 'memory-cards-heading');
-    heading.appendChild(makeElement('strong', '', '记忆卡片 v3'));
+    heading.appendChild(makeElement('strong', '', '记忆卡片 v4'));
+    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
+    scopeInput.type = 'text';
+    scopeInput.placeholder = 'group:qq_official:<openid> 或 group:onebot:<群号>';
+    scopeInput.setAttribute('aria-label', '记忆卡片 scope');
+    heading.appendChild(scopeInput);
     const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新');
     refresh.type = 'button';
     heading.appendChild(refresh);
@@ -4634,7 +4639,10 @@
       status.textContent = '正在读取记忆卡片…';
       list.replaceChildren();
       try {
-        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-cards?limit=50`);
+        const scope = scopeInput.value.trim();
+        const query = new URLSearchParams({ limit: '50' });
+        if (scope) query.set('scope', scope);
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-cards?${query.toString()}`);
         if (!data || data.ok === false) {
           status.textContent = (data && data.error) || '记忆卡片接口不可用。';
           return;
@@ -4645,10 +4653,21 @@
         }
         const stats = data.stats || {};
         status.textContent = `活跃 ${Number(stats.active || 0)} 张，归档 ${Number(stats.archived || 0)} 张。`;
-        for (const card of (data.cards || []).slice(0, 8)) {
+        if (data.session_state) {
+          const phase = textValue(data.session_state.phase_summary, '');
+          if (phase) status.textContent += ` 阶段摘要：${phase}`;
+        }
+        for (const card of (data.cards || []).slice(0, 12)) {
           const row = makeElement('div', 'memory-card-row');
           row.appendChild(makeElement('span', 'memory-card-kind', textValue(card.kind, 'card')));
           row.appendChild(makeElement('span', 'memory-card-content', textValue(card.content, '')));
+          const meta = [];
+          if (Number(card.pinned || 0)) meta.push('置顶');
+          if (Number(card.use_count || 0)) meta.push(`用过 ${Number(card.use_count)} 次`);
+          const tags = Array.isArray(card.tags) ? card.tags : [];
+          if (tags.length) meta.push(tags.join(' / '));
+          if (card.relationship_kind) meta.push(textValue(card.relationship_kind, ''));
+          if (meta.length) row.appendChild(makeElement('span', 'memory-card-meta', meta.join(' · ')));
           list.appendChild(row);
         }
       } catch (error) {
@@ -4656,6 +4675,12 @@
       }
     };
     refresh.addEventListener('click', () => void load());
+    scopeInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void load();
+      }
+    });
     void load();
     return box;
   }

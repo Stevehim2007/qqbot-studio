@@ -1,5 +1,14 @@
 # 更新日志
 
+## v5.0.0-beta.14（测试版）— 记忆卡片 v4
+
+- 卡片库 schema v2：新增来源键、极性、标签、关系绑定、置顶、使用次数、过期时间、来源回合、合并去向等字段；旧 v3 数据库按 additive migration 自动升级。
+- 卡片检索改为查询相关性 + 重要性 + 真实使用新近度 + 关系权重 + 开放话题/目的 + 清晰度 + 置顶的排序。
+- 新增会话状态 `session_state`（阶段摘要、最多两个开放话题、purpose、最后收尾 revision）与审计表 `audit_log`。
+- 收尾卡片写入会话状态和审计；卡片 touch 只更新 last_used/use_count，不再重置衰减时钟。
+- Studio 记忆卡片面板显示 v4 版本、置顶/使用次数/标签/关系，并支持按 scope 查询。
+- `qqbot_memory_commands` 版本 4.2.0；插件包 `v4.4.0-beta.36`。
+
 ## v5.0.0-beta.13（测试版）— 内置 NapCat 快速登录与 OneBot 配置修复
 
 - 内置 NapCat 注入 `ACCOUNT`，已有登录态时自动快速登录，不再每次落到二维码。
