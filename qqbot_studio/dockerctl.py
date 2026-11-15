@@ -512,7 +512,7 @@ class DockerController:
     def logs(self, service: str, lines: int = 200) -> str:
         if service != "astrbot":
             raise ValueError("service 只能是 astrbot")
-        lines = max(1, min(int(lines), 1000))
+        lines = max(1, min(int(lines), 5000))
         result = self.compose(
             ["logs", "--no-color", "--tail", str(lines), service],
             timeout=45,

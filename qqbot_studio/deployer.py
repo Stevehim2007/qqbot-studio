@@ -2434,6 +2434,18 @@ class DeployManager:
         if not self._napcat_builtin() or not self._container_running(self.napcat_container):
             return ""
         try:
+            stat_result = self.docker.exec_in_container(
+                self.napcat_container,
+                ["stat", "-c", "%Y", "/app/napcat/cache/qrcode.png"],
+                timeout=10,
+            )
+            if stat_result.returncode == 0:
+                try:
+                    qr_age = time.time() - float(str(stat_result.stdout or "").strip())
+                    if qr_age > 120:
+                        return ""
+                except (TypeError, ValueError):
+                    pass
             result = self.docker.exec_in_container(
                 self.napcat_container,
                 ["base64", "-w", "0", "/app/napcat/cache/qrcode.png"],
@@ -2452,9 +2464,25 @@ class DeployManager:
         return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
 
     def get_napcat_login(self) -> dict[str, Any]:
+        config = self.store.load_config()
+        if not isinstance(config, dict) or not config.get("platform_mode"):
+            # Some callers construct the manager before the instance config is
+            # hydrated; read the on-disk config instead of reporting empty state.
+            try:
+                import json as _json
+
+                config_path = self.data_dir / "config.json"
+                loaded = _json.loads(config_path.read_text(encoding="utf-8-sig"))
+                if isinstance(loaded, dict):
+                    config = loaded
+            except Exception:  # noqa: BLE001
+                pass
         status = self.get_status()
+        platform_mode = str(config.get("platform_mode") or status.get("platform_mode") or "official")
+        gateway = str(config.get("onebot_gateway") or status.get("onebot_gateway") or "external") if platform_mode == "onebot" else "external"
         running = bool(self._container_running(self.napcat_container))
-        connected = bool(status.get("platform_connected"))
+        connected_value = status.get("platform_connected")
+        connected = bool(connected_value) if connected_value is not None else bool(self._detect_platform_connection(platform_mode))
         qr = self._napcat_qr_data_url() if running and not connected else ""
         if connected:
             state = "online"
@@ -2466,8 +2494,8 @@ class DeployManager:
             state = "starting"
         return {
             "ok": True,
-            "platform_mode": status.get("platform_mode", ""),
-            "gateway": status.get("onebot_gateway", ""),
+            "platform_mode": platform_mode,
+            "gateway": gateway,
             "running": running,
             "connected": connected,
             "state": state,
@@ -4938,7 +4966,7 @@ class DeployManager:
 
     def _detect_platform_connection(self, platform_mode: str) -> bool | None:
         try:
-            raw = self.docker.logs("astrbot", 200)
+            raw = self.docker.logs("astrbot", 1200)
         except Exception:
             return None
         if not raw:
@@ -4946,6 +4974,20 @@ class DeployManager:
         if platform_mode == "onebot":
             if "aiocqhttp" in raw and ("适配器已连接" in raw or "adapter" in raw.lower()):
                 return True
+            # The adapter-connected line can rotate out while the bot is still
+            # receiving OneBot traffic.  Any recent aiocqhttp event proves the
+            # reverse WebSocket link is alive.
+            if "qqbot-onebot(aiocqhttp)" in raw:
+                return True
+            try:
+                direct = self.docker._docker(
+                    ["logs", "--tail", "2000", self.docker.ASTRBOT_CONTAINER],
+                    timeout=45,
+                )
+                if direct.ok and "qqbot-onebot(aiocqhttp)" in direct.stdout:
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
             return False
         if "qq_official" in raw and ("Websocket session starting" in raw or "适配器已连接" in raw):
             return True
