@@ -289,6 +289,7 @@ def _compose_yaml(
     image: ${{NAPCAT_IMAGE}}
     container_name: {napcat_container}
     restart: unless-stopped
+    stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
     depends_on:
