@@ -43,10 +43,11 @@
 如果 WorkBuddy/GPT 不可用：
 
 ```text
-新开一个全新上下文的 session
-只让它做架构/任务书
+必须复用同一个已有的 Pro 模型框架 session（固定 session id）
+只让它做架构/任务书/框架修订
 明确禁止它直接改代码
 要求输出 Markdown
+不得每次新建框架 session；只有原 session 丢失/不可恢复时才替换，并记录替换关系
 ```
 
 ## 3. 审查框架

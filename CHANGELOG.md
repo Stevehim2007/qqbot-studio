@@ -1,3 +1,12 @@
+## v5.0.0-beta.16（测试版）— V5 社交与参与模型
+
+- `qqbot_core_reply 4.1.0`：新增 `participation.mode=model`，群内非 @ 消息可由模型输出 `speak/observe` 决定是否接话；@/私聊/命令仍直通，超时/预算/非法 JSON 自动回退旧概率路径。
+- 说话人标签：历史消息带稳定 `actor_hash` 与昵称短码，群内 roster 注入；prompt 不再包含 QQ/openid/群号。
+- `qqbot_safe_tools 3.3.0`：新增 `social_state`，好感度支持模型工具 `favorability_adjust`（模型决定 delta，后端限幅/日上限/冷却/幂等/审计）与只读 `favorability_get`；默认关闭，开启后按定性 tier 注入 prompt。
+- 防刷好感：prompt 强制禁止因夸奖/要求/重复示好加分，批评/拒绝不得扣分，单次克制，不确定不调用，不向用户提及分数。
+- 新增可选 `persona_corpus`（D39）：按 `persona_id + prompt_profile_id` 隔离角色台词/示例，默认关闭，最多注入 2 条/240 字，明确标为非指令。
+- 插件包 `v4.4.0-beta.37`；bot-11 已启用 model 参与、persona corpus 与好感度工具。
+
 ## v5.0.0-beta.15（测试版）— NapCat 二维码登录与 v4 收口
 
 - Studio 新增 NapCat 登录状态/二维码 API：自动读取容器内二维码，不依赖 WebUI。
