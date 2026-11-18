@@ -11,7 +11,7 @@
 | bot-1 | 4.1.1 | 3.3.2 | 4.2.0 | 已是最新 | probability / corpus off / favorability off |
 | bot-4 | 4.1.1 | 3.3.2 | 4.2.0 | food/image/stickers/web 已升级 | probability / corpus off / favorability off |
 | bot-7 | 4.1.1 | 3.3.2 | 4.2.0 | food 已升级 | probability / corpus off / favorability off |
-| bot-11 | 4.1.1 | 3.3.2 | 4.2.0 | 已安装插件最新 | model / corpus on / favorability on |
+| bot-11 | 4.2.0 | 3.3.2 | 4.2.0 | 已安装插件最新 | unified / corpus on / favorability on |
 
 升级只改变代码版本；bot-1/4/7 没有开启模型参与和好感写入，避免生产行为突变。
 
@@ -30,7 +30,7 @@ for i in 1 4 7 11; do
   done
 done
 
-# 3) V5 开关（bot-11 必须是 model/on/on）
+# 3) V5 开关（bot-11 必须是 unified/on/on）
 sudo python3 - <<'PY'
 import json
 base='/home/ubuntu/.local/share/qqbot-studio/instances/bot-11/data/astrbot/config/'
@@ -56,18 +56,18 @@ curl -s http://127.0.0.1:8765/api/instances/bot-11/napcat/login
 | A2 | 群里只 @、不输入文字 | 回“在呢，怎么啦？”；不调用模型、不占 turn |
 | A3 | 私聊发“你好” | 正常回复 |
 | A4 | 群里发一条与机器人无关的普通消息（不带 @） | 模型判定 observe，不回复 |
-| A5 | 群里发“电子羊你怎么看？”（不带 @） | 允许模型判定 speak；最多一次回复 |
+| A5 | 群里发“电子羊你怎么看？”（不带 @） | 不保证必回；模型若接话则正常回复，不接则只输出 [[NO_REPLY]]，不应出现判定器解释 |
 | A6 | @电子羊 发 `/记忆 卡片` | 命令回执；不与主回复重复 |
 | A7 | 连续 @ 两次 | 每次只回一次；没有重复消息 |
 
 证据：聊天截图、AstrBot 日志时间戳、`core.event_bus` 记录。
 
-## 3. P1 参与模型（D37）
+## 3. P1 统一人格参与（D37 unified）
 
 1. **observe**：群内普通闲聊，不应回复；日志应为 `participation action=observe` 或等价记录。
 2. **speak**：明确把话头递给机器人但不 @，应回复一次。
 3. **直通**：@、私聊、显式命令必须绕过模型判定。
-4. **回退**：临时把 `participation.mode` 改回 `probability` 后重启，旧概率路径应恢复；测完改回 `model`。
+4. **回退**：临时把 `participation.mode` 改回 `probability` 后重启，旧概率路径应恢复；测完改回 `unified`。
 5. **预算/冷却**：快速连发 3 条普通消息，最多一次回复；模型每日上限 300，不要在测试中打满。
 6. **空 @**：只 @ 不应触发 `empty_reply_fallback`。
 
@@ -157,7 +157,7 @@ sudo sqlite3 /home/ubuntu/.local/share/qqbot-studio/instances/bot-11/data/astrbo
 
 ## 10. P8 故障恢复
 
-1. 重启 AstrBot：4 个实例 healthy；插件加载 4.1.1/3.3.2/4.2.0；bot-11 模型开关保持。
+1. 重启 AstrBot：4 个实例 healthy；插件加载 4.2.0/3.3.2/4.2.0；bot-11 模型开关保持。
 2. 重启 NapCat：快速登录或二维码状态正确；不把过期二维码显示为等待扫码。
 3. 控制桥 secret 缺失/错误：操作失败关闭，不伪造成功。
 4. 语料文件损坏、social DB 损坏：插件启动不崩溃；有明确日志/降级。
@@ -191,9 +191,16 @@ bot-11 可先关闭 V5 开关（`participation.mode=probability`、`favorability
 ## 14. 建议执行顺序
 
 1. 预检 + P0 冒烟（10 分钟）。
-2. P1 参与模型 + P2 说话人（20 分钟）。
+2. P1 统一人格参与 + P2 说话人（20 分钟）。
 3. P3 语料（10 分钟，需重启一次）。
 4. P4 好感度 + P5 安全（30 分钟，需查 DB）。
 5. P6/P7 回归（20 分钟）。
 6. P8 故障恢复（15 分钟，选做重启）。
 7. 记录证据并给出通过/阻断结论。
+
+
+## 10. unified 模式说明
+
+`participation.mode=unified` 不再单独调用判定器。非 @ 群消息会交给同一个 AstrBot 人格请求：系统提示要求模型自己决定是否接话；不接时只输出 `[[NO_REPLY]]`，core_reply 在 `on_decorating_result` 中丢弃该结果，不发送空消息。@、私聊、命令仍直通。
+
+因此“你怎么看”没有硬编码分支：模型根据人格、最近群聊、说话人和当前语境自行决定；同一句话可能回，也可能不回。代价是每条非 @ 群消息都会跑一次完整生成，生产上应使用群白名单/日预算，并先只在 bot-11 验证。

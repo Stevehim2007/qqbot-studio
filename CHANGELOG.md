@@ -1,3 +1,9 @@
+## v5.0.0-beta.17（测试版）— 统一人格参与
+
+- `qqbot_core_reply 4.2.0`：新增 `participation.mode=unified`。非 @ 群消息不再先调用独立判定器，而是把参与判断放进同一个 AstrBot 人格请求；模型不想接时只输出 `[[NO_REPLY]]`，`on_decorating_result` 丢弃该结果。
+- @、私聊、命令仍直通；`probability`/`model` 模式保留作为低成本回退。
+- 测试计划补充 unified 行为与“你怎么看”说明；单测 253 OK。
+
 ## v5.0.0-beta.16（测试版）— V5 社交与参与模型
 
 - `qqbot_core_reply 4.1.0`：新增 `participation.mode=model`，群内非 @ 消息可由模型输出 `speak/observe` 决定是否接话；@/私聊/命令仍直通，超时/预算/非法 JSON 自动回退旧概率路径。
