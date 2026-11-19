@@ -113,7 +113,7 @@ if [ -f "$DATA_DIR/server.pid" ]; then
 fi
 sleep 2
 
-server_cmd="cd $(printf '%q' "$ROOT_DIR") && exec python3 -m qqbot_studio --host $(printf '%q' "$HOST") --port $(printf '%q' "$PORT") --data-dir $(printf '%q' "$DATA_DIR") --no-browser >> $(printf '%q' "$DATA_DIR/studio-server.log") 2>&1"
+server_cmd="cd $(printf '%q' "$ROOT_DIR") && QQBOT_PLUGIN_CONTROL_ENABLED=1 exec python3 -m qqbot_studio --host $(printf '%q' "$HOST") --port $(printf '%q' "$PORT") --data-dir $(printf '%q' "$DATA_DIR") --no-browser >> $(printf '%q' "$DATA_DIR/studio-server.log") 2>&1"
 if [ -n "$screen_bin" ]; then
   if "$screen_bin" -dmS qqbot-studio-server bash -c "$server_cmd"; then
     echo "started with screen"

@@ -3421,6 +3421,33 @@ class DeployManager:
                 )
             return self._plugin_migration_service
 
+    def _control_bridge_endpoint(self):
+        """Read the per-instance loopback port used inside the container.
+
+        ``DockerExecTransport`` runs inside the AstrBot container, so the port
+        must match the safe-tools plugin config, not the host's global env.
+        """
+        from .plugin_control import endpoint_from_env
+
+        endpoint = endpoint_from_env()
+        try:
+            path = (
+                self.data_dir
+                / "data"
+                / "astrbot"
+                / "config"
+                / "qqbot_safe_tools_config.json"
+            )
+            config = json.loads(path.read_text(encoding="utf-8-sig"))
+            port = int(config.get("control_bridge_port") or 0)
+            if 0 < port < 65536:
+                return endpoint.__class__(
+                    host=endpoint.host, port=port, path=endpoint.path
+                )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        return endpoint
+
     @property
     def plugin_control_bridge(self):
         """Lazily construct the per-instance scoped control bridge.
@@ -3442,7 +3469,7 @@ class DeployManager:
 
                 instance_id = self.instance_id or self.data_dir.name
                 secret_store = ControlSecretStore(self.data_dir)
-                endpoint = endpoint_from_env()
+                endpoint = self._control_bridge_endpoint()
 
                 def transport_factory(_secret: bytes):
                     return DockerExecTransport(

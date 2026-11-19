@@ -179,7 +179,7 @@ def _server_command(studio: StudioManager, host: str, port: int) -> str:
     data = shlex.quote(str(studio.root))
     host_q = shlex.quote(str(host))
     command = (
-        f"cd {root} && exec python3 -m qqbot_studio "
+        f"cd {root} && QQBOT_PLUGIN_CONTROL_ENABLED=1 exec python3 -m qqbot_studio "
         f"--host {host_q} --port {int(port)} --data-dir {data} --no-browser "
         f">>{shlex.quote(str(log_path))} 2>&1"
     )
