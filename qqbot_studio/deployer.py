@@ -2378,7 +2378,15 @@ class DeployManager:
         try:
             data = json.loads(config_path.read_text(encoding="utf-8-sig"))
             profiles = json.loads(data.get("prompt_profiles") or "[]")
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except OSError:
+            # AstrBot runs as root and may rewrite the config as 0600 root.
+            self._repair_plugin_config_permissions(config_path)
+            try:
+                data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+                profiles = json.loads(data.get("prompt_profiles") or "[]")
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                return []
+        except (ValueError, TypeError, json.JSONDecodeError):
             return []
         return [
             {"id": str(item.get("id") or ""), "name": str(item.get("name") or "")}
