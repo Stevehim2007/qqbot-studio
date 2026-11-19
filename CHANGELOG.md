@@ -1,3 +1,11 @@
+## v5.0.0-beta.18（测试版）— V6 情绪与表达状态
+
+- 新增独立插件 `qqbot_expression_state 1.0.0`：情绪 valence/arousal（单事件 ±0.15、45 分钟半衰）与 8 维风格（30 条样本门槛、确定性统计、pin/opt-out/reset/export）。
+- `qqbot_core_reply 4.3.0`：社交块后注入表达块（≤120 字，社交+表达 ≤260），表达块仅作风格参考，不覆盖安全/工具/人格规则。
+- Studio 新增表达状态 API 与面板：按 scope 查看情绪/风格、opt-out、pin 维度、清空、导出。
+- `qqbot_safe_tools 3.3.3`：强化好感度工具提醒；仍由模型决定 delta，后端只做限幅/冷却/幂等/审计。
+- 插件包 `v4.4.0-beta.42`；bot-11 已加载 core 4.3.0 / safe 3.3.3 / expression 1.0.0。
+
 ## v5.0.0-beta.17（测试版）— 统一人格参与
 
 - `qqbot_core_reply 4.2.0`：新增 `participation.mode=unified`。非 @ 群消息不再先调用独立判定器，而是把参与判断放进同一个 AstrBot 人格请求；模型不想接时只输出 `[[NO_REPLY]]`，`on_decorating_result` 丢弃该结果。

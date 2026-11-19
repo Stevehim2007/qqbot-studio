@@ -2409,3 +2409,9 @@ body.console-modal-open { overflow: hidden; }
 }
 
 .napcat-login-panel{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:12px 0}.napcat-login-qr{background:#fff;border:1px solid var(--border,#d8dee9);border-radius:8px;padding:6px;image-rendering:pixelated}.napcat-login-panel .card-actions{margin:0}
+.expression-state-panel { margin-top: 14px; }
+.expression-state-detail { display: grid; gap: 6px; margin-top: 8px; }
+.expression-state-row { color: var(--text-muted, #667085); font-size: 12px; }
+.expression-state-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.expression-state-dimension, .expression-state-value { width: auto; min-width: 92px; }
+.expression-state-export { max-height: 220px; overflow: auto; font-size: 11px; background: var(--surface-muted, #f6f8fa); padding: 8px; }

@@ -2365,6 +2365,156 @@ class DeployManager:
             row["effective_scope"] = row["scope"]
         return row
 
+    def _expression_db_path(self) -> Path:
+        return (
+            self.astrbot_data_dir
+            / "plugin_data"
+            / "qqbot_expression_state"
+            / "expression_state.db"
+        )
+
+    def get_expression_state(self, *, scope: str = "", limit: int = 100) -> dict[str, Any]:
+        """Read the V6 expression sidecar for the Studio memory panel."""
+        db_path = self._expression_db_path()
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": db_path.is_file(),
+            "scope": str(scope or ""),
+            "scopes": [],
+            "state": None,
+            "error": "",
+        }
+        if not db_path.is_file():
+            return payload
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                keys = {
+                    str(row["scope_key"])
+                    for row in connection.execute(
+                        "SELECT scope_key FROM emotion UNION SELECT scope_key FROM style_profile"
+                    ).fetchall()
+                }
+                payload["scopes"] = sorted(keys)[: max(1, min(500, int(limit or 100)))]
+                selected = str(scope or "").strip()
+                if selected:
+                    emotion = connection.execute(
+                        "SELECT valence, arousal, updated_at FROM emotion WHERE scope_key=?",
+                        (selected,),
+                    ).fetchone()
+                    profile = connection.execute(
+                        "SELECT samples, vector, updated_at FROM style_profile WHERE scope_key=?",
+                        (selected,),
+                    ).fetchone()
+                    optout = connection.execute(
+                        "SELECT enabled FROM style_optout WHERE scope_key=?", (selected,)
+                    ).fetchone()
+                    payload["state"] = {
+                        "scope": selected,
+                        "valence": round(float(emotion["valence"]), 4) if emotion else 0.0,
+                        "arousal": round(float(emotion["arousal"]), 4) if emotion else 0.0,
+                        "style_samples": int(profile["samples"]) if profile else 0,
+                        "style": json.loads(profile["vector"]) if profile else {},
+                        "optout": bool(optout and int(optout["enabled"])),
+                    }
+            finally:
+                connection.close()
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            payload["ok"] = False
+            payload["error"] = f"读取表达状态失败：{exc}"
+        return payload
+
+    def set_expression_optout(self, *, scope: str, enabled: bool) -> dict[str, Any]:
+        db_path = self._expression_db_path()
+        if not db_path.is_file():
+            return {"ok": False, "available": False, "error": "表达状态库尚未创建。"}
+        try:
+            connection = sqlite3.connect(db_path, timeout=5.0)
+            try:
+                connection.execute(
+                    "INSERT INTO style_optout(scope_key, enabled, updated_at) VALUES(?,?,?) "
+                    "ON CONFLICT(scope_key) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at",
+                    (str(scope)[:200], 1 if enabled else 0, time.time()),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            return {"ok": True, "scope": str(scope), "optout": bool(enabled)}
+        except (sqlite3.Error, OSError) as exc:
+            return {"ok": False, "error": f"写入表达状态失败：{exc}"}
+
+    def reset_expression_state(self, *, scope: str = "") -> dict[str, Any]:
+        db_path = self._expression_db_path()
+        if not db_path.is_file():
+            return {"ok": False, "available": False, "error": "表达状态库尚未创建。"}
+        try:
+            connection = sqlite3.connect(db_path, timeout=5.0)
+            try:
+                tables = (
+                    "emotion", "emotion_event", "style_observation",
+                    "style_profile", "style_pin", "style_optout",
+                )
+                for table in tables:
+                    if scope:
+                        connection.execute(f"DELETE FROM {table} WHERE scope_key=?", (str(scope)[:200],))
+                    else:
+                        connection.execute(f"DELETE FROM {table}")
+                connection.commit()
+            finally:
+                connection.close()
+            return {"ok": True, "scope": str(scope), "cleared": True}
+        except (sqlite3.Error, OSError) as exc:
+            return {"ok": False, "error": f"清空表达状态失败：{exc}"}
+
+    def set_expression_pin(self, *, scope: str, dimension: str, value: float) -> dict[str, Any]:
+        dims = {
+            "warmth", "directness", "playfulness", "formality",
+            "verbosity", "emoji", "curiosity", "assertiveness",
+        }
+        if str(dimension) not in dims:
+            return {"ok": False, "error": "未知风格维度。"}
+        db_path = self._expression_db_path()
+        if not db_path.is_file():
+            return {"ok": False, "available": False, "error": "表达状态库尚未创建。"}
+        try:
+            connection = sqlite3.connect(db_path, timeout=5.0)
+            try:
+                connection.execute(
+                    "INSERT INTO style_pin(scope_key, dimension, value) VALUES(?,?,?) "
+                    "ON CONFLICT(scope_key, dimension) DO UPDATE SET value=excluded.value",
+                    (str(scope)[:200], str(dimension), max(0.0, min(1.0, float(value)))),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            return {"ok": True, "scope": str(scope), "dimension": str(dimension), "value": max(0.0, min(1.0, float(value)))}
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            return {"ok": False, "error": f"写入风格失败：{exc}"}
+
+    def export_expression_state(self, *, scope: str = "") -> dict[str, Any]:
+        db_path = self._expression_db_path()
+        if not db_path.is_file():
+            return {"ok": False, "available": False, "error": "表达状态库尚未创建。"}
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                where = " WHERE scope_key=?" if scope else ""
+                params = (str(scope)[:200],) if scope else ()
+                out = {
+                    "schema_version": 1,
+                    "scope": str(scope),
+                    "emotion": [dict(row) for row in connection.execute("SELECT * FROM emotion" + where, params)],
+                    "style": [dict(row) for row in connection.execute("SELECT * FROM style_profile" + where, params)],
+                    "optout": [dict(row) for row in connection.execute("SELECT * FROM style_optout" + where, params)],
+                }
+                return {"ok": True, "data": out}
+            finally:
+                connection.close()
+        except (sqlite3.Error, OSError) as exc:
+            return {"ok": False, "error": f"导出表达状态失败：{exc}"}
+
     def get_memory_cards(self, *, scope: str = "", limit: int = 50) -> dict[str, Any]:
         """Read the memory-card sidecar for the Studio memory panel."""
 

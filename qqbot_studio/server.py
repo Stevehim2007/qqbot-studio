@@ -1410,6 +1410,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._json(HTTPStatus.OK, getter())
                     return
+                if subroute == "expression":
+                    getter = getattr(manager, "get_expression_state", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供表达状态接口。")
+                        return
+                    scope = str((query.get("scope") or [""])[0]).strip()
+                    limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
+                    self._json(HTTPStatus.OK, getter(scope=scope, limit=limit))
+                    return
                 if subroute == "memory-cards":
                     getter = getattr(manager, "get_memory_cards", None)
                     if not callable(getter):
@@ -1871,6 +1880,58 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供 NapCat 登录接口。")
                         return
                     result = starter()
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "expression/optout":
+                    setter = getattr(manager, "set_expression_optout", None)
+                    if not callable(setter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供表达状态接口。")
+                        return
+                    scope = str(payload.get("scope") or "").strip()
+                    enabled = payload.get("enabled")
+                    if not scope or not isinstance(enabled, bool):
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "error": "scope 必填，enabled 必须为布尔值。"},
+                        )
+                        return
+                    result = setter(scope=scope, enabled=enabled)
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "expression/pin":
+                    pinner = getattr(manager, "set_expression_pin", None)
+                    if not callable(pinner):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供表达状态接口。")
+                        return
+                    scope = str(payload.get("scope") or "").strip()
+                    dimension = str(payload.get("dimension") or "").strip()
+                    try:
+                        value = float(payload.get("value"))
+                    except (TypeError, ValueError):
+                        value = -1.0
+                    if not scope or not 0.0 <= value <= 1.0:
+                        self._json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "error": "scope 必填，value 必须在 0..1。"},
+                        )
+                        return
+                    result = pinner(scope=scope, dimension=dimension, value=value)
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "expression/reset":
+                    resetter = getattr(manager, "reset_expression_state", None)
+                    if not callable(resetter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供表达状态接口。")
+                        return
+                    result = resetter(scope=str(payload.get("scope") or "").strip())
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "expression/export":
+                    exporter = getattr(manager, "export_expression_state", None)
+                    if not callable(exporter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供表达状态接口。")
+                        return
+                    result = exporter(scope=str(payload.get("scope") or "").strip())
                     self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
                     return
                 if subroute == "napcat/login/reset":

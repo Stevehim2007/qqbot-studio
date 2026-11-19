@@ -4615,7 +4615,141 @@
       section.appendChild(retryButton);
     }
     section.appendChild(buildMemoryCardsSection(instance));
+    section.appendChild(buildExpressionStateSection(instance));
     return section;
+  }
+
+  function buildExpressionStateSection(instance) {
+    const box = makeElement('div', 'memory-cards-panel expression-state-panel');
+    const heading = makeElement('div', 'memory-cards-heading');
+    heading.appendChild(makeElement('strong', '', '表达状态 v6'));
+    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
+    scopeInput.type = 'text';
+    scopeInput.placeholder = 'group:onebot:<群号> 或 group:qq_official:<openid>';
+    scopeInput.setAttribute('aria-label', '表达状态 scope');
+    heading.appendChild(scopeInput);
+    const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新');
+    refresh.type = 'button';
+    heading.appendChild(refresh);
+    box.appendChild(heading);
+    const status = makeElement('p', 'instance-v3-status', '正在读取表达状态…');
+    const detail = makeElement('div', 'expression-state-detail');
+    const actions = makeElement('div', 'expression-state-actions');
+    box.appendChild(status);
+    box.appendChild(detail);
+    box.appendChild(actions);
+    let currentState = null;
+    const load = async () => {
+      status.textContent = '正在读取表达状态…';
+      detail.replaceChildren();
+      actions.replaceChildren();
+      try {
+        const scope = scopeInput.value.trim();
+        const query = new URLSearchParams();
+        if (scope) query.set('scope', scope);
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/expression?${query.toString()}`);
+        if (!data || data.ok === false) {
+          status.textContent = (data && data.error) || '表达状态接口不可用。';
+          return;
+        }
+        if (!data.available) {
+          status.textContent = '当前实例还没有表达状态数据；机器人收到消息后会开始观察。';
+          return;
+        }
+        const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+        status.textContent = scopes.length
+          ? `已记录 ${scopes.length} 个 scope。${scope ? '当前：' + scope : '输入 scope 查看详情。'}`
+          : '暂无 scope。';
+        currentState = data.state || null;
+        if (!currentState) return;
+        const state = currentState;
+        detail.appendChild(makeElement('div', 'expression-state-row', `情绪 valence=${Number(state.valence || 0).toFixed(3)} arousal=${Number(state.arousal || 0).toFixed(3)}`));
+        detail.appendChild(makeElement('div', 'expression-state-row', `风格样本 ${Number(state.style_samples || 0)} 条；${state.optout ? '已 opt-out' : '注入开启'}`));
+        const style = state.style || {};
+        const styleNames = {
+          warmth: '温暖', directness: '直接', playfulness: '俏皮', formality: '正式',
+          verbosity: '话多', emoji: '表情', curiosity: '好奇', assertiveness: '坚定'
+        };
+        const styleText = Object.keys(styleNames).map((key) => `${styleNames[key]} ${Number(style[key] || 0).toFixed(2)}`).join(' · ');
+        if (styleText) detail.appendChild(makeElement('div', 'expression-state-row', styleText));
+        const optoutButton = makeElement('button', 'btn btn-quiet btn-small', state.optout ? '恢复注入' : 'Opt-out');
+        optoutButton.type = 'button';
+        optoutButton.addEventListener('click', async () => {
+          try {
+            const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/expression/optout`, {
+              method: 'POST', body: { scope, enabled: !state.optout }
+            });
+            if (!result || result.ok === false) throw new Error((result && result.error) || '操作失败');
+            await load();
+          } catch (error) { status.textContent = `操作失败：${error.message || error}`; }
+        });
+        actions.appendChild(optoutButton);
+        const resetButton = makeElement('button', 'btn btn-quiet btn-small', '清空此 scope');
+        resetButton.type = 'button';
+        resetButton.addEventListener('click', async () => {
+          if (!(await pluginMarketAskConfirm(detail, '清空该 scope 的情绪、风格与 opt-out？'))) return;
+          try {
+            const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/expression/reset`, {
+              method: 'POST', body: { scope }
+            });
+            if (!result || result.ok === false) throw new Error((result && result.error) || '操作失败');
+            await load();
+          } catch (error) { status.textContent = `清空失败：${error.message || error}`; }
+        });
+        actions.appendChild(resetButton);
+        const exportButton = makeElement('button', 'btn btn-quiet btn-small', '导出');
+        exportButton.type = 'button';
+        exportButton.addEventListener('click', async () => {
+          try {
+            const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/expression/export`, {
+              method: 'POST', body: { scope }
+            });
+            if (!result || result.ok === false) throw new Error((result && result.error) || '导出失败');
+            status.textContent = '导出 JSON（已复制到控制台下方）：';
+            const pre = makeElement('pre', 'expression-state-export', JSON.stringify(result.data || {}, null, 2));
+            detail.appendChild(pre);
+          } catch (error) { status.textContent = `导出失败：${error.message || error}`; }
+        });
+        actions.appendChild(exportButton);
+        const dimensions = [
+          ['warmth', '温暖'], ['directness', '直接'], ['playfulness', '俏皮'], ['formality', '正式'],
+          ['verbosity', '话多'], ['emoji', '表情'], ['curiosity', '好奇'], ['assertiveness', '坚定']
+        ];
+        const select = makeElement('select', 'input expression-state-dimension');
+        for (const [value, label] of dimensions) {
+          const option = makeElement('option', '', label);
+          option.value = value;
+          select.appendChild(option);
+        }
+        const valueInput = makeElement('input', 'input expression-state-value', '0.7');
+        valueInput.type = 'number';
+        valueInput.min = '0';
+        valueInput.max = '1';
+        valueInput.step = '0.05';
+        const pinButton = makeElement('button', 'btn btn-quiet btn-small', '固定风格');
+        pinButton.type = 'button';
+        pinButton.addEventListener('click', async () => {
+          try {
+            const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/expression/pin`, {
+              method: 'POST', body: { scope, dimension: select.value, value: Number(valueInput.value) }
+            });
+            if (!result || result.ok === false) throw new Error((result && result.error) || '写入失败');
+            await load();
+          } catch (error) { status.textContent = `写入风格失败：${error.message || error}`; }
+        });
+        actions.appendChild(select);
+        actions.appendChild(valueInput);
+        actions.appendChild(pinButton);
+      } catch (error) {
+        status.textContent = `读取表达状态失败：${error.message || error}`;
+      }
+    };
+    refresh.addEventListener('click', () => void load());
+    scopeInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); void load(); }
+    });
+    void load();
+    return box;
   }
 
   function buildMemoryCardsSection(instance) {
