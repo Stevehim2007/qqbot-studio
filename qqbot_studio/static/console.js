@@ -4616,6 +4616,7 @@
     }
     section.appendChild(buildMemoryCardsSection(instance));
     section.appendChild(buildExpressionStateSection(instance));
+    section.appendChild(buildPersonaCorpusSection(instance));
     return section;
   }
 
@@ -4746,6 +4747,134 @@
     };
     refresh.addEventListener('click', () => void load());
     scopeInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); void load(); }
+    });
+    void load();
+    return box;
+  }
+
+  function buildPersonaCorpusSection(instance) {
+    const box = makeElement('div', 'memory-cards-panel');
+    const heading = makeElement('div', 'memory-cards-heading');
+    heading.appendChild(makeElement('strong', '', '人格语料库 v5'));
+    const personaInput = makeElement('input', 'input memory-cards-scope', '');
+    personaInput.type = 'text';
+    personaInput.placeholder = 'persona_id（留空=default）';
+    personaInput.setAttribute('aria-label', '人格语料 persona_id');
+    heading.appendChild(personaInput);
+    const profileSelect = makeElement('select', 'input');
+    profileSelect.setAttribute('aria-label', '人格语料 profile');
+    heading.appendChild(profileSelect);
+    const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新');
+    refresh.type = 'button';
+    heading.appendChild(refresh);
+    box.appendChild(heading);
+    const status = makeElement('p', 'instance-v3-status', '正在读取人格语料库…');
+    box.appendChild(status);
+    const list = makeElement('div', 'expression-state-detail');
+    box.appendChild(list);
+    const editor = makeElement('div', 'expression-state-actions');
+    const textArea = makeElement('textarea', 'input');
+    textArea.rows = 3;
+    textArea.placeholder = '一条台词/示例对话/设定，最多 500 字';
+    textArea.style.minWidth = '320px';
+    const kindSelect = makeElement('select', 'input');
+    for (const [value, label] of [['line', '台词'], ['dialogue', '示例对话'], ['setting', '设定']]) {
+      const option = makeElement('option', '', label);
+      option.value = value;
+      kindSelect.appendChild(option);
+    }
+    const tagsInput = makeElement('input', 'input', '');
+    tagsInput.type = 'text';
+    tagsInput.placeholder = '标签，逗号分隔';
+    const addButton = makeElement('button', 'btn btn-quiet btn-small', '添加');
+    addButton.type = 'button';
+    const clearButton = makeElement('button', 'btn btn-quiet btn-small', '清空此人格/Profile');
+    clearButton.type = 'button';
+    editor.appendChild(textArea);
+    editor.appendChild(kindSelect);
+    editor.appendChild(tagsInput);
+    editor.appendChild(addButton);
+    editor.appendChild(clearButton);
+    box.appendChild(editor);
+    const params = () => {
+      const query = new URLSearchParams();
+      const persona = personaInput.value.trim();
+      if (persona) query.set('persona_id', persona);
+      if (profileSelect.value) query.set('profile_id', profileSelect.value);
+      return query;
+    };
+    const load = async () => {
+      status.textContent = '正在读取人格语料库…';
+      list.replaceChildren();
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/persona-corpus?${params().toString()}`);
+        if (!data || data.ok === false) {
+          status.textContent = (data && data.error) || '人格语料库接口不可用。';
+          return;
+        }
+        const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+        const previous = profileSelect.value;
+        profileSelect.replaceChildren();
+        if (!profiles.length) {
+          const option = makeElement('option', '', 'default');
+          option.value = 'default';
+          profileSelect.appendChild(option);
+        } else {
+          for (const profile of profiles) {
+            const option = makeElement('option', '', `${profile.name || profile.id} (${profile.id})`);
+            option.value = profile.id;
+            profileSelect.appendChild(option);
+          }
+          if (previous && profiles.some((profile) => profile.id === previous)) profileSelect.value = previous;
+        }
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        status.textContent = entries.length
+          ? `共 ${entries.length} 条；key=${data.key}`
+          : `暂无语料；key=${data.key}`;
+        for (const [index, entry] of entries.entries()) {
+          const row = makeElement('div', 'expression-state-row', `${index + 1}. [${entry.kind || 'line'}] ${entry.text || ''}`);
+          if (Array.isArray(entry.tags) && entry.tags.length) row.textContent += `  #${entry.tags.join(' #')}`;
+          list.appendChild(row);
+        }
+      } catch (error) {
+        status.textContent = `读取人格语料库失败：${error.message || error}`;
+      }
+    };
+    addButton.addEventListener('click', async () => {
+      const text = textArea.value.trim();
+      if (!text) { status.textContent = '请先输入语料内容。'; return; }
+      try {
+        const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/persona-corpus`, {
+          method: 'POST',
+          body: {
+            persona_id: personaInput.value.trim(),
+            profile_id: profileSelect.value,
+            text,
+            kind: kindSelect.value,
+            tags: tagsInput.value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
+          },
+        });
+        if (!result || result.ok === false) throw new Error((result && result.error) || '添加失败');
+        textArea.value = '';
+        tagsInput.value = '';
+        await load();
+      } catch (error) { status.textContent = `添加失败：${error.message || error}`; }
+    });
+    clearButton.addEventListener('click', async () => {
+      if (!(await pluginMarketAskConfirm(list, '清空该 persona/profile 的全部语料？'))) return;
+      try {
+        const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/persona-corpus/clear`, {
+          method: 'POST',
+          body: { persona_id: personaInput.value.trim(), profile_id: profileSelect.value },
+        });
+        if (!result || result.ok === false) throw new Error((result && result.error) || '清空失败');
+        await load();
+      } catch (error) { status.textContent = `清空失败：${error.message || error}`; }
+    });
+    refresh.addEventListener('click', () => void load());
+    profileSelect.addEventListener('change', () => void load());
+    personaInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); void load(); }
     });
     void load();

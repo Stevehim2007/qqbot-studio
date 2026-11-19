@@ -2365,6 +2365,113 @@ class DeployManager:
             row["effective_scope"] = row["scope"]
         return row
 
+    def _persona_corpus_path(self) -> Path:
+        return (
+            self.astrbot_data_dir
+            / "plugin_data"
+            / "qqbot_core_reply"
+            / "persona_corpus.json"
+        )
+
+    def _persona_corpus_profiles(self) -> list[dict[str, Any]]:
+        config_path = self.astrbot_data_dir / "config" / "qqbot_core_reply_config.json"
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+            profiles = json.loads(data.get("prompt_profiles") or "[]")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return []
+        return [
+            {"id": str(item.get("id") or ""), "name": str(item.get("name") or "")}
+            for item in profiles
+            if isinstance(item, dict) and item.get("id")
+        ]
+
+    def get_persona_corpus(self, *, persona_id: str = "", profile_id: str = "") -> dict[str, Any]:
+        path = self._persona_corpus_path()
+        key = f"{persona_id or 'default'}::{profile_id or 'default'}"
+        payload: dict[str, Any] = {
+            "ok": True,
+            "path": str(path),
+            "key": key,
+            "profiles": self._persona_corpus_profiles(),
+            "entries": [],
+        }
+        if not path.is_file():
+            return payload
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            entries = data.get(key, []) if isinstance(data, dict) else []
+            payload["entries"] = [item for item in entries if isinstance(item, dict)]
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            payload["ok"] = False
+            payload["error"] = f"读取人格语料库失败：{exc}"
+        return payload
+
+    def add_persona_corpus_entry(
+        self,
+        *,
+        persona_id: str = "",
+        profile_id: str = "",
+        text: str,
+        kind: str = "line",
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        clean = str(text or "").strip()
+        if not clean:
+            return {"ok": False, "error": "语料内容不能为空。"}
+        if len(clean) > 500:
+            return {"ok": False, "error": "单条语料不能超过 500 字。"}
+        allowed = {"line", "dialogue", "setting"}
+        kind = kind if kind in allowed else "line"
+        tag_values = [str(tag).strip()[:24] for tag in (tags or []) if str(tag).strip()][:8]
+        path = self._persona_corpus_path()
+        key = f"{persona_id or 'default'}::{profile_id or 'default'}"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": f"读取人格语料库失败：{exc}"}
+        if not isinstance(data, dict):
+            data = {}
+        items = data.setdefault(key, [])
+        if not isinstance(items, list):
+            items = []
+            data[key] = items
+        if len(items) >= 500:
+            return {"ok": False, "error": "该人格语料已达到 500 条上限。"}
+        entry = {"kind": kind, "text": clean, "tags": tag_values}
+        items.append(entry)
+        encoded = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        if len(encoded) > 2 * 1024 * 1024:
+            return {"ok": False, "error": "人格语料库超过 2MB 上限。"}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_bytes(encoded)
+            tmp.replace(path)
+            try:
+                path.chmod(0o666)
+            except OSError:
+                pass
+        except OSError as exc:
+            return {"ok": False, "error": f"写入人格语料库失败：{exc}"}
+        return {"ok": True, "key": key, "entry": entry, "count": len(items)}
+
+    def clear_persona_corpus(self, *, persona_id: str = "", profile_id: str = "") -> dict[str, Any]:
+        path = self._persona_corpus_path()
+        key = f"{persona_id or 'default'}::{profile_id or 'default'}"
+        if not path.is_file():
+            return {"ok": True, "key": key, "cleared": True}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.pop(key, None)
+                tmp = path.with_suffix(path.suffix + ".tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp.replace(path)
+            return {"ok": True, "key": key, "cleared": True}
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": f"清空人格语料库失败：{exc}"}
+
     def _expression_db_path(self) -> Path:
         return (
             self.astrbot_data_dir

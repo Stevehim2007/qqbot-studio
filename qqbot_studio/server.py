@@ -1419,6 +1419,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
                     self._json(HTTPStatus.OK, getter(scope=scope, limit=limit))
                     return
+                if subroute == "persona-corpus":
+                    getter = getattr(manager, "get_persona_corpus", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供人格语料库接口。")
+                        return
+                    persona_id = str((query.get("persona_id") or [""])[0]).strip()
+                    profile_id = str((query.get("profile_id") or [""])[0]).strip()
+                    self._json(HTTPStatus.OK, getter(persona_id=persona_id, profile_id=profile_id))
+                    return
                 if subroute == "memory-cards":
                     getter = getattr(manager, "get_memory_cards", None)
                     if not callable(getter):
@@ -1880,6 +1889,31 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供 NapCat 登录接口。")
                         return
                     result = starter()
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "persona-corpus":
+                    adder = getattr(manager, "add_persona_corpus_entry", None)
+                    if not callable(adder):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供人格语料库接口。")
+                        return
+                    result = adder(
+                        persona_id=str(payload.get("persona_id") or "").strip(),
+                        profile_id=str(payload.get("profile_id") or "").strip(),
+                        text=str(payload.get("text") or ""),
+                        kind=str(payload.get("kind") or "line").strip(),
+                        tags=payload.get("tags") if isinstance(payload.get("tags"), list) else [],
+                    )
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "persona-corpus/clear":
+                    clearer = getattr(manager, "clear_persona_corpus", None)
+                    if not callable(clearer):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供人格语料库接口。")
+                        return
+                    result = clearer(
+                        persona_id=str(payload.get("persona_id") or "").strip(),
+                        profile_id=str(payload.get("profile_id") or "").strip(),
+                    )
                     self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
                     return
                 if subroute == "expression/optout":

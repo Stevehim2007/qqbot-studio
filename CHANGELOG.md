@@ -1,3 +1,11 @@
+## v5.0.0-beta.19（测试版）— 人格会话绑定与记忆卡治理
+
+- `qqbot_core_reply 4.3.1`：AstrBot memory 模式下新增 `persona.agent_bridge_enabled`，把当前 prompt profile 同步为 AstrBot 会话人格；人格切换时新建/重绑会话，避免旧人格和历史把“麻衣”回答成旧身份。
+- 麻衣提示词加入群聊回应原则：默认不接、无点名/直接提问不回复、不必要时只输出 `[[NO_REPLY]]`。
+- Studio 新增人格语料库入口/API：按 persona/profile 增删角色台词、示例对话、设定片段，支持标签和清空。
+- `qqbot_memory_commands 4.2.1`：wrapup 生成记忆卡前清洗 `[[NO_REPLY]]`、mqqapi、markdown 链接和 @ 噪声；空内容不再落库。
+- 已清理 bot-1/bot-11 历史脏卡片（备份后删除重复/媒体/噪声 episode），并补写入侧过滤防复发。
+
 ## v5.0.0-beta.18（测试版）— V6 情绪与表达状态
 
 - 新增独立插件 `qqbot_expression_state 1.0.0`：情绪 valence/arousal（单事件 ±0.15、45 分钟半衰）与 8 维风格（30 条样本门槛、确定性统计、pin/opt-out/reset/export）。
