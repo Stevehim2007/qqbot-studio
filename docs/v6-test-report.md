@@ -3,8 +3,8 @@
 测试时间：2026-11-19；对象 bot-11（OneBot 291690445）；输入源 bot-1 官方主动消息 API。
 
 ## 结果摘要
-- 单元测试：core 255 OK；safe_tools 230 OK；expression 7 OK；deployer 31 OK；server 46 OK；主项目 `875 OK`。
-- 插件加载：`qqbot_expression_state 1.0.0`、core 4.3.0、safe_tools 3.3.3 均加载；OneBot 适配器已连接。
+- 单元测试：core 255 OK；safe_tools 231 OK；expression 7 OK；deployer 31 OK；server 46 OK；主项目 `875 OK`。
+- 插件加载：`qqbot_expression_state 1.0.0`、core 4.3.0、safe_tools 3.3.5 均加载；OneBot 适配器已连接。
 - 真实观察：`expression_state.db` 记录 38 条风格观察，已生成 8 维风格向量；群 scope 为 `group:onebot:291690445`。
 - Studio API：`GET /api/instances/bot-11/expression` 返回情绪/风格/optout；测试 scope 的 optout、pin、export、reset 均成功。
 - prompt hook：`safe_tools hook: instruction_chars=651 injected=True`；表达块由 `PersonaService.expression_context()` 读取，缺插件/optout 时为空。
@@ -15,8 +15,17 @@
 - 风格：38 条样本，warmth≈0.06、directness≈0.25、verbosity≈0.19，其余维度≈0；`style_ready=true`。
 - 风格向量低值是正常结果：测试语料以短句陈述为主，未出现高情绪/高 emoji 文本。
 
+## P4 好感度端到端（已通过）
+- 真实消息：“电子羊，你上次建议我煮面加个蛋，我试了，确实更好吃，谢谢你。”
+- 模型自主输出 `[[tool:favorability_adjust delta=1 confidence=0.8 reason="采纳了煮面加蛋的建议并反馈确实更好吃"]]`。
+- safe_tools 直接执行 self-owned marker，未经过 ABI dispatcher；`social_state.db` 创建成功。
+- `favorability`：scope `291690445`，actor_hash `2bc3a6f2b858190a`，score `1.0`。
+- `favorability_event`：delta `1.0`、reason_code `model_tool`、event_label `advice_worked`、source `model_tool`。
+- 回复正文正常发送，没有追加“工具执行失败”提示。
+- 根因链：self-owned descriptor 未 advertised → ABI dispatcher 无 provider → kwargs 展开与 `(context, args)` 签名不匹配 → `_social_scope_actor` 把 `AstrMessageEvent` 当 `RequestContext` 读，返回 `no_actor`。四处均已修复。
+
 ## 未通过 / 限制
-- P4 好感度端到端“模型主动调用 `favorability_adjust`”未触发：模型拒绝用户强行要求贴 marker，说明防刷提示词生效，但真实调用证据不足；safe_tools 的单测 230 OK。
+- 真实 @、私聊、多用户说话人无法只靠 bot-1 官方主动 API 制造；bot-4/7 不在测试群。
 - 真实 @、私聊、多用户说话人无法只靠 bot-1 官方主动 API 制造；bot-4/7 不在测试群。
 - 表达块的“文风是否真的改变回复”仍是软约束，未做 A/B 人工评分。
 
