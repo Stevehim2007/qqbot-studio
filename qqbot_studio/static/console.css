@@ -2415,3 +2415,110 @@ body.console-modal-open { overflow: hidden; }
 .expression-state-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
 .expression-state-dimension, .expression-state-value { width: auto; min-width: 92px; }
 .expression-state-export { max-height: 220px; overflow: auto; font-size: 11px; background: var(--surface-muted, #f6f8fa); padding: 8px; }
+
+/* ------------------------------------------------------------------
+   Memory settings polish: consistent inputs, focus rings, buttons
+   ------------------------------------------------------------------ */
+.memory-policy-section .memory-policy-field select,
+.memory-policy-section .memory-policy-field input,
+.memory-policy-section .memory-policy-budget-field input,
+.memory-content-section .memory-content-input,
+.memory-content-section .memory-content-textarea,
+.memory-content-section .memory-content-import input[type="file"] {
+  min-height: 36px;
+  padding: 0 11px;
+  color: #20303d;
+  background: #fff;
+  border: 1px solid #d5e1ea;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 1px 2px rgba(16, 42, 64, .04);
+  transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+}
+.memory-policy-section .memory-policy-field select:focus,
+.memory-policy-section .memory-policy-field input:focus,
+.memory-policy-section .memory-policy-budget-field input:focus,
+.memory-content-section .memory-content-input:focus,
+.memory-content-section .memory-content-textarea:focus,
+.memory-content-section .memory-content-import input[type="file"]:focus {
+  outline: none;
+  border-color: #56a8d8;
+  box-shadow: 0 0 0 3px rgba(86, 168, 216, .14), 0 1px 2px rgba(16, 42, 64, .04);
+}
+.memory-policy-section .memory-policy-field select:hover,
+.memory-policy-section .memory-policy-field input:hover,
+.memory-policy-section .memory-policy-budget-field input:hover,
+.memory-content-section .memory-content-input:hover,
+.memory-content-section .memory-content-textarea:hover {
+  border-color: #b9cfdd;
+}
+.memory-content-section .memory-content-textarea {
+  min-height: 96px;
+  padding: 10px 11px;
+  resize: vertical;
+}
+.memory-policy-section .memory-policy-defaults,
+.memory-policy-section .memory-policy-row {
+  border-radius: 11px;
+  padding: 12px;
+}
+.memory-content-section .memory-content-controls {
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e2ecf3;
+  border-radius: 12px;
+  background: #f8fbfd;
+}
+.memory-content-section .memory-content-field {
+  gap: 6px;
+}
+.memory-policy-section .btn,
+.memory-content-section .btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 650;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .12s ease, background .16s ease;
+}
+.memory-policy-section .btn:hover,
+.memory-content-section .btn:hover {
+  border-color: #b5cfdf;
+  box-shadow: 0 3px 9px rgba(16, 42, 64, .08);
+}
+.memory-policy-section .btn:active,
+.memory-content-section .btn:active {
+  transform: translateY(1px);
+}
+.memory-policy-section .btn:focus-visible,
+.memory-content-section .btn:focus-visible,
+.memory-content-section .memory-content-input:focus-visible {
+  outline: 2px solid rgba(58, 145, 201, .55);
+  outline-offset: 2px;
+}
+.memory-policy-section .memory-policy-save {
+  min-height: 38px;
+  padding-inline: 18px;
+  border-radius: 999px;
+  box-shadow: 0 5px 14px rgba(20, 166, 125, .18);
+}
+.memory-content-section .memory-content-controls .btn {
+  min-height: 36px;
+}
+.memory-content-section .memory-content-record-actions .btn,
+.memory-content-section .memory-content-toolbar .btn {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+@media (max-width: 560px) {
+  .memory-content-section .memory-content-controls { align-items: stretch; }
+  .memory-content-section .memory-content-field,
+  .memory-content-section .memory-content-field:first-child { min-width: calc(50% - 5px); }
+  .memory-content-section .memory-content-controls .btn { flex: 1 1 auto; }
+  .memory-policy-section .memory-policy-field select,
+  .memory-policy-section .memory-policy-field input { width: 100%; }
+}

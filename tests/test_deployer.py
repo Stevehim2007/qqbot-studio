@@ -258,6 +258,37 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(data["instance_id"], "bot-9")
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_memory_cards_maintenance_metrics_rebuild_export(self):
+        db_path = self.manager.astrbot_data_dir / "plugin_data" / "qqbot_memory_commands" / "memory_cards.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(db_path)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE card (id TEXT PRIMARY KEY, scope TEXT, status TEXT, pinned INTEGER DEFAULT 0,
+                  created_at REAL, updated_at REAL, title TEXT, content TEXT, tags TEXT);
+                CREATE VIRTUAL TABLE card_fts USING fts5(card_id UNINDEXED, title, content, tags);
+                CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL, actor_hash TEXT,
+                  action TEXT, target_type TEXT, target_id TEXT, scope TEXT, reason TEXT);
+                CREATE TABLE purpose_usage (result TEXT);
+                """
+            )
+            connection.execute(
+                "INSERT INTO card VALUES ('c1','group:onebot:1','active',1,1,1,'t','hello','[]')"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        metrics = self.manager.memory_cards_maintenance(action="metrics")
+        self.assertTrue(metrics["ok"])
+        self.assertEqual(metrics["metrics"]["active"], 1)
+        rebuilt = self.manager.memory_cards_maintenance(action="rebuild")
+        self.assertTrue(rebuilt["ok"])
+        self.assertEqual(rebuilt["fts_rows"], 1)
+        exported = self.manager.memory_cards_maintenance(action="export", scope="group:onebot:1")
+        self.assertTrue(exported["ok"])
+        self.assertEqual(len(exported["cards"]), 1)
+
     def test_runtime_dependency_check_and_python_install(self):
         requirements = {
             "python": [{"name": "Pillow", "spec": ">=10", "module": "PIL", "description": "图片"}],

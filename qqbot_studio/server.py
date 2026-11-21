@@ -2174,6 +2174,21 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._serve_plugin_api_result(lambda: installer(payload))
                     return
+                if subroute == "memory-cards/maintenance":
+                    maintainer = getattr(manager, "memory_cards_maintenance", None)
+                    if not callable(maintainer):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆卡片维护接口。")
+                        return
+                    self._json(
+                        HTTPStatus.OK,
+                        maintainer(
+                            action=str(payload.get("action") or ""),
+                            scope=str(payload.get("scope") or ""),
+                            card_id=str(payload.get("card_id") or ""),
+                            confirm=str(payload.get("confirm") or ""),
+                        ),
+                    )
+                    return
                 memory_route = self._memory_admin_route(subroute)
                 if memory_route is not None:
                     self._serve_memory_admin(

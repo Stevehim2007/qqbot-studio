@@ -4632,6 +4632,15 @@
     const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新');
     refresh.type = 'button';
     heading.appendChild(refresh);
+    const rebuild = makeElement('button', 'btn btn-quiet btn-small', '重建索引');
+    rebuild.type = 'button';
+    heading.appendChild(rebuild);
+    const sweep = makeElement('button', 'btn btn-quiet btn-small', '清理归档');
+    sweep.type = 'button';
+    heading.appendChild(sweep);
+    const exportButton = makeElement('button', 'btn btn-quiet btn-small', '导出');
+    exportButton.type = 'button';
+    heading.appendChild(exportButton);
     box.appendChild(heading);
     const status = makeElement('p', 'instance-v3-status', '正在读取表达状态…');
     const detail = makeElement('div', 'expression-state-detail');
@@ -4745,6 +4754,30 @@
         status.textContent = `读取表达状态失败：${error.message || error}`;
       }
     };
+    const maintain = async (action) => {
+      status.textContent = '正在执行记忆卡片维护…';
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-cards/maintenance`, {
+          method: 'POST',
+          body: { action, scope: scopeInput.value.trim() }
+        });
+        if (!data || data.ok === false) throw new Error((data && data.error) || '维护失败');
+        if (action === 'export') {
+          status.textContent = `已导出 ${(data.cards || []).length} 张卡片。`;
+        } else if (action === 'rebuild') {
+          status.textContent = `索引已重建：${Number(data.fts_rows || 0)} 行。`;
+        } else if (action === 'sweep') {
+          status.textContent = `已清理 ${Number(data.purged || 0)} 张归档卡片。`;
+        } else {
+          status.textContent = '维护完成。';
+        }
+      } catch (error) {
+        status.textContent = `维护失败：${error.message || error}`;
+      }
+    };
+    rebuild.addEventListener('click', () => void maintain('rebuild'));
+    sweep.addEventListener('click', () => void maintain('sweep'));
+    exportButton.addEventListener('click', () => void maintain('export'));
     refresh.addEventListener('click', () => void load());
     scopeInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); void load(); }

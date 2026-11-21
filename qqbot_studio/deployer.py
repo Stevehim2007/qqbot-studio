@@ -2688,6 +2688,84 @@ class DeployManager:
             payload["error"] = f"读取记忆卡片失败：{exc}"
         return payload
 
+    def _memory_cards_path(self) -> Path:
+        return self.astrbot_data_dir / "plugin_data" / "qqbot_memory_commands" / "memory_cards.db"
+
+    def memory_cards_maintenance(
+        self,
+        *,
+        action: str,
+        scope: str = "",
+        card_id: str = "",
+        confirm: str = "",
+    ) -> dict[str, Any]:
+        """Small, audited maintenance surface for the memory-card sidecar."""
+
+        db_path = self._memory_cards_path()
+        result: dict[str, Any] = {"ok": True, "available": db_path.is_file(), "action": action}
+        if not db_path.is_file():
+            result.update({"ok": False, "error": "memory_cards.db 不存在。"})
+            return result
+        action = str(action or "").strip().lower()
+        allowed = {"metrics", "audit", "export", "rebuild", "sweep", "delete", "purpose"}
+        if action not in allowed:
+            return {"ok": False, "available": True, "error": "不支持的维护动作。"}
+        try:
+            connection = sqlite3.connect(str(db_path), timeout=10.0)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout=5000")
+            try:
+                if action == "metrics":
+                    row = connection.execute(
+                        "SELECT COUNT(*) AS total, "
+                        "SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active, "
+                        "SUM(CASE WHEN status='archived' THEN 1 ELSE 0 END) AS archived, "
+                        "SUM(CASE WHEN pinned=1 THEN 1 ELSE 0 END) AS pinned FROM card"
+                    ).fetchone()
+                    result["metrics"] = {key: int(row[key] or 0) for key in ("total", "active", "archived", "pinned")}
+                elif action == "audit":
+                    rows = connection.execute(
+                        "SELECT id, at, actor_hash, action, target_type, target_id, scope, reason "
+                        "FROM audit_log ORDER BY id DESC LIMIT 100"
+                    ).fetchall()
+                    result["entries"] = [dict(row) for row in rows]
+                elif action == "export":
+                    clauses = " WHERE scope = ?" if scope else ""
+                    params = (str(scope),) if scope else ()
+                    rows = connection.execute("SELECT * FROM card" + clauses + " ORDER BY created_at", params).fetchall()
+                    result["cards"] = [dict(row) for row in rows]
+                elif action == "rebuild":
+                    connection.execute("DELETE FROM card_fts")
+                    connection.execute(
+                        "INSERT INTO card_fts(card_id,title,content,tags) "
+                        "SELECT id,title,content,tags FROM card WHERE status='active'"
+                    )
+                    connection.commit()
+                    result["fts_rows"] = int(connection.execute("SELECT COUNT(*) FROM card_fts").fetchone()[0])
+                elif action == "sweep":
+                    connection.execute(
+                        "DELETE FROM card WHERE status='archived' AND archived_at IS NOT NULL AND archived_at < ?",
+                        (time.time() - 365 * 24 * 60 * 60,),
+                    )
+                    connection.commit()
+                    result["purged"] = int(connection.total_changes or 0)
+                elif action == "delete":
+                    if not card_id or str(confirm) != str(card_id):
+                        return {"ok": False, "available": True, "error": "删除需要 confirm 等于 card_id。"}
+                    connection.execute("DELETE FROM card WHERE id = ?", (str(card_id),))
+                    connection.commit()
+                    result["deleted"] = str(card_id)
+                elif action == "purpose":
+                    rows = connection.execute(
+                        "SELECT result, COUNT(*) AS n FROM purpose_usage GROUP BY result"
+                    ).fetchall()
+                    result["counts"] = {str(row["result"]): int(row["n"]) for row in rows}
+            finally:
+                connection.close()
+        except (sqlite3.Error, OSError) as exc:
+            return {"ok": False, "available": True, "action": action, "error": f"记忆卡片维护失败：{exc}"}
+        return result
+
     def _napcat_builtin(self) -> bool:
         config = self.store.load_config()
         return (

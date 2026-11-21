@@ -1,3 +1,13 @@
+## v5.0.0-beta.20（测试版）— V7 记忆收口与使用手册
+
+- 记忆卡片补齐 FTS5 trigram 索引、48 张归档目标、purpose 使用记录、sweep/export/delete/metrics。
+- 收尾节奏改为阶段摘要每 6 轮、完整收尾每 8 轮，避免 sliding window 重复 episode。
+- 新增 `cards_group_member_enabled` 第六 scope 开关。
+- Studio 记忆卡片面板新增重建索引/清理归档/导出；新增 `/memory-cards/maintenance` API。
+- 新增 `docs/v7-feature-guide.md`，覆盖 V1–V7 功能意义与用法。
+- memory_commands 4.3.0；memory_bank 自动抽取与工具化知识库保持可选。
+- 可选辅助收尾默认关闭，失败回退规则路径。
+
 ## v5.0.0-beta.19（测试版）— 人格会话绑定与记忆卡治理
 
 - `qqbot_core_reply 4.3.1`：AstrBot memory 模式下新增 `persona.agent_bridge_enabled`，把当前 prompt profile 同步为 AstrBot 会话人格；人格切换时新建/重绑会话，避免旧人格和历史把“麻衣”回答成旧身份。
