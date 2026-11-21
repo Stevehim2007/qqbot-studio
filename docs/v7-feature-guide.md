@@ -138,6 +138,17 @@ http://服务器IP:8765/console
 - `unified` 没接话时模型输出 `[[NO_REPLY]]`，core 会清空消息链、标记 `cancelled/not_sent`，不会发空消息。
 - 全量 `unified` 的成本是每条非 @ 消息一次完整生成；不想付费就用 `probability=0`。
 
+### 5.5 群聊非 @ 硬开关
+
+`participation.group_mention_only`（默认 false）是**事件层硬门**，不是概率、不是 judge。
+
+- 开启后：群聊消息如果没有真实 @ 机器人，在进入任何插件业务、记忆观察、工具或模型之前就被 `stop_event()` 丢弃。
+- 私聊、真实 @、空 @ 仍然通过。
+- 关闭后：恢复原来的参与模式（probability/model/unified）。
+- 适合“只允许 @ 触发”的群；不要在业务层再用 `group_probability=0` 模拟，两者语义不同。
+
+bot-11 当前已开启；bot-1/4/7 保持关闭。
+
 ## 6. V4：人格、提示词 profile 与角色语料库
 
 ### 6.1 功能意义
@@ -424,7 +435,7 @@ cd ../qqbot_memory_bank && python3 -m unittest discover -s tests -q
 
 - 主项目：876 tests OK
 - memory_commands：150 tests OK
-- core_reply：255 tests OK
+- core_reply：258 tests OK
 - safe_tools：231 tests OK
 - expression_state：7 tests OK
 - memory_bank：6 tests OK
@@ -465,9 +476,25 @@ cd ../qqbot_memory_bank && python3 -m unittest discover -s tests -q
 - 关闭 V6：`expression_state.enabled=false` 或删除插件。
 - 关闭好感写入：`favorability_enabled=false`，读取仍可用。
 - 关闭卡片注入：`cards_inject_enabled=false`。
-- 回到纯 @ 回复：`participation.mode=probability`、`group_probability=0`、`ambient_group_chat_enabled=false`。
+- 回到纯 @ 回复：`participation.mode=probability`、`group_probability=0`、`ambient_group_chat_enabled=false`；或打开 `participation.group_mention_only=true` 做事件层硬门。
 - 数据库迁移前先备份 `memory_cards.db`、`social_state.db`、`expression_state.db`、`persona_corpus.json`。
 
 ## 14. 一句话总结
 
 V1–V7 现在不是“堆功能”，而是四层控制：**能力/预算控制成本，群策略控制边界，人格/参与控制像不像人，记忆/表达/好感控制长期关系**。需要少回就调参与模式；需要人味就只给测试群开 unified；需要记忆就分卡片、知识库、语料库三条线，不要把所有东西塞进一个 prompt。
+
+## 15. V4.6+ 扩展路线（以后做，条件触发）
+
+这些不是 V7 的欠账，而是 v4 之后的条件扩展；默认都不启用。
+
+| 能力 | 触发条件 | 说明 |
+|---|---|---|
+| 卡片 embedding 融合 | L0 语义检索开启率 >30%，或 BM25 top-k 抽检合格率 <80% | 0.7 BM25 + 0.3 cosine；纯 BM25 回退不变 |
+| 跨会话 LLM 反思 `reflection.cross_session` | full 档、每周一次、默认关 | 只产出报告，不自动改卡 |
+| LLM 语义去重 `fuzzy` | standard 档起 | LLM 只做候选过滤，阈值规则不变 |
+| `card.organize` 卡片整理 | full 档 + 用户确认 | 默认关；需要用户显式开启 |
+| purpose 主动实验评估 | V4.3 上线后收集 offered/used ≥1 个月 | 用数据决定是否改默认值 |
+| 多实例/跨 bot 卡片共享 | 产品线授权 + 同步机制立项 | 不在当前架构内，单独设计 |
+
+原则：V4.6+ 只能“增强”，不能改变 V4.1–V4.5 的确定性基线；任何增强失败都必须回退到 BM25/规则路径。
+
