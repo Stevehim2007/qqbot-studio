@@ -530,6 +530,7 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
         # `policy.scope` stopped embedding every plugin schema (hundreds of
         # fields); the page must backfill per plugin before rendering.
         self._has(self.console_js, (
+            "`${scopePath(scope)}?include_schema=0`",
             "if (!data.schemas || !Object.keys(data.schemas).length) {",
             "const pluginIds = Array.isArray(data.available_plugins) ? data.available_plugins : [];",
             "group-param-schema/${encodeURIComponent(id)}",

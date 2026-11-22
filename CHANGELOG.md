@@ -1,3 +1,14 @@
+## v5.0.0-beta.32（测试版）— 群策略接口默认返回精简快照
+
+- `GET group-policies/<type>/<id>` 默认按 `include_schema=0` 返回，前端显式带上该参数：
+  内嵌 500+ 字段的完整快照有 215KB，超过插件桥 64KiB 响应上限会直接
+  `response_too_large`，群策略页因此打不开；精简快照只回 `schema_digests`，前端再逐插件惰性
+  拉 `group-param-schema/<plugin>`。
+- `?include_schema=1` 仍可显式要求内嵌 schema（本地调试/小插件集）。
+- 需配套 `qqbot_safe_tools 3.4.1`（`v4.4.0-beta.65`）：把 `include_schema` 透传到
+  `policy.scope`，此前该参数在控制桥里被丢弃。
+- 测试：主项目 897、server 49、策略 UI 静态契约 35。
+
 ## v5.0.0-beta.31（测试版）— 插件参数一键加入群策略
 
 - 插件参数编辑器每个字段新增「加入群策略」开关：登记 `plugin_id + 参数路径`，群策略页即可按群覆盖该参数，不再只能在群策略页里翻已有参数。

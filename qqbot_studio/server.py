@@ -735,7 +735,9 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 )
             )
             return True
-        include_values = query.get("include_schema") or ["1"]
+        # Default to the lean payload: the embedded schema (500+ fields across
+        # installed plugins) exceeds the plugin bridge's 64KiB response cap.
+        include_values = query.get("include_schema") or ["0"]
         include_schema = str(include_values[0]).strip().lower() not in {"0", "false", "no", "off", ""}
         self._serve_control_result(
             lambda: self._attach_plugin_configs(

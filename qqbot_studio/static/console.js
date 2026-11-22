@@ -4221,7 +4221,7 @@
       content.replaceChildren(makeElement('p', 'plugin-config-loading', '正在读取分群策略…'));
       await loadPolicyPrefs();
       try {
-        const data = await apiRequest(scopePath(scope));
+        const data = await apiRequest(`${scopePath(scope)}?include_schema=0`);
         if (!data.schemas || !Object.keys(data.schemas).length) {
           // The scope snapshot no longer ships every plugin's schema; fetch it
           // per plugin only when a scope is actually open.

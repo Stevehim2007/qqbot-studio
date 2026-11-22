@@ -970,18 +970,19 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(calls[-1][0], "policy.scope")
         self.assertEqual(
             calls[-1][2],
-            {"scope_type": "group", "scope_id": "1056821876", "include_schema": True},
+            {"scope_type": "group", "scope_id": "1056821876", "include_schema": False},
         )
         self.assertEqual(json.loads(body)["plugin_configs"]["qqbot_food"]["food_max_results"], 7)
         self.assertEqual(
             json.loads(body)["plugin_configs"]["qqbot_core_reply"]["participation.group_probability"],
             0.0,
         )
+        self.assertFalse(calls[-1][2]["include_schema"])
         status, body = self._get(
-            "/api/instances/bot-1/group-policies/group/1056821876?include_schema=0"
+            "/api/instances/bot-1/group-policies/group/1056821876?include_schema=1"
         )
         self.assertEqual(status, 200)
-        self.assertFalse(calls[-1][2]["include_schema"])
+        self.assertTrue(calls[-1][2]["include_schema"])
         status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876/audit?limit=10&offset=5")
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.audit")
