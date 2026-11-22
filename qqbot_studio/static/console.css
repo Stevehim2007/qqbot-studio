@@ -2522,3 +2522,141 @@ body.console-modal-open { overflow: hidden; }
   .memory-policy-section .memory-policy-field select,
   .memory-policy-section .memory-policy-field input { width: 100%; }
 }
+
+/* Favorability panel */
+.favorability-detail { display: grid; gap: 6px; margin-top: 8px; }
+.favorability-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(127, 127, 127, 0.18);
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.06);
+}
+.favorability-score { color: var(--text-muted, #888); font-variant-numeric: tabular-nums; }
+
+/* Expression scope chips: scope is a partition key, not a free-text search */
+.expression-scope-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.expression-scope-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+/* Knowledge bank */
+.memory-bank-detail { display: grid; gap: 6px; margin-top: 8px; }
+.memory-bank-row {
+  padding: 8px 10px;
+  border: 1px solid rgba(127, 127, 127, 0.18);
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.06);
+}
+.memory-bank-content { margin-bottom: 4px; }
+.memory-bank-meta { color: var(--text-muted, #888); font-size: 12px; }
+
+/* Group policy parameter whitelist and quick-mark table */
+.group-policy-prefs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+.group-policy-prefs-panel,
+.group-policy-marked-panel {
+  border: 1px solid var(--line, #d8dee9);
+  border-radius: 10px;
+  background: var(--surface-soft, #f7f9fc);
+  padding: 12px;
+  margin: 8px 0 12px;
+}
+.group-policy-prefs-panel h5,
+.group-policy-marked-panel h5 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.group-policy-prefs-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.group-policy-prefs-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  background: #fff;
+}
+.group-policy-prefs-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.group-policy-prefs-item input {
+  margin-top: 2px;
+}
+.group-policy-mark-button {
+  align-self: flex-start;
+  margin-top: 2px;
+  min-width: 30px;
+  padding: 2px 8px;
+  color: #b7791f;
+  border-color: #ecc94b;
+  background: #fffbea;
+}
+.group-policy-mark-button:hover {
+  background: #fefcbf;
+}
+.group-policy-marked-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.group-policy-marked-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(140px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.group-policy-marked-label {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.group-policy-marked-row input,
+.group-policy-marked-row select {
+  height: 34px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line, #cbd5e0);
+}
+@media (max-width: 720px) {
+  .group-policy-marked-row {
+    grid-template-columns: 1fr;
+  }
+  .group-policy-marked-row .btn {
+    width: 100%;
+  }
+}
+
+/* Knowledge bank curated import */
+.memory-bank-import {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(120px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 10px;
+}
+.memory-bank-import .input {
+  height: 36px;
+  border-radius: 10px;
+}
+.memory-bank-row .btn-danger {
+  margin-top: 6px;
+}
+@media (max-width: 720px) {
+  .memory-bank-import { grid-template-columns: 1fr; }
+  .memory-bank-import .btn { width: 100%; }
+}

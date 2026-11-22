@@ -3236,6 +3236,11 @@
 
   const GROUP_POLICY_PARAM_META = {
     'participation.reply_probability': ['非 @ 接话概率', '群聊里没有 @ 机器人时，按这个概率随机参与；0 表示不主动接话。'],
+    'participation.mode': ['AI 参与模式', 'probability=概率；model=独立小模型判定；unified=同一人格一次生成、不接输出 NO_REPLY。'],
+    'participation.model_confidence': ['model 置信阈值', 'model 模式下，判定器 speak 置信度低于该值按 observe 处理。'],
+    'participation.unified_require_name': ['unified 必须点名', '开启后，unified 模式只有消息含人格名/别名才进入完整生成。'],
+    'participation.unified_names': ['unified 人格别名', '该群可唤醒机器人的人格名/别名列表，逗号分隔。'],
+    'participation.group_mention_only': ['群聊只允许 @', '开启后，没有真实 @ 的群消息在事件层直接丢弃，私聊不受影响。'],
     'participation.timezone': ['时区', '分群时间段判断使用的 IANA 时区，例如 Asia/Shanghai。'],
     'context.max_chars': ['上下文长度', '送入模型的上下文/输入最大字符数；过大增加成本。'],
     'persona.profile_id': ['人格 Profile', '该群绑定的人格 Profile ID；留空使用实例默认。'],
@@ -3318,10 +3323,30 @@
     toolbar.append(scopeSelect, scopeInput, loadButton);
     section.appendChild(toolbar);
 
+    const prefsBar = makeElement('div', 'group-policy-prefs-bar');
+    const manageParamsButton = makeElement('button', 'btn btn-secondary btn-small', '参数名单');
+    manageParamsButton.type = 'button';
+    const markedParamsButton = makeElement('button', 'btn btn-secondary btn-small', '标记表');
+    markedParamsButton.type = 'button';
+    prefsBar.append(manageParamsButton, markedParamsButton);
+    section.appendChild(prefsBar);
+
+    const prefsPanel = makeElement('div', 'group-policy-prefs-panel');
+    prefsPanel.hidden = true;
+    section.appendChild(prefsPanel);
+
+    const markedPanel = makeElement('div', 'group-policy-marked-panel');
+    markedPanel.hidden = true;
+    section.appendChild(markedPanel);
+
     const content = makeElement('div', 'group-policy-content');
     section.appendChild(content);
     const auditBox = makeElement('div', 'group-policy-audit');
     section.appendChild(auditBox);
+
+    let policyPrefs = { selected: {}, marked: {} };
+    let latestPolicyData = null;
+    let latestPolicyScope = null;
 
     const setStatus = (message, tone = 'info') => {
       status.textContent = message;
@@ -3382,7 +3407,225 @@
       }
     };
 
+    const policyPrefKey = (pluginId) => String(pluginId || '');
+    const selectedParamsFor = (pluginId) => {
+      const value = policyPrefs.selected && policyPrefs.selected[policyPrefKey(pluginId)];
+      return Array.isArray(value) ? value.map(String) : null;
+    };
+    const markedParamsFor = (pluginId) => {
+      const value = policyPrefs.marked && policyPrefs.marked[policyPrefKey(pluginId)];
+      return new Set(Array.isArray(value) ? value.map(String) : []);
+    };
+    const policyParamVisible = (pluginId, name) => {
+      const selected = selectedParamsFor(pluginId);
+      return selected === null || selected.includes(String(name));
+    };
+
+    const loadPolicyPrefs = async () => {
+      try {
+        const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-prefs`));
+        policyPrefs = {
+          selected: asRecord(data.selected),
+          marked: asRecord(data.marked)
+        };
+      } catch (error) {
+        policyPrefs = { selected: {}, marked: {} };
+        setStatus(formatError(error, '参数名单读取失败，暂按全部参数显示。'), 'error');
+      }
+    };
+
+    const persistPolicyPrefs = async (message = '参数名单已保存。') => {
+      const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-prefs`, {
+        method: 'POST',
+        body: { selected: policyPrefs.selected, marked: policyPrefs.marked }
+      }));
+      policyPrefs = {
+        selected: asRecord(data.selected),
+        marked: asRecord(data.marked)
+      };
+      setStatus(message, 'success');
+    };
+
+    const policyFieldValue = (field, spec) => {
+      const kind = normalizePolicyKind(spec && spec.kind);
+      if (kind === 'boolean') return Boolean(field.checked);
+      if (field.value === '') return undefined;
+      if (kind === 'integer') {
+        const parsed = Number.parseInt(field.value, 10);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      }
+      if (kind === 'number') {
+        const parsed = Number(field.value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      }
+      return field.value;
+    };
+
+    const renderPrefsPanel = (data, scope) => {
+      prefsPanel.replaceChildren();
+      prefsPanel.appendChild(makeElement('h5', '', '群策略修改名单'));
+      prefsPanel.appendChild(makeElement('p', 'group-policy-field-meta',
+        '只把勾选的参数放进群策略修改列表；取消勾选后该参数仍保留原覆盖值，只是不再显示。敏感项不会出现在这里。'));
+      const pluginMeta = new Map(
+        (((instance.v3 || {}).plugins || {}).items || []).map((plugin) => [String(plugin.id || plugin.plugin_id || ''), plugin])
+      );
+      const available = (data.available_plugins || []).filter((pluginId) => (
+        pluginMeta.has(String(pluginId)) || Boolean(data.plugins && data.plugins[pluginId])
+      ));
+      const groups = makeElement('div', 'group-policy-prefs-groups');
+      for (const pluginId of available) {
+        const schema = data.schemas && data.schemas[pluginId] ? data.schemas[pluginId] : {};
+        const params = Object.entries(schema)
+          .filter(([, spec]) => spec && spec.group_overridable && !spec.sensitive);
+        if (!params.length) continue;
+        const group = makeElement('div', 'group-policy-prefs-group');
+        group.appendChild(makeElement('strong', '', pluginId));
+        const selected = selectedParamsFor(pluginId);
+        for (const [name, spec] of params) {
+          const label = makeElement('label', 'group-policy-prefs-item');
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.dataset.prefPlugin = pluginId;
+          box.dataset.prefName = name;
+          box.checked = selected === null ? true : selected.includes(name);
+          label.append(box, document.createTextNode(` ${groupPolicyParamMeta(name, spec).label}（${name}）`));
+          group.appendChild(label);
+        }
+        groups.appendChild(group);
+      }
+      prefsPanel.appendChild(groups);
+      const actions = makeElement('div', 'group-policy-actions');
+      const allButton = makeElement('button', 'btn btn-secondary btn-small', '全选');
+      allButton.type = 'button';
+      allButton.addEventListener('click', () => {
+        prefsPanel.querySelectorAll('[data-pref-plugin]').forEach((box) => { box.checked = true; });
+      });
+      const noneButton = makeElement('button', 'btn btn-secondary btn-small', '全不选');
+      noneButton.type = 'button';
+      noneButton.addEventListener('click', () => {
+        prefsPanel.querySelectorAll('[data-pref-plugin]').forEach((box) => { box.checked = false; });
+      });
+      const save = makeElement('button', 'btn btn-primary btn-small', '保存名单');
+      save.type = 'button';
+      save.addEventListener('click', async () => {
+        const selected = {};
+        for (const box of prefsPanel.querySelectorAll('[data-pref-plugin]')) {
+          const pluginId = String(box.dataset.prefPlugin || '');
+          const name = String(box.dataset.prefName || '');
+          if (!pluginId || !name) continue;
+          if (!selected[pluginId]) selected[pluginId] = [];
+          if (box.checked) selected[pluginId].push(name);
+        }
+        for (const pluginId of available) {
+          if (!Object.prototype.hasOwnProperty.call(selected, pluginId)) selected[pluginId] = [];
+        }
+        policyPrefs.selected = selected;
+        try {
+          await persistPolicyPrefs('修改名单已保存；已按新名单重绘。');
+          if (latestPolicyData && latestPolicyScope) renderScope(latestPolicyData, latestPolicyScope);
+        } catch (error) {
+          setStatus(formatError(error, '保存修改名单失败。'), 'error');
+        }
+      });
+      actions.append(allButton, noneButton, save);
+      prefsPanel.appendChild(actions);
+    };
+
+    const renderMarkedPanel = (data, scope) => {
+      markedPanel.replaceChildren();
+      if (markedPanel.hidden) return;
+      markedPanel.appendChild(makeElement('h5', '', '已标记参数'));
+      const rows = makeElement('div', 'group-policy-marked-rows');
+      let count = 0;
+      for (const [pluginId, names] of Object.entries(policyPrefs.marked || {})) {
+        const schema = data.schemas && data.schemas[pluginId] ? data.schemas[pluginId] : {};
+        const raw = data.plugins && data.plugins[pluginId] ? data.plugins[pluginId] : {};
+        const effective = data.effective && data.effective[pluginId] ? data.effective[pluginId] : {};
+        const policyDefaults = data.defaults && data.defaults[pluginId] ? data.defaults[pluginId] : {};
+        const pluginConfigs = data.plugin_configs && data.plugin_configs[pluginId] ? data.plugin_configs[pluginId] : {};
+        for (const name of Array.isArray(names) ? names : []) {
+          const spec = schema[name];
+          if (!spec) continue;
+          count += 1;
+          const row = makeElement('div', 'group-policy-marked-row');
+          row.appendChild(makeElement('span', 'group-policy-marked-label', `${pluginId} / ${groupPolicyParamMeta(name, spec).label}`));
+          let inherited = effective.params && effective.params[name] !== undefined ? effective.params[name] : undefined;
+          if (inherited === undefined && spec.config_key && pluginConfigs[spec.config_key] !== undefined) inherited = pluginConfigs[spec.config_key];
+          if (inherited === undefined) inherited = policyDefaults[name];
+          let field;
+          const kind = normalizePolicyKind(spec.kind);
+          if (kind === 'boolean') {
+            field = document.createElement('input');
+            field.type = 'checkbox';
+            field.checked = raw.params && raw.params[name] !== undefined ? Boolean(raw.params[name]) : Boolean(inherited);
+          } else if (kind === 'enum') {
+            field = document.createElement('select');
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.textContent = '继承';
+            field.appendChild(empty);
+            (spec.enum || []).forEach((value) => {
+              const option = document.createElement('option');
+              option.value = value;
+              option.textContent = value;
+              field.appendChild(option);
+            });
+            field.value = raw.params && raw.params[name] !== undefined ? String(raw.params[name]) : '';
+          } else {
+            field = document.createElement('input');
+            field.type = kind === 'integer' || kind === 'number' ? 'number' : 'text';
+            if (spec.minimum !== null && spec.minimum !== undefined) field.min = spec.minimum;
+            if (spec.maximum !== null && spec.maximum !== undefined) field.max = spec.maximum;
+            field.value = raw.params && raw.params[name] !== undefined ? String(raw.params[name]) : '';
+            field.placeholder = inherited !== undefined ? String(inherited) : '继承';
+          }
+          row.appendChild(field);
+          const save = makeElement('button', 'btn btn-primary btn-small', '保存');
+          save.type = 'button';
+          save.addEventListener('click', async () => {
+            const parsed = policyFieldValue(field, spec);
+            const params = {};
+            if (parsed !== undefined) params[name] = parsed;
+            setStatus(`正在保存 ${pluginId} / ${name}…`);
+            try {
+              const result = await apiRequest(scopePath(scope, encodeURIComponent(pluginId)), {
+                method: 'POST',
+                body: { enabled: raw.enabled !== undefined ? Boolean(raw.enabled) : Boolean(effective.enabled !== false), params, expected_revision: data.revision }
+              });
+              if (result && result.ok === false) throw new Error(result.message || result.error || 'save failed');
+              setStatus(`${pluginId} / ${name} 已保存。`, 'success');
+              await loadScope();
+            } catch (error) {
+              setStatus(formatError(error, '标记参数保存失败。'), 'error');
+            }
+          });
+          row.appendChild(save);
+          rows.appendChild(row);
+        }
+      }
+      if (!count) {
+        markedPanel.appendChild(makeElement('p', 'instance-v3-empty', '还没有标记参数。展开“参数名单”或在参数旁点星标。'));
+      } else {
+        markedPanel.appendChild(rows);
+      }
+    };
+
+    manageParamsButton.addEventListener('click', () => {
+      prefsPanel.hidden = !prefsPanel.hidden;
+      if (!prefsPanel.hidden && latestPolicyData && latestPolicyScope) {
+        renderPrefsPanel(latestPolicyData, latestPolicyScope);
+      }
+    });
+    markedParamsButton.addEventListener('click', () => {
+      markedPanel.hidden = !markedPanel.hidden;
+      if (!markedPanel.hidden && latestPolicyData && latestPolicyScope) {
+        renderMarkedPanel(latestPolicyData, latestPolicyScope);
+      }
+    });
+
     const renderScope = (data, scope) => {
+      latestPolicyData = data;
+      latestPolicyScope = scope;
       content.replaceChildren();
       const templates = Array.isArray(data.templates) ? data.templates : [];
       const summary = makeElement('div', 'group-policy-summary');
@@ -3490,6 +3733,7 @@
         };
         for (const [name, spec] of Object.entries(schema)) {
           if (!spec.group_overridable || spec.sensitive) continue;
+          if (!policyParamVisible(pluginId, name)) continue;
           const paramMeta = groupPolicyParamMeta(name, spec);
           const label = makeElement('label', 'group-policy-field');
           label.title = paramMeta.title;
@@ -3530,6 +3774,31 @@
             'group-policy-field-meta',
             defaultValue !== undefined ? `${inheritedLabel(name)}：${String(defaultValue)}` : '未设置（跟随插件参数）'
           ));
+          const markButton = makeElement(
+            'button',
+            'btn btn-secondary btn-small group-policy-mark-button',
+            markedParamsFor(pluginId).has(name) ? '★' : '☆'
+          );
+          markButton.type = 'button';
+          markButton.title = '标记后可在“标记表”中快速修改';
+          markButton.setAttribute('aria-label', `标记 ${paramMeta.label}`);
+          markButton.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const marked = { ...(policyPrefs.marked || {}) };
+            const names = new Set(Array.isArray(marked[pluginId]) ? marked[pluginId] : []);
+            if (names.has(name)) names.delete(name); else names.add(name);
+            if (names.size) marked[pluginId] = [...names].sort(); else delete marked[pluginId];
+            policyPrefs.marked = marked;
+            markButton.textContent = names.has(name) ? '★' : '☆';
+            try {
+              await persistPolicyPrefs(names.has(name) ? '已标记参数。' : '已取消标记。');
+              renderMarkedPanel(data, scope);
+            } catch (error) {
+              setStatus(formatError(error, '更新标记失败。'), 'error');
+            }
+          });
+          label.appendChild(markButton);
           card.appendChild(label);
         }
         const actions = makeElement('div', 'group-policy-actions');
@@ -3570,6 +3839,8 @@
         pluginGrid.appendChild(card);
       }
       content.appendChild(pluginGrid);
+      if (!markedPanel.hidden) renderMarkedPanel(data, scope);
+      if (!prefsPanel.hidden) renderPrefsPanel(data, scope);
     };
 
     const loadScope = async () => {
@@ -3580,6 +3851,7 @@
       }
       setStatus('正在读取策略…');
       content.replaceChildren(makeElement('p', 'plugin-config-loading', '正在读取分群策略…'));
+      await loadPolicyPrefs();
       try {
         const data = await apiRequest(scopePath(scope));
         renderScope(data, scope);
@@ -4616,8 +4888,173 @@
     }
     section.appendChild(buildMemoryCardsSection(instance));
     section.appendChild(buildExpressionStateSection(instance));
+    section.appendChild(buildFavorabilitySection(instance));
+    section.appendChild(buildMemoryBankSection(instance));
     section.appendChild(buildPersonaCorpusSection(instance));
     return section;
+  }
+
+  function buildMemoryBankSection(instance) {
+    const box = makeElement('div', 'memory-cards-panel memory-bank-panel');
+    const heading = makeElement('div', 'memory-cards-heading');
+    heading.appendChild(makeElement('strong', '', '知识记忆库'));
+    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
+    scopeInput.type = 'text';
+    scopeInput.placeholder = 'scope，例如 group:onebot:291690445';
+    scopeInput.setAttribute('aria-label', '知识记忆库 scope');
+    heading.appendChild(scopeInput);
+    const personaInput = makeElement('input', 'input memory-cards-scope', '');
+    personaInput.type = 'text';
+    personaInput.placeholder = 'persona_id（可空）';
+    personaInput.setAttribute('aria-label', '知识记忆库人格 ID');
+    heading.appendChild(personaInput);
+    const load = makeElement('button', 'btn btn-quiet btn-small', '查询');
+    load.type = 'button';
+    heading.appendChild(load);
+    box.appendChild(heading);
+    const importRow = makeElement('div', 'memory-bank-import');
+    const importContent = makeElement('input', 'input memory-cards-scope', '');
+    importContent.type = 'text';
+    importContent.placeholder = '导入一条用户资料，例如：用户喜欢喝无糖可乐';
+    importContent.setAttribute('aria-label', '导入知识内容');
+    const importTags = makeElement('input', 'input memory-cards-scope', '');
+    importTags.type = 'text';
+    importTags.placeholder = '标签，可空';
+    importTags.setAttribute('aria-label', '导入知识标签');
+    const importButton = makeElement('button', 'btn btn-primary btn-small', '导入知识');
+    importButton.type = 'button';
+    importRow.append(importContent, importTags, importButton);
+    box.appendChild(importRow);
+    const status = makeElement('p', 'instance-v3-status', '知识记忆库按 scope + persona_id + 用户身份分区；用户导入的 curated 资料为共享只读，AI 提取的记忆只对当前用户可见。');
+    const detail = makeElement('div', 'memory-bank-detail');
+    box.appendChild(status);
+    box.appendChild(detail);
+    const query = async () => {
+      const scope = scopeInput.value.trim();
+      const personaId = personaInput.value.trim();
+      detail.replaceChildren();
+      status.textContent = '正在查询…';
+      try {
+        const params = new URLSearchParams();
+        if (scope) params.set('scope', scope);
+        if (personaId) params.set('persona_id', personaId);
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-bank?${params.toString()}`);
+        if (!data || data.ok === false) { status.textContent = (data && data.error) || '知识记忆库接口不可用。'; return; }
+        if (!data.available) { status.textContent = '该实例还没有知识记忆库。'; return; }
+        const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+        const chips = makeElement('div', 'expression-scope-chips');
+        for (const item of scopes.slice(0, 20)) {
+          const label = `${item.scope}${item.persona_id ? ' / ' + item.persona_id : ''} (${item.total})`;
+          const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', label);
+          chip.type = 'button';
+          chip.addEventListener('click', () => { scopeInput.value = item.scope; personaInput.value = item.persona_id || ''; void query(); });
+          chips.appendChild(chip);
+        }
+        if (chips.childNodes.length) detail.appendChild(chips);
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        status.textContent = scope
+          ? `当前 scope 有 ${entries.length} 条知识。`
+          : '点上方 scope 标签查看知识；每个 persona_id 是独立分区。';
+        for (const entry of entries) {
+          const row = makeElement('div', 'memory-bank-row');
+          row.appendChild(makeElement('div', 'memory-bank-content', entry.content || ''));
+          const actor = entry.actor_hash
+            ? (entry.actor_label ? `${entry.actor_label} / ${String(entry.actor_hash).slice(0, 8)}` : String(entry.actor_hash).slice(0, 8))
+            : '共享';
+          const meta = `${entry.entry_kind || 'legacy'} · actor=${actor} · persona=${entry.persona_id || '(shared)'} · ${entry.tags || '无标签'} · ${entry.source || ''}`;
+          row.appendChild(makeElement('div', 'memory-bank-meta', meta));
+          if (entry.entry_kind === 'curated') {
+            const remove = makeElement('button', 'btn btn-danger btn-small', '删除');
+            remove.type = 'button';
+            remove.addEventListener('click', async () => {
+              status.textContent = '正在删除…';
+              try {
+                const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-bank/delete`, {
+                  method: 'POST',
+                  body: { scope: entry.scope, persona_id: entry.persona_id || '', entry_id: entry.id }
+                });
+                if (!result || result.ok === false) throw new Error((result && result.reason) || '删除失败');
+                await query();
+              } catch (error) { status.textContent = `删除失败：${error.message || error}`; }
+            });
+            row.appendChild(remove);
+          }
+          detail.appendChild(row);
+        }
+      } catch (error) { status.textContent = `查询失败：${error.message || error}`; }
+    };
+    importButton.addEventListener('click', async () => {
+      const scope = scopeInput.value.trim();
+      if (!scope) { status.textContent = '请先填 scope，或点一个 scope 标签。'; return; }
+      status.textContent = '正在导入…';
+      try {
+        const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-bank`, {
+          method: 'POST',
+          body: {
+            scope,
+            persona_id: personaInput.value.trim(),
+            content: importContent.value,
+            tags: importTags.value.trim()
+          }
+        });
+        if (!result || result.ok === false) throw new Error((result && result.reason) || '导入失败');
+        importContent.value = '';
+        importTags.value = '';
+        status.textContent = result.duplicate ? '这条资料已存在，已更新标签。' : '导入成功。';
+        await query();
+      } catch (error) { status.textContent = `导入失败：${error.message || error}`; }
+    });
+    load.addEventListener('click', () => void query());
+    return box;
+  }
+
+  function buildFavorabilitySection(instance) {
+    const box = makeElement('div', 'memory-cards-panel favorability-panel');
+    const heading = makeElement('div', 'memory-cards-heading');
+    heading.appendChild(makeElement('strong', '', '群成员好感度'));
+    const groupInput = makeElement('input', 'input memory-cards-scope', '');
+    groupInput.type = 'text';
+    groupInput.placeholder = '群号（OneBot 数字群号，或官方 group openid）';
+    groupInput.setAttribute('aria-label', '好感度群号');
+    heading.appendChild(groupInput);
+    const load = makeElement('button', 'btn btn-quiet btn-small', '查询');
+    load.type = 'button';
+    heading.appendChild(load);
+    box.appendChild(heading);
+    const status = makeElement('p', 'instance-v3-status', '输入群号后查询该群成员好感度。');
+    const detail = makeElement('div', 'favorability-detail');
+    box.appendChild(status);
+    box.appendChild(detail);
+    const tierLabels = { hostile: '敌对', cold: '冷淡', neutral: '普通', warm: '亲近', close: '亲密' };
+    const query = async () => {
+      const groupId = groupInput.value.trim();
+      detail.replaceChildren();
+      if (!groupId) { status.textContent = '请输入群号。'; return; }
+      status.textContent = '正在查询…';
+      try {
+        const params = new URLSearchParams({ group_id: groupId });
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/favorability?${params.toString()}`);
+        if (!data || data.ok === false) {
+          status.textContent = (data && data.error) || '好感度接口不可用。';
+          return;
+        }
+        if (!data.available) { status.textContent = '该实例还没有好感度数据。'; return; }
+        const members = Array.isArray(data.members) ? data.members : [];
+        status.textContent = members.length ? `群 ${groupId} 共 ${members.length} 个成员有好感度记录。` : '该群暂没有好感度记录。';
+        for (const member of members) {
+          const row = makeElement('div', 'favorability-row');
+          const name = member.actor_label || `用户 ${String(member.actor_hash || '').slice(0, 8)}`;
+          row.appendChild(makeElement('strong', '', name));
+          row.appendChild(makeElement('span', 'favorability-score', `${tierLabels[member.tier] || member.tier} · ${Number(member.score || 0).toFixed(2)}`));
+          detail.appendChild(row);
+        }
+      } catch (error) {
+        status.textContent = `查询失败：${error.message || error}`;
+      }
+    };
+    load.addEventListener('click', () => void query());
+    groupInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') void query(); });
+    return box;
   }
 
   function buildExpressionStateSection(instance) {
@@ -4668,8 +5105,16 @@
         }
         const scopes = Array.isArray(data.scopes) ? data.scopes : [];
         status.textContent = scopes.length
-          ? `已记录 ${scopes.length} 个 scope。${scope ? '当前：' + scope : '输入 scope 查看详情。'}`
-          : '暂无 scope。';
+          ? `已记录 ${scopes.length} 个 scope。scope 是数据分区，不是搜索词；点下方标签即可查看。`
+          : '暂无 scope；机器人收到群消息后会自动生成。';
+        const scopeChips = makeElement('div', 'expression-scope-chips');
+        for (const item of scopes.slice(0, 20)) {
+          const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', item);
+          chip.type = 'button';
+          chip.addEventListener('click', () => { scopeInput.value = item; void load(); });
+          scopeChips.appendChild(chip);
+        }
+        if (scopeChips.childNodes.length) detail.appendChild(scopeChips);
         currentState = data.state || null;
         if (!currentState) return;
         const state = currentState;

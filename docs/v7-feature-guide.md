@@ -84,7 +84,11 @@ http://服务器IP:8765/console
 常用覆盖：
 
 - `core_reply.participation.group_probability`
-- `core_reply.participation.mode`
+- `core_reply.participation.mode`（probability / model / unified，AI 参与入口）
+- `core_reply.participation.model_confidence`
+- `core_reply.participation.unified_require_name`
+- `core_reply.participation.unified_names`
+- `core_reply.participation.group_mention_only`（群聊只允许真实 @）
 - `memory_commands.cards_inject_enabled`
 - `memory_commands.cards_auto_wrapup_enabled`
 - `safe_tools.favorability_enabled`
@@ -148,6 +152,14 @@ http://服务器IP:8765/console
 - 适合“只允许 @ 触发”的群；不要在业务层再用 `group_probability=0` 模拟，两者语义不同。
 
 bot-11 当前已开启；bot-1/4/7 保持关闭。
+
+### 5.6 群策略参数名单与标记表
+
+控制台 → 实例 → **分群策略**：
+
+- **参数名单**：按插件勾选哪些参数出现在群策略编辑区；保存后存到 `<data>/studio-group-policy-prefs.json`，不依赖插件控制桥。
+- **标记表**：点参数字段的 ☆ 标记，常用参数会出现在“标记表”，可直接输入/选择并单条保存；适合只调几个高频参数。
+- 空名单表示该插件不显示参数；恢复默认用“全选”。
 
 ## 6. V4：人格、提示词 profile 与角色语料库
 
@@ -237,6 +249,10 @@ bot-11 当前已开启；bot-1/4/7 保持关闭。
 结果：score +1，写入 favorability_event，不覆盖回复正文
 ```
 
+### 7.6 控制台查询好感度
+
+控制台 → 实例 → **好感度**：输入群号（官方用 openid，OneBot 用数字群号），可查看该群每个成员的 `actor_hash`、昵称、分数、tier、最近事件时间。昵称只用于展示，权限判断仍用 `actor_hash`。
+
 ## 8. V6：表达状态（情绪 + 风格）
 
 ### 8.1 功能意义
@@ -250,7 +266,7 @@ bot-11 当前已开启；bot-1/4/7 保持关闭。
 ### 8.2 使用方法
 
 - 自动：插件 `qqbot_expression_state` 用 `event_message_type(ALL, priority=119)` 观察消息。
-- 控制台 → 实例 → **表达状态**：输入 scope，查看情绪/风格，opt-out、pin、清空、导出。
+- 控制台 → 实例 → **表达状态**：scope 是数据分区键，不是搜索词；格式为 `group:onebot:<数字群号>`、`group:qq_official:<openid>` 或 `user:<platform>:<id>`。面板会列出已有 scope 标签，点选即可查看/调整，不需要手记。
 - 配置：
 
 ```json
@@ -267,7 +283,17 @@ bot-11 当前已开启；bot-1/4/7 保持关闭。
 
 数据库：`<实例>/data/astrbot/plugin_data/qqbot_expression_state/expression_state.db`。
 
-### 8.3 注意
+### 8.3 scope 是什么
+
+表达状态的 scope 是数据分区键，不是搜索词：
+
+- `group:onebot:<数字群号>`：OneBot 群。
+- `group:qq_official:<openid>`：官方群。
+- `user:<platform>:<id>`：用户级。
+
+控制台面板会列出已有 scope，可点击切换；不要手填“关键词”。`pin` 固定某个风格维度，`optout` 关闭该 scope 的观察/注入，`reset` 清空。
+
+### 8.4 注意
 
 - 用户 opt-out 后不观察、不注入。
 - pin 的维度不会被自动 profile 覆盖。
@@ -370,12 +396,19 @@ V7 是本轮重点，分三层：
 
 ### 9.7 知识记忆库（模型工具）
 
+**和记忆卡片的区别**：记忆卡片是对话派生的事件/未完成话题（`memory_cards.db`），不是聊天背景，也不等同于知识库；知识记忆库是显式事实，只有模型调用 `memory_search` 时才取，不默认进 prompt。两库独立。
+
+**三层分区**：知识库按 `scope + persona_id + actor_hash` 分区。`actor_hash` 是当前用户身份（昵称仅展示，不作为权限凭据）；用户导入的 `curated` 条目为共享只读，AI 提取的 `ai` 条目只对当前用户可见。旧数据迁移为 `entry_kind=legacy`、`actor_hash=''`，作为兼容共享区。
+
+控制台 → 实例 → **知识记忆库**：可按 scope/persona 查看，导入 curated 资料，删除 curated 条目；模型写入/删除只走工具。人格切换后新写入会落到对应 persona 分区。
+
 插件 `qqbot_memory_bank` 与卡片库分离，工具化访问，不默认塞 prompt：
 
 - `memory_add`：模型主动记住事实。
-- `memory_search`：按关键词检索，返回 `[kb-...]` id。
-- `memory_forget`：按 id 删除。
-- 自动抽取：每 4 条用户消息，辅助 LLM 主提取，规则兜底；失败不影响聊天。
+- `memory_search`：按关键词检索当前用户 + 共享 curated，返回 `[kb-...]` id 和 actor/kind 元信息。
+- `memory_forget`：按 id 删除 AI 记忆；curated 条目不能由模型删除。
+- 自动抽取：每 4 条用户消息，辅助 LLM 主提取，规则兜底；按 `scope + actor_hash` 隔离缓冲，失败不影响聊天。
+- `cards_episode_enabled=false` 时关闭规则 episode；长期事实交给知识库。`cards_episode_ai_enabled=true` 时改用辅助 AI 叙事 episode（见 9.9），失败回退规则/不生成。
 
 示例：
 
@@ -390,6 +423,15 @@ V7 是本轮重点，分三层：
 ```
 
 数据库：`<实例>/data/astrbot/plugin_data/qqbot_memory_bank/knowledge.db`。
+
+### 9.9 AI episode（叙事记忆）
+
+`cards_episode_ai_enabled` 与 `cards_episode_enabled` 是两条路径：
+
+- `cards_episode_enabled=true`：规则版 `durable_episode()`，只收长期事实，最多 3 条/240 字。
+- `cards_episode_ai_enabled=true`：完整收尾时由辅助 LLM 生成 120–200 字叙事，写“发生了什么/用户情绪/结果/未完成事项”，失败回退规则或跳过。
+- 两者都关：不生成新 episode；知识库仍按工具/自动抽取记录事实。
+- bot-11 当前：`cards_episode_enabled=true`、`cards_episode_ai_enabled=true`，用叙事 episode；知识库负责事实，二者分工。
 
 ### 9.8 注入优化
 

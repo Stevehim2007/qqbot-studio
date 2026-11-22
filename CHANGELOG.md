@@ -1,3 +1,12 @@
+## v5.0.0-beta.21（测试版）— 群策略名单、知识库身份与 AI episode
+
+- 群策略新增“参数名单”和“标记表”：按插件勾选组策略可见参数，常用参数可星标后在一个表里快速修改；名单保存在 Studio 数据目录，不依赖插件控制桥。
+- 知识记忆库新增用户身份：`actor_hash/actor_label` 隔离 AI 记忆，用户导入的 `curated` 资料为共享只读；旧数据标记为 `legacy` 共享区。
+- 知识记忆库新增 Studio 导入/删除 curated 条目；`memory_search` 返回当前用户 + 共享资料，`memory_forget` 不会删除 curated。
+- 新增 `cards_episode_ai_enabled`：完整收尾可由辅助模型生成 120–200 字叙事 episode，失败回退规则或跳过；知识库记事实、episode 记叙事。
+- 表达状态、好感度控制台入口补 scope/群号说明；个人资料查询按群号显示成员昵称与分数。
+- `qqbot_memory_commands 4.3.1`、`qqbot_memory_bank 0.2.0`；插件包 `v4.4.0-beta.58`。
+
 ## v5.0.0-beta.20（测试版）— V7 记忆收口与使用手册
 
 - 记忆卡片补齐 FTS5 trigram 索引、48 张归档目标、purpose 使用记录、sweep/export/delete/metrics。

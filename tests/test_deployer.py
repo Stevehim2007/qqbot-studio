@@ -258,6 +258,47 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(data["instance_id"], "bot-9")
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_memory_bank_curated_import_and_delete(self):
+        first = self.manager.add_memory_bank_entry(
+            scope="group:onebot:1", content="用户喜欢喝无糖可乐", tags="饮食"
+        )
+        self.assertTrue(first["ok"], first)
+        second = self.manager.add_memory_bank_entry(
+            scope="group:onebot:1", content="用户喜欢喝无糖可乐", tags="偏好"
+        )
+        self.assertTrue(second["duplicate"])
+        payload = self.manager.get_memory_bank(scope="group:onebot:1")
+        self.assertTrue(payload["available"])
+        self.assertEqual(len(payload["entries"]), 1)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["entry_kind"], "curated")
+        self.assertEqual(entry["actor_hash"], "")
+        self.assertEqual(entry["tags"], "偏好")
+        deleted = self.manager.delete_memory_bank_entry(
+            scope="group:onebot:1", entry_id=first["id"]
+        )
+        self.assertTrue(deleted["ok"])
+        self.assertEqual(self.manager.get_memory_bank(scope="group:onebot:1")["entries"], [])
+
+    def test_group_policy_prefs_roundtrip(self):
+        saved = self.manager.set_group_policy_prefs(
+            selected={
+                "qqbot_core_reply": ["participation.mode", "participation.group_mention_only"],
+                "qqbot_food": [],
+            },
+            marked={"qqbot_core_reply": ["participation.mode"]},
+        )
+        self.assertTrue(saved["ok"])
+        loaded = self.manager.get_group_policy_prefs()
+        self.assertEqual(
+            loaded["selected"]["qqbot_core_reply"],
+            ["participation.group_mention_only", "participation.mode"],
+        )
+        self.assertEqual(loaded["selected"]["qqbot_food"], [])
+        self.assertEqual(loaded["marked"]["qqbot_core_reply"], ["participation.mode"])
+        path = Path(self.tmp.name) / "studio-group-policy-prefs.json"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_memory_cards_maintenance_metrics_rebuild_export(self):
         db_path = self.manager.astrbot_data_dir / "plugin_data" / "qqbot_memory_commands" / "memory_cards.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)

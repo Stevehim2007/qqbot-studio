@@ -668,8 +668,23 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
 
     def _group_policy_get(self, manager: Any, subroute: str, query: dict[str, list[str]]) -> bool:
         parts = [urllib.parse.unquote(part) for part in subroute.split("/") if part]
-        if not parts or parts[0] not in {"group-policies", "group-param-schema", "group-policy-templates"}:
+        if not parts or parts[0] not in {
+            "group-policies",
+            "group-param-schema",
+            "group-policy-templates",
+            "group-policy-prefs",
+        }:
             return False
+        if parts[0] == "group-policy-prefs" and len(parts) == 1:
+            getter = getattr(manager, "get_group_policy_prefs", None)
+            if not callable(getter):
+                self._json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "code": "prefs_unavailable", "message": "当前后端不支持群策略参数偏好。"},
+                )
+                return True
+            self._json(HTTPStatus.OK, getter())
+            return True
         caller = getattr(manager, "plugin_control_call", None)
         if not callable(caller):
             self._json(
@@ -734,8 +749,26 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
 
     def _group_policy_write(self, manager: Any, subroute: str, payload: dict[str, Any]) -> bool:
         parts = [urllib.parse.unquote(part) for part in subroute.split("/") if part]
-        if not parts or parts[0] not in {"group-policies", "group-policy-templates"}:
+        if not parts or parts[0] not in {"group-policies", "group-policy-templates", "group-policy-prefs"}:
             return False
+        if parts[0] == "group-policy-prefs" and len(parts) == 1:
+            setter = getattr(manager, "set_group_policy_prefs", None)
+            if not callable(setter):
+                self._json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "code": "prefs_unavailable", "message": "当前后端不支持群策略参数偏好。"},
+                )
+                return True
+            try:
+                result = setter(
+                    selected=payload.get("selected"),
+                    marked=payload.get("marked"),
+                )
+            except (OSError, ValueError) as exc:
+                self._error(HTTPStatus.BAD_REQUEST, f"保存群策略参数偏好失败：{exc}")
+                return True
+            self._json(HTTPStatus.OK, result)
+            return True
         caller = getattr(manager, "plugin_control_call", None)
         if not callable(caller):
             self._json(
@@ -1410,6 +1443,25 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._json(HTTPStatus.OK, getter())
                     return
+                if subroute == "memory-bank":
+                    getter = getattr(manager, "get_memory_bank", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供知识记忆库接口。")
+                        return
+                    scope = str((query.get("scope") or [""])[0]).strip()
+                    persona_id = str((query.get("persona_id") or [""])[0]).strip()
+                    limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
+                    self._json(HTTPStatus.OK, getter(scope=scope, persona_id=persona_id, limit=limit))
+                    return
+                if subroute == "favorability":
+                    getter = getattr(manager, "get_favorability", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供好感度查询接口。")
+                        return
+                    group_id = str((query.get("group_id") or [""])[0]).strip()
+                    limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
+                    self._json(HTTPStatus.OK, getter(group_id=group_id, limit=limit))
+                    return
                 if subroute == "expression":
                     getter = getattr(manager, "get_expression_state", None)
                     if not callable(getter):
@@ -1418,6 +1470,30 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     scope = str((query.get("scope") or [""])[0]).strip()
                     limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
                     self._json(HTTPStatus.OK, getter(scope=scope, limit=limit))
+                    return
+                if subroute in {"memory-bank", "memory-bank/delete"}:
+                    if subroute.endswith("/delete"):
+                        deleter = getattr(manager, "delete_memory_bank_entry", None)
+                        if not callable(deleter):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供知识记忆库删除接口。")
+                            return
+                        result = deleter(
+                            scope=str(payload.get("scope") or "").strip(),
+                            persona_id=str(payload.get("persona_id") or "").strip(),
+                            entry_id=str(payload.get("entry_id") or "").strip(),
+                        )
+                    else:
+                        adder = getattr(manager, "add_memory_bank_entry", None)
+                        if not callable(adder):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供知识记忆库导入接口。")
+                            return
+                        result = adder(
+                            scope=str(payload.get("scope") or "").strip(),
+                            persona_id=str(payload.get("persona_id") or "").strip(),
+                            content=str(payload.get("content") or ""),
+                            tags=str(payload.get("tags") or "").strip(),
+                        )
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
                     return
                 if subroute == "persona-corpus":
                     getter = getattr(manager, "get_persona_corpus", None)

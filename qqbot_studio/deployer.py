@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import errno
+import hashlib
 import json
 import math
 import os
@@ -275,6 +276,73 @@ class DeployManager:
             pass
         self._last_persist_at: dict[str, float] = {}
         self._recover_interrupted_jobs()
+
+    # ------------------------------------------------------------------
+    # Studio group-policy parameter preferences
+    # ------------------------------------------------------------------
+
+    def _group_policy_prefs_path(self) -> Path:
+        return self.data_dir / "studio-group-policy-prefs.json"
+
+    @staticmethod
+    def _clean_policy_pref_map(value: Any) -> dict[str, list[str]]:
+        if not isinstance(value, dict):
+            return {}
+        cleaned: dict[str, list[str]] = {}
+        token_re = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+        for raw_plugin, raw_names in value.items():
+            plugin_id = str(raw_plugin or "").strip()
+            if not token_re.match(plugin_id) or not isinstance(raw_names, list):
+                continue
+            names = sorted({
+                str(name).strip()
+                for name in raw_names
+                if token_re.match(str(name).strip())
+            })
+            if names or raw_names == []:
+                cleaned[plugin_id] = names[:500]
+        return cleaned
+
+    def get_group_policy_prefs(self) -> dict[str, Any]:
+        path = self._group_policy_prefs_path()
+        with self._lock:
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                raw = {}
+            except (OSError, ValueError):
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return {
+            "ok": True,
+            "selected": self._clean_policy_pref_map(raw.get("selected")),
+            "marked": self._clean_policy_pref_map(raw.get("marked")),
+            "updated_at": str(raw.get("updated_at") or ""),
+        }
+
+    def set_group_policy_prefs(
+        self,
+        *,
+        selected: Any = None,
+        marked: Any = None,
+    ) -> dict[str, Any]:
+        selected_map = self._clean_policy_pref_map(selected)
+        marked_map = self._clean_policy_pref_map(marked)
+        payload = {
+            "selected": selected_map,
+            "marked": marked_map,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        path = self._group_policy_prefs_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with self._lock:
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            chmod_best_effort(tmp, 0o600)
+            os.replace(tmp, path)
+            chmod_best_effort(path, 0o600)
+        return {"ok": True, **payload}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -2479,6 +2547,250 @@ class DeployManager:
             return {"ok": True, "key": key, "cleared": True}
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             return {"ok": False, "error": f"清空人格语料库失败：{exc}"}
+
+    def add_memory_bank_entry(
+        self,
+        *,
+        scope: str,
+        content: str,
+        tags: str = "",
+        persona_id: str = "",
+    ) -> dict[str, Any]:
+        """Import an operator-curated fact.  Curated entries are shared and
+        read-only to the model; they are never touched by AI extraction."""
+        scope_text = str(scope or "").strip()[:200]
+        fact = re.sub(r"\s+", " ", str(content or "")).strip(" ，,。；;")
+        if not scope_text:
+            return {"ok": False, "reason": "scope_required"}
+        if not fact or len(fact) < 4 or len(fact) > 200:
+            return {"ok": False, "reason": "content_length"}
+        if any(marker in fact for marker in ("[[NO_REPLY]]", "mqqapi://", "ComponentType.")):
+            return {"ok": False, "reason": "noise"}
+        db_path = self._knowledge_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(
+            f"{scope_text}\n{str(persona_id or '').strip()[:128]}\n\n{fact.casefold()}".encode("utf-8")
+        ).hexdigest()[:32]
+        entry_id = "kb-" + digest[:20]
+        connection = sqlite3.connect(str(db_path), timeout=10)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_entry (
+                  id TEXT PRIMARY KEY,
+                  scope TEXT NOT NULL,
+                  persona_id TEXT NOT NULL DEFAULT '',
+                  content TEXT NOT NULL,
+                  tags TEXT NOT NULL DEFAULT '',
+                  source TEXT NOT NULL DEFAULT 'manual',
+                  confidence REAL NOT NULL DEFAULT 1.0,
+                  content_hash TEXT NOT NULL,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  actor_hash TEXT NOT NULL DEFAULT '',
+                  actor_label TEXT NOT NULL DEFAULT '',
+                  entry_kind TEXT NOT NULL DEFAULT 'curated'
+                );
+                """
+            )
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(knowledge_entry)")}
+            for name, ddl in (
+                ("actor_hash", "TEXT NOT NULL DEFAULT ''"),
+                ("actor_label", "TEXT NOT NULL DEFAULT ''"),
+                ("entry_kind", "TEXT NOT NULL DEFAULT 'curated'"),
+            ):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE knowledge_entry ADD COLUMN {name} {ddl}")
+            connection.execute("DROP INDEX IF EXISTS knowledge_hash")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS knowledge_hash "
+                "ON knowledge_entry(scope, persona_id, actor_hash, content_hash)"
+            )
+            now = time.time()
+            existing = connection.execute(
+                "SELECT id FROM knowledge_entry WHERE scope=? AND persona_id=? AND actor_hash='' AND content_hash=?",
+                (scope_text, str(persona_id or "").strip()[:128], digest),
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE knowledge_entry SET content=?, tags=?, source='curated', entry_kind='curated', updated_at=? WHERE id=?",
+                    (fact, str(tags or "")[:160], now, existing[0]),
+                )
+                connection.commit()
+                return {"ok": True, "id": str(existing[0]), "duplicate": True, "content": fact}
+            connection.execute(
+                "INSERT INTO knowledge_entry(id, scope, persona_id, content, tags, source, confidence, content_hash, "
+                "created_at, updated_at, actor_hash, actor_label, entry_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    entry_id, scope_text, str(persona_id or "").strip()[:128], fact,
+                    str(tags or "")[:160], "curated", 1.0, digest, now, now, "", "", "curated",
+                ),
+            )
+            connection.commit()
+            return {"ok": True, "id": entry_id, "duplicate": False, "content": fact}
+        except sqlite3.DatabaseError as exc:
+            return {"ok": False, "reason": "database_error", "error": str(exc)}
+        finally:
+            connection.close()
+
+    def delete_memory_bank_entry(
+        self,
+        *,
+        scope: str,
+        entry_id: str,
+        persona_id: str = "",
+    ) -> dict[str, Any]:
+        db_path = self._knowledge_db_path()
+        if not db_path.is_file():
+            return {"ok": False, "reason": "not_found"}
+        connection = sqlite3.connect(str(db_path), timeout=10)
+        try:
+            cur = connection.execute(
+                "DELETE FROM knowledge_entry WHERE id=? AND scope=? AND persona_id=? AND entry_kind='curated'",
+                (str(entry_id or ""), str(scope or "").strip()[:200], str(persona_id or "").strip()[:128]),
+            )
+            connection.commit()
+            return {"ok": cur.rowcount > 0}
+        finally:
+            connection.close()
+
+    def _knowledge_db_path(self) -> Path:
+        return (
+            self.astrbot_data_dir
+            / "plugin_data"
+            / "qqbot_memory_bank"
+            / "knowledge.db"
+        )
+
+    def get_memory_bank(
+        self,
+        *,
+        scope: str = "",
+        persona_id: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Read the V5/V7 knowledge bank for Studio."""
+        db_path = self._knowledge_db_path()
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": db_path.is_file(),
+            "scope": str(scope or ""),
+            "persona_id": str(persona_id or ""),
+            "scopes": [],
+            "entries": [],
+            "error": "",
+        }
+        if not db_path.is_file():
+            return payload
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                for row in connection.execute(
+                    "SELECT scope, persona_id, COUNT(*) AS total FROM knowledge_entry "
+                    "GROUP BY scope, persona_id ORDER BY scope"
+                ).fetchall():
+                    payload["scopes"].append(
+                        {
+                            "scope": str(row["scope"] or ""),
+                            "persona_id": str(row["persona_id"] or ""),
+                            "total": int(row["total"] or 0),
+                        }
+                    )
+                selected_scope = str(scope or "").strip()
+                selected_persona = str(persona_id or "").strip()
+                if selected_scope:
+                    rows = connection.execute(
+                        "SELECT id, scope, persona_id, content, tags, source, confidence, updated_at, "
+                        "actor_hash, actor_label, entry_kind "
+                        "FROM knowledge_entry WHERE scope=? AND (persona_id=? OR persona_id='') "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (
+                            selected_scope,
+                            selected_persona,
+                            max(1, min(500, int(limit or 100))),
+                        ),
+                    ).fetchall()
+                    payload["entries"] = [
+                        {
+                            "id": str(row["id"]),
+                            "scope": str(row["scope"]),
+                            "persona_id": str(row["persona_id"] or ""),
+                            "content": str(row["content"] or ""),
+                            "tags": str(row["tags"] or ""),
+                            "source": str(row["source"] or ""),
+                            "confidence": float(row["confidence"] or 0),
+                            "updated_at": float(row["updated_at"] or 0),
+                            "actor_hash": str(row["actor_hash"] or ""),
+                            "actor_label": str(row["actor_label"] or ""),
+                            "entry_kind": str(row["entry_kind"] or "legacy"),
+                            "actor_hash": str(row["actor_hash"] or ""),
+                            "actor_label": str(row["actor_label"] or ""),
+                            "entry_kind": str(row["entry_kind"] or ""),
+                        }
+                        for row in rows
+                    ]
+            finally:
+                connection.close()
+        except Exception as exc:
+            payload["ok"] = False
+            payload["error"] = str(exc)
+        return payload
+
+    def _social_db_path(self) -> Path:
+        return (
+            self.astrbot_data_dir
+            / "plugin_data"
+            / "qqbot_safe_tools"
+            / "social_state.db"
+        )
+
+    def get_favorability(self, *, group_id: str = "", limit: int = 100) -> dict[str, Any]:
+        """Read the V5 social sidecar for one group, for the Studio panel."""
+        group = str(group_id or "").strip()
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": False,
+            "group_id": group,
+            "members": [],
+            "error": "",
+        }
+        if not group:
+            payload["error"] = "group_id_required"
+            return payload
+        db_path = self._social_db_path()
+        payload["available"] = db_path.is_file()
+        if not db_path.is_file():
+            return payload
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                rows = connection.execute(
+                    "SELECT actor_hash, actor_label, score, last_event_at, updated_at "
+                    "FROM favorability WHERE scope_key=? ORDER BY score DESC LIMIT ?",
+                    (group, max(1, min(500, int(limit or 100)))),
+                ).fetchall()
+            finally:
+                connection.close()
+            members = []
+            for row in rows:
+                score = float(row["score"] or 0)
+                members.append(
+                    {
+                        "actor_hash": str(row["actor_hash"] or ""),
+                        "actor_label": str(row["actor_label"] or ""),
+                        "score": round(score, 2),
+                        "tier": _favorability_tier(score),
+                        "last_event_at": float(row["last_event_at"] or 0),
+                        "updated_at": float(row["updated_at"] or 0),
+                    }
+                )
+            payload["members"] = members
+        except Exception as exc:
+            payload["ok"] = False
+            payload["error"] = str(exc)
+        return payload
 
     def _expression_db_path(self) -> Path:
         return (
@@ -5577,3 +5889,16 @@ class DeployManager:
     def get_logs(self, service: str, lines: int = 200) -> str:
         raw = self.docker.logs(service, lines)
         return self.redact_sensitive_text(raw)
+
+def _favorability_tier(score: float) -> str:
+    value = max(-100.0, min(100.0, float(score)))
+    if value <= -40:
+        return "hostile"
+    if value <= -10:
+        return "cold"
+    if value < 10:
+        return "neutral"
+    if value < 40:
+        return "warm"
+    return "close"
+

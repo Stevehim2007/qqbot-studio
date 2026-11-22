@@ -1,5 +1,5 @@
-"""QQ Bot Studio - local multi-instance deployment assistant."""
+"""QQ Bot Studio package."""
 
 __all__ = ["__version__"]
 
-__version__ = "5.0.0-beta.20"
+__version__ = "5.0.0-beta.21"
