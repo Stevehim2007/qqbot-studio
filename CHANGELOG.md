@@ -1,3 +1,10 @@
+## v5.0.0-beta.30（测试版）— 辅助 AI Key 权限修正
+
+- `qqbot_aux_ai.json` 统一为 `0660`（Studio 用户与 AstrBot 容器均可读写，其他用户不可读）；`set_aux_ai` 写入后同步 chmod。
+- 修复已存在 `0640` 文件时 Studio 保存 API Key 报 `Permission denied` 的问题。
+- 保存后控制台只显示掩码，不回显完整 Key；配置不进入日志或仓库。
+- 测试：主项目全量 880 tests OK；memory_bank 16、memory_commands 151。
+
 ## v5.0.0-beta.29（测试版）— 辅助 AI 专用 API Key
 
 - Studio「辅助模型」新增“辅助 AI 专用 API”设置：启用开关、Base URL、模型、API Key、超时；Key 只写本机 `plugin_data/qqbot_aux_ai.json`（0640），界面只显示掩码，不回显完整值。

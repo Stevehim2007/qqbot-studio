@@ -190,7 +190,7 @@ content_hash, created_at, updated_at
 Studio「辅助模型」页可单独配置辅助 AI：
 
 - `enabled`、`base_url`、`model`、`api_key`、`timeout_seconds`；
-- Key 写入实例 `plugin_data/qqbot_aux_ai.json`，权限 `0640`；
+- Key 写入实例 `plugin_data/qqbot_aux_ai.json`，权限 `0660`；
 - 控制台只显示 `sk-abc…wxyz` 掩码，不回显完整 Key；
 - 记忆路由、自动提取、阶段摘要、episode 摘要优先调用该 API；
 - 未配置、请求失败或超时，才回退 AstrBot 主模型；主聊天永远不使用这把 Key。

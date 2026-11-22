@@ -2954,7 +2954,7 @@ class DeployManager:
         }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         try:
-            path.chmod(0o640)
+            path.chmod(0o660)
         except OSError:
             pass
         result = self.get_aux_ai()
