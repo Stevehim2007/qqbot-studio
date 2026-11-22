@@ -1,3 +1,14 @@
+## v5.0.0-beta.34（测试版）— 删掉不生效的默认 LLM 开关
+
+- `qqbot_core_reply` 移除 `block_default_llm_for_group_non_at`：该参数只存在于 schema 与默认值表，
+  运行时代码从不读取（`reply_pipeline.block_default_llm()` 20 处调用都是无条件阻断），
+  开与关没有任何区别，留着只会误导。
+- 「消息进不进 AI」现在只有一个开关：`participation.group_mention_only`，描述统一改为
+  「只有真实 @ 机器人的群消息会进入 AI 处理，其余群消息在事件层直接丢弃、不消耗模型；私聊不受影响」，
+  群策略页标签同步为「群消息进 AI 的开关（只允许 @）」。
+- Studio 的旧版参数分组表（`qqbot_studio/static/services/plugin-config.js`）同步移除该键。
+- 需配套 `qqbot_core_reply 4.3.14`（`v4.4.0-beta.66`）。
+
 ## v5.0.0-beta.33（测试版）— 群策略页按插件折叠 + 常用参数默认展示
 
 - 群策略页不再一次性平铺所有插件、所有参数：每张插件卡片新增「▾ 收起 / ▸ 展开」，

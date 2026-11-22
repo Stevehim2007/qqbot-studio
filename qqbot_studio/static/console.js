@@ -3546,7 +3546,7 @@
     'participation.model_confidence': ['model 置信阈值', 'model 模式下，判定器 speak 置信度低于该值按 observe 处理。'],
     'participation.unified_require_name': ['unified 必须点名', '开启后，unified 模式只有消息含人格名/别名才进入完整生成。'],
     'participation.unified_names': ['unified 人格别名', '该群可唤醒机器人的人格名/别名列表，逗号分隔。'],
-    'participation.group_mention_only': ['群聊只允许 @', '开启后，没有真实 @ 的群消息在事件层直接丢弃，私聊不受影响。'],
+    'participation.group_mention_only': ['群消息进 AI 的开关（只允许 @）', '开启后只有真实 @ 机器人的群消息会进入 AI 处理，其余群消息在事件层直接丢弃、不消耗模型；私聊不受影响。'],
     'participation.timezone': ['时区', '分群时间段判断使用的 IANA 时区，例如 Asia/Shanghai。'],
     'context.max_chars': ['上下文长度', '送入模型的上下文/输入最大字符数；过大增加成本。'],
     'persona.profile_id': ['人格 Profile', '该群绑定的人格 Profile ID；留空使用实例默认。'],

@@ -143,8 +143,7 @@
         'reply_probability', 'system_prompt', 'llm_timeout_seconds', 'llm_error_reply',
         'empty_reply_fallback', 'max_input_chars', 'max_reply_chars', 'min_message_chars',
         'group_cooldown_seconds', 'user_cooldown_seconds', 'ignore_pure_image',
-        'ignore_pure_face', 'ignore_command_prefixes', 'inherit_astrbot_wake_prefix',
-        'block_default_llm_for_group_non_at'
+        'ignore_pure_face', 'ignore_command_prefixes', 'inherit_astrbot_wake_prefix'
       ],
       prefixes: ['reply_', 'group_cooldown_', 'user_cooldown_', 'llm_', 'ignore_']
     },
