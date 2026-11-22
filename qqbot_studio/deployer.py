@@ -303,6 +303,39 @@ class DeployManager:
                 cleaned[plugin_id] = names[:500]
         return cleaned
 
+    @staticmethod
+    def _clean_policy_registry_map(value: Any) -> dict[str, dict[str, str]]:
+        """Validate the editor-driven parameter registry.
+
+        Shape: ``{plugin_id: {config_path: policy_param}}``.  ``config_path`` is
+        the key shown in the plugin parameter editor (e.g.
+        ``participation.group_probability``); ``policy_param`` is the
+        capability-policy schema name (e.g. ``participation.reply_probability``)
+        that the runtime actually reads.  Unknown/broken entries are dropped
+        instead of being trusted.
+        """
+
+        if not isinstance(value, dict):
+            return {}
+        cleaned: dict[str, dict[str, str]] = {}
+        token_re = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+        for raw_plugin, raw_entries in value.items():
+            plugin_id = str(raw_plugin or "").strip()
+            if not token_re.match(plugin_id) or not isinstance(raw_entries, dict):
+                continue
+            entries: dict[str, str] = {}
+            for raw_path, raw_param in raw_entries.items():
+                path = str(raw_path or "").strip()
+                param = str(raw_param or "").strip()
+                if not token_re.match(path) or not token_re.match(param):
+                    continue
+                entries[path] = param
+                if len(entries) >= 500:
+                    break
+            if entries:
+                cleaned[plugin_id] = entries
+        return cleaned
+
     def get_group_policy_prefs(self) -> dict[str, Any]:
         path = self._group_policy_prefs_path()
         with self._lock:
@@ -318,6 +351,7 @@ class DeployManager:
             "ok": True,
             "selected": self._clean_policy_pref_map(raw.get("selected")),
             "marked": self._clean_policy_pref_map(raw.get("marked")),
+            "registered": self._clean_policy_registry_map(raw.get("registered")),
             "updated_at": str(raw.get("updated_at") or ""),
         }
 
@@ -326,12 +360,15 @@ class DeployManager:
         *,
         selected: Any = None,
         marked: Any = None,
+        registered: Any = None,
     ) -> dict[str, Any]:
         selected_map = self._clean_policy_pref_map(selected)
         marked_map = self._clean_policy_pref_map(marked)
+        registered_map = self._clean_policy_registry_map(registered)
         payload = {
             "selected": selected_map,
             "marked": marked_map,
+            "registered": registered_map,
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         path = self._group_policy_prefs_path()

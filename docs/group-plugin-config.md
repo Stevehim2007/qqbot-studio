@@ -197,6 +197,45 @@ GET  /api/instances/{id}/group-policies/{group_id}/effective
 
 写入 body 只接受 `enabled` 和 `params`；服务端按 schema 过滤、校验、合并、递增 revision。
 
+### 6.2 从插件参数编辑器登记参数
+
+问题：插件参数编辑器显示的是插件 `_conf_schema.json` 的配置键，例如
+`participation.group_probability`；而运行时读取的是安全策略里的语义参数名
+`participation.reply_probability`。两者靠 `capability_policy.ParamSpec.config_key`
+建立映射，只有映射到的参数才会被群覆盖生效。
+
+因此参数编辑器的每个字段旁都有一个「加入群策略」开关（`.plugin-field-policy`）：
+
+- 未登记：点击后写入 `registered[plugin_id][config_path] = policy_param`，同时把
+  `policy_param` 并入 `selected[plugin_id]`（参数名单）；
+- 已登记：按钮显示「已在群策略」，再次点击只移除该条登记（`registered` 与
+  `selected` 里的名字一起删）；
+- 字段的 `spec.sensitive = true` 或 `spec.group_overridable = false`：按钮禁用并显示
+  「仅全局」，永不写入；
+- 字段在安全策略里没有对应项（没登记 `config_key`、也不曾用过同名）：按钮禁用，
+  tooltip 说明需要在 `capability_policy` 补登记，避免出现「点了但运行时不生效」。
+
+编辑器的展示不受「参数名单」限制：`policyParamVisible()` 在 `selected` 已收窄时，
+仍会让 `registered` 里登记过的参数在群策略页可见，并在行内标注
+「来自插件参数：<config_path>」，参数名单面板里标注「来自参数编辑：<config_path>」。
+
+`studio-group-policy-prefs.json` 因此扩展为：
+
+```json
+{
+  "selected":  {"qqbot_core_reply": ["participation.mode", "participation.reply_probability"]},
+  "marked":    {"qqbot_core_reply": ["participation.mode"]},
+  "registered": {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+  "updated_at": "2026-01-01T00:00:00+00:00"
+}
+```
+
+服务端对 `registered` 做与 `selected` 相同的白名单清洗（plugin_id / config_path /
+policy_param 都必须是 `^[A-Za-z0-9_.:-]{1,160}$`，每个插件最多 500 条，坏项丢弃，
+不整体报错），文件仍是 `0600`。旧文件没有 `registered` 时按空表读取。
+注意：登记只影响 UI 可见性与映射记录，真正生效仍由 `policy.set` 按
+`group_overridable` 校验。
+
 ## 7. 失败与安全
 
 - 策略库损坏/读不到：回退全局默认，记录错误；不能把所有群误关。

@@ -763,6 +763,7 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 result = setter(
                     selected=payload.get("selected"),
                     marked=payload.get("marked"),
+                    registered=payload.get("registered"),
                 )
             except (OSError, ValueError) as exc:
                 self._error(HTTPStatus.BAD_REQUEST, f"保存群策略参数偏好失败：{exc}")

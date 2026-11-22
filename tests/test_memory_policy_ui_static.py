@@ -446,3 +446,86 @@ class MemoryPolicyDocsContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class GroupPolicyRegistrationStaticTests(unittest.TestCase):
+    """T20: every plugin field can be published into group-policy-prefs.
+
+    The editor offers a per-field "加入群策略" pill.  It must map the editor's
+    config key onto the capability-policy parameter name (config_key), persist
+    the mapping as ``registered[plugin_id][config_path] = policy_param`` and
+    keep the group-policy page able to override that parameter per group.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
+
+    def _has(self, text: str, tokens, label: str) -> None:
+        missing = [token for token in tokens if token not in text]
+        self.assertFalse(missing, f"{label} 缺少：{missing}")
+
+    def test_every_field_renders_a_group_policy_action(self) -> None:
+        self._has(self.console_js, (
+            "const policyButton = makeElement('button', 'plugin-field-policy', '加入群策略');",
+            "policyButton.dataset.policyFieldKey = field.key;",
+            "togglePluginFieldGroupPolicy(field, policyButton);",
+        ), "console.js")
+
+    def test_action_maps_editor_key_to_policy_param(self) -> None:
+        self._has(self.console_js, (
+            "function pluginFieldPolicyTarget(field)",
+            "entries.find(([, spec]) => String(asRecord(spec).config_key || '') === key)",
+            "if (asRecord(spec).sensitive) return { param, spec, blocked: 'sensitive' };",
+            "if (!asRecord(spec).group_overridable) return { param, spec, blocked: 'global' };",
+            "'仅全局'",
+        ), "console.js")
+
+    def test_unsupported_fields_are_disabled_not_silently_hidden(self) -> None:
+        self._has(self.console_js, (
+            "button.disabled = true;",
+            "该参数未在 safe_tools 安全策略中登记 config_key，暂不支持按群覆盖。",
+            "敏感参数（Key/密钥/白名单）只允许全局修改，不能加入群策略。",
+        ), "console.js")
+
+    def test_toggle_persists_registered_map_without_narrowing_roster(self) -> None:
+        self._has(self.console_js, (
+            "async function togglePluginFieldGroupPolicy(field, button)",
+            "const registered = { ...asRecord(prefs.registered) };",
+            "registry[path] = target.param;",
+            "const eligible = Object.entries(asRecord(config.policySchema))",
+            ".filter(([, spec]) => asRecord(spec).group_overridable && !asRecord(spec).sensitive)",
+            "body: { selected, marked, registered }",
+        ), "console.js")
+
+    def test_editor_loads_schema_and_prefs_before_rendering(self) -> None:
+        self._has(self.console_js, (
+            "group-param-schema/${encodeURIComponent(plugin.id)}",
+            "groupPolicyPrefsPath(instance.id)",
+            "config.policySchema = asRecord(asRecord(schemaPayload).fields);",
+            "config.policyPrefs = {",
+            "state.pluginConfig.policyPrefs = { selected: {}, marked: {}, registered: {} };",
+        ), "console.js")
+
+    def test_group_policy_page_honours_registered_params(self) -> None:
+        self._has(self.console_js, (
+            "registeredFor(pluginId)",
+            "registeredPathFor(pluginId, name)",
+            "return Object.values(registeredFor(pluginId)).map(String).includes(String(name));",
+            "`来自参数编辑：${registeredPath}`",
+            "`来自插件参数：${registeredPath}`",
+            "registered: policyPrefs.registered",
+            "registered: asRecord(data.registered)",
+        ), "console.js")
+
+    def test_registration_pill_has_desktop_and_mobile_styles(self) -> None:
+        self._has(self.console_css, (
+            ".plugin-field-policy {",
+            ".plugin-field-policy:hover:not(:disabled)",
+            ".plugin-field-policy.is-registered",
+            ".plugin-field-policy:disabled",
+            ".group-policy-field-registered",
+            ".group-policy-prefs-path",
+            ".plugin-field-policy { order: 3; flex: 1 0 100%; padding: 5px 8px; text-align: center; }",
+        ), "console.css")
+

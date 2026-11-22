@@ -1,3 +1,13 @@
+## v5.0.0-beta.31（测试版）— 插件参数一键加入群策略
+
+- 插件参数编辑器每个字段新增「加入群策略」开关：登记 `plugin_id + 参数路径`，群策略页即可按群覆盖该参数，不再只能在群策略页里翻已有参数。
+- `studio-group-policy-prefs.json` 新增 `registered`（`{plugin_id: {config_path: policy_param}}`），服务端按 `^[A-Za-z0-9_.:-]{1,160}$` 清洗、每插件最多 500 条、坏项丢弃，文件仍为 `0600`；旧文件按空表兼容。
+- 编辑器按 `capability_policy.ParamSpec.config_key` 把编辑器配置键映射到运行时语义名（如 `participation.group_probability` → `participation.reply_probability`）；敏感字段与仅全局字段显示「仅全局」且禁用，未登记字段提示需补 `capability_policy`，避免"点了不生效"。
+- 群策略页：登记过的参数即使被"参数名单"收窄也保持可见，并标注来源路径（`.group-policy-field-registered` / `.group-policy-prefs-path`）。
+- 移动端（≤640px）字段头换行，开关独占一行居中，避免挤压标题。
+- 文档：[分群插件启用与分群参数设计](docs/group-plugin-config.md) 新增 §6.2。
+- 测试：deployer 38、server 48、记忆策略 UI 静态契约 31、前端组件 5，均 OK。
+
 ## v5.0.0-beta.30（测试版）— 辅助 AI Key 权限修正
 
 - `qqbot_aux_ai.json` 统一为 `0660`（Studio 用户与 AstrBot 容器均可读写，其他用户不可读）；`set_aux_ai` 写入后同步 chmod。

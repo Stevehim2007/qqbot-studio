@@ -8,7 +8,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 | 项目 | 版本 |
 |---|---|
-| 主项目 | `5.0.0-beta.30`（tag `v5.0.0-beta.30`） |
+| 主项目 | `5.0.0-beta.31`（tag `v5.0.0-beta.31`） |
 | 插件仓库 tag | `v4.4.0-beta.61` / `60ae636` |
 | core_reply | `4.3.12` |
 | safe_tools | `3.3.5` |
@@ -32,7 +32,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 ## 当前部署
 
-- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.30`；`/console` HTTP 200。
+- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.30`（待同步 beta.31）；`/console` HTTP 200。
 - bot-1：QQ 官方，生产实例；健康。
 - bot-11：OneBot + 内置 NapCat，`qq_account=871247845`；AstrBot healthy，aiocqhttp 已连接。
 - bot-4 / bot-7：保留实例；健康。
@@ -47,6 +47,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - 表达状态：真实消息后 `expression context injected mode=astrbot chars=20`。
 - 测试：core 258、safe 231、memory 151、bank 11、expression 7、studio server 46、deployer 34（3 个本机 6185 端口段失败为环境占用）。
 - 主项目全量 880 tests OK；测试已改为使用系统空闲端口，不再依赖固定 6185。
+- 插件参数「加入群策略」（beta.31）：deployer 38、server 48、记忆策略 UI 静态契约 31、前端组件 5，均 OK；`registered` 映射与 `0600` 文件权限、坏项丢弃、旧文件兼容均有覆盖（未跑全量）。
 
 ## 已知边界
 
@@ -63,3 +64,6 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 2. 用干净端口环境重跑主项目全量测试。
 3. 浏览器手工验收 Studio 新面板（人格/群记忆、scope 选择器、知识库导入）。
 4. 视需要补 embedding/BGE 自动召回和知识库切块。
+
+5. 把 `5.0.0-beta.31` 同步到服务器 `/home/ubuntu/qqbot-studio`（群策略参数登记需要新前端 + 新 deployer），再浏览器验收：插件参数页点「加入群策略」→ 群策略页出现该参数并可按群覆盖。
+6. 插件 v4.4.0-beta.63 已含 `qqbot_memory_commands/aux.py` 相对导入修复（插件源码与 ZIP 均已核对），无需重打 beta.64；如需确认线上，只在 bot-11 解包核对 `aux.py`。

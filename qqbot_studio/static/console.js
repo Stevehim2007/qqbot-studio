@@ -1817,6 +1817,129 @@
     if (cancelButton) cancelButton.disabled = config.saving;
   }
 
+  // ---- Plugin parameter -> group-policy registry -------------------------
+  // The group-policy page can only override parameters that the runtime
+  // actually reads, i.e. names present in safe_tools' PLUGIN_PARAM_SPECS.
+  // The editor bridges the two vocabularies through each spec's config_key:
+  //   editor key  participation.group_probability
+  //   policy name participation.reply_probability
+  // Registering writes both the config path and the policy name into
+  // group-policy-prefs so the mapping survives later roster edits.
+  const groupPolicyPrefsPath = (instanceId) => `/api/instances/${encodeURIComponent(instanceId)}/group-policy-prefs`;
+
+  function pluginFieldPolicyTarget(field) {
+    const config = state.pluginConfig;
+    if (!config || !config.open || !field) return null;
+    const key = String(field.key || '');
+    if (!key) return null;
+    const entries = Object.entries(asRecord(config.policySchema));
+    let match = entries.find(([, spec]) => String(asRecord(spec).config_key || '') === key);
+    if (!match) match = entries.find(([name]) => name === key);
+    if (!match) return null;
+    const [param, spec] = match;
+    if (asRecord(spec).sensitive) return { param, spec, blocked: 'sensitive' };
+    if (!asRecord(spec).group_overridable) return { param, spec, blocked: 'global' };
+    return { param, spec, blocked: '' };
+  }
+
+  function pluginFieldPolicyRegistry(pluginId) {
+    const prefs = asRecord(state.pluginConfig.policyPrefs);
+    return asRecord(asRecord(prefs.registered)[pluginId]);
+  }
+
+  function pluginFieldPolicyRegistered(field) {
+    const config = state.pluginConfig;
+    if (!config || !field) return false;
+    return Object.prototype.hasOwnProperty.call(pluginFieldPolicyRegistry(config.pluginId), String(field.key));
+  }
+
+  function syncPluginFieldPolicyButton(button, field) {
+    if (!button) return;
+    const target = pluginFieldPolicyTarget(field);
+    const registered = pluginFieldPolicyRegistered(field);
+    button.classList.toggle('is-registered', registered);
+    button.setAttribute('aria-pressed', registered ? 'true' : 'false');
+    if (!target) {
+      button.textContent = '加入群策略';
+      button.disabled = true;
+      button.title = '该参数未在 safe_tools 安全策略中登记 config_key，暂不支持按群覆盖。';
+      return;
+    }
+    if (target.blocked === 'sensitive') {
+      button.textContent = '仅全局';
+      button.disabled = true;
+      button.title = '敏感参数（Key/密钥/白名单）只允许全局修改，不能加入群策略。';
+      return;
+    }
+    if (target.blocked === 'global') {
+      button.textContent = '仅全局';
+      button.disabled = true;
+      button.title = '该参数只允许全局修改，不能按群覆盖。';
+      return;
+    }
+    button.disabled = false;
+    button.textContent = registered ? '已在群策略' : '加入群策略';
+    button.title = registered
+      ? `已登记 ${field.key} → ${target.param}；点击移除。`
+      : `把 ${field.key} 登记到群策略参数名单（policy 参数：${target.param}）。`;
+  }
+
+  async function togglePluginFieldGroupPolicy(field, button) {
+    const config = state.pluginConfig;
+    const target = pluginFieldPolicyTarget(field);
+    if (!config || !config.open || !target || target.blocked) return;
+    const pluginId = String(config.pluginId || '');
+    const path = String(field.key || '');
+    if (!pluginId || !path) return;
+    button.disabled = true;
+    try {
+      const prefs = asRecord(await apiRequest(groupPolicyPrefsPath(config.instanceId)));
+      const selected = { ...asRecord(prefs.selected) };
+      const marked = asRecord(prefs.marked);
+      const registered = { ...asRecord(prefs.registered) };
+      const registry = { ...asRecord(registered[pluginId]) };
+      const removing = Object.prototype.hasOwnProperty.call(registry, path);
+      if (removing) {
+        delete registry[path];
+        if (Array.isArray(selected[pluginId])) {
+          selected[pluginId] = selected[pluginId].map(String).filter((name) => name !== target.param);
+        }
+      } else {
+        registry[path] = target.param;
+        // An absent roster means "show every parameter". Materialise the full
+        // overridable list first, otherwise registering one parameter would
+        // narrow the group-policy page to that one parameter.
+        const eligible = Object.entries(asRecord(config.policySchema))
+          .filter(([, spec]) => asRecord(spec).group_overridable && !asRecord(spec).sensitive)
+          .map(([name]) => name);
+        const list = Array.isArray(selected[pluginId]) ? selected[pluginId].map(String) : eligible.slice();
+        if (!list.includes(target.param)) list.push(target.param);
+        selected[pluginId] = list;
+      }
+      if (Object.keys(registry).length) registered[pluginId] = registry;
+      else delete registered[pluginId];
+      const saved = asRecord(await apiRequest(groupPolicyPrefsPath(config.instanceId), {
+        method: 'POST',
+        body: { selected, marked, registered }
+      }));
+      config.policyPrefs = {
+        selected: asRecord(saved.selected),
+        marked: asRecord(saved.marked),
+        registered: asRecord(saved.registered)
+      };
+      setPluginConfigStatus(
+        removing
+          ? `已从群策略移除 ${path}。`
+          : `已加入群策略：${path} → ${target.param}。`,
+        false
+      );
+    } catch (error) {
+      setPluginConfigError(formatError(error, '加入群策略失败。'));
+    } finally {
+      syncPluginFieldPolicyButton(button, field);
+    }
+  }
+
   function makePluginFieldEntry(field, value) {
     const isReplyProbability = field.key === 'reply_probability';
     const fieldElement = makeElement('div', `plugin-config-field${isReplyProbability ? ' is-highlight' : ''}`);
@@ -1835,6 +1958,16 @@
     titleWrap.appendChild(makeElement('span', 'plugin-field-key', field.key));
     head.appendChild(titleWrap);
     if (field.hasDefault) head.appendChild(makeElement('span', 'plugin-field-default', `默认：${pluginDefaultText(field.default)}`));
+    const policyButton = makeElement('button', 'plugin-field-policy', '加入群策略');
+    policyButton.type = 'button';
+    policyButton.dataset.policyFieldKey = field.key;
+    syncPluginFieldPolicyButton(policyButton, field);
+    policyButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePluginFieldGroupPolicy(field, policyButton);
+    });
+    head.appendChild(policyButton);
     const modifiedBadge = makeElement('span', 'plugin-field-modified', '已修改');
     modifiedBadge.hidden = true;
     head.appendChild(modifiedBadge);
@@ -2042,6 +2175,8 @@
     state.pluginConfig.saving = false;
     state.pluginConfig.entries = [];
     state.pluginConfig.snapshot = null;
+    state.pluginConfig.policySchema = {};
+    state.pluginConfig.policyPrefs = { selected: {}, marked: {}, registered: {} };
     state.pluginConfig.groups = [];
     state.pluginConfig.groupsById = new Map();
     state.pluginConfig.groupSections = new Map();
@@ -2113,6 +2248,25 @@
       config.source = snapshot.source;
       const source = $('plugin-config-source');
       if (source) source.textContent = snapshot.source ? `配置来源：${snapshot.source}` : '';
+      config.policySchema = {};
+      config.policyPrefs = { selected: {}, marked: {}, registered: {} };
+      try {
+        const [schemaPayload, prefsPayload] = await Promise.all([
+          apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-param-schema/${encodeURIComponent(plugin.id)}`)
+            .catch(() => null),
+          apiRequest(groupPolicyPrefsPath(instance.id)).catch(() => null)
+        ]);
+        if (!config.open || seq !== config.requestSeq) return;
+        config.policySchema = asRecord(asRecord(schemaPayload).fields);
+        const prefsData = asRecord(prefsPayload);
+        config.policyPrefs = {
+          selected: asRecord(prefsData.selected),
+          marked: asRecord(prefsData.marked),
+          registered: asRecord(prefsData.registered)
+        };
+      } catch (error) {
+        // The editor still works without the policy bridge; buttons stay disabled.
+      }
       if (!snapshot.apiAvailable || snapshot.schema.length === 0) {
         if (loading) loading.hidden = true;
         if (empty) {
@@ -3437,7 +3591,7 @@
     const auditBox = makeElement('div', 'group-policy-audit');
     section.appendChild(auditBox);
 
-    let policyPrefs = { selected: {}, marked: {} };
+    let policyPrefs = { selected: {}, marked: {}, registered: {} };
     let latestPolicyData = null;
     let latestPolicyScope = null;
 
@@ -3509,9 +3663,20 @@
       const value = policyPrefs.marked && policyPrefs.marked[policyPrefKey(pluginId)];
       return new Set(Array.isArray(value) ? value.map(String) : []);
     };
+    const registeredFor = (pluginId) => {
+      const value = policyPrefs.registered && policyPrefs.registered[policyPrefKey(pluginId)];
+      return asRecord(value);
+    };
+    const registeredPathFor = (pluginId, name) => {
+      const registry = registeredFor(pluginId);
+      return Object.keys(registry).find((path) => String(registry[path]) === String(name)) || '';
+    };
     const policyParamVisible = (pluginId, name) => {
       const selected = selectedParamsFor(pluginId);
-      return selected === null || selected.includes(String(name));
+      if (selected === null || selected.includes(String(name))) return true;
+      // A parameter registered from the plugin editor stays visible even when
+      // the operator later narrowed the manual roster.
+      return Object.values(registeredFor(pluginId)).map(String).includes(String(name));
     };
 
     const loadPolicyPrefs = async () => {
@@ -3519,10 +3684,11 @@
         const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-prefs`));
         policyPrefs = {
           selected: asRecord(data.selected),
-          marked: asRecord(data.marked)
+          marked: asRecord(data.marked),
+          registered: asRecord(data.registered)
         };
       } catch (error) {
-        policyPrefs = { selected: {}, marked: {} };
+        policyPrefs = { selected: {}, marked: {}, registered: {} };
         setStatus(formatError(error, '参数名单读取失败，暂按全部参数显示。'), 'error');
       }
     };
@@ -3530,11 +3696,16 @@
     const persistPolicyPrefs = async (message = '参数名单已保存。') => {
       const data = asRecord(await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-policy-prefs`, {
         method: 'POST',
-        body: { selected: policyPrefs.selected, marked: policyPrefs.marked }
+        body: {
+          selected: policyPrefs.selected,
+          marked: policyPrefs.marked,
+          registered: policyPrefs.registered
+        }
       }));
       policyPrefs = {
         selected: asRecord(data.selected),
-        marked: asRecord(data.marked)
+        marked: asRecord(data.marked),
+        registered: asRecord(data.registered)
       };
       setStatus(message, 'success');
     };
@@ -3581,7 +3752,11 @@
           box.dataset.prefPlugin = pluginId;
           box.dataset.prefName = name;
           box.checked = selected === null ? true : selected.includes(name);
+          const registeredPath = registeredPathFor(pluginId, name);
           label.append(box, document.createTextNode(` ${groupPolicyParamMeta(name, spec).label}（${name}）`));
+          if (registeredPath) {
+            label.appendChild(makeElement('small', 'group-policy-prefs-path', `来自参数编辑：${registeredPath}`));
+          }
           group.appendChild(label);
         }
         groups.appendChild(group);
@@ -3867,6 +4042,14 @@
             'group-policy-field-meta',
             defaultValue !== undefined ? `${inheritedLabel(name)}：${String(defaultValue)}` : '未设置（跟随插件参数）'
           ));
+          const registeredPath = registeredPathFor(pluginId, name);
+          if (registeredPath) {
+            label.appendChild(makeElement(
+              'small',
+              'group-policy-field-registered',
+              `来自插件参数：${registeredPath}`
+            ));
+          }
           const markButton = makeElement(
             'button',
             'btn btn-secondary btn-small group-policy-mark-button',

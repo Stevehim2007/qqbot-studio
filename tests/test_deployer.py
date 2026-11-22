@@ -339,6 +339,66 @@ class DeployerTests(unittest.TestCase):
         path = Path(self.tmp.name) / "studio-group-policy-prefs.json"
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_group_policy_prefs_registers_editor_paths(self):
+        # The plugin editor registers "config path -> policy param" pairs so the
+        # group-policy page can override parameters whose editor key differs
+        # from the runtime policy name (e.g. participation.group_probability ->
+        # participation.reply_probability).
+        saved = self.manager.set_group_policy_prefs(
+            selected={"qqbot_core_reply": ["participation.reply_probability"]},
+            marked={},
+            registered={
+                "qqbot_core_reply": {
+                    "participation.group_probability": "participation.reply_probability",
+                },
+            },
+        )
+        self.assertTrue(saved["ok"])
+        loaded = self.manager.get_group_policy_prefs()
+        self.assertEqual(
+            loaded["registered"],
+            {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+        )
+        self.assertIn("registered", loaded)
+
+    def test_group_policy_prefs_rejects_malformed_registry_entries(self):
+        saved = self.manager.set_group_policy_prefs(
+            selected={},
+            marked={},
+            registered={
+                "qqbot_core_reply": {
+                    "participation.group_probability": "participation.reply_probability",
+                    "bad path with spaces": "participation.reply_probability",
+                    "participation.mode": "",
+                },
+                "bad plugin id!": {"participation.mode": "participation.mode"},
+                "qqbot_food": "not-a-dict",
+            },
+        )
+        self.assertTrue(saved["ok"])
+        loaded = self.manager.get_group_policy_prefs()
+        self.assertEqual(
+            loaded["registered"],
+            {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+        )
+
+    def test_group_policy_prefs_registry_roundtrips_through_disk(self):
+        self.manager.set_group_policy_prefs(
+            selected={},
+            marked={},
+            registered={"qqbot_food": {"food_max_results": "max_results"}},
+        )
+        path = Path(self.tmp.name) / "studio-group-policy-prefs.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            payload["registered"],
+            {"qqbot_food": {"food_max_results": "max_results"}},
+        )
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        # An untouched file (pre-registry schema) must degrade to an empty map.
+        path.write_text(json.dumps({"selected": {}, "marked": {}}), encoding="utf-8")
+        self.assertEqual(self.manager.get_group_policy_prefs()["registered"], {})
+
     def test_memory_cards_maintenance_metrics_rebuild_export(self):
         db_path = self.manager.astrbot_data_dir / "plugin_data" / "qqbot_memory_commands" / "memory_cards.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)

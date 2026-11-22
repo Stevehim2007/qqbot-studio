@@ -1026,6 +1026,51 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.template_delete")
 
+    def test_group_policy_prefs_route_carries_registered_map(self):
+        captured = {}
+        self.studio.manager.get_group_policy_prefs = lambda: {
+            "ok": True,
+            "selected": {},
+            "marked": {},
+            "registered": {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+
+        def setter(**kwargs):
+            captured.update(kwargs)
+            return {
+                "ok": True,
+                "selected": kwargs.get("selected") or {},
+                "marked": kwargs.get("marked") or {},
+                "registered": kwargs.get("registered") or {},
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+
+        self.studio.manager.set_group_policy_prefs = setter
+        status, body = self._get("/api/instances/bot-1/group-policy-prefs")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            json.loads(body)["registered"],
+            {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+        )
+        status, body = self._post(
+            "/api/instances/bot-1/group-policy-prefs",
+            {
+                "selected": {"qqbot_core_reply": ["participation.reply_probability"]},
+                "marked": {},
+                "registered": {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            captured["registered"],
+            {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+        )
+        self.assertEqual(json.loads(body)["registered"], captured["registered"])
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get("/api/instances/bot-1/group-policy-prefs", token=False)
+        self.assertEqual(ctx.exception.code, 403)
+
     def test_prompt_profiles_post_has_bounded_large_body_limit(self):
         # > default 2MiB, but this endpoint is explicitly allowed up to 8MiB.
         prompt = "x" * (2 * 1024 * 1024)
