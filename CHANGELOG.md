@@ -2,7 +2,7 @@
 
 - 修复 Studio 的 persona/group memory、知识库导入、AI 记忆导入/删除 POST 分支误放在 GET 处理器中，导致界面写入返回 404；现已移到 `do_POST` 并保持 GET 查询独立。
 - 真实服务器验证：人格记忆/群记忆 GET 200；POST 新增、重复提示、查询、删除完整通过。
-- 测试：server 46 tests OK；主项目 879 tests OK。
+- 测试：server 47 tests OK（新增 persona/group memory POST 路由覆盖）；主项目 880 tests OK。
 
 ## v5.0.0-beta.25（测试版）— 四层记忆修复与测试环境收口
 

@@ -65,6 +65,15 @@ class FakeManager:
         self.dependency_payload = dict(payload or {})
         return {"ok": True, "installed": ["Pillow>=10"], "manual_required": []}
 
+    def get_memory_layers(self, *, layer, owner_id=""):
+        return {"ok": True, "available": True, "layer": layer, "owner_id": owner_id, "entries": [], "error": ""}
+
+    def add_memory_layer(self, *, layer, owner_id, content, title="", tags="", priority=0):
+        return {"ok": True, "id": "ml-test", "duplicate": False, "layer": layer, "owner_id": owner_id}
+
+    def delete_memory_layer(self, *, layer, owner_id, layer_id):
+        return {"ok": True}
+
     def get_napcat_login(self):
         return {"ok": True, "state": "qr_waiting", "qr_data_url": "data:image/png;base64,AAAA"}
 
@@ -1188,6 +1197,20 @@ class ServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)["plugin"]["enabled"])
+
+    def test_persona_memory_post_routes_are_writable(self):
+        status, body = self._post(
+            "/api/instances/bot-1/persona-memory",
+            {"persona_id": "p1", "content": "人格记忆", "priority": 3},
+        )
+        self.assertEqual(status, 200, body)
+        self.assertTrue(json.loads(body)["ok"])
+        status, body = self._post(
+            "/api/instances/bot-1/persona-memory/delete",
+            {"persona_id": "p1", "id": "ml-test"},
+        )
+        self.assertEqual(status, 200, body)
+        self.assertTrue(json.loads(body)["ok"])
 
     def test_v3_plugin_toggle_rejects_non_boolean_enabled(self):
         status, body = self._post(

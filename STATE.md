@@ -46,7 +46,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - 好感度：模型自主 `favorability_adjust delta=1 confidence=0.8`，`social_state.db` 记录 scope `291690445`、score 2.0。
 - 表达状态：真实消息后 `expression context injected mode=astrbot chars=20`。
 - 测试：core 258、safe 231、memory 151、bank 11、expression 7、studio server 46、deployer 34（3 个本机 6185 端口段失败为环境占用）。
-- 主项目全量 879 tests OK；测试已改为使用系统空闲端口，不再依赖固定 6185。
+- 主项目全量 880 tests OK；测试已改为使用系统空闲端口，不再依赖固定 6185。
 
 ## 已知边界
 
