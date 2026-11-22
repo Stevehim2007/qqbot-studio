@@ -1837,8 +1837,13 @@
     if (!match) match = entries.find(([name]) => name === key);
     if (!match) return null;
     const [param, spec] = match;
-    if (asRecord(spec).sensitive) return { param, spec, blocked: 'sensitive' };
-    if (!asRecord(spec).group_overridable) return { param, spec, blocked: 'global' };
+    const detail = asRecord(spec);
+    if (detail.system_managed) return { param, spec, blocked: 'system' };
+    if (detail.sensitive) return { param, spec, blocked: 'sensitive' };
+    if (!detail.group_overridable) return { param, spec, blocked: 'global' };
+    if (String(detail.source || '') === 'schema' && config.policyOverlaySupported === false) {
+      return { param, spec, blocked: 'overlay' };
+    }
     return { param, spec, blocked: '' };
   }
 
@@ -1858,9 +1863,11 @@
     const fields = Array.isArray(config.snapshot && config.snapshot.schema) ? config.snapshot.schema : [];
     const keys = new Set(fields.map((field) => String(field && field.key ? field.key : '')));
     let covered = 0;
+    const overlayReady = config.policyOverlaySupported !== false;
     for (const [name, rawSpec] of Object.entries(schema)) {
       const spec = asRecord(rawSpec);
-      if (!spec.group_overridable || spec.sensitive) continue;
+      if (!spec.group_overridable || spec.sensitive || spec.system_managed) continue;
+      if (String(spec.source || '') === 'schema' && !overlayReady) continue;
       const configKey = String(spec.config_key || name);
       if (keys.has(configKey) || keys.has(String(name))) covered += 1;
     }
@@ -1900,6 +1907,18 @@
       button.title = '该参数只允许全局修改，不能按群覆盖。';
       return;
     }
+    if (target.blocked === 'system') {
+      button.textContent = '系统字段';
+      button.disabled = true;
+      button.title = '这是机器管理的内部字段（owner_epoch / 版本锚点），只能由程序维护，不参与群策略。';
+      return;
+    }
+    if (target.blocked === 'overlay') {
+      button.textContent = '仅全局';
+      button.disabled = true;
+      button.title = '该插件尚未接入按群配置覆盖（缺少 policy_overlay.py），当前只能全局修改；升级插件后自动可登记。';
+      return;
+    }
     button.disabled = false;
     button.textContent = registered ? '已在群策略' : '加入群策略';
     button.title = registered
@@ -1932,8 +1951,13 @@
         // An absent roster means "show every parameter". Materialise the full
         // overridable list first, otherwise registering one parameter would
         // narrow the group-policy page to that one parameter.
+        const overlayReady = config.policyOverlaySupported !== false;
         const eligible = Object.entries(asRecord(config.policySchema))
-          .filter(([, spec]) => asRecord(spec).group_overridable && !asRecord(spec).sensitive)
+          .filter(([, spec]) => {
+            const detail = asRecord(spec);
+            if (!detail.group_overridable || detail.sensitive || detail.system_managed) return false;
+            return String(detail.source || '') !== 'schema' || overlayReady;
+          })
           .map(([name]) => name);
         const list = Array.isArray(selected[pluginId]) ? selected[pluginId].map(String) : eligible.slice();
         if (!list.includes(target.param)) list.push(target.param);
@@ -2200,6 +2224,8 @@
     state.pluginConfig.snapshot = null;
     state.pluginConfig.policySchema = {};
     state.pluginConfig.policyPrefs = { selected: {}, marked: {}, registered: {} };
+    state.pluginConfig.policyOverlaySupported = false;
+    state.pluginConfig.policyUnsupported = {};
     state.pluginConfig.groups = [];
     state.pluginConfig.groupsById = new Map();
     state.pluginConfig.groupSections = new Map();
@@ -2273,6 +2299,8 @@
       if (source) source.textContent = snapshot.source ? `配置来源：${snapshot.source}` : '';
       config.policySchema = {};
       config.policyPrefs = { selected: {}, marked: {}, registered: {} };
+      config.policyOverlaySupported = false;
+      config.policyUnsupported = {};
       try {
         const [schemaPayload, prefsPayload] = await Promise.all([
           apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/group-param-schema/${encodeURIComponent(plugin.id)}`)
@@ -2280,7 +2308,10 @@
           apiRequest(groupPolicyPrefsPath(instance.id)).catch(() => null)
         ]);
         if (!config.open || seq !== config.requestSeq) return;
-        config.policySchema = asRecord(asRecord(schemaPayload).fields);
+        const schemaData = asRecord(schemaPayload);
+        config.policySchema = asRecord(schemaData.fields);
+        config.policyOverlaySupported = Boolean(schemaData.overlay_supported);
+        config.policyUnsupported = asRecord(schemaData.unsupported);
         const prefsData = asRecord(prefsPayload);
         config.policyPrefs = {
           selected: asRecord(prefsData.selected),
@@ -3598,13 +3629,27 @@
     toolbar.append(scopeSelect, scopeInput, loadButton);
     section.appendChild(toolbar);
 
+    let policyShowAll = false;
     const prefsBar = makeElement('div', 'group-policy-prefs-bar');
     const manageParamsButton = makeElement('button', 'btn btn-secondary btn-small', '参数名单');
     manageParamsButton.type = 'button';
     const markedParamsButton = makeElement('button', 'btn btn-secondary btn-small', '标记表');
     markedParamsButton.type = 'button';
-    prefsBar.append(manageParamsButton, markedParamsButton);
+    const showAllLabel = makeElement('label', 'group-policy-show-all');
+    const showAllBox = document.createElement('input');
+    showAllBox.type = 'checkbox';
+    showAllBox.checked = policyShowAll;
+    showAllLabel.append(showAllBox, document.createTextNode(' 显示全部参数'));
+    showAllLabel.title = '默认只显示已登记（来自插件参数）与星标参数；勾选后显示该插件的全部可按群覆盖参数。';
+    prefsBar.append(manageParamsButton, markedParamsButton, showAllLabel);
     section.appendChild(prefsBar);
+    showAllBox.addEventListener('change', () => {
+      policyShowAll = Boolean(showAllBox.checked);
+      if (latestPolicyData && latestPolicyScope) renderScope(latestPolicyData, latestPolicyScope);
+      if (!prefsPanel.hidden && latestPolicyData && latestPolicyScope) {
+        renderPrefsPanel(latestPolicyData, latestPolicyScope);
+      }
+    });
 
     const prefsPanel = makeElement('div', 'group-policy-prefs-panel');
     prefsPanel.hidden = true;
@@ -3700,11 +3745,17 @@
       return Object.keys(registry).find((path) => String(registry[path]) === String(name)) || '';
     };
     const policyParamVisible = (pluginId, name) => {
+      const key = String(name);
       const selected = selectedParamsFor(pluginId);
-      if (selected === null || selected.includes(String(name))) return true;
-      // A parameter registered from the plugin editor stays visible even when
-      // the operator later narrowed the manual roster.
-      return Object.values(registeredFor(pluginId)).map(String).includes(String(name));
+      if (selected !== null && selected.includes(key)) return true;
+      // A parameter registered from the plugin editor always stays visible.
+      if (Object.values(registeredFor(pluginId)).map(String).includes(key)) return true;
+      // Starred (marked) parameters stay visible as the operator's shortlist.
+      if (markedParamsFor(pluginId).has(key)) return true;
+      // An explicit roster already narrows the list; otherwise the page hides
+      // the hundreds of untouched parameters until "显示全部参数" is ticked.
+      if (selected !== null) return false;
+      return policyShowAll;
     };
 
     const loadPolicyPrefs = async () => {
@@ -3768,7 +3819,8 @@
       for (const pluginId of available) {
         const schema = data.schemas && data.schemas[pluginId] ? data.schemas[pluginId] : {};
         const params = Object.entries(schema)
-          .filter(([, spec]) => spec && spec.group_overridable && !spec.sensitive);
+          .filter(([, spec]) => spec && spec.group_overridable && !spec.sensitive && !spec.system_managed)
+          .filter(([name]) => policyParamVisible(pluginId, name));
         if (!params.length) continue;
         const group = makeElement('div', 'group-policy-prefs-group');
         group.appendChild(makeElement('strong', '', pluginId));
@@ -3804,16 +3856,28 @@
       const save = makeElement('button', 'btn btn-primary btn-small', '保存名单');
       save.type = 'button';
       save.addEventListener('click', async () => {
-        const selected = {};
+        // Start from the current roster and only rewrite plugins that actually
+        // rendered rows: with "显示全部参数" off the page deliberately hides most
+        // parameters, and saving must not silently narrow `null` (= all) to the
+        // handful that happened to be visible.
+        const previous = asRecord(policyPrefs.selected);
+        const selected = { ...previous };
+        const touched = new Set();
         for (const box of prefsPanel.querySelectorAll('[data-pref-plugin]')) {
           const pluginId = String(box.dataset.prefPlugin || '');
           const name = String(box.dataset.prefName || '');
           if (!pluginId || !name) continue;
-          if (!selected[pluginId]) selected[pluginId] = [];
-          if (box.checked) selected[pluginId].push(name);
-        }
-        for (const pluginId of available) {
-          if (!Object.prototype.hasOwnProperty.call(selected, pluginId)) selected[pluginId] = [];
+          if (!touched.has(pluginId)) {
+            touched.add(pluginId);
+            const prior = previous[pluginId];
+            selected[pluginId] = Array.isArray(prior) ? prior.map(String) : [];
+          }
+          const list = selected[pluginId];
+          if (box.checked) {
+            if (!list.includes(name)) list.push(name);
+          } else {
+            selected[pluginId] = list.filter((item) => item !== name);
+          }
         }
         policyPrefs.selected = selected;
         try {
@@ -4158,6 +4222,24 @@
       await loadPolicyPrefs();
       try {
         const data = await apiRequest(scopePath(scope));
+        if (!data.schemas || !Object.keys(data.schemas).length) {
+          // The scope snapshot no longer ships every plugin's schema; fetch it
+          // per plugin only when a scope is actually open.
+          const pluginIds = Array.isArray(data.available_plugins) ? data.available_plugins : [];
+          const schemas = {};
+          await Promise.all(pluginIds.map(async (pluginId) => {
+            const id = String(pluginId);
+            try {
+              const payload = await apiRequest(
+                `/api/instances/${encodeURIComponent(instance.id)}/group-param-schema/${encodeURIComponent(id)}`
+              );
+              schemas[id] = asRecord(asRecord(payload).fields);
+            } catch (error) {
+              schemas[id] = {};
+            }
+          }));
+          data.schemas = schemas;
+        }
         renderScope(data, scope);
         setStatus('策略已加载；修改会在下一条消息生效。', 'success');
         await loadAudit(scope);

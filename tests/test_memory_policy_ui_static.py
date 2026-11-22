@@ -476,8 +476,11 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
         self._has(self.console_js, (
             "function pluginFieldPolicyTarget(field)",
             "entries.find(([, spec]) => String(asRecord(spec).config_key || '') === key)",
-            "if (asRecord(spec).sensitive) return { param, spec, blocked: 'sensitive' };",
-            "if (!asRecord(spec).group_overridable) return { param, spec, blocked: 'global' };",
+            "if (detail.system_managed) return { param, spec, blocked: 'system' };",
+            "if (detail.sensitive) return { param, spec, blocked: 'sensitive' };",
+            "if (!detail.group_overridable) return { param, spec, blocked: 'global' };",
+            "if (String(detail.source || '') === 'schema' && config.policyOverlaySupported === false) {",
+            "blocked: 'overlay'",
             "'仅全局'",
         ), "console.js")
 
@@ -495,7 +498,8 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
         # instead of letting operators assume all of them are.
         self._has(self.console_js, (
             "function pluginConfigPolicyCoverage(config)",
-            "if (!spec.group_overridable || spec.sensitive) continue;",
+            "if (!spec.group_overridable || spec.sensitive || spec.system_managed) continue;",
+            "if (String(spec.source || '') === 'schema' && !overlayReady) continue;",
             "function pluginConfigPolicyHint(config)",
             "` · 可按群覆盖 ${covered}/${total} 个参数`",
         ), "console.js")
@@ -506,7 +510,8 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
             "const registered = { ...asRecord(prefs.registered) };",
             "registry[path] = target.param;",
             "const eligible = Object.entries(asRecord(config.policySchema))",
-            ".filter(([, spec]) => asRecord(spec).group_overridable && !asRecord(spec).sensitive)",
+            "if (!detail.group_overridable || detail.sensitive || detail.system_managed) return false;",
+            "return String(detail.source || '') !== 'schema' || overlayReady;",
             "body: { selected, marked, registered }",
         ), "console.js")
 
@@ -514,16 +519,48 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
         self._has(self.console_js, (
             "group-param-schema/${encodeURIComponent(plugin.id)}",
             "groupPolicyPrefsPath(instance.id)",
-            "config.policySchema = asRecord(asRecord(schemaPayload).fields);",
+            "config.policySchema = asRecord(schemaData.fields);",
+            "config.policyOverlaySupported = Boolean(schemaData.overlay_supported);",
+            "config.policyUnsupported = asRecord(schemaData.unsupported);",
             "config.policyPrefs = {",
             "state.pluginConfig.policyPrefs = { selected: {}, marked: {}, registered: {} };",
+        ), "console.js")
+
+    def test_group_policy_page_fetches_schema_lazily(self) -> None:
+        # `policy.scope` stopped embedding every plugin schema (hundreds of
+        # fields); the page must backfill per plugin before rendering.
+        self._has(self.console_js, (
+            "if (!data.schemas || !Object.keys(data.schemas).length) {",
+            "const pluginIds = Array.isArray(data.available_plugins) ? data.available_plugins : [];",
+            "group-param-schema/${encodeURIComponent(id)}",
+            "schemas[id] = asRecord(asRecord(payload).fields);",
+            "data.schemas = schemas;",
+        ), "console.js")
+
+    def test_group_policy_page_defaults_to_registered_and_marked(self) -> None:
+        self._has(self.console_js, (
+            "let policyShowAll = false;",
+            "' 显示全部参数'",
+            "policyShowAll = Boolean(showAllBox.checked);",
+            "if (markedParamsFor(pluginId).has(key)) return true;",
+            "return policyShowAll;",
+        ), "console.js")
+
+    def test_editor_button_states_cover_system_and_overlay(self) -> None:
+        self._has(self.console_js, (
+            "if (target.blocked === 'system') {",
+            "button.textContent = '系统字段';",
+            "if (target.blocked === 'overlay') {",
+            "该插件尚未接入按群配置覆盖（缺少 policy_overlay.py）",
         ), "console.js")
 
     def test_group_policy_page_honours_registered_params(self) -> None:
         self._has(self.console_js, (
             "registeredFor(pluginId)",
             "registeredPathFor(pluginId, name)",
-            "return Object.values(registeredFor(pluginId)).map(String).includes(String(name));",
+            "if (Object.values(registeredFor(pluginId)).map(String).includes(key)) return true;",
+            "if (markedParamsFor(pluginId).has(key)) return true;",
+            "return policyShowAll;",
             "`来自参数编辑：${registeredPath}`",
             "`来自插件参数：${registeredPath}`",
             "registered: policyPrefs.registered",

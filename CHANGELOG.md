@@ -6,7 +6,12 @@
 - 群策略页：登记过的参数即使被"参数名单"收窄也保持可见，并标注来源路径（`.group-policy-field-registered` / `.group-policy-prefs-path`）。
 - 移动端（≤640px）字段头换行，开关独占一行居中，避免挤压标题。
 - 文档：[分群插件启用与分群参数设计](docs/group-plugin-config.md) 新增 §6.2。
-- 测试：deployer 38、server 48、记忆策略 UI 静态契约 31、前端组件 5，均 OK。
+- **任意标量参数按群覆盖（config.overlay.v1）**：`qqbot_safe_tools` 新增 `spec_registry`，按 `_conf_schema.json` 自动生成 `ParamSpec`（手写 spec 优先）；`qqbot_core_reply` / `qqbot_food` / `qqbot_stickers` 各自 vendored `policy_overlay.py`，事件入口一次性取策略、`ConfigReader`/`_cfg`/`PluginConfig.raw` 先查 overlay 再查自身配置，`creator_task` 校验阻断子任务隐式继承（后台任务用 `detached()`）。插件版本：core_reply 4.3.13、food 3.0.6、stickers 3.0.4、safe_tools 3.4.0（发布 tag `v4.4.0-beta.64`）。
+- `policy.param_schema` 新增 `overlay_supported`/`unsupported`/`digest`/`registry_digest`/`scalar_count` 与每字段 `source`/`system_managed`；`policy.scope` 支持 `?include_schema=0`（只回 `schema_digests`），前端按插件惰性拉 schema，群策略页不再一次性嵌 500+ 字段。
+- 群策略页默认只显示「已登记 + 已星标」参数，新增「显示全部参数」开关；保存名单不再把未渲染插件的 `null`（全部）悄悄收窄。
+- 服务端对 `registered` 做逐条校验（插件已登记、路径↔策略参数匹配、非敏感/系统字段、schema 项需 `overlay_supported`），不合法返回 400。
+- 文档：[分群插件启用与分群参数设计](docs/group-plugin-config.md) 新增 §6.3。
+- 测试：主项目 897、core_reply 264、food 203、stickers 173、safe_tools 242，均 OK。
 
 ## v5.0.0-beta.30（测试版）— 辅助 AI Key 权限修正
 

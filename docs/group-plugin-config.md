@@ -236,6 +236,39 @@ policy_param 都必须是 `^[A-Za-z0-9_.:-]{1,160}$`，每个插件最多 500 �
 注意：登记只影响 UI 可见性与映射记录，真正生效仍由 `policy.set` 按
 `group_overridable` 校验。
 
+### 6.3 任意标量参数按群覆盖（config.overlay.v1）
+
+从 v5.0.0-beta.31 起，v1 三个插件（`qqbot_core_reply` 4.3.13 / `qqbot_food` 3.0.6 /
+`qqbot_stickers` 3.0.4 + `qqbot_safe_tools` 3.4.0）不再依赖手写 `PLUGIN_PARAM_SPECS`
+才能按群覆盖：
+
+- **spec 生成**：`qqbot_safe_tools/spec_registry.py` 扫兄弟目录的 `_conf_schema.json`，
+  把标量字段（bool/int/float/string/text）生成 `ParamSpec`（`source="schema"`），
+  手写 spec 永远优先（按名字与 `config_key` 双去重）。`list`/`object`/`dict`/`file`/`json`
+  归为复杂类型，v1 不支持（`unsupported` 会列出，编辑器显示「仅全局」）。
+- **两类例外**：凭据兜底正则（`api_key`/`token`/`secret`/`cookie` 等，当前插件 schema 0 命中）
+  与 `system_managed` 内部锚点（`owner_epoch`、`*_schema_version`、`registry_abi_version`，
+  实测 8 个）。它们 `group_overridable=false`，编辑器显示「系统字段」且不可登记。
+- **运行时注入**：每个插件 vendored 一份 `policy_overlay.py`（`config.overlay.v1`）。
+  事件入口 `policy_scope()` 只查一次 `policy_effective`，把 `params` 与
+  `config_values`（策略名→插件配置键，来自 `ParamSpec.config_key`）放进 `ContextVar`；
+  `_cfg` / `ConfigReader` 先查 overlay 再查自身配置，`RuntimeConfig` 顺序是
+  overrides > overlay > base。`creator_task` 身份校验阻断 `create_task` 隐式继承，
+  后台任务要用 `detached()` 显式接手。
+- **契约**：`policy.param_schema` 返回 `overlay_supported`（探测兄弟目录
+  `policy_overlay.py`）、`unsupported`、`digest`、`registry_digest`、`scalar_count`；
+  `policy.scope` 支持 `include_schema=0`，此时只回 `schema_digests`，Studio 在打开某个群后
+  按 `available_plugins` 逐插件拉 `group-param-schema/<plugin>` 惰性回填。
+- **服务端校验**：`POST group-policy-prefs` 的 `registered` 会逐条对
+  `policy.param_schema` 校验——插件必须已登记、`config_path` 必须能映射到该策略参数、
+  不得是敏感/系统字段、schema 生成的参数要求 `overlay_supported`，否则 400（缺省 deny）。
+- **群策略页默认收窄**：只显示「已登记 + 已星标」的参数，勾选「显示全部参数」
+  才展开该插件的全部可覆盖项；`selected` 为 `null`（=全部）时保存名单不会把未渲染的插件
+  悄悄收窄。
+- **覆盖率**：v1 三插件标量全量可覆盖——core_reply 112、food 94、stickers 107
+  （`_conf_schema.json` 标量口径，减 8 个系统锚点；实际数字以
+  `pluginConfigPolicyCoverage()` 运行时统计为准）。
+
 ## 7. 失败与安全
 
 - 策略库损坏/读不到：回退全局默认，记录错误；不能把所有群误关。

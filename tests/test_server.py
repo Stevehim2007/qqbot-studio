@@ -968,12 +968,20 @@ class ServerTests(unittest.TestCase):
         status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876")
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.scope")
-        self.assertEqual(calls[-1][2], {"scope_type": "group", "scope_id": "1056821876"})
+        self.assertEqual(
+            calls[-1][2],
+            {"scope_type": "group", "scope_id": "1056821876", "include_schema": True},
+        )
         self.assertEqual(json.loads(body)["plugin_configs"]["qqbot_food"]["food_max_results"], 7)
         self.assertEqual(
             json.loads(body)["plugin_configs"]["qqbot_core_reply"]["participation.group_probability"],
             0.0,
         )
+        status, body = self._get(
+            "/api/instances/bot-1/group-policies/group/1056821876?include_schema=0"
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(calls[-1][2]["include_schema"])
         status, body = self._get("/api/instances/bot-1/group-policies/group/1056821876/audit?limit=10&offset=5")
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.audit")
@@ -1025,6 +1033,99 @@ class ServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(calls[-1][0], "policy.template_delete")
+
+    def test_group_policy_prefs_rejects_unusable_registry_entries(self):
+        schema = {
+            "participation.reply_probability": {
+                "kind": "float",
+                "config_key": "participation.group_probability",
+                "group_overridable": True,
+                "sensitive": False,
+                "system_managed": False,
+                "source": "manual",
+            },
+            "participation.mention_only": {
+                "kind": "bool",
+                "config_key": "participation.group_mention_only",
+                "group_overridable": True,
+                "sensitive": False,
+                "system_managed": False,
+                "source": "manual",
+            },
+            "safe_tools.api_key": {
+                "kind": "str",
+                "config_key": "safe_tools.api_key",
+                "group_overridable": False,
+                "sensitive": True,
+                "system_managed": False,
+                "source": "schema",
+            },
+            "owner_epoch": {
+                "kind": "str",
+                "config_key": "owner_epoch",
+                "group_overridable": False,
+                "sensitive": False,
+                "system_managed": True,
+                "source": "schema",
+            },
+        }
+
+        def control(method, *, scope=None, body=None):
+            if method != "policy.param_schema":
+                return {"ok": False, "error": "unexpected"}
+            return {
+                "ok": True,
+                "plugin_id": body["plugin_id"],
+                "fields": schema,
+                "overlay_supported": True,
+            }
+
+        self.studio.manager.plugin_control_call = control
+        saved = {}
+        self.studio.manager.set_group_policy_prefs = lambda **kwargs: saved.update(kwargs) or {
+            "ok": True,
+            "selected": kwargs.get("selected") or {},
+            "marked": kwargs.get("marked") or {},
+            "registered": kwargs.get("registered") or {},
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+        cases = (
+            ({"qqbot_core_reply": {"no.such.key": "participation.reply_probability"}}, "不存在参数"),
+            ({"qqbot_core_reply": {"participation.group_probability": "no.such.param"}}, "不存在策略参数"),
+            (
+                {
+                    "qqbot_core_reply": {
+                        "participation.group_probability": "participation.mention_only"
+                    }
+                },
+                "不匹配",
+            ),
+            ({"qqbot_safe_tools": {"safe_tools.api_key": "safe_tools.api_key"}}, "敏感或系统字段"),
+            ({"qqbot_safe_tools": {"owner_epoch": "owner_epoch"}}, "敏感或系统字段"),
+            ({"qqbot_core_reply": []}, "必须是对象"),
+        )
+        for registered, needle in cases:
+            status, body = self._post(
+                "/api/instances/bot-1/group-policy-prefs", {"registered": registered}
+            )
+            self.assertEqual(status, 400)
+            self.assertIn(needle, body)
+        self.assertEqual(saved, {})
+        status, body = self._post(
+            "/api/instances/bot-1/group-policy-prefs",
+            {
+                "registered": {
+                    "qqbot_core_reply": {
+                        "participation.group_probability": "participation.reply_probability"
+                    }
+                }
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            saved["registered"],
+            {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
+        )
 
     def test_group_policy_prefs_route_carries_registered_map(self):
         captured = {}

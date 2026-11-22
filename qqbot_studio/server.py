@@ -735,17 +735,84 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                 )
             )
             return True
+        include_values = query.get("include_schema") or ["1"]
+        include_schema = str(include_values[0]).strip().lower() not in {"0", "false", "no", "off", ""}
         self._serve_control_result(
             lambda: self._attach_plugin_configs(
                 manager,
                 caller(
                     "policy.scope",
                     scope=("admin", "global"),
-                    body={"scope_type": scope_type, "scope_id": scope_id},
+                    body={
+                        "scope_type": scope_type,
+                        "scope_id": scope_id,
+                        "include_schema": include_schema,
+                    },
                 ),
             )
         )
         return True
+
+    @staticmethod
+    def _policy_registry_problem(caller: Any, registered: Any) -> str:
+        """Reject a registry entry that would silently never take effect.
+
+        The UI can only offer parameters that the policy bridge really knows
+        about; this is the server-side half of that contract (default deny).
+        """
+        if not isinstance(registered, dict):
+            return "registered 必须是对象：{plugin_id: {config_path: policy_param}}。"
+        schemas: dict[str, dict[str, Any]] = {}
+        overlay: dict[str, bool] = {}
+        for plugin_id, paths in registered.items():
+            plugin = str(plugin_id or "").strip()
+            if not plugin:
+                return "registered 中含空 plugin_id。"
+            if not isinstance(paths, dict):
+                return f"registered[{plugin}] 必须是对象。"
+            if plugin not in schemas:
+                try:
+                    result = caller(
+                        "policy.param_schema", scope=("admin", "global"), body={"plugin_id": plugin}
+                    )
+                except Exception:  # noqa: BLE001 - bridge errors become a 400 contract failure
+                    return f"无法读取插件 {plugin} 的参数注册表。"
+                if not isinstance(result, dict) or not result.get("ok", True):
+                    return f"插件 {plugin} 未在策略注册表中登记。"
+                fields = result.get("fields")
+                schemas[plugin] = fields if isinstance(fields, dict) else {}
+                overlay[plugin] = bool(result.get("overlay_supported"))
+            fields = schemas[plugin]
+            overlay_ready = overlay.get(plugin, False)
+            for config_path, param in paths.items():
+                path = str(config_path or "").strip()
+                name = str(param or "").strip()
+                if not path or not name:
+                    return f"registered[{plugin}] 含空路径或空策略参数。"
+                target = None
+                for field_name, spec in fields.items():
+                    if not isinstance(spec, dict):
+                        continue
+                    if str(spec.get("config_key") or "") == path or field_name == path:
+                        target = spec
+                        break
+                if target is None:
+                    return f"{plugin} 不存在参数 {path}，不能登记到群策略。"
+                if name not in fields:
+                    return f"{plugin} 不存在策略参数 {name}，不能登记到群策略。"
+                spec = fields[name]
+                if not isinstance(spec, dict):
+                    return f"{plugin}.{name} 的参数定义无效。"
+                mapped = str(spec.get("config_key") or name)
+                if name != path and mapped != path:
+                    return f"{plugin}.{path} 与策略参数 {name} 不匹配。"
+                if spec.get("sensitive") or spec.get("system_managed"):
+                    return f"{plugin}.{path} 是敏感或系统字段，不能按群覆盖。"
+                if not spec.get("group_overridable", True):
+                    return f"{plugin}.{path} 不允许按群覆盖。"
+                if str(spec.get("source") or "") == "schema" and not overlay_ready:
+                    return f"插件 {plugin} 尚未接入按群配置覆盖（缺少 policy_overlay.py）。"
+        return ""
 
     def _group_policy_write(self, manager: Any, subroute: str, payload: dict[str, Any]) -> bool:
         parts = [urllib.parse.unquote(part) for part in subroute.split("/") if part]
@@ -759,11 +826,18 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     {"ok": False, "code": "prefs_unavailable", "message": "当前后端不支持群策略参数偏好。"},
                 )
                 return True
+            contract = getattr(manager, "plugin_control_call", None)
+            registered = payload.get("registered")
+            if registered and callable(contract):
+                problem = self._policy_registry_problem(contract, registered)
+                if problem:
+                    self._error(HTTPStatus.BAD_REQUEST, problem)
+                    return True
             try:
                 result = setter(
                     selected=payload.get("selected"),
                     marked=payload.get("marked"),
-                    registered=payload.get("registered"),
+                    registered=registered,
                 )
             except (OSError, ValueError) as exc:
                 self._error(HTTPStatus.BAD_REQUEST, f"保存群策略参数偏好失败：{exc}")

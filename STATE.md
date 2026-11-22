@@ -9,9 +9,11 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 | 项目 | 版本 |
 |---|---|
 | 主项目 | `5.0.0-beta.31`（tag `v5.0.0-beta.31`） |
-| 插件仓库 tag | `v4.4.0-beta.63` / `8a9277e` |
-| core_reply | `4.3.12` |
-| safe_tools | `3.3.5` |
+| 插件仓库 tag | `v4.4.0-beta.64`（工作区已构建，待提交/推送） |
+| core_reply | `4.3.13` |
+| safe_tools | `3.4.0` |
+| food | `3.0.6` |
+| stickers | `3.0.4` |
 | memory_commands | `4.3.3` |
 | memory_bank | `0.6.0`（仅 bot-11） |
 | expression_state | `1.0.0`（仅 bot-11） |
@@ -27,7 +29,8 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
   - `qqbot_memory_commands 4.3.1`：卡片、收尾、purpose、FTS、Studio 维护；
   - `qqbot_memory_bank 0.4.1`：`memory_layer`（人格/群核心记忆）、`knowledge_entry`（个人 AI 事实）、`knowledge_doc`（用户导入共享资料）、自动召回；
   - `qqbot_expression_state 1.0.0`：情绪/风格，不调用模型；
-  - `qqbot_core_reply 4.3.12`：唯一聊天 owner，人格注入、参与判定、群聊非 @ 硬门、表达块注入。
+  - `qqbot_core_reply 4.3.13`：唯一聊天 owner，人格注入、参与判定、群聊非 @ 硬门、表达块注入。
+- 群参数覆盖（v5.0.0-beta.31 新增）：`qqbot_safe_tools/spec_registry.py` 按 `_conf_schema.json` 生成标量 spec；core_reply/food/stickers 各自 `policy_overlay.py`（`config.overlay.v1`）在事件入口注入 `ContextVar`，`ConfigReader`/`_cfg`/`PluginConfig.raw` 先查 overlay；Studio 插件参数编辑器可把任意标量参数「加入群策略」，服务端逐条校验 `registered`。
 - 控制台记忆结构：人格记忆、群记忆、个人 AI 记忆、知识库（用户导入）、记忆卡片、表达状态、群成员好感度、人格语料库、记忆与检索策略、高级原生记忆。
 
 ## 当前部署
@@ -36,6 +39,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - bot-1：QQ 官方，生产实例；健康。
 - bot-11：OneBot + 内置 NapCat，`qq_account=871247845`；AstrBot healthy，aiocqhttp 已连接。
 - bot-4 / bot-7：保留实例；健康。
+- 待部署：主项目 `5.0.0-beta.31` 与插件 `v4.4.0-beta.64` 尚未同步到服务器（线上仍是 beta.30 / core 4.3.12 / safe_tools 3.3.5）。
 - 实测（2026-11-22 直接读容器内 `data/astrbot/plugins/*/metadata.yaml`）：bot-1/4/7/11 全部 core 4.3.12 / safe_tools 3.3.5 / memory_commands 4.3.3；四台 `qqbot_memory_commands/aux.py` 均含 `from . import aux_ai` 相对导入修复。bot-11 另装 memory_bank 0.6.0 / expression 1.0.0。
 - 注意：`studio-plugins/registry.json` 里的版本是旧的（4.1.0 / 3.2.5），插件实际是手工装进容器 data 目录的，判断线上版本要看 `metadata.yaml` 而不是 registry。
 
@@ -48,7 +52,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - 表达状态：真实消息后 `expression context injected mode=astrbot chars=20`。
 - 测试：core 258、safe 231、memory 151、bank 11、expression 7、studio server 46、deployer 34（3 个本机 6185 端口段失败为环境占用）。
 - 主项目全量 893 tests OK（beta.31，新增 13 个群策略登记测试）；测试使用系统空闲端口，不再依赖固定 6185。
-- 插件参数「加入群策略」（beta.31）：deployer 38、server 48、记忆策略 UI 静态契约 31、前端组件 5，均 OK；`registered` 映射与 `0600` 文件权限、坏项丢弃、旧文件兼容均有覆盖（未跑全量）。
+- 插件参数「加入群策略」（beta.31）：主项目全量 **897 tests OK**；三个插件 overlay 契约（core_reply 264、food 203、stickers 173）与 safe_tools 242 全 OK；`registered` 映射、`0600` 文件权限、坏项丢弃、旧文件兼容、服务端 400 校验（不存在参数/敏感字段/不匹配/非对象）、`include_schema=0`、惰性 schema、默认收窄均有覆盖。
 
 ## 已知边界
 
@@ -66,5 +70,6 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 3. 浏览器手工验收 Studio 新面板（人格/群记忆、scope 选择器、知识库导入）。
 4. 视需要补 embedding/BGE 自动召回和知识库切块。
 
-5. 把 `5.0.0-beta.31` 同步到服务器 `/home/ubuntu/qqbot-studio`（群策略参数登记需要新前端 + 新 deployer），再浏览器验收：插件参数页点「加入群策略」→ 群策略页出现该参数并可按群覆盖。
-6. 插件 v4.4.0-beta.63 已含 `qqbot_memory_commands/aux.py` 相对导入修复（插件源码与 ZIP 均已核对），无需重打 beta.64；如需确认线上，只在 bot-11 解包核对 `aux.py`。
+5. 提交插件仓（`v4.4.0-beta.64`：core_reply 4.3.13 / food 3.0.6 / stickers 3.0.4 / safe_tools 3.4.0）与主项目（`5.0.0-beta.31`），push + 打 tag。
+6. 服务器 `/home/ubuntu/qqbot-studio` 升级到 beta.31，并把四个插件 ZIP 装进 bot-1/4/7/11；部署前备份 `studio-group-policy-prefs.json` 与 safe_tools config。
+7. 浏览器/手机验收：插件参数页点「加入群策略」→ 群策略页出现该参数 → 按群保存 → 日志确认 overlay 生效；再验「显示全部参数」与 v2 待做的复杂类型提示。
