@@ -1453,6 +1453,16 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
                     self._json(HTTPStatus.OK, getter(scope=scope, persona_id=persona_id, limit=limit))
                     return
+                if subroute == "knowledge-base":
+                    getter = getattr(manager, "get_knowledge_base", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供用户知识库接口。")
+                        return
+                    scope = str((query.get("scope") or [""])[0]).strip()
+                    persona_id = str((query.get("persona_id") or [""])[0]).strip()
+                    limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
+                    self._json(HTTPStatus.OK, getter(scope=scope, persona_id=persona_id, limit=limit))
+                    return
                 if subroute == "favorability":
                     getter = getattr(manager, "get_favorability", None)
                     if not callable(getter):
@@ -1470,6 +1480,31 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     scope = str((query.get("scope") or [""])[0]).strip()
                     limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
                     self._json(HTTPStatus.OK, getter(scope=scope, limit=limit))
+                    return
+                if subroute in {"knowledge-base", "knowledge-base/delete"}:
+                    if subroute.endswith("/delete"):
+                        deleter = getattr(manager, "delete_knowledge_doc", None)
+                        if not callable(deleter):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供用户知识库删除接口。")
+                            return
+                        result = deleter(
+                            entry_id=str(payload.get("entry_id") or "").strip(),
+                            scope=str(payload.get("scope") or "").strip(),
+                            persona_id=str(payload.get("persona_id") or "").strip(),
+                        )
+                    else:
+                        adder = getattr(manager, "add_knowledge_doc", None)
+                        if not callable(adder):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供用户知识库导入接口。")
+                            return
+                        result = adder(
+                            scope=str(payload.get("scope") or "").strip(),
+                            persona_id=str(payload.get("persona_id") or "").strip(),
+                            title=str(payload.get("title") or "").strip(),
+                            content=str(payload.get("content") or ""),
+                            tags=str(payload.get("tags") or "").strip(),
+                        )
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
                     return
                 if subroute in {"memory-bank", "memory-bank/delete"}:
                     if subroute.endswith("/delete"):

@@ -394,35 +394,27 @@ V7 是本轮重点，分三层：
 
 别名：`/记忆管理`、`/memory`。会话/人格命令：`/会话 状态`、`/会话 新建`、`/人格 列表`、`/人格 切换 <id>`。
 
-### 9.7 知识记忆库（模型工具）
+### 9.7 用户导入知识库与 AI 记忆
 
-**和记忆卡片的区别**：记忆卡片是对话派生的事件/未完成话题（`memory_cards.db`），不是聊天背景，也不等同于知识库；知识记忆库是显式事实，只有模型调用 `memory_search` 时才取，不默认进 prompt。两库独立。
+两套数据物理分开：
 
-**三层分区**：知识库按 `scope + persona_id + actor_hash` 分区。`actor_hash` 是当前用户身份（昵称仅展示，不作为权限凭据）；用户导入的 `curated` 条目为共享只读，AI 提取的 `ai` 条目只对当前用户可见。旧数据迁移为 `entry_kind=legacy`、`actor_hash=''`，作为兼容共享区。
+| | 用户导入知识库 | AI 记忆 |
+|---|---|---|
+| 表 | `knowledge_doc` | `knowledge_entry` |
+| 写入 | Studio 导入/删除，模型不能写 | `memory_add` 或辅助 AI 自动提取 |
+| 读取 | 模型调用 `knowledge_search` | 模型调用 `memory_search` |
+| 分区 | `scope + persona_id`，导入资料共享 | `scope + persona_id + actor_hash`，按用户隔离 |
+| 用途 | 群规、设定、资料、角色台词 | 偏好、习惯、约定等对话事实 |
 
-控制台 → 实例 → **知识记忆库**：可按 scope/persona 查看，导入 curated 资料，删除 curated 条目；模型写入/删除只走工具。人格切换后新写入会落到对应 persona 分区。
+控制台 → 实例 → **知识库（用户导入）**：选 scope/persona，填写标题、正文、标签后导入；可查询和删除。
+控制台 → 实例 → **AI 记忆库（自动提取）**：只查看 AI 写入的事实和 actor 元信息，不提供导入。
 
-插件 `qqbot_memory_bank` 与卡片库分离，工具化访问，不默认塞 prompt：
+`scope` 示例：
 
-- `memory_add`：模型主动记住事实。
-- `memory_search`：按关键词检索当前用户 + 共享 curated，返回 `[kb-...]` id 和 actor/kind 元信息。
-- `memory_forget`：按 id 删除 AI 记忆；curated 条目不能由模型删除。
-- 自动抽取：每 4 条用户消息，辅助 LLM 主提取，规则兜底；按 `scope + actor_hash` 隔离缓冲，失败不影响聊天。
-- `cards_episode_enabled=false` 时关闭规则 episode；长期事实交给知识库。`cards_episode_ai_enabled=true` 时改用辅助 AI 叙事 episode（见 9.9），失败回退规则/不生成。
-
-示例：
-
-```text
-用户：麻衣，记住：我喜欢喝无糖可乐，不喜欢香菜。
-模型：memory_add(content="用户喜欢喝无糖可乐，不喜欢香菜。", tags="饮食,偏好")
-```
-
-```text
-用户：麻衣，先用 memory_search 查一下我喜欢喝什么，再回答。
-模型：memory_search(query="用户喜欢喝什么")
-```
-
-数据库：`<实例>/data/astrbot/plugin_data/qqbot_memory_bank/knowledge.db`。
+- `group:onebot:291690445`
+- `group:qq_official:<openid>`
+- `user:<platform>:<id>`
+- `global`：所有 scope 可检索的公共资料
 
 ### 9.8 注入优化
 

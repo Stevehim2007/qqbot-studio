@@ -1,3 +1,10 @@
+## v5.0.0-beta.22（测试版）— 用户导入知识库与 AI 记忆彻底分开
+
+- 用户导入知识库改为独立表 `knowledge_doc`，只读、可导入/删除/检索，模型通过 `knowledge_search` 查询，不再和 AI 自动提取记忆混在同一结果里。
+- AI 自动提取记忆仍走 `knowledge_entry`，按 `scope + persona_id + actor_hash` 隔离，只通过 `memory_add/search/forget` 使用。
+- Studio 新增“知识库（用户导入）”面板；原“AI 记忆库”面板只展示 AI 记忆，不再导入资料。
+- `qqbot_memory_bank 0.3.0`；插件包 `v4.4.0-beta.59`。
+
 ## v5.0.0-beta.21（测试版）— 群策略名单、知识库身份与 AI episode
 
 - 群策略新增“参数名单”和“标记表”：按插件勾选组策略可见参数，常用参数可星标后在一个表里快速修改；名单保存在 Studio 数据目录，不依赖插件控制桥。

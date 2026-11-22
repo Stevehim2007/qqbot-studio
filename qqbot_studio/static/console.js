@@ -4889,15 +4889,127 @@
     section.appendChild(buildMemoryCardsSection(instance));
     section.appendChild(buildExpressionStateSection(instance));
     section.appendChild(buildFavorabilitySection(instance));
+    section.appendChild(buildKnowledgeBaseSection(instance));
     section.appendChild(buildMemoryBankSection(instance));
     section.appendChild(buildPersonaCorpusSection(instance));
     return section;
   }
 
+  function buildKnowledgeBaseSection(instance) {
+    const box = makeElement('div', 'memory-cards-panel knowledge-base-panel');
+    const heading = makeElement('div', 'memory-cards-heading');
+    heading.appendChild(makeElement('strong', '', '知识库（用户导入）'));
+    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
+    scopeInput.type = 'text';
+    scopeInput.placeholder = 'scope，例如 group:onebot:291690445';
+    scopeInput.setAttribute('aria-label', '知识库 scope');
+    heading.appendChild(scopeInput);
+    const personaInput = makeElement('input', 'input memory-cards-scope', '');
+    personaInput.type = 'text';
+    personaInput.placeholder = 'persona_id（可空）';
+    personaInput.setAttribute('aria-label', '知识库人格 ID');
+    heading.appendChild(personaInput);
+    const load = makeElement('button', 'btn btn-quiet btn-small', '查询');
+    load.type = 'button';
+    heading.appendChild(load);
+    box.appendChild(heading);
+    const importRow = makeElement('div', 'knowledge-base-import');
+    const importTitle = makeElement('input', 'input memory-cards-scope', '');
+    importTitle.type = 'text';
+    importTitle.placeholder = '资料标题，可空';
+    importTitle.setAttribute('aria-label', '知识标题');
+    const importContent = makeElement('textarea', 'input knowledge-base-content', '');
+    importContent.placeholder = '导入资料正文，例如：宿舍门禁 23:00，周五延长到 24:00';
+    importContent.setAttribute('aria-label', '知识正文');
+    const importTags = makeElement('input', 'input memory-cards-scope', '');
+    importTags.type = 'text';
+    importTags.placeholder = '标签，逗号分隔，可空';
+    importTags.setAttribute('aria-label', '知识标签');
+    const importButton = makeElement('button', 'btn btn-primary btn-small', '导入知识库');
+    importButton.type = 'button';
+    importRow.append(importTitle, importContent, importTags, importButton);
+    box.appendChild(importRow);
+    const status = makeElement('p', 'instance-v3-status', '用户导入的只读资料，按 scope + persona_id 分区；模型只能通过 knowledge_search 查询，不会自动改写。');
+    const detail = makeElement('div', 'knowledge-base-detail');
+    box.appendChild(status);
+    box.appendChild(detail);
+    const query = async () => {
+      const scope = scopeInput.value.trim();
+      const personaId = personaInput.value.trim();
+      detail.replaceChildren();
+      status.textContent = '正在查询…';
+      try {
+        const params = new URLSearchParams();
+        if (scope) params.set('scope', scope);
+        if (personaId) params.set('persona_id', personaId);
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/knowledge-base?${params.toString()}`);
+        if (!data || data.ok === false) { status.textContent = (data && data.error) || '知识库接口不可用。'; return; }
+        if (!data.available) { status.textContent = '该实例还没有用户导入知识库。'; return; }
+        const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+        const chips = makeElement('div', 'expression-scope-chips');
+        for (const item of scopes.slice(0, 20)) {
+          const label = `${item.scope}${item.persona_id ? ' / ' + item.persona_id : ''} (${item.total})`;
+          const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', label);
+          chip.type = 'button';
+          chip.addEventListener('click', () => { scopeInput.value = item.scope; personaInput.value = item.persona_id || ''; void query(); });
+          chips.appendChild(chip);
+        }
+        if (chips.childNodes.length) detail.appendChild(chips);
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        status.textContent = scope ? `当前 scope 有 ${entries.length} 条资料。` : '点上方 scope 标签查看资料。';
+        for (const entry of entries) {
+          const row = makeElement('div', 'knowledge-base-row');
+          row.appendChild(makeElement('div', 'knowledge-base-title', entry.title || '(无标题)'));
+          row.appendChild(makeElement('div', 'knowledge-base-content', entry.content || ''));
+          row.appendChild(makeElement('div', 'memory-bank-meta', `${entry.tags || '无标签'} · ${entry.source || ''}`));
+          const remove = makeElement('button', 'btn btn-danger btn-small', '删除');
+          remove.type = 'button';
+          remove.addEventListener('click', async () => {
+            status.textContent = '正在删除…';
+            try {
+              const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/knowledge-base/delete`, {
+                method: 'POST',
+                body: { entry_id: entry.id, scope: entry.scope, persona_id: entry.persona_id || '' }
+              });
+              if (!result || result.ok === false) throw new Error((result && result.reason) || '删除失败');
+              await query();
+            } catch (error) { status.textContent = `删除失败：${error.message || error}`; }
+          });
+          row.appendChild(remove);
+          detail.appendChild(row);
+        }
+      } catch (error) { status.textContent = `查询失败：${error.message || error}`; }
+    };
+    importButton.addEventListener('click', async () => {
+      const scope = scopeInput.value.trim();
+      if (!scope) { status.textContent = '请先填 scope，或先查询并点一个 scope 标签。'; return; }
+      if (!importContent.value.trim()) { status.textContent = '请填写资料正文。'; return; }
+      status.textContent = '正在导入…';
+      try {
+        const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/knowledge-base`, {
+          method: 'POST',
+          body: {
+            scope,
+            persona_id: personaInput.value.trim(),
+            title: importTitle.value.trim(),
+            content: importContent.value,
+            tags: importTags.value.trim()
+          }
+        });
+        if (!result || result.ok === false) throw new Error((result && result.reason) || '导入失败');
+        importContent.value = '';
+        status.textContent = result.duplicate ? '这条资料已存在，已更新标题/标签。' : '导入成功。';
+        await query();
+      } catch (error) { status.textContent = `导入失败：${error.message || error}`; }
+    });
+    load.addEventListener('click', () => void query());
+    return box;
+  }
+
   function buildMemoryBankSection(instance) {
     const box = makeElement('div', 'memory-cards-panel memory-bank-panel');
     const heading = makeElement('div', 'memory-cards-heading');
-    heading.appendChild(makeElement('strong', '', '知识记忆库'));
+    heading.appendChild(makeElement('strong', '', 'AI 记忆库（自动提取）'));
     const scopeInput = makeElement('input', 'input memory-cards-scope', '');
     scopeInput.type = 'text';
     scopeInput.placeholder = 'scope，例如 group:onebot:291690445';
@@ -4924,8 +5036,9 @@
     const importButton = makeElement('button', 'btn btn-primary btn-small', '导入知识');
     importButton.type = 'button';
     importRow.append(importContent, importTags, importButton);
+    importRow.hidden = true;
     box.appendChild(importRow);
-    const status = makeElement('p', 'instance-v3-status', '知识记忆库按 scope + persona_id + 用户身份分区；用户导入的 curated 资料为共享只读，AI 提取的记忆只对当前用户可见。');
+    const status = makeElement('p', 'instance-v3-status', 'AI 自动提取的记忆，按 scope + persona_id + 用户身份隔离；这里不导入资料，用户资料请用上方“知识库（用户导入）”。');
     const detail = makeElement('div', 'memory-bank-detail');
     box.appendChild(status);
     box.appendChild(detail);

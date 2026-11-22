@@ -258,27 +258,26 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(data["instance_id"], "bot-9")
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
-    def test_memory_bank_curated_import_and_delete(self):
-        first = self.manager.add_memory_bank_entry(
-            scope="group:onebot:1", content="用户喜欢喝无糖可乐", tags="饮食"
+    def test_user_knowledge_base_import_and_delete(self):
+        first = self.manager.add_knowledge_doc(
+            scope="group:onebot:1", title="宿舍", content="宿舍门禁 23:00", tags="规则"
         )
         self.assertTrue(first["ok"], first)
-        second = self.manager.add_memory_bank_entry(
-            scope="group:onebot:1", content="用户喜欢喝无糖可乐", tags="偏好"
+        second = self.manager.add_knowledge_doc(
+            scope="group:onebot:1", title="宿舍规则", content="宿舍门禁 23:00", tags="门禁"
         )
         self.assertTrue(second["duplicate"])
-        payload = self.manager.get_memory_bank(scope="group:onebot:1")
+        payload = self.manager.get_knowledge_base(scope="group:onebot:1")
         self.assertTrue(payload["available"])
         self.assertEqual(len(payload["entries"]), 1)
         entry = payload["entries"][0]
-        self.assertEqual(entry["entry_kind"], "curated")
-        self.assertEqual(entry["actor_hash"], "")
-        self.assertEqual(entry["tags"], "偏好")
-        deleted = self.manager.delete_memory_bank_entry(
+        self.assertEqual(entry["title"], "宿舍规则")
+        self.assertEqual(entry["tags"], "门禁")
+        deleted = self.manager.delete_knowledge_doc(
             scope="group:onebot:1", entry_id=first["id"]
         )
         self.assertTrue(deleted["ok"])
-        self.assertEqual(self.manager.get_memory_bank(scope="group:onebot:1")["entries"], [])
+        self.assertEqual(self.manager.get_knowledge_base(scope="group:onebot:1")["entries"], [])
 
     def test_group_policy_prefs_roundtrip(self):
         saved = self.manager.set_group_policy_prefs(

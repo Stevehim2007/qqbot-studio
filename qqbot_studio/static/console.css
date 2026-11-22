@@ -2660,3 +2660,37 @@ body.console-modal-open { overflow: hidden; }
   .memory-bank-import { grid-template-columns: 1fr; }
   .memory-bank-import .btn { width: 100%; }
 }
+
+/* User-imported knowledge base: separate from AI memory */
+.knowledge-base-panel .knowledge-base-import {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(220px, 2fr) minmax(120px, 0.7fr) auto;
+  gap: 8px;
+  align-items: start;
+  margin: 10px 0;
+}
+.knowledge-base-panel .knowledge-base-content {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.knowledge-base-panel .knowledge-base-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.knowledge-base-panel .knowledge-base-title {
+  font-weight: 600;
+}
+.knowledge-base-panel .knowledge-base-row .btn {
+  justify-self: start;
+}
+@media (max-width: 760px) {
+  .knowledge-base-panel .knowledge-base-import {
+    grid-template-columns: 1fr;
+  }
+}

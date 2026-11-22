@@ -2688,7 +2688,7 @@ class DeployManager:
             try:
                 for row in connection.execute(
                     "SELECT scope, persona_id, COUNT(*) AS total FROM knowledge_entry "
-                    "GROUP BY scope, persona_id ORDER BY scope"
+                    "WHERE entry_kind!='curated' GROUP BY scope, persona_id ORDER BY scope"
                 ).fetchall():
                     payload["scopes"].append(
                         {
@@ -2704,7 +2704,7 @@ class DeployManager:
                         "SELECT id, scope, persona_id, content, tags, source, confidence, updated_at, "
                         "actor_hash, actor_label, entry_kind "
                         "FROM knowledge_entry WHERE scope=? AND (persona_id=? OR persona_id='') "
-                        "ORDER BY updated_at DESC LIMIT ?",
+                        "AND entry_kind!='curated' ORDER BY updated_at DESC LIMIT ?",
                         (
                             selected_scope,
                             selected_persona,
@@ -2736,6 +2736,149 @@ class DeployManager:
             payload["ok"] = False
             payload["error"] = str(exc)
         return payload
+
+    def _knowledge_base_db_path(self) -> Path:
+        return self._knowledge_db_path()
+
+    def get_knowledge_base(
+        self,
+        *,
+        scope: str = "",
+        persona_id: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Read user-imported knowledge docs (not AI memory)."""
+        db_path = self._knowledge_base_db_path()
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": db_path.is_file(),
+            "scope": str(scope or ""),
+            "persona_id": str(persona_id or ""),
+            "scopes": [],
+            "entries": [],
+            "error": "",
+        }
+        if not db_path.is_file():
+            return payload
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                for row in connection.execute(
+                    "SELECT scope, persona_id, COUNT(*) AS total FROM knowledge_doc "
+                    "GROUP BY scope, persona_id ORDER BY scope"
+                ).fetchall():
+                    payload["scopes"].append({
+                        "scope": str(row["scope"] or ""),
+                        "persona_id": str(row["persona_id"] or ""),
+                        "total": int(row["total"] or 0),
+                    })
+                selected_scope = str(scope or "").strip()
+                selected_persona = str(persona_id or "").strip()
+                if selected_scope:
+                    rows = connection.execute(
+                        "SELECT id, scope, persona_id, title, content, tags, source, updated_at "
+                        "FROM knowledge_doc WHERE scope=? AND (persona_id=? OR persona_id='') "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (selected_scope, selected_persona, max(1, min(500, int(limit or 100)))),
+                    ).fetchall()
+                    payload["entries"] = [dict(row) for row in rows]
+            finally:
+                connection.close()
+        except Exception as exc:
+            payload["ok"] = False
+            payload["error"] = str(exc)
+        return payload
+
+    def add_knowledge_doc(
+        self,
+        *,
+        scope: str,
+        content: str,
+        title: str = "",
+        tags: str = "",
+        persona_id: str = "",
+    ) -> dict[str, Any]:
+        scope_text = str(scope or "").strip()[:200]
+        persona_text = str(persona_id or "").strip()[:128]
+        title_text = re.sub(r"\s+", " ", str(title or "")).strip()[:120]
+        content_text = re.sub(r"\s+", " ", str(content or "")).strip()
+        tags_text = re.sub(r"\s+", " ", str(tags or "")).strip()[:160]
+        if not scope_text:
+            return {"ok": False, "reason": "scope_required"}
+        if len(content_text) < 2:
+            return {"ok": False, "reason": "content_required"}
+        if len(content_text) > 4000:
+            return {"ok": False, "reason": "content_too_long"}
+        db_path = self._knowledge_base_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(
+            f"{scope_text}\n{persona_text}\n{content_text.casefold()}".encode("utf-8")
+        ).hexdigest()[:32]
+        doc_id = "doc-" + digest[:20]
+        connection = sqlite3.connect(str(db_path), timeout=10)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_doc (
+                  id TEXT PRIMARY KEY,
+                  scope TEXT NOT NULL,
+                  persona_id TEXT NOT NULL DEFAULT '',
+                  title TEXT NOT NULL DEFAULT '',
+                  content TEXT NOT NULL,
+                  tags TEXT NOT NULL DEFAULT '',
+                  source TEXT NOT NULL DEFAULT 'import',
+                  content_hash TEXT NOT NULL,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS knowledge_doc_hash
+                  ON knowledge_doc(scope, persona_id, content_hash);
+                """
+            )
+            now = time.time()
+            existing = connection.execute(
+                "SELECT id FROM knowledge_doc WHERE scope=? AND persona_id=? AND content_hash=?",
+                (scope_text, persona_text, digest),
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE knowledge_doc SET title=?, tags=?, source='import', updated_at=? WHERE id=?",
+                    (title_text, tags_text, now, existing[0]),
+                )
+                connection.commit()
+                return {"ok": True, "id": str(existing[0]), "duplicate": True}
+            connection.execute(
+                "INSERT INTO knowledge_doc(id, scope, persona_id, title, content, tags, source, content_hash, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (doc_id, scope_text, persona_text, title_text, content_text, tags_text, "import", digest, now, now),
+            )
+            connection.commit()
+            return {"ok": True, "id": doc_id, "duplicate": False}
+        except sqlite3.DatabaseError as exc:
+            return {"ok": False, "reason": "database_error", "error": str(exc)}
+        finally:
+            connection.close()
+
+    def delete_knowledge_doc(self, *, entry_id: str, scope: str = "", persona_id: str = "") -> dict[str, Any]:
+        db_path = self._knowledge_base_db_path()
+        if not db_path.is_file():
+            return {"ok": False, "reason": "not_found"}
+        connection = sqlite3.connect(str(db_path), timeout=10)
+        try:
+            args: list[Any] = [str(entry_id or "")]
+            sql = "DELETE FROM knowledge_doc WHERE id=?"
+            if scope:
+                sql += " AND scope=?"
+                args.append(str(scope).strip()[:200])
+            if persona_id:
+                sql += " AND persona_id=?"
+                args.append(str(persona_id).strip()[:128])
+            cur = connection.execute(sql, tuple(args))
+            connection.commit()
+            return {"ok": cur.rowcount > 0}
+        finally:
+            connection.close()
 
     def _social_db_path(self) -> Path:
         return (
