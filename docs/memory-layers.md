@@ -184,3 +184,25 @@ content_hash, created_at, updated_at
 注入收口：bot-11 设置 `qqbot_memory_commands.cards_inject_enabled=false`，记忆卡片由 `qqbot_memory_bank` 的自动召回统一读取并按 scope/persona 去重，避免 `memory_cards` 与 memory_bank 两套注入重复。AstrBot 原生记忆仍保留为“最近会话”，不再由记忆卡片重复提供叙事背景。
 
 注意：`auto_write_core_memory` 默认 `false`，AI 只能建议、不能自动改人格/群核心；需要自动写入时再显式打开。
+
+## 10. 辅助 AI 专用 API Key
+
+Studio「辅助模型」页可单独配置辅助 AI：
+
+- `enabled`、`base_url`、`model`、`api_key`、`timeout_seconds`；
+- Key 写入实例 `plugin_data/qqbot_aux_ai.json`，权限 `0640`；
+- 控制台只显示 `sk-abc…wxyz` 掩码，不回显完整 Key；
+- 记忆路由、自动提取、阶段摘要、episode 摘要优先调用该 API；
+- 未配置、请求失败或超时，才回退 AstrBot 主模型；主聊天永远不使用这把 Key。
+
+配置文件示例（不要提交到仓库）：
+
+```json
+{
+  "enabled": true,
+  "base_url": "https://api.deepseek.com/v1",
+  "model": "deepseek-chat",
+  "api_key": "<your-key>",
+  "timeout_seconds": 15
+}
+```

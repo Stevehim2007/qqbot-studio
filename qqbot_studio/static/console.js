@@ -3042,6 +3042,99 @@
     return section;
   }
 
+  function buildAuxAiSection(instance) {
+    const section = makeElement('section', 'instance-v3-section aux-ai-section');
+    const heading = makeElement('div', 'instance-v3-section-heading');
+    const headingCopy = makeElement('div', 'instance-v3-section-copy');
+    headingCopy.appendChild(makeElement('h4', '', '辅助 AI 专用 API'));
+    headingCopy.appendChild(makeElement('p', '', '记忆路由、记忆提取、episode 摘要等后台调用使用这把 Key；不用于主聊天。留空 Key 表示保持已保存的值。'));
+    heading.appendChild(headingCopy);
+    section.appendChild(heading);
+
+    const status = makeElement('p', 'instance-v3-status', '正在读取辅助 AI 设置…');
+    section.appendChild(status);
+    const form = makeElement('div', 'aux-ai-form');
+    const enabledLabel = makeElement('label', 'aux-ai-check');
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabledLabel.append(enabled, makeElement('span', '', '启用专用辅助 AI'));
+    form.appendChild(enabledLabel);
+
+    const baseLabel = makeElement('label', 'aux-ai-field', 'Base URL');
+    const baseUrl = makeElement('input', 'input', '');
+    baseUrl.type = 'url';
+    baseUrl.placeholder = 'https://api.deepseek.com/v1';
+    baseLabel.appendChild(baseUrl);
+    form.appendChild(baseLabel);
+
+    const modelLabel = makeElement('label', 'aux-ai-field', '模型');
+    const model = makeElement('input', 'input', '');
+    model.type = 'text';
+    model.placeholder = 'deepseek-chat';
+    modelLabel.appendChild(model);
+    form.appendChild(modelLabel);
+
+    const keyLabel = makeElement('label', 'aux-ai-field', 'API Key');
+    const key = makeElement('input', 'input', '');
+    key.type = 'password';
+    key.autocomplete = 'off';
+    key.placeholder = '留空保持当前 Key';
+    keyLabel.appendChild(key);
+    form.appendChild(keyLabel);
+
+    const timeoutLabel = makeElement('label', 'aux-ai-field', '超时（秒）');
+    const timeout = makeElement('input', 'input', '');
+    timeout.type = 'number';
+    timeout.min = '3'; timeout.max = '120'; timeout.value = '15';
+    timeoutLabel.appendChild(timeout);
+    form.appendChild(timeoutLabel);
+    section.appendChild(form);
+
+    const actions = makeElement('div', 'aux-ai-actions');
+    const save = makeElement('button', 'btn btn-primary btn-small', '保存辅助 AI');
+    save.type = 'button';
+    actions.appendChild(save);
+    section.appendChild(actions);
+    const keyState = makeElement('p', 'aux-budget-hint', '');
+    section.appendChild(keyState);
+
+    const load = async () => {
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/aux-ai`);
+        if (!data || data.ok === false) { status.textContent = (data && data.error) || '辅助 AI 设置不可用。'; return; }
+        enabled.checked = Boolean(data.enabled);
+        baseUrl.value = data.base_url || '';
+        model.value = data.model || '';
+        timeout.value = String(data.timeout_seconds || 15);
+        keyState.textContent = data.api_key_present ? `当前 Key：${data.api_key_masked || '已设置'}（不会回显完整值）` : '尚未设置 API Key。';
+        status.textContent = data.enabled ? '专用辅助 AI 已启用。' : '专用辅助 AI 未启用；将回退到 AstrBot 主模型。';
+      } catch (error) { status.textContent = `读取失败：${error.message || error}`; }
+    };
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      status.textContent = '正在保存…';
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/aux-ai`, {
+          method: 'POST',
+          body: JSON.stringify({
+            enabled: enabled.checked,
+            base_url: baseUrl.value.trim(),
+            model: model.value.trim(),
+            api_key: key.value.trim(),
+            timeout_seconds: Number(timeout.value || 15),
+          }),
+        });
+        if (!data || data.ok === false) { status.textContent = (data && (data.reason || data.error)) || '保存失败。'; return; }
+        key.value = '';
+        await load();
+        status.textContent = '辅助 AI 设置已保存。';
+      } catch (error) { status.textContent = `保存失败：${error.message || error}`; }
+      finally { save.disabled = false; }
+    });
+    void load();
+    return section;
+  }
+
   function buildAuxBudgetSection(instance) {
     const section = makeElement('section', 'instance-v3-section aux-budget-section');
     const heading = makeElement('div', 'instance-v3-section-heading');
@@ -3983,7 +4076,7 @@
       },
       { id: 'groups', label: '群策略', sections: [buildGroupPolicySection(instance), buildGroupPolicyTemplateSection(instance)] },
       { id: 'prompts', label: '提示词', sections: [buildPromptManagerSection(instance)] },
-      { id: 'aux', label: '辅助模型', sections: [buildAuxBudgetSection(instance)] },
+      { id: 'aux', label: '辅助模型', sections: [buildAuxAiSection(instance), buildAuxBudgetSection(instance)] },
       { id: 'stats', label: '运行状态', sections: [buildStatsSection(instance)] }
     ];
     const buttons = new Map();

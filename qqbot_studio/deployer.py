@@ -2884,6 +2884,84 @@ class DeployManager:
             connection.close()
 
     # ------------------------------------------------------------------
+    # Dedicated auxiliary model settings (API key never returned).
+    # ------------------------------------------------------------------
+    def _aux_ai_path(self) -> Path:
+        return self._knowledge_db_path().parent.parent / "qqbot_aux_ai.json"
+
+    def get_aux_ai(self) -> dict[str, Any]:
+        path = self._aux_ai_path()
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": path.is_file(),
+            "enabled": False,
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+            "timeout_seconds": 15,
+            "api_key_present": False,
+            "api_key_masked": "",
+            "error": "",
+        }
+        if not path.is_file():
+            return payload
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            key = str(data.get("api_key") or "").strip()
+            payload.update({
+                "enabled": bool(data.get("enabled", False)),
+                "base_url": str(data.get("base_url") or payload["base_url"]),
+                "model": str(data.get("model") or payload["model"]),
+                "timeout_seconds": int(data.get("timeout_seconds") or 15),
+                "api_key_present": bool(key),
+                "api_key_masked": (key[:3] + "…" + key[-4:]) if len(key) >= 12 else ("已设置" if key else ""),
+            })
+        except Exception as exc:
+            payload["ok"] = False
+            payload["error"] = str(exc)
+        return payload
+
+    def set_aux_ai(
+        self,
+        *,
+        enabled: bool,
+        base_url: str = "https://api.deepseek.com/v1",
+        model: str = "deepseek-chat",
+        api_key: str = "",
+        timeout_seconds: int = 15,
+    ) -> dict[str, Any]:
+        path = self._aux_ai_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        current: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                current = json.loads(path.read_text(encoding="utf-8-sig"))
+            except Exception:
+                current = {}
+        key = str(api_key or "").strip() or str(current.get("api_key") or "").strip()
+        base = str(base_url or "").strip().rstrip("/") or "https://api.deepseek.com/v1"
+        model_text = str(model or "").strip() or "deepseek-chat"
+        if base and not base.startswith(("http://", "https://")):
+            return {"ok": False, "reason": "invalid_base_url"}
+        if enabled and not key:
+            return {"ok": False, "reason": "api_key_required"}
+        data = {
+            "enabled": bool(enabled),
+            "base_url": base,
+            "model": model_text,
+            "api_key": key,
+            "timeout_seconds": max(3, min(120, int(timeout_seconds or 15))),
+            "updated_at": time.time(),
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        try:
+            path.chmod(0o640)
+        except OSError:
+            pass
+        result = self.get_aux_ai()
+        result["ok"] = True
+        return result
+
+    # ------------------------------------------------------------------
     # AI routing inbox: suggestions that require human approval.
     # ------------------------------------------------------------------
     def get_memory_inbox(self, *, scope: str = "", limit: int = 100) -> dict[str, Any]:

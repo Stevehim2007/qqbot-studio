@@ -1,3 +1,11 @@
+## v5.0.0-beta.29（测试版）— 辅助 AI 专用 API Key
+
+- Studio「辅助模型」新增“辅助 AI 专用 API”设置：启用开关、Base URL、模型、API Key、超时；Key 只写本机 `plugin_data/qqbot_aux_ai.json`（0640），界面只显示掩码，不回显完整值。
+- 新增 `GET/POST /api/instances/<id>/aux-ai`；`qqbot_memory_bank` 与 `qqbot_memory_commands` 的辅助调用优先使用该 Key，未配置/失败才回退 AstrBot 主模型。
+- 辅助调用覆盖：记忆路由、自动提取、阶段摘要、episode 摘要；不用于主聊天。
+- 测试：主项目全量 880 tests OK；memory_bank 16、memory_commands 151。
+- 发布：插件仓库 `v4.4.0-beta.63`；`qqbot_memory_bank 0.6.0`、`qqbot_memory_commands 4.3.3`。
+
 ## v5.0.0-beta.28（测试版）— 记忆建议收件箱
 
 - Studio 的“AI 记忆库”面板新增待审核建议列表，可接受/忽略 AI 路由到人格记忆、群记忆、用户知识库的建议；`episode/open_topic` 只能忽略，卡片仍由卡片写入者管理。

@@ -1542,6 +1542,13 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         )
                     )
                     return
+                if subroute == "aux-ai":
+                    getter = getattr(manager, "get_aux_ai", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供辅助 AI 设置。")
+                        return
+                    self._json(HTTPStatus.OK, getter())
+                    return
                 if subroute in {"aux-budget", "aux-budget/features", "aux-budget/usage"}:
                     caller = getattr(manager, "plugin_control_call", None)
                     if not callable(caller):
@@ -2369,6 +2376,20 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     self._serve_memory_admin(
                         manager, memory_route, method="POST", payload=payload, query=query
                     )
+                    return
+                if subroute == "aux-ai":
+                    setter = getattr(manager, "set_aux_ai", None)
+                    if not callable(setter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供辅助 AI 设置。")
+                        return
+                    result = setter(
+                        enabled=bool(payload.get("enabled", False)),
+                        base_url=str(payload.get("base_url") or "").strip(),
+                        model=str(payload.get("model") or "").strip(),
+                        api_key=str(payload.get("api_key") or "").strip(),
+                        timeout_seconds=self._safe_int(str(payload.get("timeout_seconds") or "15"), 15, 3, 120),
+                    )
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
                     return
                 if subroute == "aux-budget":
                     caller = getattr(manager, "plugin_control_call", None)
