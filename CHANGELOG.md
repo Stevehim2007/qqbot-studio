@@ -1,3 +1,17 @@
+## v5.0.0-beta.33（测试版）— 群策略页按插件折叠 + 常用参数默认展示
+
+- 群策略页不再一次性平铺所有插件、所有参数：每张插件卡片新增「▾ 收起 / ▸ 展开」，
+  顶部新增「插件」下拉框（`全部插件` 或只看单个插件），选单个后可一键「显示全部插件」。
+- 默认展示常用参数（`GROUP_POLICY_IMPORTANT`）：core_reply 8 项（对话模式、回复概率、
+  群内必须 @、@ 才回复、模型置信度、群内闲聊、工具指令需 @、允许主动接话），
+  stickers 4 项、food 3 项、memory_bank 3 项、memory_commands / image_search / web_reader /
+  expression_state / safe_tools / weather 各 2–3 项，fortune / scheduler 各 1 项；
+  其余参数仍可通过「显示全部参数」或参数名单查看。
+- 未安装在该实例的插件会显示「该实例未安装此插件，或没有可按群覆盖的参数」，不再渲染空卡片。
+- 样式：`.group-policy-filter-row` / `.group-policy-plugin-filter` / `.group-policy-collapse` /
+  `.group-policy-card-body`，≤640px 时下拉框占满一行。
+- 测试：策略 UI 静态契约 36。
+
 ## v5.0.0-beta.32（测试版）— 群策略接口默认返回精简快照
 
 - `GET group-policies/<type>/<id>` 默认按 `include_schema=0` 返回，前端显式带上该参数：

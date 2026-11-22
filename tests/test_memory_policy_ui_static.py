@@ -568,6 +568,36 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
             "registered: asRecord(data.registered)",
         ), "console.js")
 
+    def test_group_policy_page_curates_defaults_and_collapses_plugins(self) -> None:
+        # The page used to dump every plugin at once.  Important knobs render by
+        # default, every plugin card can be collapsed, and a dropdown limits the
+        # grid to one plugin.
+        self._has(self.console_js, (
+            "const GROUP_POLICY_IMPORTANT = {",
+            "const policyImportant = (pluginId, name) => {",
+            "if (policyImportant(pluginId, key)) return true;",
+            "group-policy-filter-row",
+            "pluginFilter.className = 'group-policy-plugin-filter';",
+            "'显示全部插件'",
+            "group-policy-collapse",
+            "collapsedPolicyPlugins",
+            "const cardBody = makeElement('div', 'group-policy-card-body');",
+            "cardBody.hidden = collapsedPolicyPlugins.has(String(pluginId));",
+            "params: collectParams(cardBody, schema)",
+            "该实例未安装此插件，或没有可按群覆盖的参数。",
+            "const fieldRow = makeElement('div', 'group-policy-field-row');",
+            "fieldRow.appendChild(markButton);",
+        ), "console.js")
+        self._has(self.console_css, (
+            ".group-policy-filter-row {",
+            ".group-policy-plugin-filter {",
+            ".group-policy-collapse {",
+            ".group-policy-card-body[hidden] {",
+            ".group-policy-field-row {",
+            ".group-policy-mark-button {",
+            "margin-right: auto;",
+        ), "console.css")
+
     def test_registration_pill_has_desktop_and_mobile_styles(self) -> None:
         self._has(self.console_css, (
             ".plugin-field-policy {",

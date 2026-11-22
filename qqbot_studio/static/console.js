@@ -3630,6 +3630,37 @@
     section.appendChild(toolbar);
 
     let policyShowAll = false;
+    let policyPluginFilter = '';
+    const collapsedPolicyPlugins = new Set();
+    // The knobs operators actually tune per group. Everything else stays
+    // behind "显示全部参数" (or the "加入群策略" button in the plugin editor).
+    const GROUP_POLICY_IMPORTANT = {
+      qqbot_core_reply: [
+        'participation.mode',
+        'participation.reply_probability',
+        'participation.group_mention_only',
+        'participation.mention_enabled',
+        'participation.model_confidence',
+        'ambient_group_chat_enabled',
+        'utility_commands_require_at',
+        'option_allow_unmentioned'
+      ],
+      qqbot_stickers: ['sticker_enabled', 'sticker_decorate_enabled', 'decoration_probability', 'ai_decoration_probability'],
+      qqbot_food: ['food_enabled', 'food_search_enabled', 'submit_confirm_required'],
+      qqbot_memory_bank: ['auto_recall_enabled', 'auto_recall_top_k', 'routing_mode'],
+      qqbot_memory_commands: ['enabled', 'cards_inject_enabled'],
+      qqbot_image_search: ['enabled', 'natural_language_enabled'],
+      qqbot_web_reader: ['enabled', 'extract.mode'],
+      qqbot_expression_state: ['enabled', 'observe_enabled'],
+      qqbot_safe_tools: ['enabled', 'marker_enabled', 'allow_collect_sticker'],
+      qqbot_weather: ['enabled', 'default_city'],
+      qqbot_fortune: ['enabled'],
+      qqbot_scheduler: ['enabled']
+    };
+    const policyImportant = (pluginId, name) => {
+      const list = GROUP_POLICY_IMPORTANT[pluginId];
+      return Array.isArray(list) && list.includes(String(name));
+    };
     const prefsBar = makeElement('div', 'group-policy-prefs-bar');
     const manageParamsButton = makeElement('button', 'btn btn-secondary btn-small', '参数名单');
     manageParamsButton.type = 'button';
@@ -3755,6 +3786,8 @@
       // An explicit roster already narrows the list; otherwise the page hides
       // the hundreds of untouched parameters until "显示全部参数" is ticked.
       if (selected !== null) return false;
+      // A curated shortlist keeps the page useful out of the box.
+      if (policyImportant(pluginId, key)) return true;
       return policyShowAll;
     };
 
@@ -3999,6 +4032,41 @@
       if (data.degraded) summary.appendChild(makeElement('span', 'group-policy-degraded', '策略库降级，写操作已关闭'));
       content.appendChild(summary);
 
+      const pluginMetaForFilter = new Map(
+        (((instance.v3 || {}).plugins || {}).items || []).map((plugin) => [String(plugin.id || plugin.plugin_id || ''), plugin])
+      );
+      const filterRow = makeElement('div', 'group-policy-filter-row');
+      filterRow.appendChild(makeElement('label', '', '插件'));
+      const pluginFilter = document.createElement('select');
+      pluginFilter.className = 'group-policy-plugin-filter';
+      const allOption = document.createElement('option');
+      allOption.value = '';
+      allOption.textContent = `全部插件（${(data.available_plugins || []).length}）`;
+      pluginFilter.appendChild(allOption);
+      (data.available_plugins || []).forEach((pluginId) => {
+        const option = document.createElement('option');
+        option.value = String(pluginId);
+        const meta = pluginMetaForFilter.get(String(pluginId)) || {};
+        option.textContent = textValue(meta.name, String(pluginId));
+        pluginFilter.appendChild(option);
+      });
+      pluginFilter.value = policyPluginFilter;
+      pluginFilter.addEventListener('change', () => {
+        policyPluginFilter = pluginFilter.value;
+        renderScope(data, scope);
+      });
+      filterRow.appendChild(pluginFilter);
+      if (policyPluginFilter) {
+        const back = makeElement('button', 'btn btn-secondary btn-small', '显示全部插件');
+        back.type = 'button';
+        back.addEventListener('click', () => {
+          policyPluginFilter = '';
+          renderScope(data, scope);
+        });
+        filterRow.appendChild(back);
+      }
+      content.appendChild(filterRow);
+
       const templateRow = makeElement('div', 'group-policy-template-row');
       templateRow.appendChild(makeElement('label', '', '群模板'));
       const templateSelect = document.createElement('select');
@@ -4051,7 +4119,7 @@
         (((instance.v3 || {}).plugins || {}).items || []).map((plugin) => [String(plugin.id || plugin.plugin_id || ''), plugin])
       );
       const availablePlugins = (data.available_plugins || []).filter((pluginId) => (
-        pluginMeta.has(String(pluginId)) || Boolean(data.plugins && data.plugins[pluginId])
+        !policyPluginFilter || String(pluginId) === policyPluginFilter
       ));
       for (const pluginId of availablePlugins) {
         const raw = data.plugins && data.plugins[pluginId] ? data.plugins[pluginId] : {};
@@ -4069,9 +4137,30 @@
         enabled.checked = raw.enabled !== undefined ? Boolean(raw.enabled) : Boolean(effective.enabled !== false);
         enabledLabel.append(enabled, document.createTextNode(' 启用'));
         cardHead.appendChild(title);
+        const collapseButton = makeElement(
+          'button',
+          'btn btn-secondary btn-small group-policy-collapse',
+          collapsedPolicyPlugins.has(String(pluginId)) ? '▸ 展开' : '▾ 收起'
+        );
+        collapseButton.type = 'button';
+        collapseButton.addEventListener('click', () => {
+          const key = String(pluginId);
+          if (collapsedPolicyPlugins.has(key)) collapsedPolicyPlugins.delete(key);
+          else collapsedPolicyPlugins.add(key);
+          renderScope(latestPolicyData || data, latestPolicyScope || scope);
+        });
+        cardHead.appendChild(collapseButton);
         cardHead.appendChild(enabledLabel);
         card.appendChild(cardHead);
-        if (meta.description) card.appendChild(makeElement('p', 'group-policy-plugin-desc', String(meta.description)));
+        const cardBody = makeElement('div', 'group-policy-card-body');
+        cardBody.hidden = collapsedPolicyPlugins.has(String(pluginId));
+        card.appendChild(cardBody);
+        if (meta.description) cardBody.appendChild(makeElement('p', 'group-policy-plugin-desc', String(meta.description)));
+        if (!Object.keys(schema).length) {
+          cardBody.appendChild(makeElement('small', 'group-policy-field-meta', '该实例未安装此插件，或没有可按群覆盖的参数。'));
+          pluginGrid.appendChild(card);
+          continue;
+        }
         const rawParams = raw.params || {};
         const effectiveParams = effective.params || {};
         const policyDefaults = data.defaults && data.defaults[pluginId] ? data.defaults[pluginId] : {};
@@ -4127,7 +4216,9 @@
           }
           field.dataset.policyParam = name;
           field.setAttribute('aria-label', `${paramMeta.label}（${name}）`);
-          label.appendChild(field);
+          const fieldRow = makeElement('div', 'group-policy-field-row');
+          fieldRow.appendChild(field);
+          label.appendChild(fieldRow);
           const defaultValue = inheritedValue(name);
           label.appendChild(makeElement(
             'small',
@@ -4166,8 +4257,8 @@
               setStatus(formatError(error, '更新标记失败。'), 'error');
             }
           });
-          label.appendChild(markButton);
-          card.appendChild(label);
+          fieldRow.appendChild(markButton);
+          cardBody.appendChild(label);
         }
         const actions = makeElement('div', 'group-policy-actions');
         const save = makeElement('button', 'btn btn-primary btn-small', '保存');
@@ -4177,7 +4268,7 @@
           try {
             const result = await apiRequest(scopePath(scope, encodeURIComponent(pluginId)), {
               method: 'POST',
-              body: { enabled: enabled.checked, params: collectParams(card, schema), expected_revision: data.revision }
+              body: { enabled: enabled.checked, params: collectParams(cardBody, schema), expected_revision: data.revision }
             });
             if (result && result.ok === false) {
               throw new Error(result.message || result.error || 'save failed');
@@ -4203,7 +4294,7 @@
           }
         });
         actions.append(save, reset);
-        card.appendChild(actions);
+        cardBody.appendChild(actions);
         pluginGrid.appendChild(card);
       }
       content.appendChild(pluginGrid);
