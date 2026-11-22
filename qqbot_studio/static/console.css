@@ -2132,6 +2132,7 @@ body.console-modal-open { overflow: hidden; }
 .group-policy-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: start;
   gap: 12px;
 }
 
@@ -2752,6 +2753,18 @@ body.console-modal-open { overflow: hidden; }
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* 展开后的参数在卡片内滚动，卡片占位不随参数数量膨胀 */
+  max-height: 44vh;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+.group-policy-card-body::-webkit-scrollbar {
+  width: 6px;
+}
+.group-policy-card-body::-webkit-scrollbar-thumb {
+  background: rgba(107, 114, 128, .35);
+  border-radius: 3px;
 }
 .group-policy-card-body[hidden] {
   display: none;

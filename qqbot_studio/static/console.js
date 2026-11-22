@@ -3599,6 +3599,28 @@
     return { label, description: description || (known ? known[1] : ''), title: `${label}（${name}）\n${details.join('；')}` };
   }
 
+  // In "show all" mode every plugin card starts collapsed: the grid keeps the
+  // same footprint and each card opens on demand.  A plugin picked from the
+  // dropdown, or one the operator expanded by hand, stays open.
+  function policyCardCollapsed(pluginId) {
+    const key = String(pluginId);
+    if (collapsedPolicyPlugins.has(key)) return true;
+    if (expandedPolicyPlugins.has(key)) return false;
+    if (policyPluginFilter && String(policyPluginFilter) === key) return false;
+    return policyShowAll;
+  }
+
+  function togglePolicyCard(pluginId) {
+    const key = String(pluginId);
+    if (policyCardCollapsed(key)) {
+      collapsedPolicyPlugins.delete(key);
+      expandedPolicyPlugins.add(key);
+    } else {
+      collapsedPolicyPlugins.add(key);
+      expandedPolicyPlugins.delete(key);
+    }
+  }
+
   function buildGroupPolicySection(instance) {
     const section = makeElement('section', 'instance-v3-section group-policy-section');
     const heading = makeElement('div', 'instance-v3-section-heading');
@@ -3637,6 +3659,7 @@
     let policyShowAll = false;
     let policyPluginFilter = '';
     const collapsedPolicyPlugins = new Set();
+    const expandedPolicyPlugins = new Set();
     // The knobs operators actually tune per group. Everything else stays
     // behind "显示全部参数" (or the "加入群策略" button in the plugin editor).
     const GROUP_POLICY_IMPORTANT = {
@@ -4142,23 +4165,25 @@
         enabled.checked = raw.enabled !== undefined ? Boolean(raw.enabled) : Boolean(effective.enabled !== false);
         enabledLabel.append(enabled, document.createTextNode(' 启用'));
         cardHead.appendChild(title);
+        const paramCount = Object.keys(schema).filter((name) => (
+          schema[name] && schema[name].group_overridable && !schema[name].sensitive
+        )).length;
         const collapseButton = makeElement(
           'button',
           'btn btn-secondary btn-small group-policy-collapse',
-          collapsedPolicyPlugins.has(String(pluginId)) ? '▸ 展开' : '▾ 收起'
+          policyCardCollapsed(pluginId) ? `▸ 展开（${paramCount}）` : '▾ 收起'
         );
         collapseButton.type = 'button';
+        collapseButton.setAttribute('aria-expanded', policyCardCollapsed(pluginId) ? 'false' : 'true');
         collapseButton.addEventListener('click', () => {
-          const key = String(pluginId);
-          if (collapsedPolicyPlugins.has(key)) collapsedPolicyPlugins.delete(key);
-          else collapsedPolicyPlugins.add(key);
+          togglePolicyCard(pluginId);
           renderScope(latestPolicyData || data, latestPolicyScope || scope);
         });
         cardHead.appendChild(collapseButton);
         cardHead.appendChild(enabledLabel);
         card.appendChild(cardHead);
         const cardBody = makeElement('div', 'group-policy-card-body');
-        cardBody.hidden = collapsedPolicyPlugins.has(String(pluginId));
+        cardBody.hidden = policyCardCollapsed(pluginId);
         card.appendChild(cardBody);
         if (meta.description) cardBody.appendChild(makeElement('p', 'group-policy-plugin-desc', String(meta.description)));
         if (!Object.keys(schema).length) {
