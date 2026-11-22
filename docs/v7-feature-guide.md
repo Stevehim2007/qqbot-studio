@@ -424,6 +424,12 @@ V7 是本轮重点，分三层：
 
 数据库：`<实例>/data/astrbot/plugin_data/qqbot_memory_bank/knowledge.db`。
 
+### 9.8 注入优化
+
+- 默认卡片注入受 4 张/480 字限制。
+- 若觉得 prompt 太重：设 `cards_inject_enabled=false`，让知识库只在工具调用时返回；或把 `cards_max_cards` 降到 2。
+- 人格提示词、expression、social、corpus、history 仍各自有预算；不要把整段记忆手写进人格提示词。
+
 ### 9.9 AI episode（叙事记忆）
 
 `cards_episode_ai_enabled` 与 `cards_episode_enabled` 是两条路径：
@@ -432,12 +438,6 @@ V7 是本轮重点，分三层：
 - `cards_episode_ai_enabled=true`：完整收尾时由辅助 LLM 生成 120–200 字叙事，写“发生了什么/用户情绪/结果/未完成事项”，失败回退规则或跳过。
 - 两者都关：不生成新 episode；知识库仍按工具/自动抽取记录事实。
 - bot-11 当前：`cards_episode_enabled=true`、`cards_episode_ai_enabled=true`，用叙事 episode；知识库负责事实，二者分工。
-
-### 9.8 注入优化
-
-- 默认卡片注入受 4 张/480 字限制。
-- 若觉得 prompt 太重：设 `cards_inject_enabled=false`，让知识库只在工具调用时返回；或把 `cards_max_cards` 降到 2。
-- 人格提示词、expression、social、corpus、history 仍各自有预算；不要把整段记忆手写进人格提示词。
 
 ## 10. 插件清单（本次 12 个）
 
