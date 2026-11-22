@@ -9,12 +9,12 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 | 项目 | 版本 |
 |---|---|
 | 主项目 | `5.0.0-beta.31`（tag `v5.0.0-beta.31`） |
-| 插件仓库 tag | `v4.4.0-beta.61` / `60ae636` |
+| 插件仓库 tag | `v4.4.0-beta.63` / `8a9277e` |
 | core_reply | `4.3.12` |
 | safe_tools | `3.3.5` |
-| memory_commands | `4.3.1` |
-| memory_bank | `0.4.1` |
-| expression_state | `1.0.0` |
+| memory_commands | `4.3.3` |
+| memory_bank | `0.6.0`（仅 bot-11） |
+| expression_state | `1.0.0`（仅 bot-11） |
 
 ## 当前架构
 
@@ -36,7 +36,8 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - bot-1：QQ 官方，生产实例；健康。
 - bot-11：OneBot + 内置 NapCat，`qq_account=871247845`；AstrBot healthy，aiocqhttp 已连接。
 - bot-4 / bot-7：保留实例；健康。
-- 所有实例已装 core 4.3.12 / safe_tools 3.3.5 / memory_commands 4.3.1；bot-11 另装 memory_bank 0.4.1 / expression 1.0.0。
+- 实测（2026-11-22 直接读容器内 `data/astrbot/plugins/*/metadata.yaml`）：bot-1/4/7/11 全部 core 4.3.12 / safe_tools 3.3.5 / memory_commands 4.3.3；四台 `qqbot_memory_commands/aux.py` 均含 `from . import aux_ai` 相对导入修复。bot-11 另装 memory_bank 0.6.0 / expression 1.0.0。
+- 注意：`studio-plugins/registry.json` 里的版本是旧的（4.1.0 / 3.2.5），插件实际是手工装进容器 data 目录的，判断线上版本要看 `metadata.yaml` 而不是 registry。
 
 ## 已验证
 
@@ -46,7 +47,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - 好感度：模型自主 `favorability_adjust delta=1 confidence=0.8`，`social_state.db` 记录 scope `291690445`、score 2.0。
 - 表达状态：真实消息后 `expression context injected mode=astrbot chars=20`。
 - 测试：core 258、safe 231、memory 151、bank 11、expression 7、studio server 46、deployer 34（3 个本机 6185 端口段失败为环境占用）。
-- 主项目全量 880 tests OK；测试已改为使用系统空闲端口，不再依赖固定 6185。
+- 主项目全量 893 tests OK（beta.31，新增 13 个群策略登记测试）；测试使用系统空闲端口，不再依赖固定 6185。
 - 插件参数「加入群策略」（beta.31）：deployer 38、server 48、记忆策略 UI 静态契约 31、前端组件 5，均 OK；`registered` 映射与 `0600` 文件权限、坏项丢弃、旧文件兼容均有覆盖（未跑全量）。
 
 ## 已知边界
