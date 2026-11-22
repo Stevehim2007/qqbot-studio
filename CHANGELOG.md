@@ -1,3 +1,13 @@
+## v5.0.0-beta.39（测试版）— 被 @ 门挡掉的群消息也进入上下文
+
+- `qqbot_core_reply 4.3.17`：`participation.group_mention_only` 的硬门在 `stop_event()` 之前
+  新增 `_observe_without_reply()`，把未 @ 机器人的群消息写进该群对话历史——**不调用任何模型、零 token**。
+  效果：群里整天聊天但机器人没被 @ 时，它依然"读过"这些消息；之后被 @ 时能看到刚才聊了什么。
+- 关系网/事实记忆本来就不受该门影响：`qqbot_memory_bank` 的 `observe_message` 挂 priority 118，
+  早于 core_reply 的硬门 120，注释即写明"extraction is independent of whether the main bot chose to reply"；
+  实测 bot-11 的 `knowledge.db` 已有 34 条记忆，最近几条为当日写入、来源 `aux`。
+- 需配套 `qqbot_core_reply 4.3.17`（`v4.4.0-beta.69`）。
+
 ## v5.0.0-beta.38（测试版）— qqbot_core_reply 参数分组、删掉点歌文案键
 
 - `qqbot_core_reply` 的 108 个参数全部补上 `ui_group`，设置页从"115 项平铺"变成 13 个分组：

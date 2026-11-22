@@ -8,7 +8,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 | 项目 | 版本 |
 |---|---|
-| 主项目 | `5.0.0-beta.38`（tag `v5.0.0-beta.38`） |
+| 主项目 | `5.0.0-beta.39`（tag `v5.0.0-beta.39`） |
 | 插件仓库 tag | `v4.4.0-beta.65` |
 | core_reply | `4.3.13` |
 | safe_tools | `3.4.2` |
@@ -35,7 +35,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 ## 当前部署
 
-- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.38`；`/console` HTTP 200。
+- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.39`；`/console` HTTP 200。
 - bot-1：QQ 官方，生产实例；健康。
 - bot-11：OneBot + 内置 NapCat，`qq_account=871247845`；AstrBot healthy，aiocqhttp 已连接。
 - bot-4 / bot-7：保留实例；健康。
@@ -70,7 +70,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 3. 浏览器手工验收 Studio 新面板（人格/群记忆、scope 选择器、知识库导入）。
 4. 视需要补 embedding/BGE 自动召回和知识库切块。
 
-5. 已发布（2026-11-22）：插件 `v4.4.0-beta.64`（overlay）/ `beta.65`（include_schema）/ `beta.66`（core_reply 去死开关）/ `beta.67`（参数简介 + 去重复键）/ `beta.68`（参数分组 + 删点歌文案），主项目 `v5.0.0-beta.31`–`v5.0.0-beta.38`，均已 push。
+5. 已发布（2026-11-22）：插件 `v4.4.0-beta.64`（overlay）/ `beta.65`（include_schema）/ `beta.66`（core_reply 去死开关）/ `beta.67`（参数简介 + 去重复键）/ `beta.68`（参数分组 + 删点歌文案）/ `beta.69`（硬门消息进上下文），主项目 `v5.0.0-beta.31`–`v5.0.0-beta.39`，均已 push。
 6. 已部署：服务器 beta.35 + core_reply 4.3.15 / food 3.0.6 / stickers 3.0.4 / safe_tools 3.4.2；备份 `/home/ubuntu/deploy-backup-20261122-180436`。
 7. 待人工验收：浏览器/手机打开 `/console` → 插件参数页点「加入群策略」→ 群策略页出现该参数 → 按群保存 → 日志确认 overlay 生效；再验「显示全部参数」与复杂类型（v2）仅全局提示。
 8. v2 计划：`list` 15 个键（整表替换语义）与 `object` 类型覆盖。
