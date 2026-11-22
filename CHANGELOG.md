@@ -1,3 +1,13 @@
+## v5.0.0-beta.38（测试版）— qqbot_core_reply 参数分组、删掉点歌文案键
+
+- `qqbot_core_reply` 的 108 个参数全部补上 `ui_group`，设置页从"115 项平铺"变成 13 个分组：
+  基础 15 / 群内参与 19 / 冷却 4 / 上下文 5 / 人格 23 / 模型与识图 12 / 氛围插话 8 /
+  表情回应 3 / 会话管理 5 / 点歌 4 / 命令与回复 8 / 安全工具 1 / 内部 1。
+- 删除 7 个纯文案参数（`song_success_prefix`、`song_disabled_reply`、`song_empty_reply`、
+  `song_not_found_reply`、`song_too_large_reply`、`song_error_reply`、`song_cooldown_reply`），
+  文案改为插件内常量；四台实例的现值本来就等于默认值，行为不变。schema 与默认值键集仍严格相等。
+- 需配套 `qqbot_core_reply 4.3.16`（`v4.4.0-beta.68`）。
+
 ## v5.0.0-beta.37（测试版）— 修复群策略页 ReferenceError
 
 - 修复 beta.36 引入的 `collapsedPolicyPlugins is not defined`：卡片收起判定的两个辅助函数
