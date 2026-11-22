@@ -8,7 +8,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 | 项目 | 版本 |
 |---|---|
-| 主项目 | `5.0.0-beta.25`（tag `v5.0.0-beta.25`） |
+| 主项目 | `5.0.0-beta.26`（tag `v5.0.0-beta.26`） |
 | 插件仓库 tag | `v4.4.0-beta.61` / `60ae636` / `5909f71` |
 | core_reply | `4.3.12` |
 | safe_tools | `3.3.5` |
@@ -32,7 +32,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 ## 当前部署
 
-- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.25`；`/console` HTTP 200。
+- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.26`；`/console` HTTP 200。
 - bot-1：QQ 官方，生产实例；健康。
 - bot-11：OneBot + 内置 NapCat，`qq_account=871247845`；AstrBot healthy，aiocqhttp 已连接。
 - bot-4 / bot-7：保留实例；健康。
