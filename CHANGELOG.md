@@ -1,3 +1,14 @@
+## v5.0.0-beta.35（测试版）— 群策略参数有简介、选中框重做、清理重复参数
+
+- 群策略页每个参数控制项下面新增一行简介：`param_schema` 现在为**每个**字段返回 `description`
+  （手写的 33 条策略参数逐条写文案，其余从插件 `_conf_schema.json` 生成），控制台直接渲染，不再只靠 hover。
+- 重做群策略页所有下拉框（插件筛选、scope 类型、模板、枚举参数、标记表）：统一 34px 高度、
+  9px 圆角、CSS 绘制的箭头（无 `url()`、无图片资源）、hover 边框反馈与 focus 光环，移动端 38px 满宽。
+- 清理 `qqbot_core_reply` 的重复参数：`reply_probability`（= `participation.group_probability`）、
+  `group_cooldown_seconds`（= `cooldown.seconds`）、`llm_timeout_seconds`（= `llm.timeout_seconds`）
+  从 schema / 默认值表移除，编辑器不再重复展示；旧实例里已存的值仍然生效（运行时代码先读规范键、再回退旧键）。
+- 需配套 `qqbot_safe_tools 3.4.2`、`qqbot_core_reply 4.3.15`（`v4.4.0-beta.67`）。
+
 ## v5.0.0-beta.34（测试版）— 删掉不生效的默认 LLM 开关
 
 - `qqbot_core_reply` 移除 `block_default_llm_for_group_non_at`：该参数只存在于 schema 与默认值表，

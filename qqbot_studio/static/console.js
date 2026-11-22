@@ -3585,13 +3585,18 @@
   function groupPolicyParamMeta(name, spec) {
     const known = GROUP_POLICY_PARAM_META[name];
     const label = known ? known[0] : name;
+    // The control bridge now ships a one-line description for every field
+    // (hand-written specs plus generated ones from _conf_schema.json); prefer it
+    // and fall back to the curated table for older plugin builds.
+    const description = spec && typeof spec.description === 'string' ? spec.description.trim() : '';
     const details = [];
-    if (known) details.push(known[1]);
+    if (description) details.push(description);
+    else if (known) details.push(known[1]);
     if (spec && spec.kind) details.push(`类型：${spec.kind}`);
     if (spec && spec.minimum !== null && spec.minimum !== undefined) details.push(`最小：${spec.minimum}`);
     if (spec && spec.maximum !== null && spec.maximum !== undefined) details.push(`最大：${spec.maximum}`);
     if (spec && spec.enum && spec.enum.length) details.push(`可选：${spec.enum.join(' / ')}`);
-    return { label, title: `${label}（${name}）\n${details.join('；')}` };
+    return { label, description: description || (known ? known[1] : ''), title: `${label}（${name}）\n${details.join('；')}` };
   }
 
   function buildGroupPolicySection(instance) {
@@ -4187,6 +4192,9 @@
           const label = makeElement('label', 'group-policy-field');
           label.title = paramMeta.title;
           label.appendChild(makeElement('span', 'group-policy-field-label', paramMeta.label));
+          if (paramMeta.description) {
+            label.appendChild(makeElement('small', 'group-policy-field-desc', paramMeta.description));
+          }
           let field;
           const fieldKind = normalizePolicyKind(spec.kind);
           if (fieldKind === 'boolean') {

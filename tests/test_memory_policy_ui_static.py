@@ -587,6 +587,8 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
             "该实例未安装此插件，或没有可按群覆盖的参数。",
             "const fieldRow = makeElement('div', 'group-policy-field-row');",
             "fieldRow.appendChild(markButton);",
+            "const description = spec && typeof spec.description === 'string' ? spec.description.trim() : '';",
+            "label.appendChild(makeElement('small', 'group-policy-field-desc', paramMeta.description));",
         ), "console.js")
         self._has(self.console_css, (
             ".group-policy-filter-row {",
@@ -596,6 +598,10 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
             ".group-policy-field-row {",
             ".group-policy-mark-button {",
             "margin-right: auto;",
+            ".group-policy-field-desc {",
+            "appearance: none;",
+            "linear-gradient(45deg, transparent 50%, #6b7280 50%),",
+            ".group-policy-plugin-filter:disabled,",
         ), "console.css")
 
     def test_registration_pill_has_desktop_and_mobile_styles(self) -> None:

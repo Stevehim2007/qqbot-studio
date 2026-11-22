@@ -242,6 +242,15 @@ policy_param 都必须是 `^[A-Za-z0-9_.:-]{1,160}$`，每个插件最多 500 �
 `qqbot_stickers` 3.0.4 + `qqbot_safe_tools` 3.4.0）不再依赖手写 `PLUGIN_PARAM_SPECS`
 才能按群覆盖：
 
+每个字段都带一行 `description`（v5.0.0-beta.35 起）：手写的 33 条策略参数在
+`capability_policy.py` 的 `ParamSpec.description` 里逐条写文案，其余从 `_conf_schema.json`
+的 `description` 生成，`param_schema` 原样返回，控制台渲染在控件下方，不再依赖 hover。
+
+重复的旧键不再出现在编辑器里：`qqbot_core_reply` 4.3.15 移除了 `reply_probability`
+（= `participation.group_probability`）、`group_cooldown_seconds`（= `cooldown.seconds`）、
+`llm_timeout_seconds`（= `llm.timeout_seconds`）。运行时代码先读规范键、再回退旧键，
+所以已经存进实例配置的旧值仍然生效。
+
 - **spec 生成**：`qqbot_safe_tools/spec_registry.py` 扫兄弟目录的 `_conf_schema.json`，
   把标量字段（bool/int/float/string/text）生成 `ParamSpec`（`source="schema"`），
   手写 spec 永远优先（按名字与 `config_key` 双去重）。`list`/`object`/`dict`/`file`/`json`

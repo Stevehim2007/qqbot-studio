@@ -2086,7 +2086,6 @@ body.console-modal-open { overflow: hidden; }
   margin: 14px 0;
 }
 
-.group-policy-scope-type,
 .group-policy-scope-id {
   min-height: 36px;
   padding: 7px 10px;
@@ -2687,20 +2686,64 @@ body.console-modal-open { overflow: hidden; }
   font-size: 12px;
   color: var(--muted, #6b7280);
 }
-.group-policy-plugin-filter {
-  height: 32px;
-  min-width: 190px;
-  max-width: 100%;
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--line, #cbd5e0);
-  background: #fff;
+.group-policy-plugin-filter,
+.group-policy-scope-type,
+.group-policy-template-row select,
+.group-policy-field select,
+.group-policy-marked-row select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  height: 34px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--line, #d5dbe6);
+  border-radius: 9px;
+  background-color: #fff;
+  /* CSS-only chevron: two short diagonals; no image asset, no url() */
+  background-image:
+    linear-gradient(45deg, transparent 50%, #6b7280 50%),
+    linear-gradient(135deg, #6b7280 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) calc(50% - 2px),
+    calc(100% - 10px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--text, #111827);
   font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
 }
-.group-policy-plugin-filter:focus {
+.group-policy-plugin-filter:hover,
+.group-policy-scope-type:hover,
+.group-policy-template-row select:hover,
+.group-policy-field select:hover,
+.group-policy-marked-row select:hover {
+  border-color: #b6c2d6;
+  background-color: #fbfdff;
+}
+.group-policy-plugin-filter:focus,
+.group-policy-scope-type:focus,
+.group-policy-template-row select:focus,
+.group-policy-field select:focus,
+.group-policy-marked-row select:focus {
   outline: none;
   border-color: var(--accent, #4f7cff);
   box-shadow: 0 0 0 3px rgba(79, 124, 255, .15);
+}
+.group-policy-plugin-filter:disabled,
+.group-policy-field select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.group-policy-plugin-filter {
+  min-width: 190px;
+  max-width: 100%;
+}
+.group-policy-field-desc {
+  color: var(--muted, #6b7280);
+  font-size: 10.5px;
+  line-height: 1.45;
 }
 .group-policy-collapse {
   white-space: nowrap;
@@ -2719,6 +2762,7 @@ body.console-modal-open { overflow: hidden; }
   }
   .group-policy-plugin-filter {
     width: 100%;
+    height: 38px;
   }
   .group-policy-collapse {
     order: 2;
