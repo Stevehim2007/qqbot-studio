@@ -9,7 +9,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 | 项目 | 版本 |
 |---|---|
 | 主项目 | `5.0.0-beta.26`（tag `v5.0.0-beta.26`） |
-| 插件仓库 tag | `v4.4.0-beta.61` / `60ae636` / `5909f71` |
+| 插件仓库 tag | `v4.4.0-beta.61` / `60ae636` |
 | core_reply | `4.3.12` |
 | safe_tools | `3.3.5` |
 | memory_commands | `4.3.1` |
@@ -25,7 +25,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - 插件仓库：`.qqbot-plugins-staging/`；构建脚本 `scripts/build_release.py`；12 个 ZIP + `manifest.json` + `catalog.json`。
 - 记忆：
   - `qqbot_memory_commands 4.3.1`：卡片、收尾、purpose、FTS、Studio 维护；
-  - `qqbot_memory_bank 0.4.0`：`memory_layer`（人格/群核心记忆）、`knowledge_entry`（个人 AI 事实）、`knowledge_doc`（用户导入共享资料）、自动召回；
+  - `qqbot_memory_bank 0.4.1`：`memory_layer`（人格/群核心记忆）、`knowledge_entry`（个人 AI 事实）、`knowledge_doc`（用户导入共享资料）、自动召回；
   - `qqbot_expression_state 1.0.0`：情绪/风格，不调用模型；
   - `qqbot_core_reply 4.3.12`：唯一聊天 owner，人格注入、参与判定、群聊非 @ 硬门、表达块注入。
 - 控制台记忆结构：人格记忆、群记忆、个人 AI 记忆、知识库（用户导入）、记忆卡片、表达状态、群成员好感度、人格语料库、记忆与检索策略、高级原生记忆。
@@ -36,7 +36,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - bot-1：QQ 官方，生产实例；健康。
 - bot-11：OneBot + 内置 NapCat，`qq_account=871247845`；AstrBot healthy，aiocqhttp 已连接。
 - bot-4 / bot-7：保留实例；健康。
-- 所有实例已装 core 4.3.12 / safe_tools 3.3.5 / memory_commands 4.3.1；bot-11 另装 memory_bank 0.4.0 / expression 1.0.0。
+- 所有实例已装 core 4.3.12 / safe_tools 3.3.5 / memory_commands 4.3.1；bot-11 另装 memory_bank 0.4.1 / expression 1.0.0。
 
 ## 已验证
 
@@ -46,7 +46,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 - 好感度：模型自主 `favorability_adjust delta=1 confidence=0.8`，`social_state.db` 记录 scope `291690445`、score 2.0。
 - 表达状态：真实消息后 `expression context injected mode=astrbot chars=20`。
 - 测试：core 258、safe 231、memory 151、bank 11、expression 7、studio server 46、deployer 34（3 个本机 6185 端口段失败为环境占用）。
-- 主项目全量 878 曾有 3 failures + 6 errors，均为本机 6185–6204 端口段被占；需在空闲端口环境重跑。
+- 主项目全量 879 tests OK；测试已改为使用系统空闲端口，不再依赖固定 6185。
 
 ## 已知边界
 
