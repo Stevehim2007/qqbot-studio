@@ -1,4 +1,4 @@
-# 美食 AI 提交（qqbot_enhancer t3）
+# 美食 AI 提交（qqbot_food）
 
 状态：已实现并通过 mock 测试；依赖 t1 契约
 [`docs/food-ai-contract/API_AI_REVIEW.md`](food-ai-contract/API_AI_REVIEW.md)。
@@ -123,7 +123,7 @@ Content-Type: application/json; charset=utf-8
   direct 模式 prompt 里的发送者 QQ 是**既有身份上下文**（身份元数据，不是 password，
   也不会被当成提交密钥使用）；模型无法通过工具传密码（白名单拒绝 `password=`）。
 - **不可信网页注入**：`fetch_webpage` 返回的文本会把 `[[` 中和成 `[ [`，且工具结果会打上
-  `qqbot_enhancer_tool_processed` 标记，`on_decorating_result` 不再二次解析，恶意页面无法
+  `qqbot_food_tool_processed` 标记，`on_decorating_result` 不再二次解析，恶意页面无法
   注入 `[[tool:submit_food_review ...]]` 触发写入。
 - **非法提交 marker**：被识别为 `submit_food_review` 但被禁用/参数非法/字段超长/多条 marker/
   执行无结果时，整条回复替换为固定的中文说明（`food_submit_tool_rejected_reply`），
@@ -234,7 +234,7 @@ GET https://food.dlsz.top/api/upload -> 405   # POST 端点存在且拒绝 GET
 
 - 站点：**无需改动**（v1 公开接口即可）。可选 v1.1 补丁只为更稳定的错误 `code`，
   按 [`food-ai-contract/API_AI_REVIEW.md`](food-ai-contract/API_AI_REVIEW.md) §6 手工应用并重启 gunicorn。
-- 插件：把 `plugins/qqbot_enhancer/` 覆盖到 AstrBot 的 data/plugins 目录并重启；
+- 插件：安装插件市场中的 `qqbot_food` 包并重启；
   `_conf_schema.json` 与 `config.py` 键集合一致（有测试保证），旧配置自动补默认值。
 
 ## 9. 限制

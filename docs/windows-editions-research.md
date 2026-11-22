@@ -1,5 +1,8 @@
 # Windows 双发行版可行性调研
 
+> 历史调研：旧 `plugins/qqbot_enhancer/` 已不在运行时路径；Windows 发行需同步当前插件仓库。
+
+
 > 历史研究资料：当前 Linux 主项目仅支持 QQ 官方机器人；SnowLuma/noVNC/OneBot 方案不再属于本仓库运行路径。
 
 > 调研日期：2026-10-30  

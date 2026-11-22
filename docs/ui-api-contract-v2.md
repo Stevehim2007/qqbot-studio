@@ -1,5 +1,8 @@
 # QQ Bot Studio v2 前端 / 本地服务 API 契约
 
+> 说明：本文示例中的插件 id/配置路径已统一为当前 `qqbot_core_reply`；旧 `qqbot_enhancer` 字段数量与示例仅存在于 git 历史，不代表 5.0 运行时。
+
+
 适用文件：
 
 - `qqbot_studio/static/index.html`、`styles.css`、`app.js`：实例部署向导
@@ -506,15 +509,15 @@ GET /api/instances/<instance_id>/plugins
   "ok": true,
   "plugins": [
     {
-      "id": "qqbot_enhancer",
-      "plugin_id": "qqbot_enhancer",
+      "id": "qqbot_core_reply",
+      "plugin_id": "qqbot_core_reply",
       "name": "QQ Bot 增强回复",
       "enabled": true,
       "version": "1.4.1",
       "description": "QQ 群 @/私聊必回、概率回复等增强。",
       "source": "installed",
       "reserved": false,
-      "root_dir_name": "qqbot_enhancer",
+      "root_dir_name": "qqbot_core_reply",
       "restart_required": false,
       "error": ""
     }
@@ -547,7 +550,7 @@ GET /api/instances/<instance_id>/plugins
 ```text
 POST /api/instances/<instance_id>/plugins
 POST /api/instances/<instance_id>/plugins/toggle   # 兼容别名
-body: {"plugin_id": "qqbot_enhancer", "enabled": false}
+body: {"plugin_id": "qqbot_core_reply", "enabled": false}
 ```
 
 服务端使用 AstrBot v4.29 真实接口
@@ -559,7 +562,7 @@ body: {"plugin_id": "qqbot_enhancer", "enabled": false}
 {
   "ok": true,
   "plugin": {
-    "id": "qqbot_enhancer",
+    "id": "qqbot_core_reply",
     "name": "QQ Bot 增强回复",
     "enabled": false,
     "version": "1.4.1",
@@ -575,7 +578,7 @@ body: {"plugin_id": "qqbot_enhancer", "enabled": false}
 ```
 
 AstrBot v4.29 的启停接口会热更新插件；`restart_required=false`。如果 AstrBot 或接口不可达，
-返回可操作的中文错误，不会把插件标记为已修改。至少支持管理内置 `qqbot_enhancer` 及
+返回可操作的中文错误，不会把插件标记为已修改。至少支持管理内置 `qqbot_core_reply` 及
 AstrBot 内置（reserved）插件。
 
 兼容别名：`GET /api/plugins?instance=<id>`、`POST /api/plugins?instance=<id>`，请求体相同。
@@ -602,7 +605,7 @@ body: {"mode": "direct"}  或  {"mode": "astrbot"}
   "unique_session": false,
   "group_memory_shared": true,
   "restart_required": false,
-  "config_path": "…/data/astrbot/config/qqbot_enhancer_config.json",
+  "config_path": "…/data/astrbot/config/qqbot_core_reply_config.json",
   "astrbot_config_path": "…/data/astrbot/cmd_config.json",
   "behavior": {
     "group": "同一群的消息共享 event.unified_msg_origin 对应的会话。",
@@ -660,7 +663,7 @@ body: {"mode": "direct"}  或  {"mode": "astrbot"}
   数据卷中，可按会话管理功能查看。两命令都不提供跨群共享知识库；长期记忆边界是 AstrBot 的会话存储，
   不是无限期全局记忆。
 - 兼容别名：`GET/POST /api/memory?instance=<id>`，POST 请求体相同。
-- 插件配置写入会同时原子更新 `<qqbot_enhancer_config>.bak` 最近良好快照（0600）。
+- 插件配置写入会同时原子更新 `<qqbot_core_reply_config>.bak` 最近良好快照（0600）。
   主配置损坏时读取优先回退 backup；无 backup 时回退内存 cached 值或 Studio 当前
   `memory_mode` 镜像，并返回明确 `error/warning`，不会把默认 `direct` 写回损坏文件。
   只有显式写操作才允许修复主配置。
@@ -1253,7 +1256,7 @@ GET /api/assistant/diagnose
 
 ## 11. 插件参数读取与编辑
 
-这些接口让控制台读取/编辑某个实例的单个插件参数，重点是 `qqbot_enhancer` 的
+这些接口让控制台读取/编辑某个实例的单个插件参数，重点是 `qqbot_core_reply` 的
 `reply_probability`。服务端以插件目录中的 `_conf_schema.json` 为字段白名单，不修改 schema，
 也不会读取/返回其它插件的配置。
 
@@ -1275,7 +1278,7 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
 ```json
 {
   "ok": true,
-  "plugin_id": "qqbot_enhancer",
+  "plugin_id": "qqbot_core_reply",
   "schema": {
     "reply_probability": {
       "description": "群聊非 @ 消息的回复概率",
@@ -1294,9 +1297,9 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
     "image_search_enabled": true
   },
   "schema_source": "bundled",
-  "schema_path": "/opt/qqbot-studio/plugins/qqbot_enhancer/_conf_schema.json",
+  "schema_path": "/opt/qqbot-studio/plugins/qqbot_core_reply/_conf_schema.json",
   "schema_warning": "",
-  "config_path": "/home/user/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_enhancer_config.json",
+  "config_path": "/home/user/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_core_reply_config.json",
   "source": "astrbot",
   "api_available": true,
   "restart_required": false,
@@ -1307,8 +1310,8 @@ GET /api/plugin-config?instance=<instance_id>&plugin_id=<plugin_id>
 
 读取规则：
 
-- 内置 `qqbot_enhancer` **优先**读取主项目 `plugins/qqbot_enhancer/_conf_schema.json`（bundled，版本固定）；
-  实例 `<astrbot_data>/plugins/qqbot_enhancer/_conf_schema.json` 仅作备用，不复制、不覆盖。
+- 内置 `qqbot_core_reply` **优先**读取主项目 `plugins/qqbot_core_reply/_conf_schema.json`（bundled，版本固定）；
+  实例 `<astrbot_data>/plugins/qqbot_core_reply/_conf_schema.json` 仅作备用，不复制、不覆盖。
 - 其它插件保持实例 schema 优先；实例 schema 不可用时回退 bundled。
 - 对 missing、PermissionError/OSError、半写 JSON、损坏 JSON、空 object/无字段 schema 做最多 3 次短重试；
   本地 schema 失败但 bundled 成功时仍返回 HTTP 200 + `ok:true`，UI 可正常编辑。
@@ -1391,10 +1394,10 @@ Content-Type: application/json
 ```json
 {
   "ok": false,
-  "plugin_id": "qqbot_enhancer",
+  "plugin_id": "qqbot_core_reply",
   "schema": {},
   "values": {},
-  "config_path": "…/qqbot_enhancer_config.json",
+  "config_path": "…/qqbot_core_reply_config.json",
   "source": "none",
   "api_available": false,
   "restart_required": false,

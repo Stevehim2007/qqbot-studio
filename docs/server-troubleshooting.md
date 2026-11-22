@@ -651,7 +651,7 @@ cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 
 ### 先确认插件状态
 
-在控制台实例展开 **插件、记忆与资源 → 插件管理**，或登录 AstrBot WebUI → 插件，确认 `qqbot_enhancer` 已启用。AstrBot 停止时控制台只能显示本地文件状态，无法线上启停。
+在控制台实例展开 **插件、记忆与资源 → 插件管理**，或登录 AstrBot WebUI → 插件，确认 `qqbot_core_reply` 已启用。AstrBot 停止时控制台只能显示本地文件状态，无法线上启停。
 
 ### 非 @ 消息不回复
 
@@ -681,7 +681,7 @@ cat ~/.local/share/qqbot-studio/instances/bot-1/config.json
 本地点歌只读取实例插件目录直属 `songs/` 文件，不调用 TTS/音乐生成；仓库不附带歌曲。放入你有权使用的音频：
 
 ```bash
-SONGS="$HOME/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugins/qqbot_enhancer/songs"
+SONGS="$HOME/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugins/qqbot_core_reply/songs"
 mkdir -p "$SONGS"
 cp "/你的授权音频.wav" "$SONGS/"
 ```
@@ -828,7 +828,7 @@ python3 -m json.tool ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/cm
 可检查容器 root 创建目录的权限，并以管理员确认后用类似命令修复（路径按实际实例调整）：
 ```bash
 sudo chmod -R u+rwX,g+rX,o+rX \
-  ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugin_data/qqbot_enhancer/collected_stickers
+  ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/plugin_data/qqbot_stickers/collected_stickers
 ```
 不要使用 `777`，不要删除收藏；AstrBot 容器与宿主机用户权限的插件侧彻底修复由插件任务负责。
 
@@ -841,6 +841,6 @@ sudo chmod -R u+rwX,g+rX,o+rX \
 请先备份，再用以下命令确认并修复，不要直接删除含用户调优值的文件：
 ```bash
 python3 -m json.tool \
-  ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_enhancer_config.json \
+  ~/.local/share/qqbot-studio/instances/bot-1/data/astrbot/config/qqbot_core_reply_config.json \
   >/dev/null
 ```
