@@ -119,6 +119,10 @@ content_hash, created_at, updated_at
 | `auto_extract_enabled` | `true`（本项目实例） | 是否自动提取 AI 记忆 |
 | `aux_enabled` | `true` | 辅助 AI 主提取，失败回退规则 |
 | `extract_every_turns` | `4` | 每多少条用户消息提取一次 |
+| `routing_mode` | `ai` | `ai` 辅助模型路由；`rules` 规则提取 |
+| `routing_min_confidence` | `0.6` | 写人格/群核心记忆的最低置信度 |
+| `auto_write_core_memory` | `false` | 是否允许 AI 自动写核心记忆；关闭时进收件箱 |
+| `auto_recall_cards_enabled` | `true` | 是否由 memory_bank 统一召回记忆卡片 |
 
 如果要“完全工具化、不自动注入”：设 `auto_recall_enabled=false`，模型只能用 `knowledge_search`/`memory_search`。
 
@@ -151,3 +155,32 @@ content_hash, created_at, updated_at
 - 人格/群记忆的“每层最多 6 条”是注入上限，不是存储上限。
 - 共享知识库不会自动切块/摘要；长文档请自行拆成多条，单条建议 ≤1000 字。
 - `knowledge_entry` 旧 `legacy` 数据没有 actor，按共享区处理；新 AI 事实才按用户隔离。
+
+## 9. AI 路由与所有权（收口）
+
+四层之间不再用固定关键词决定去向。`qqbot_memory_bank/memory_router.py` 把最近用户消息交给辅助模型，由模型返回 JSON 路由：
+
+| route | 所有者 | 处理 |
+|---|---|---|
+| `user_fact` | AI 记忆库 | 按 `scope + persona_id + actor_hash` 写入 `knowledge_entry` |
+| `persona_memory` | 人格记忆 | `auto_write_core_memory=true` 且置信度达标才写 `memory_layer(persona)`，否则进 `memory_inbox` |
+| `group_memory` | 群记忆 | 同上，写 `memory_layer(group)` 或进收件箱 |
+| `episode` / `open_topic` | 记忆卡片 | 只进 `memory_inbox` 建议；卡片正文由 memory_commands 的 AI episode 判断 |
+| `knowledge_doc` | 用户导入知识库 | 只进 `memory_inbox` 建议，绝不自动改写用户资料 |
+| `ignore` | 不保存 | 寒暄、问句、助手话、临时情绪、凭据等 |
+
+辅助模型不可用时，才回退到规则提取 `user_fact`（置信度 0.55），不会静默写人格/群/资料。
+
+`memory_inbox` 是待审核建议表，字段包含 `scope/persona_id/actor_hash/actor_label/route/content/confidence/reason/source/status`。待审核项不会被注入；只有人工接受或后续管理面处理后才进入对应层。
+
+记忆卡片的 `episode_summary()` 也改成 AI 判断：没有实质内容时返回 `[[NONE]]`，调用方过滤，不生成卡片。由此：
+
+- 事实 → AI 记忆库；
+- 人格/群规则 → 核心记忆或收件箱；
+- 情节/未完成话题 → 卡片；
+- 用户资料 → 只读知识库；
+- 最近会话 → AstrBot 原生会话。
+
+注入收口：bot-11 设置 `qqbot_memory_commands.cards_inject_enabled=false`，记忆卡片由 `qqbot_memory_bank` 的自动召回统一读取并按 scope/persona 去重，避免 `memory_cards` 与 memory_bank 两套注入重复。AstrBot 原生记忆仍保留为“最近会话”，不再由记忆卡片重复提供叙事背景。
+
+注意：`auto_write_core_memory` 默认 `false`，AI 只能建议、不能自动改人格/群核心；需要自动写入时再显式打开。

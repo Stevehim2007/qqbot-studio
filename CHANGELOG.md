@@ -1,3 +1,13 @@
+## v5.0.0-beta.27（测试版）— AI 记忆路由与注入收口
+
+- `qqbot_memory_bank 0.5.0`：新增 `memory_router.py`，由辅助模型判断 `user_fact / persona_memory / group_memory / episode / open_topic / knowledge_doc / ignore`，不再用固定关键词决定记忆去向。
+- 新增 `memory_inbox` 待审核表：AI 不能静默改人格/群核心/用户资料；`auto_write_core_memory` 默认关闭，非事实类建议进入待审核。
+- 事实写入 `knowledge_entry`；人格/群核心写入 `memory_layer`（需显式开启+置信度）；用户资料只能人工导入；卡片和文档不自动改写。
+- `qqbot_memory_commands 4.3.2`：AI episode 摘要在没有实质内容时返回 `[[NONE]]`，不再生成垃圾 episode。
+- 注入收口：bot-11 关闭 `cards_inject_enabled`，记忆卡片由 `qqbot_memory_bank` 统一按 scope/persona 去重召回，避免卡片与 memory_bank 重复注入。
+- 文档：[四层记忆与自动召回](docs/memory-layers.md) 增加 AI 路由、`memory_inbox`、所有权与注入收口说明。
+- 发布：插件仓库 `v4.4.0-beta.62`；`qqbot_memory_bank 0.5.0`、`qqbot_memory_commands 4.3.2`。
+
 ## v5.0.0-beta.26（测试版）— 记忆面板写入路由修复
 
 - 修复 Studio 的 persona/group memory、知识库导入、AI 记忆导入/删除 POST 分支误放在 GET 处理器中，导致界面写入返回 404；现已移到 `do_POST` 并保持 GET 查询独立。
