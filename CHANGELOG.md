@@ -1,3 +1,11 @@
+## v5.0.0-beta.28（测试版）— 记忆建议收件箱
+
+- Studio 的“AI 记忆库”面板新增待审核建议列表，可接受/忽略 AI 路由到人格记忆、群记忆、用户知识库的建议；`episode/open_topic` 只能忽略，卡片仍由卡片写入者管理。
+- 新增 `GET /api/instances/<id>/memory-inbox`、`POST /api/instances/<id>/memory-inbox/resolve`。
+- `qqbot_memory_bank 0.5.0` 的 `memory_inbox` 仍只保存建议，不自动写核心记忆/用户资料；`auto_write_core_memory` 默认关闭。
+- 测试：主项目 880 tests OK；memory_bank 16、memory_commands 151。
+- 发布：插件仓库 `v4.4.0-beta.62`。
+
 ## v5.0.0-beta.27（测试版）— AI 记忆路由与注入收口
 
 - `qqbot_memory_bank 0.5.0`：新增 `memory_router.py`，由辅助模型判断 `user_fact / persona_memory / group_memory / episode / open_topic / knowledge_doc / ignore`，不再用固定关键词决定记忆去向。

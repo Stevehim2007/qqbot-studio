@@ -5179,6 +5179,44 @@
     const detail = makeElement('div', 'memory-bank-detail');
     box.appendChild(status);
     box.appendChild(detail);
+    const inboxTitle = makeElement('div', 'memory-bank-meta', '待审核的 AI 建议（不会自动写人格/群/资料）');
+    const inboxDetail = makeElement('div', 'memory-bank-detail');
+    box.appendChild(inboxTitle);
+    box.appendChild(inboxDetail);
+    const loadInbox = async () => {
+      inboxDetail.replaceChildren();
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-inbox?limit=30`);
+        if (!data || data.ok === false || !data.available) return;
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        if (!entries.length) return;
+        for (const entry of entries) {
+          const row = makeElement('div', 'memory-bank-row');
+          row.appendChild(makeElement('div', 'memory-bank-content', `[${entry.route}] ${entry.content || ''}`));
+          const meta = makeElement('div', 'memory-bank-meta', `置信度 ${Number(entry.confidence || 0).toFixed(2)} · ${entry.reason || ''}`);
+          row.appendChild(meta);
+          const actions = makeElement('div', 'memory-layer-actions');
+          const accept = makeElement('button', 'btn btn-primary btn-small', '接受');
+          accept.type = 'button';
+          const dismiss = makeElement('button', 'btn btn-quiet btn-small', '忽略');
+          dismiss.type = 'button';
+          const resolve = async (action) => {
+            try {
+              const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-inbox/resolve`, {
+                method: 'POST', body: JSON.stringify({ item_id: entry.id, action }),
+              });
+              if (!result || result.ok === false) { status.textContent = (result && (result.reason || result.error)) || '处理失败。'; return; }
+              await loadInbox(); await query();
+            } catch (error) { status.textContent = `处理失败：${error.message || error}`; }
+          };
+          accept.addEventListener('click', () => void resolve('accept'));
+          dismiss.addEventListener('click', () => void resolve('dismiss'));
+          actions.append(accept, dismiss);
+          row.appendChild(actions);
+          inboxDetail.appendChild(row);
+        }
+      } catch (_) { /* 收件箱是附加功能，查询失败不影响 AI 记忆列表 */ }
+    };
     const query = async () => {
       const scope = scopePicker.getValue();
       const personaId = personaInput.value.trim();
@@ -5219,6 +5257,7 @@
       } catch (error) { status.textContent = `查询失败：${error.message || error}`; }
     };
     load.addEventListener('click', () => void query());
+    void loadInbox();
     return box;
   }
 

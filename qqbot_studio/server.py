@@ -1463,6 +1463,15 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
                     self._json(HTTPStatus.OK, getter(scope=scope, persona_id=persona_id, limit=limit))
                     return
+                if subroute == "memory-inbox":
+                    getter = getattr(manager, "get_memory_inbox", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆建议收件箱。")
+                        return
+                    scope = str((query.get("scope") or [""])[0]).strip()
+                    limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
+                    self._json(HTTPStatus.OK, getter(scope=scope, limit=limit))
+                    return
                 if subroute == "knowledge-base":
                     getter = getattr(manager, "get_knowledge_base", None)
                     if not callable(getter):
@@ -2012,6 +2021,17 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                             content=str(payload.get("content") or ""),
                             tags=str(payload.get("tags") or "").strip(),
                         )
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+                    return
+                if subroute == "memory-inbox/resolve":
+                    resolver = getattr(manager, "resolve_memory_inbox", None)
+                    if not callable(resolver):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供记忆建议处理接口。")
+                        return
+                    result = resolver(
+                        item_id=str(payload.get("item_id") or "").strip(),
+                        action=str(payload.get("action") or "dismiss").strip(),
+                    )
                     self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
                     return
                 if subroute in {"memory-bank", "memory-bank/delete"}:

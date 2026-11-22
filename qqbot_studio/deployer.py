@@ -2883,6 +2883,84 @@ class DeployManager:
         finally:
             connection.close()
 
+    # ------------------------------------------------------------------
+    # AI routing inbox: suggestions that require human approval.
+    # ------------------------------------------------------------------
+    def get_memory_inbox(self, *, scope: str = "", limit: int = 100) -> dict[str, Any]:
+        db_path = self._knowledge_db_path()
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": db_path.is_file(),
+            "scope": str(scope or ""),
+            "entries": [],
+            "error": "",
+        }
+        if not db_path.is_file():
+            return payload
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                query = "SELECT * FROM memory_inbox WHERE status='pending'"
+                args: list[Any] = []
+                if str(scope or "").strip():
+                    query += " AND scope=?"
+                    args.append(str(scope).strip())
+                query += " ORDER BY created_at DESC LIMIT ?"
+                args.append(max(1, min(500, int(limit or 100))))
+                payload["entries"] = [dict(row) for row in connection.execute(query, args).fetchall()]
+            finally:
+                connection.close()
+        except Exception as exc:
+            payload["ok"] = False
+            payload["error"] = str(exc)
+        return payload
+
+    def resolve_memory_inbox(self, *, item_id: str, action: str = "dismiss") -> dict[str, Any]:
+        db_path = self._knowledge_db_path()
+        item_id = str(item_id or "").strip()
+        action = str(action or "dismiss").strip().lower()
+        if not item_id or action not in {"accept", "dismiss"}:
+            return {"ok": False, "reason": "invalid_request"}
+        if not db_path.is_file():
+            return {"ok": False, "reason": "not_found"}
+        connection = sqlite3.connect(str(db_path), timeout=10)
+        connection.row_factory = sqlite3.Row
+        try:
+            row = connection.execute("SELECT * FROM memory_inbox WHERE id=? AND status='pending'", (item_id,)).fetchone()
+            if not row:
+                return {"ok": False, "reason": "not_found"}
+            route = str(row["route"] or "")
+            if action == "accept":
+                if route in {"persona_memory", "group_memory"}:
+                    layer = "persona" if route == "persona_memory" else "group"
+                    owner = str(row["persona_id"] or "") if layer == "persona" else str(row["scope"] or "")
+                    result = self.add_memory_layer(
+                        layer=layer, owner_id=owner, content=str(row["content"] or ""),
+                        title="AI 建议", tags="ai-routed",
+                    )
+                    if not result.get("ok"):
+                        return result
+                elif route == "knowledge_doc":
+                    result = self.add_knowledge_doc(
+                        scope=str(row["scope"] or ""), persona_id=str(row["persona_id"] or ""),
+                        title="AI 建议导入", content=str(row["content"] or ""), tags="ai-suggested",
+                    )
+                    if not result.get("ok"):
+                        return result
+                else:
+                    return {"ok": False, "reason": "card_owner_requires_manual_review"}
+            connection.execute(
+                "UPDATE memory_inbox SET status=?, resolved_at=? WHERE id=? AND status='pending'",
+                ("accepted" if action == "accept" else "dismissed", time.time(), item_id),
+            )
+            connection.commit()
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "reason": "database_error", "error": str(exc)}
+        finally:
+            connection.close()
+
     def _knowledge_base_db_path(self) -> Path:
         return self._knowledge_db_path()
 

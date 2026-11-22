@@ -171,7 +171,7 @@ content_hash, created_at, updated_at
 
 辅助模型不可用时，才回退到规则提取 `user_fact`（置信度 0.55），不会静默写人格/群/资料。
 
-`memory_inbox` 是待审核建议表，字段包含 `scope/persona_id/actor_hash/actor_label/route/content/confidence/reason/source/status`。待审核项不会被注入；只有人工接受或后续管理面处理后才进入对应层。
+`memory_inbox` 是待审核建议表，字段包含 `scope/persona_id/actor_hash/actor_label/route/content/confidence/reason/source/status`。待审核项不会被注入；Studio 的“AI 记忆库”面板底部会列出待审核建议，可“接受”写入人格/群记忆或用户知识库，也可“忽略”；`episode/open_topic` 只能人工忽略，卡片仍由卡片写入者管理。
 
 记忆卡片的 `episode_summary()` 也改成 AI 判断：没有实质内容时返回 `[[NONE]]`，调用方过滤，不生成卡片。由此：
 
