@@ -194,7 +194,7 @@ Content-Type: application/json; charset=utf-8
 固定 host 的 `/api/locations/search`、`/api/tags/search`、`/api/restaurants` 三个 GET，
 标签/地点精确匹配否则追问，本地按均分/口味/性价比/评价数/店名/最新日期排序，
 `limit` 1–5，只输出店名/地点/标签/三项均分/评价数/最新日期 + 站点链接，不 POST、不额外调用 LLM。
-详见 [`plugin-qqbot-enhancer.md`](plugin-qqbot-enhancer.md) §4.27。
+详见 [`v7-feature-guide.md`](v7-feature-guide.md) 的 food/工具章节。
 
 ## 7. 测试证据
 

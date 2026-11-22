@@ -688,7 +688,7 @@ cp "/你的授权音频.wav" "$SONGS/"
 
 支持 `.mp3/.wav/.ogg/.flac/.m4a/.aac`，默认单文件上限 20 MB；部分 QQ 适配器可能只可靠支持 WAV，真实播放需按 AstrBot 和 QQ 官方平台日志确认。
 
-`/option`、`/插件用法`、`/用法` 可显示本插件用法和已加载插件元数据，但不会猜测其他插件的子命令。完整配置见 [`plugin-qqbot-enhancer.md`](plugin-qqbot-enhancer.md)。
+`/option`、`/插件用法`、`/用法` 可显示本插件用法和已加载插件元数据，但不会猜测其他插件的子命令。当前回复插件是 `qqbot_core_reply`，完整功能与 `/option` 说明见 [`v7-feature-guide.md`](v7-feature-guide.md)。
 
 <a id="screen"></a>
 ## 15. screen/后台管理服务和日志
