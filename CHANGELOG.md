@@ -1,3 +1,13 @@
+## v5.0.0-beta.24（测试版）— 四层记忆与自动召回
+
+- `qqbot_memory_bank 0.4.0` 新增 `memory_layer`：人格记忆（按 persona_id）与群记忆（按群 scope）常驻注入，支持标题、标签、优先级、同内容去重和删除。
+- 新增自动召回 `@filter.on_llm_request()`：每轮按预算注入人格记忆、群记忆、共享知识库 top-k、当前用户 AI 记忆；可用 `auto_recall_enabled` 全局关闭，退回纯工具检索。
+- Studio 新增“人格记忆”“群记忆”面板和 `/api/instances/<id>/persona-memory`、`/group-memory` GET/POST/DELETE；scope 使用统一下拉选择器。
+- 明确四层边界：人格/群核心记忆常驻；个人 AI 记忆按 actor 隔离；用户导入知识库只读并自动 RAG；`memory_cards`、`persona_corpus`、AstrBot 原生记忆保留但不混表。
+- 真实 bot-11 验证自动召回日志：`memory auto recall: layers=2 docs=1 facts=0 chars=103`；测试数据已清理，`group_mention_only` 已恢复。
+- 文档：新增 [四层记忆与自动召回](docs/memory-layers.md)，重写文档索引/STATE，更新 V7 使用手册。
+- 测试：memory_bank 11 tests OK；主项目 server/deployer 新增路由编译通过；全量端口占用失败仍为环境问题。
+
 ## v5.0.0-beta.23（测试版）— scope 选择器与知识库 UI 优化
 
 - 记忆卡片、表达状态、用户导入知识库、AI 记忆库统一使用 scope 选择器：先选“群聊 OneBot / 群聊官方 / 私聊 / 全局 / 自定义”，再填 ID，不需要手写完整 scope。

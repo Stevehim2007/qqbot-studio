@@ -4890,6 +4890,8 @@
     section.appendChild(buildExpressionStateSection(instance));
     section.appendChild(buildFavorabilitySection(instance));
     section.appendChild(buildKnowledgeBaseSection(instance));
+    section.appendChild(buildPersonaMemorySection(instance));
+    section.appendChild(buildGroupMemorySection(instance));
     section.appendChild(buildMemoryBankSection(instance));
     section.appendChild(buildPersonaCorpusSection(instance));
     return section;
@@ -5014,6 +5016,143 @@
     });
     load.addEventListener('click', () => void query());
     return box;
+  }
+
+  function buildMemoryLayerSection(instance, layer) {
+    const isPersona = layer === 'persona';
+    const title = isPersona ? '人格记忆（常驻）' : '群记忆（常驻）';
+    const subtitle = isPersona
+      ? '按人格 ID 保存的核心设定/偏好，每次新会话常驻注入；不是用户导入资料，也不与群记忆混用。'
+      : '按群 scope 保存的群规/长期背景，每次该群会话常驻注入；默认独立于人格，不能改写人格身份。';
+    const box = makeElement('div', `memory-cards-panel memory-layer-panel memory-layer-${layer}`);
+    const heading = makeElement('div', 'knowledge-base-heading');
+    const copy = makeElement('div', 'knowledge-base-heading-copy');
+    copy.appendChild(makeElement('strong', '', title));
+    copy.appendChild(makeElement('p', 'knowledge-base-subtitle', subtitle));
+    heading.appendChild(copy);
+    box.appendChild(heading);
+
+    const controls = makeElement('div', 'knowledge-base-controls memory-layer-controls');
+    let ownerControl;
+    if (isPersona) {
+      ownerControl = makeElement('select', 'input knowledge-base-persona');
+      ownerControl.setAttribute('aria-label', '人格 ID');
+      ownerControl.appendChild(new Option('default（默认人格）', 'default'));
+      void apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/persona-corpus`).then((data) => {
+        for (const profile of (data && Array.isArray(data.profiles) ? data.profiles : [])) {
+          if (!profile || !profile.id) continue;
+          if ([...ownerControl.options].some((opt) => opt.value === profile.id)) continue;
+          ownerControl.appendChild(new Option(profile.name ? `${profile.name} (${profile.id})` : profile.id, profile.id));
+        }
+      }).catch(() => {});
+    } else {
+      ownerControl = buildScopePicker({ ariaLabel: '群记忆 scope' });
+      controls.appendChild(ownerControl.element);
+    }
+    if (isPersona) controls.appendChild(ownerControl);
+    const load = makeElement('button', 'btn btn-primary btn-small', '查询');
+    load.type = 'button';
+    controls.appendChild(load);
+    box.appendChild(controls);
+
+    const status = makeElement('p', 'instance-v3-status knowledge-base-status', '正在读取…');
+    const detail = makeElement('div', 'memory-bank-detail');
+    box.appendChild(status);
+    box.appendChild(detail);
+
+    const getOwner = () => isPersona ? String(ownerControl.value || 'default').trim() : ownerControl.getValue();
+    const apiBase = `/api/instances/${encodeURIComponent(instance.id)}/${layer}-memory`;
+    const query = async () => {
+      const owner = getOwner();
+      detail.replaceChildren();
+      if (!owner) { status.textContent = '请选择/填写 owner。'; return; }
+      status.textContent = '正在查询…';
+      try {
+        const params = new URLSearchParams();
+        params.set(isPersona ? 'persona_id' : 'scope', owner);
+        const data = await apiRequest(`${apiBase}?${params.toString()}`);
+        if (!data || data.ok === false) { status.textContent = (data && data.error) || '读取失败。'; return; }
+        if (!data.available) { status.textContent = '该实例还没有这类记忆。'; return; }
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        status.textContent = `当前 owner 有 ${entries.length} 条。`;
+        for (const entry of entries) {
+          const row = makeElement('div', 'memory-bank-row memory-layer-row');
+          const head = makeElement('div', 'knowledge-base-row-head');
+          head.appendChild(makeElement('div', 'knowledge-base-title', entry.title || '(无标题)'));
+          const remove = makeElement('button', 'btn btn-danger btn-small', '删除');
+          remove.type = 'button';
+          remove.addEventListener('click', async () => {
+            status.textContent = '正在删除…';
+            try {
+              const result = await apiRequest(`${apiBase}/delete`, {
+                method: 'POST',
+                body: { [isPersona ? 'persona_id' : 'scope']: owner, id: entry.id }
+              });
+              if (!result || result.ok === false) throw new Error((result && result.error) || '删除失败');
+              await query();
+            } catch (error) { status.textContent = `删除失败：${error.message || error}`; }
+          });
+          head.appendChild(remove);
+          row.appendChild(head);
+          row.appendChild(makeElement('div', 'knowledge-base-row-content', entry.content || ''));
+          row.appendChild(makeElement('div', 'memory-bank-meta', `${entry.tags || '无标签'} · priority=${entry.priority ?? 0}`));
+          detail.appendChild(row);
+        }
+      } catch (error) { status.textContent = `查询失败：${error.message || error}`; }
+    };
+
+    const form = makeElement('div', 'knowledge-base-import memory-layer-form');
+    const formTitle = makeElement('input', 'input', '');
+    formTitle.placeholder = '标题（可选，如“身份/群规”）';
+    formTitle.setAttribute('aria-label', `${title}标题`);
+    const formTags = makeElement('input', 'input', '');
+    formTags.placeholder = '标签（逗号分隔）';
+    formTags.setAttribute('aria-label', `${title}标签`);
+    const formPriority = makeElement('input', 'input', '');
+    formPriority.type = 'number';
+    formPriority.value = '0';
+    formPriority.placeholder = 'priority';
+    formPriority.setAttribute('aria-label', `${title}优先级`);
+    const formContent = makeElement('textarea', 'input memory-layer-textarea', '');
+    formContent.placeholder = '一条核心记忆，例如：衣衣是电子羊的群内人格，话少、不客服腔。';
+    formContent.setAttribute('aria-label', `${title}内容`);
+    const add = makeElement('button', 'btn btn-primary btn-small', '保存');
+    add.type = 'button';
+    add.addEventListener('click', async () => {
+      const owner = getOwner();
+      if (!owner) { status.textContent = '请选择/填写 owner。'; return; }
+      if (!formContent.value.trim()) { status.textContent = '请填写内容。'; return; }
+      status.textContent = '正在保存…';
+      try {
+        const result = await apiRequest(apiBase, {
+          method: 'POST',
+          body: {
+            [isPersona ? 'persona_id' : 'scope']: owner,
+            title: formTitle.value.trim(),
+            content: formContent.value,
+            tags: formTags.value.trim(),
+            priority: Number(formPriority.value || 0)
+          }
+        });
+        if (!result || result.ok === false) throw new Error((result && result.error) || '保存失败');
+        formContent.value = '';
+        status.textContent = result.duplicate ? '相同内容已存在，已更新标题/标签/优先级。' : '已保存。';
+        await query();
+      } catch (error) { status.textContent = `保存失败：${error.message || error}`; }
+    });
+    form.append(formTitle, formTags, formPriority, formContent, add);
+    box.appendChild(form);
+    load.addEventListener('click', () => void query());
+    void query();
+    return box;
+  }
+
+  function buildPersonaMemorySection(instance) {
+    return buildMemoryLayerSection(instance, 'persona');
+  }
+
+  function buildGroupMemorySection(instance) {
+    return buildMemoryLayerSection(instance, 'group');
   }
 
   function buildMemoryBankSection(instance) {

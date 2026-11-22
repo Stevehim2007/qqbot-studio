@@ -1443,6 +1443,16 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                         return
                     self._json(HTTPStatus.OK, getter())
                     return
+                if subroute in {"persona-memory", "group-memory"}:
+                    getter = getattr(manager, "get_memory_layers", None)
+                    if not callable(getter):
+                        self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供人格/群记忆接口。")
+                        return
+                    layer = "persona" if subroute == "persona-memory" else "group"
+                    owner_key = "persona_id" if layer == "persona" else "scope"
+                    owner_id = str((query.get(owner_key) or [""])[0]).strip()
+                    self._json(HTTPStatus.OK, getter(layer=layer, owner_id=owner_id))
+                    return
                 if subroute == "memory-bank":
                     getter = getattr(manager, "get_memory_bank", None)
                     if not callable(getter):
@@ -1480,6 +1490,40 @@ class QQBotRequestHandler(BaseHTTPRequestHandler):
                     scope = str((query.get("scope") or [""])[0]).strip()
                     limit = self._safe_int((query.get("limit") or ["100"])[0], 100, 1, 500)
                     self._json(HTTPStatus.OK, getter(scope=scope, limit=limit))
+                    return
+                if subroute in {
+                    "persona-memory",
+                    "group-memory",
+                    "persona-memory/delete",
+                    "group-memory/delete",
+                }:
+                    layer = "persona" if subroute.startswith("persona-memory") else "group"
+                    owner_key = "persona_id" if layer == "persona" else "scope"
+                    owner_id = str(payload.get(owner_key) or "").strip()
+                    if subroute.endswith("/delete"):
+                        deleter = getattr(manager, "delete_memory_layer", None)
+                        if not callable(deleter):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供人格/群记忆删除接口。")
+                            return
+                        result = deleter(
+                            layer=layer,
+                            owner_id=owner_id,
+                            layer_id=str(payload.get("id") or "").strip(),
+                        )
+                    else:
+                        adder = getattr(manager, "add_memory_layer", None)
+                        if not callable(adder):
+                            self._error(HTTPStatus.NOT_IMPLEMENTED, "当前后端未提供人格/群记忆写入接口。")
+                            return
+                        result = adder(
+                            layer=layer,
+                            owner_id=owner_id,
+                            title=str(payload.get("title") or "").strip(),
+                            content=str(payload.get("content") or ""),
+                            tags=str(payload.get("tags") or "").strip(),
+                            priority=int(payload.get("priority") or 0),
+                        )
+                    self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
                     return
                 if subroute in {"knowledge-base", "knowledge-base/delete"}:
                     if subroute.endswith("/delete"):

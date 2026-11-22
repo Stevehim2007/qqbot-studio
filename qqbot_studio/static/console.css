@@ -2860,3 +2860,30 @@ body.console-modal-open { overflow: hidden; }
   align-items: center;
   gap: 8px;
 }
+
+/* Memory layers: persona / group core memory */
+.memory-layer-panel .knowledge-base-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.memory-layer-panel .knowledge-base-persona { min-width: 220px; }
+.memory-layer-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(140px, 1fr) 96px;
+  gap: 10px;
+  align-items: start;
+}
+.memory-layer-form .memory-layer-textarea {
+  grid-column: 1 / -1;
+  min-height: 76px;
+  resize: vertical;
+}
+.memory-layer-form .btn { grid-column: 3; justify-self: end; min-width: 96px; }
+.memory-layer-row .knowledge-base-row-content { white-space: pre-wrap; }
+@media (max-width: 720px) {
+  .memory-layer-form { grid-template-columns: 1fr; }
+  .memory-layer-form .memory-layer-textarea,
+  .memory-layer-form .btn { grid-column: 1; justify-self: stretch; }
+}

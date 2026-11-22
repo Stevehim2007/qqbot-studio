@@ -1,8 +1,8 @@
 # QQ Bot Studio 模块化 / 接口化架构
 
-> 当前接入范围：仅 QQ 官方机器人。本文部分内容记录模块化演进历史；涉及 SnowLuma/OneBot/noVNC 的描述已不再代表当前运行路径。
+> 当前接入范围：QQ 官方机器人 + 外部/内置 OneBot v11。本文部分内容记录模块化演进历史；涉及 SnowLuma/noVNC 的旧描述已不再代表当前运行路径。
 
-> 状态：Phase 0（后端契约/资源统计）、Phase 4 第二阶段（前端 service/component 低风险提取）已实现；Ponytail full 第一阶段与第二阶段低风险精简已完成（详见 [ponytail-audit.md](ponytail-audit.md)、[ponytail-optimization-phase2.md](ponytail-optimization-phase2.md)）。
+> 状态：Phase 0（后端契约/资源统计）、Phase 4 第二阶段（前端 service/component 低风险提取）已实现；Ponytail 优化记录已移除，历史可在 git log 查。
 > 本文描述目标架构、现有耦合、分阶段迁移方案、回滚方式和兼容边界。
 > 所有阶段均**不改变**现有用户可见 API、页面 URL、实例数据、文件路径或安全策略。
 
@@ -426,40 +426,8 @@ Phase 0 完成了“可替换接口 + 可独立测试平台无关模块”的目
 - 剩余前端组件（参数编辑器 DOM、实例卡片、向导、独立助手页）、Windows Native 和
   deployer/server 深度拆分留到后续阶段，未伪称已完成。
 
-## 10. Ponytail full 全仓审计与低风险精简进度
+## 10. 历史精简记录
 
-### 10.1 第一阶段：删除无调用的私有叶子
+2026-10 的 Ponytail 两阶段精简记录、旧 QA 快照和过时 API 契约已从当前文档集移除，避免与 5.0 架构混淆；需要追溯时使用 `git log -- docs/ponytail-audit.md docs/ponytail-optimization-phase2.md`。
 
-日期：2026-10-30。规则：DSH Ponytail `full` + `ponytail-audit` 七级阶梯（YAGNI、复用、
-stdlib/native、既有依赖、一行化、最小实现）。
-
-本轮只删除可证明无调用方的私有辅助、未使用导入/常量、单调用包装器和重复固定模板；
-没有改 API、数据格式、权限、安全策略、插件协议或 Windows 发行物。实际代码/测试净减少
-**129 行**（11 个源码文件、2 个测试文件；无新增/删除文件、无新增依赖）。
-
-保留项和剩余债务已记录在 [`ponytail-audit.md`](ponytail-audit.md)：前端 `app.js` /
-`console.js` 工具函数和插件配置前后端双校验优先保留；Git runner、原子 JSON 写入、
-sticker/tool marker 分叉和 Windows vendored core 暂不做跨边界合并。Windows 独立仓库
-本轮只读审计，后续需按既有 sync workflow 同步同一个 upstream commit。
-
-验收：`python3 -m unittest discover -s tests -v` 通过 **357 tests**；插件专项
-**161 tests**；`node --check`、`py_compile`、`bash -n` 和 Markdown 链接检查通过。
-
-### 10.2 第二阶段：跨页 helper 与重复 runner/fixture
-
-第二阶段以 `ae10104`（v3.12.0）为基线，在保留页面错误文案、API/数据/安全语义的前提下：
-
-- 复用 `services/api.js` 作为经典脚本公共入口，向向导、控制台、插件配置 service 和
-  AI 助手 B 页提供对象/字符串/布尔/安全 URL helper 与统一 API client；
-- 新增标准库 `gitutil.py`，合并 updater 与 assistant extension 的 non-interactive
-  Git runner，并保留两种测试注入签名；
-- 合并测试中的重复 `FakeProcess`/`StuckProcess` 与 `OfflineApi`；
-- 删除零调用的 `syncPromptManagerBusyUi()` 包装，保留有测试断言的兼容别名。
-
-实际行为承载代码/测试为 **+198/-393，净减 195 行**（源码净减 157、测试净减 38；
-新增 1 个 43 行标准库 helper 文件，0 新增依赖）。全量 **408 tests OK**。
-拒绝合并页面级错误文案、DOM builder、双实现 `FakeContext`、原子 JSON 写入、
-plugin schema 双校验、marker 协议与 Windows vendored core。详细记录见
-[`ponytail-optimization-phase2.md`](ponytail-optimization-phase2.md)。
-
-后续触发条件：出现真实第二个 runtime/组件实现，或重复逻辑已产生缺陷/测试漂移时再拆。
+当前代码导读与模块职责以 [`PROJECT_CODE_GUIDE.md`](../PROJECT_CODE_GUIDE.md) 和 [`docs/README.md`](README.md) 为准。

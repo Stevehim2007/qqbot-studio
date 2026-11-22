@@ -1,69 +1,70 @@
 # QQ Bot Studio 文档索引
 
-本目录是文档入口。第一次使用时先读主项目 [`README.md`](../README.md)，需要排查服务器问题时再按下面的索引进入专项文档。
+> 当前主项目：`5.0.0-beta.24`；插件仓库：`v4.4.0-beta.60`；运行时 12 个插件。
+>
+> 第一次使用先读主项目 [`README.md`](../README.md)。本索引只列当前有效文档；旧 QA 快照、已删除插件的说明和过时 API 契约已移除，历史版本可在 git 历史中查。
 
-## 1. 入门与安装
-
-| 文档 | 内容 | 适用对象 |
-|---|---|---|
-| [`../README.md`](../README.md) | 最短安装、首个机器人、管理控制台、进阶功能、FAQ、声明 | 所有用户 |
-| [`server-troubleshooting.md`](server-troubleshooting.md) | Git SSL、Docker、0.0.0.0/127、腾讯云安全组、防火墙、SSH 隧道、AstrBot WebUI、端口冲突等真实故障 | 云服务器/远程 Ubuntu 用户 |
-
-## 2. 功能与接口
+## 1. 入门、安装与运维
 
 | 文档 | 内容 |
 |---|---|
-| [`plugin-qqbot-enhancer.md`](plugin-qqbot-enhancer.md) | QQ Bot 增强回复插件：@必回、概率、识图/找图、表情包、唱歌、`/option`、配置项和限制 |
-| [`food-ai-submission.md`](food-ai-submission.md) | 自然语言美食提交（`submit_food_review`）：t1 站点契约、触发与写入门槛、密钥安全、测试证据、猫娘群 Bot 提示词 |
-| [`food-ai-contract/API_AI_REVIEW.md`](food-ai-contract/API_AI_REVIEW.md) | food.dlsz.top `POST /api/upload` 完整契约、错误语义、v1.1 可选补丁与部署步骤 |
-| [`ui-api-contract-v2.md`](ui-api-contract-v2.md) | v2 控制台、向导、多实例、镜像、插件、记忆、统计、自动更新和 AI 助手 B 的 HTTP API 契约 |
-| [`memory-policy.md`](memory-policy.md) | 控制台「记忆策略」面板：按群长期记忆 `memory.policy` 结构、`/api/instances/<id>/memory-policy` 契约、校验规则、限制与隐私边界 |
-| [`plugin-market-v1.md`](plugin-market-v1.md) | 测试版插件市场 v1：manifest/SHA256/ZIP 安全边界、安装更新删除、SQLite 分组、预览/确认/幂等 API 与配置迁移 field-map 预览 |
-| [`memory-admin-api.md`](memory-admin-api.md) | 控制台「记忆内容」面板：按 scope 查看/编辑/删除/忘记/导出/导入/整理记忆，`/api/instances/<id>/memory/...` 契约、确认字段、状态码、隐私与已知限制 |
-| [`v7-feature-guide.md`](v7-feature-guide.md) | V1–V7 全功能使用手册：辅助预算、群策略、三种参与模式、人格/语料库、好感度、表达状态、记忆卡片/知识库、Studio 入口、测试与回滚 |
-| [`memory-system.md`](memory-system.md) | 记忆系统完整说明：五 scope、BM25/FTS5 与回退、可选语义检索、启发式抽取、Reflection、按群策略，以及下一版 SurfCore 活跃/归档记忆卡设计 |
-| [`group-plugin-config.md`](group-plugin-config.md) | 分群插件启用与分群参数设计：数据模型、字段级覆盖、优先级、运行时快照、Studio/API、审计与双群验收 |
-| [`next-major-decisions.md`](next-major-decisions.md) | 下一大版本 8 项拍板与解释：插件拆分、侧车、首版预算、可见/删除权、五/六 scope、词汇库、测试版灰度、人格四层 |
-| [`update-rollback.md`](update-rollback.md) | 更新通道（稳定/测试）、同大版本任意回滚、备份与失败恢复、schema 兼容、历史与 `/api/update/*` 契约 |
-| [`integration-research.md`](integration-research.md) | AstrBot / QQ 官方平台 / DeepSeek 集成字段调研与来源（历史资料） |
-| [`../plugins/qqbot_enhancer/README.md`](../plugins/qqbot_enhancer/README.md) | 插件开发者/高级用户的文件结构、安装、搜索、点歌与 `/option` 说明 |
-| [`../plugins/qqbot_enhancer/songs/README.md`](../plugins/qqbot_enhancer/songs/README.md) | 本地点歌目录、授权音频格式和文件限制 |
+| [`../README.md`](../README.md) | 安装、首个机器人、控制台、记忆/插件/更新、FAQ、安全 |
+| [`server-troubleshooting.md`](server-troubleshooting.md) | Git SSL、Docker、0.0.0.0/127、腾讯云安全组、SSH 隧道、端口冲突 |
+| [`update-rollback.md`](update-rollback.md) | 稳定/测试更新通道、任意回滚、备份、失败恢复 |
+| [`mobile-access.md`](mobile-access.md) | Android 通过 LAN/VPN 访问 DSH |
+| [`e2e-validation.md`](e2e-validation.md) | 真实 QQ 端到端验证清单与边界 |
 
-## 3. QA 与版本记录
+## 2. 当前功能
 
-- [`qa-report-v2.md`](qa-report-v2.md)：当前 v4.1.1 条件验收报告、真实 E2E 待测清单和已知限制。
-- [`ponytail-audit.md`](ponytail-audit.md)：Ponytail full 第一阶段全仓审计、低风险精简记录、保留/拒绝项和剩余债务。
-- [`ponytail-optimization-phase2.md`](ponytail-optimization-phase2.md)：第二阶段跨页 helper、Git runner 与测试 fixture 精简记录、实际净行数、验证和 Windows 同步影响。
-- [`qa-report.md`](qa-report.md)：旧版单实例 v1 时代的 QA 快照，仅作历史记录；接口和端口不要按它配置。
-- [`ui-api-contract.md`](ui-api-contract.md)：旧版单实例 API 契约，仅作历史兼容参考；新开发请使用 [`ui-api-contract-v2.md`](ui-api-contract-v2.md)。
-
-## 4. 平台与其他项目
-
-| 项目/文档 | 说明 |
+| 文档 | 内容 |
 |---|---|
-| [`../windows/README.md`](../windows/README.md) | 主仓库内保留的 Windows 初始移植资料/开发记录；正式 Windows 发行请使用独立仓库 |
-| [QQ Bot Studio Windows](https://github.com/Stevehim2007/qqbot-studio-windows) | Windows 10/11 独立发行项目，Docker Desktop + WSL2，不是 Ubuntu 主项目的同一发行包 |
-| [Windows EXE 构建 workflow](https://github.com/Stevehim2007/qqbot-studio-windows/actions/workflows/windows-build.yml) | 从最新成功的 `windows-build` artifact 下载 `QQBotStudioWindows.exe`；当前未提供正式 Release EXE 资产 |
-| [Windows Releases](https://github.com/Stevehim2007/qqbot-studio-windows/releases) | 后续正式 EXE 发布页；当前 Releases 为空时请使用 Actions artifact |
-| [QQ Bot Studio AI Assistant B](https://github.com/Stevehim2007/qqbot-studio-ai-assistant) | 可选、独立的生成式 AI 使用助手 B；主控制台通过独立 /assistant 页面管理 |
-| [AstrBot](https://github.com/AstrBotDevs/AstrBot) | 上游聊天机器人框架 |
-| [DeepSeek API Docs](https://api-docs.deepseek.com/) | DeepSeek API 文档 |
+| [`v7-feature-guide.md`](v7-feature-guide.md) | V1–V7 完整使用手册：参与模式、人格/语料、好感度、表达状态、记忆、Studio、测试、回滚 |
+| [`memory-layers.md`](memory-layers.md) | **四层记忆**：人格记忆、群记忆、个人 AI 记忆、共享知识库；自动召回、表结构、控制台、配置、边界 |
+| [`memory-system.md`](memory-system.md) | 记忆系统底层：scope、BM25/FTS5、卡片生命周期、历史设计 |
+| [`memory-admin-api.md`](memory-admin-api.md) | 控制台「记忆内容」原生记忆 API 契约与隐私边界 |
+| [`memory-policy.md`](memory-policy.md) | 记忆策略/按群长期记忆结构、校验与 API |
+| [`memory-management-plan.md`](memory-management-plan.md) | 记忆管理面设计与迁移计划（历史设计依据） |
+| [`group-plugin-config.md`](group-plugin-config.md) | 分群插件启用、字段级覆盖、优先级、审计 |
+| [`plugin-standard.md`](plugin-standard.md) | 插件目录、schema、tools.json、native 工具桥标准 |
+| [`plugin-dependencies.md`](plugin-dependencies.md) | 插件依赖声明、检测、pip/apt 安装 |
+| [`plugin-market-v1.md`](plugin-market-v1.md) | 插件市场 manifest/SHA256/ZIP 安全、安装更新删除、SQLite 分组 |
+| [`default-off-parameters.md`](default-off-parameters.md) | 默认关闭/高风险参数清单 |
+| [`post-update-verification.md`](post-update-verification.md) | 更新后版本脚本与自检 |
+| [`ui-api-contract-v2.md`](ui-api-contract-v2.md) | 控制台、向导、实例、插件、记忆、统计、更新 HTTP API 契约 |
 
-## 5. 安全提醒
+## 3. 架构与下一版设计
 
-- 管理服务默认监听 `0.0.0.0:8765`；每个机器人实例只发布一个自动分配的 AstrBot WebUI 端口。
-- 不要把管理端口或 AstrBot WebUI 直接暴露到公网；先用安全组、防火墙、VPN 或 SSH 隧道限制访问。
-- 本项目不保存 QQ 密码，不绕过 QQ 开放平台的授权、频控或权限要求。
-- API Key、访问令牌、QQ 官方 AppSecret 不要贴到公开 issue、聊天截图或日志中。
-- Windows 是独立项目，不能与 Linux 主项目共用数据目录或自动更新；AI 助手 B 也是独立可选项目，主项目不会自动启动它或传递它的 API Key。
+| 文档 | 内容 |
+|---|---|
+| [`architecture-modularization.md`](architecture-modularization.md) | 模块化/接口化架构、目标边界与迁移阶段 |
+| [`plugin-modularization.md`](plugin-modularization.md) | 插件拆分原则、依赖与数据所有权 |
+| [`FRAMEWORK_BRIEF.md`](FRAMEWORK_BRIEF.md) | 下一版框架简报 |
+| [`FRAMEWORK_FIRST.md`](FRAMEWORK_FIRST.md) | 框架优先工作流、Pro session 复用规则 |
+| [`next-major-brief.md`](next-major-brief.md) | 下一大版本需求简报 |
+| [`next-major-decisions.md`](next-major-decisions.md) | 8 项拍板与解释 |
 
-- [`qa-report-final.md`](qa-report-final.md)：Ponytail 第二阶段后的最终 QA（v4.1.1，0 P0/P1）
+## 4. 食物 / 平台 / 研究资料
 
-- [CHANGELOG.md](../CHANGELOG.md)：完整版本更新日志
+| 文档 | 内容 |
+|---|---|
+| [`food-ai-submission.md`](food-ai-submission.md) | 自然语言美食提交：站点契约、触发、写入门槛、密钥安全 |
+| [`food-ai-contract/README.md`](food-ai-contract/README.md) | food.dlsz.top 契约、补丁说明、测试脚本 |
+| [`integration-research.md`](integration-research.md) | AstrBot / QQ 官方 / DeepSeek 集成调研（历史资料） |
+| [`windows-editions-research.md`](windows-editions-research.md) | Windows 发行形态调研（历史资料） |
 
+## 5. 测试与版本
 
+| 文档 | 内容 |
+|---|---|
+| [`v7-feature-guide.md`](v7-feature-guide.md) | 功能验收、使用和回滚的总入口 |
+| [`v6-test-plan.md`](v6-test-plan.md) / [`v6-test-report.md`](v6-test-report.md) | V6 表达状态测试计划/报告 |
+| [`v5-test-plan.md`](v5-test-plan.md) / [`v5-test-report.md`](v5-test-report.md) | V5 参与/好感度测试计划/报告 |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | 完整版本更新日志 |
+| [`../STATE.md`](../STATE.md) | 当前分支、版本、部署和已知边界 |
 
-- [`mobile-access.md`](mobile-access.md)：Android 通过同一 LAN/VPN 安全访问 Linux DSH。
+## 6. 安全提醒
 
-- [`plugin-market-v1.md`](plugin-market-v1.md)：插件市场、安装/更新/删除、分组与安全校验。
-- [`plugin-standard.md`](plugin-standard.md)：插件目录标准、schema、tools.json 与 native 工具桥。
+- 管理服务默认 `0.0.0.0:8765`；不要直接暴露公网。
+- API Key、AppSecret、token 不写入日志/截图/issue。
+- 记忆库不含 QQ 密码；`actor_hash` 是哈希，不存明文 QQ 号。
+- 共享知识库只读；模型不能写入用户导入资料。

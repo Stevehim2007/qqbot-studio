@@ -2,7 +2,7 @@
 
 在 Ubuntu 上一键部署和管理多个 QQ 机器人实例：AstrBot、QQ 官方机器人开放平台、DeepSeek AI 聊天。当前版本支持 QQ 官方机器人，也可选外部 OneBot v11 网关。
 
-当前主项目版本：**5.0.0-beta.23（测试版）**。支持 QQ 官方机器人，或内置 NapCat / 外部 OneBot v11 网关；AstrBot 单容器运行；包含长期记忆与群策略、记忆卡片 v4、插件市场/分组、最小三插件默认集、七个核心 QQ 插件、可选的 `qqbot_expression_state` 表达状态插件与定时/运势/天气三个工具插件、统一安全工具入口、运行时依赖检查、Food 地点解析与更新/回退功能。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
+当前主项目版本：**5.0.0-beta.24（测试版）**。支持 QQ 官方机器人，或内置 NapCat / 外部 OneBot v11 网关；AstrBot 单容器运行；包含长期记忆与群策略、记忆卡片 v4、插件市场/分组、最小三插件默认集、八个核心 QQ 插件（含 `qqbot_memory_bank` 四层记忆）、可选的 `qqbot_expression_state` 表达状态插件与定时/运势/天气三个工具插件、统一安全工具入口、运行时依赖检查、Food 地点解析与更新/回退功能。目标是 Ubuntu 22.04 / 24.04；Windows 是独立项目，见 [Windows 入口](#windows)。
 
 > **升级提醒**：5.0.0 是 QQ 官方机器人接入后的测试线；升级前请备份实例 `data/`，并先在测试实例验证。长期记忆是独立 SQLite sidecar，启用前同样先备份。
 
@@ -294,7 +294,7 @@ ss -ltnp 2>/dev/null | grep -E ':(8765|5000)\b'
 <a id="enhancer"></a>
 ### 2.2 QQ 增强插件：概率、识图、找图、表情包、唱歌、/option
 
-最终模块化版本保留七个核心插件：`qqbot_core_reply`（回复/人格/会话/点歌）、`qqbot_safe_tools`（唯一 marker/授权/确认/审计）、`qqbot_web_reader`、`qqbot_image_search`、`qqbot_food`、`qqbot_stickers`、`qqbot_memory_commands`；另有可选的 `qqbot_expression_state`（情绪/风格，不调用模型）与 `qqbot_scheduler`、`qqbot_fortune`、`qqbot_weather` 三个工具插件。部署过程**不再**复制 `qqbot_enhancer` 或 `qqbot_core_full`；请在控制台的插件市场按依赖顺序安装这七个包。
+最终模块化版本保留八个核心插件：`qqbot_core_reply`（回复/人格/会话/点歌）、`qqbot_safe_tools`（唯一 marker/授权/确认/审计）、`qqbot_web_reader`、`qqbot_image_search`、`qqbot_food`、`qqbot_stickers`、`qqbot_memory_commands`、`qqbot_memory_bank`（四层记忆）；另有可选的 `qqbot_expression_state`（情绪/风格，不调用模型）与 `qqbot_scheduler`、`qqbot_fortune`、`qqbot_weather` 三个工具插件。部署过程**不再**复制 `qqbot_enhancer` 或 `qqbot_core_full`；请在控制台的插件市场按依赖顺序安装这些包。
 
 插件开发与新增插件规范见 [docs/plugin-standard.md](docs/plugin-standard.md)。
 
@@ -358,6 +358,8 @@ cp "/你的授权音频.wav" "$SONGS/"
 |---|---|---|
 | `direct`（默认） | 插件直接调用 provider，只发送系统提示词 + 当前消息，不携带跨轮 AstrBot 会话历史 | 较低，适合低概率陪聊 |
 | `astrbot` | 交给 AstrBot 默认 Agent，使用会话管理器、人格、上下文历史和 Agent 能力 | 随历史增长；记忆越长越贵 |
+
+**四层记忆（`qqbot_memory_bank 0.4.0` 起）**：人格记忆按 `persona_id` 常驻注入；群记忆按群 scope 常驻注入；个人 AI 记忆按 `scope + persona + actor_hash` 隔离，模型用 `memory_search` 检索；用户导入的共享知识库只读，每轮自动 RAG top-k。控制台实例 → 记忆可分别管理，详见 [docs/memory-layers.md](docs/memory-layers.md)。
 
 `astrbot` 模式的内存边界：
 
@@ -775,10 +777,9 @@ tail -n 150 ~/.local/share/qqbot-studio/studio-server.log
 
 完整文档索引见 [`docs/README.md`](docs/README.md)：
 
-- [QQ Bot 增强插件详解](docs/plugin-qqbot-enhancer.md)
-- [服务器部署与实战排错](docs/server-troubleshooting.md)
-- [v2 控制台/API 契约](docs/ui-api-contract-v2.md)
-- [AstrBot / QQ 官方平台 / DeepSeek 集成调研（历史资料）](docs/integration-research.md)
-- [v2 QA 报告与真实 E2E 待测清单](docs/qa-report-v2.md)
 - [V7 功能使用手册：V1–V7 功能意义与用法](docs/v7-feature-guide.md)
+- [四层记忆与自动召回](docs/memory-layers.md)
+- [服务器部署与实战排错](docs/server-troubleshooting.md)
+- [控制台/API 契约 v2](docs/ui-api-contract-v2.md)
+- [AstrBot / QQ 官方平台 / DeepSeek 集成调研（历史资料）](docs/integration-research.md)
 - [Windows 主仓库历史移植资料](windows/README.md)

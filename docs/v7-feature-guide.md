@@ -1,6 +1,6 @@
 # QQ Bot Studio V7 功能使用手册
 
-> 适用版本：主项目 `5.0.0-beta.20` 以后；记忆插件 `qqbot_memory_commands 4.3.0`；core `4.3.10`；safe_tools `3.3.5`；expression_state `1.0.0`；memory_bank `0.1.0`。
+> 适用版本：主项目 `5.0.0-beta.24` 以后；记忆插件 `qqbot_memory_commands 4.3.1`；core `4.3.12`；safe_tools `3.3.5`；expression_state `1.0.0`；memory_bank `0.4.0`。
 >
 > 本文是“功能 + 意义 + 使用方法”的完整说明。V1–V7 的验收口径：单测、API 测试和可自动化的 QQ 实机测试通过；需要真人多账号的项在文中注明测试边界。
 
@@ -431,6 +431,21 @@ V7 是本轮重点，分三层：
 - 两者都关：不生成新 episode；知识库仍按工具/自动抽取记录事实。
 - bot-11 当前：`cards_episode_enabled=true`、`cards_episode_ai_enabled=true`，用叙事 episode；知识库负责事实，二者分工。
 
+### 9.10 四层记忆与自动召回（beta.24）
+
+四层不是四个插件，而是 `qqbot_memory_bank` 内的四类数据：
+
+| 层 | 存储 | 谁写 | 怎么用 |
+|---|---|---|---|
+| 人格记忆 | `memory_layer(layer='persona')` | Studio | 每个 persona 的核心设定，常驻注入 |
+| 群记忆 | `memory_layer(layer='group')` | Studio | 每个群的核心背景，常驻注入 |
+| 个人 AI 记忆 | `knowledge_entry` | 模型 `memory_add` / 辅助提取 | 按 `scope+persona+actor_hash` 隔离，工具或自动召回 |
+| 共享知识库 | `knowledge_doc` | 仅 Studio 导入 | 模型只读 `knowledge_search`，每轮自动 RAG top-k |
+
+自动召回配置：`auto_recall_enabled`、`auto_recall_top_k`、`auto_recall_max_chars`、`auto_recall_personal_enabled`、`memory_layer_max_items`、`memory_layer_max_chars`。控制台实例 → 记忆 → “人格记忆”“群记忆”“知识库（用户导入）”“AI 记忆库（自动提取）”；策略在“记忆与检索策略”。
+
+完整字段、scope、注入顺序、验证证据和边界见 [memory-layers.md](memory-layers.md)。
+
 ## 10. 插件清单（本次 12 个）
 
 | 插件 | 作用 |
@@ -438,7 +453,7 @@ V7 是本轮重点，分三层：
 | `qqbot_core_reply` | 唯一聊天 owner、persona、参与判定、回复注入 |
 | `qqbot_safe_tools` | 能力策略、marker、工具执行、好感度 |
 | `qqbot_memory_commands` | `/记忆`、卡片、L0 管理 |
-| `qqbot_memory_bank` | 知识库工具、自动抽取 |
+| `qqbot_memory_bank` | 四层记忆：人格/群核心记忆、用户导入知识库、AI 事实、自动召回 |
 | `qqbot_expression_state` | 情绪/表达风格 |
 | `qqbot_web_reader` | 网页读取 |
 | `qqbot_image_search` | 图片搜索 |

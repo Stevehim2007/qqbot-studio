@@ -2737,6 +2737,145 @@ class DeployManager:
             payload["error"] = str(exc)
         return payload
 
+    # ------------------------------------------------------------------
+    # Core persona / group memory layers.
+    # ------------------------------------------------------------------
+    def _memory_layer_db_path(self) -> Path:
+        return self._knowledge_db_path()
+
+    def get_memory_layers(self, *, layer: str, owner_id: str = "") -> dict[str, Any]:
+        layer = str(layer or "").strip().lower()
+        owner_id = str(owner_id or "").strip()[:200]
+        payload: dict[str, Any] = {
+            "ok": True,
+            "available": False,
+            "layer": layer,
+            "owner_id": owner_id,
+            "entries": [],
+            "error": "",
+        }
+        if layer not in {"persona", "group"}:
+            payload["ok"] = False
+            payload["error"] = "invalid_layer"
+            return payload
+        db_path = self._memory_layer_db_path()
+        payload["available"] = db_path.is_file()
+        if not db_path.is_file() or not owner_id:
+            return payload
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            try:
+                rows = connection.execute(
+                    "SELECT id, layer, owner_id, title, content, tags, priority, updated_at "
+                    "FROM memory_layer WHERE layer=? AND owner_id=? "
+                    "ORDER BY priority DESC, updated_at DESC LIMIT 500",
+                    (layer, owner_id),
+                ).fetchall()
+            finally:
+                connection.close()
+            payload["entries"] = [dict(row) for row in rows]
+        except Exception as exc:
+            payload["ok"] = False
+            payload["error"] = str(exc)
+        return payload
+
+    def add_memory_layer(
+        self,
+        *,
+        layer: str,
+        owner_id: str,
+        content: str,
+        title: str = "",
+        tags: str = "",
+        priority: int = 0,
+    ) -> dict[str, Any]:
+        layer = str(layer or "").strip().lower()
+        owner_id = str(owner_id or "").strip()[:200]
+        if layer not in {"persona", "group"}:
+            return {"ok": False, "reason": "invalid_layer"}
+        if not owner_id:
+            return {"ok": False, "reason": "owner_required"}
+        title = re.sub(r"\s+", " ", str(title or "")).strip()[:120]
+        text = re.sub(r"\s+", " ", str(content or "")).strip()
+        tags_text = re.sub(r"\s+", " ", str(tags or "")).strip()[:160]
+        if len(text) < 2:
+            return {"ok": False, "reason": "content_required"}
+        if len(text) > 1200:
+            return {"ok": False, "reason": "content_too_long"}
+        db_path = self._memory_layer_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(
+            f"{layer}\n{owner_id}\n{text.casefold()}".encode("utf-8")
+        ).hexdigest()[:32]
+        layer_id = "ml-" + digest[:20]
+        now = time.time()
+        connection = sqlite3.connect(str(db_path), timeout=10)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS memory_layer (
+                  id TEXT PRIMARY KEY,
+                  layer TEXT NOT NULL,
+                  owner_id TEXT NOT NULL,
+                  scope TEXT NOT NULL DEFAULT '',
+                  title TEXT NOT NULL DEFAULT '',
+                  content TEXT NOT NULL,
+                  tags TEXT NOT NULL DEFAULT '',
+                  priority INTEGER NOT NULL DEFAULT 0,
+                  content_hash TEXT NOT NULL,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS memory_layer_hash
+                  ON memory_layer(layer, owner_id, content_hash);
+                """
+            )
+            existing = connection.execute(
+                "SELECT id FROM memory_layer WHERE layer=? AND owner_id=? AND content_hash=?",
+                (layer, owner_id, digest),
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE memory_layer SET title=?, content=?, tags=?, priority=?, updated_at=? WHERE id=?",
+                    (title, text, tags_text, int(priority), now, existing[0]),
+                )
+                connection.commit()
+                return {"ok": True, "id": str(existing[0]), "duplicate": True}
+            connection.execute(
+                "INSERT INTO memory_layer(id, layer, owner_id, scope, title, content, tags, priority, content_hash, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    layer_id, layer, owner_id, owner_id if layer == "group" else "",
+                    title, text, tags_text, int(priority), digest, now, now,
+                ),
+            )
+            connection.commit()
+            return {"ok": True, "id": layer_id, "duplicate": False}
+        except sqlite3.DatabaseError as exc:
+            return {"ok": False, "reason": "database_error", "error": str(exc)}
+        finally:
+            connection.close()
+
+    def delete_memory_layer(self, *, layer: str, owner_id: str, layer_id: str) -> dict[str, Any]:
+        layer = str(layer or "").strip().lower()
+        owner_id = str(owner_id or "").strip()[:200]
+        if layer not in {"persona", "group"} or not owner_id:
+            return {"ok": False, "reason": "invalid_request"}
+        db_path = self._memory_layer_db_path()
+        if not db_path.is_file():
+            return {"ok": False, "reason": "not_found"}
+        connection = sqlite3.connect(str(db_path), timeout=10)
+        try:
+            cur = connection.execute(
+                "DELETE FROM memory_layer WHERE id=? AND layer=? AND owner_id=?",
+                (str(layer_id or ""), layer, owner_id),
+            )
+            connection.commit()
+            return {"ok": cur.rowcount > 0}
+        finally:
+            connection.close()
+
     def _knowledge_base_db_path(self) -> Path:
         return self._knowledge_db_path()
 
