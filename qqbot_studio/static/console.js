@@ -1853,6 +1853,26 @@
     return Object.prototype.hasOwnProperty.call(pluginFieldPolicyRegistry(config.pluginId), String(field.key));
   }
 
+  function pluginConfigPolicyCoverage(config) {
+    const schema = asRecord(config.policySchema);
+    const fields = Array.isArray(config.snapshot && config.snapshot.schema) ? config.snapshot.schema : [];
+    const keys = new Set(fields.map((field) => String(field && field.key ? field.key : '')));
+    let covered = 0;
+    for (const [name, rawSpec] of Object.entries(schema)) {
+      const spec = asRecord(rawSpec);
+      if (!spec.group_overridable || spec.sensitive) continue;
+      const configKey = String(spec.config_key || name);
+      if (keys.has(configKey) || keys.has(String(name))) covered += 1;
+    }
+    return { covered, total: keys.size };
+  }
+
+  function pluginConfigPolicyHint(config) {
+    if (!config.policySchema || !Object.keys(config.policySchema).length) return '';
+    const { covered, total } = pluginConfigPolicyCoverage(config);
+    return total ? ` · 可按群覆盖 ${covered}/${total} 个参数` : '';
+  }
+
   function syncPluginFieldPolicyButton(button, field) {
     if (!button) return;
     const target = pluginFieldPolicyTarget(field);
@@ -1860,9 +1880,12 @@
     button.classList.toggle('is-registered', registered);
     button.setAttribute('aria-pressed', registered ? 'true' : 'false');
     if (!target) {
-      button.textContent = '加入群策略';
+      button.textContent = '仅全局';
       button.disabled = true;
-      button.title = '该参数未在 safe_tools 安全策略中登记 config_key，暂不支持按群覆盖。';
+      const type = String(field && field.type ? field.type : '');
+      button.title = type === 'object' || type === 'list' || type === 'dict' || type === 'json'
+        ? '复杂类型（对象/数组）不支持按群覆盖，只能全局修改。'
+        : '该参数的运行时读取尚未接入群策略（capability_policy 未登记 config_key），当前只能全局修改。';
       return;
     }
     if (target.blocked === 'sensitive') {
@@ -2266,6 +2289,11 @@
         };
       } catch (error) {
         // The editor still works without the policy bridge; buttons stay disabled.
+      }
+      if (source) {
+        const hint = pluginConfigPolicyHint(config);
+        const base = snapshot.source ? `配置来源：${snapshot.source}` : '';
+        source.textContent = hint ? `${base}${hint}` : base;
       }
       if (!snapshot.apiAvailable || snapshot.schema.length === 0) {
         if (loading) loading.hidden = true;

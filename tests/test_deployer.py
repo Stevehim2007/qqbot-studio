@@ -382,6 +382,18 @@ class DeployerTests(unittest.TestCase):
             {"qqbot_core_reply": {"participation.group_probability": "participation.reply_probability"}},
         )
 
+    def test_group_policy_prefs_selected_null_empty_and_missing_differ(self):
+        # null = "show every parameter" (no roster), [] = "show none", missing =
+        # same as null.  The three must not collapse into one another.
+        self.manager.set_group_policy_prefs(
+            selected={"qqbot_food": [], "qqbot_core_reply": None},
+            marked={},
+            registered={},
+        )
+        loaded = self.manager.get_group_policy_prefs()
+        self.assertEqual(loaded["selected"]["qqbot_food"], [])
+        self.assertNotIn("qqbot_core_reply", loaded["selected"])
+
     def test_group_policy_prefs_registry_roundtrips_through_disk(self):
         self.manager.set_group_policy_prefs(
             selected={},

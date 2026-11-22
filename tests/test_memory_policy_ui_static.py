@@ -484,8 +484,20 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
     def test_unsupported_fields_are_disabled_not_silently_hidden(self) -> None:
         self._has(self.console_js, (
             "button.disabled = true;",
-            "该参数未在 safe_tools 安全策略中登记 config_key，暂不支持按群覆盖。",
+            "该参数的运行时读取尚未接入群策略（capability_policy 未登记 config_key），当前只能全局修改。",
+            "复杂类型（对象/数组）不支持按群覆盖，只能全局修改。",
             "敏感参数（Key/密钥/白名单）只允许全局修改，不能加入群策略。",
+        ), "console.js")
+
+    def test_editor_reports_group_override_coverage(self) -> None:
+        # Most plugin settings are read straight from the plugin config, so the
+        # editor must state how many parameters are actually group-overridable
+        # instead of letting operators assume all of them are.
+        self._has(self.console_js, (
+            "function pluginConfigPolicyCoverage(config)",
+            "if (!spec.group_overridable || spec.sensitive) continue;",
+            "function pluginConfigPolicyHint(config)",
+            "` · 可按群覆盖 ${covered}/${total} 个参数`",
         ), "console.js")
 
     def test_toggle_persists_registered_map_without_narrowing_roster(self) -> None:
