@@ -4897,44 +4897,50 @@
 
   function buildKnowledgeBaseSection(instance) {
     const box = makeElement('div', 'memory-cards-panel knowledge-base-panel');
-    const heading = makeElement('div', 'memory-cards-heading');
-    heading.appendChild(makeElement('strong', '', '知识库（用户导入）'));
-    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
-    scopeInput.type = 'text';
-    scopeInput.placeholder = 'scope，例如 group:onebot:291690445';
-    scopeInput.setAttribute('aria-label', '知识库 scope');
-    heading.appendChild(scopeInput);
-    const personaInput = makeElement('input', 'input memory-cards-scope', '');
-    personaInput.type = 'text';
-    personaInput.placeholder = 'persona_id（可空）';
-    personaInput.setAttribute('aria-label', '知识库人格 ID');
-    heading.appendChild(personaInput);
-    const load = makeElement('button', 'btn btn-quiet btn-small', '查询');
-    load.type = 'button';
-    heading.appendChild(load);
+    const heading = makeElement('div', 'knowledge-base-heading');
+    const headingCopy = makeElement('div', 'knowledge-base-heading-copy');
+    headingCopy.appendChild(makeElement('strong', '', '知识库（用户导入）'));
+    headingCopy.appendChild(makeElement('p', 'knowledge-base-subtitle', '只读资料库：导入群规、设定、角色台词或资料；模型只能通过 knowledge_search 查询，不会改写。'));
+    heading.appendChild(headingCopy);
     box.appendChild(heading);
-    const importRow = makeElement('div', 'knowledge-base-import');
-    const importTitle = makeElement('input', 'input memory-cards-scope', '');
+
+    const controls = makeElement('div', 'knowledge-base-controls');
+    const scopePicker = buildScopePicker({ ariaLabel: '知识库 scope' });
+    const personaInput = makeElement('input', 'input knowledge-base-persona', '');
+    personaInput.type = 'text';
+    personaInput.placeholder = 'persona_id（可空，留空为共享）';
+    personaInput.setAttribute('aria-label', '知识库人格 ID');
+    const load = makeElement('button', 'btn btn-primary btn-small', '查询');
+    load.type = 'button';
+    controls.append(scopePicker.element, personaInput, load);
+    box.appendChild(controls);
+
+    const importCard = makeElement('div', 'knowledge-base-import-card');
+    const importGrid = makeElement('div', 'knowledge-base-import');
+    const importTitle = makeElement('input', 'input knowledge-base-title-input', '');
     importTitle.type = 'text';
     importTitle.placeholder = '资料标题，可空';
     importTitle.setAttribute('aria-label', '知识标题');
-    const importContent = makeElement('textarea', 'input knowledge-base-content', '');
-    importContent.placeholder = '导入资料正文，例如：宿舍门禁 23:00，周五延长到 24:00';
-    importContent.setAttribute('aria-label', '知识正文');
-    const importTags = makeElement('input', 'input memory-cards-scope', '');
+    const importTags = makeElement('input', 'input knowledge-base-tags-input', '');
     importTags.type = 'text';
     importTags.placeholder = '标签，逗号分隔，可空';
     importTags.setAttribute('aria-label', '知识标签');
-    const importButton = makeElement('button', 'btn btn-primary btn-small', '导入知识库');
+    const importContent = makeElement('textarea', 'input knowledge-base-content', '');
+    importContent.placeholder = '导入资料正文，例如：宿舍门禁 23:00，周五延长到 24:00';
+    importContent.setAttribute('aria-label', '知识正文');
+    const importButton = makeElement('button', 'btn btn-primary knowledge-base-import-button', '导入知识库');
     importButton.type = 'button';
-    importRow.append(importTitle, importContent, importTags, importButton);
-    box.appendChild(importRow);
-    const status = makeElement('p', 'instance-v3-status', '用户导入的只读资料，按 scope + persona_id 分区；模型只能通过 knowledge_search 查询，不会自动改写。');
+    importGrid.append(importTitle, importTags, importContent, importButton);
+    importCard.appendChild(importGrid);
+    box.appendChild(importCard);
+
+    const status = makeElement('p', 'instance-v3-status knowledge-base-status', '用户导入的只读资料，按 scope + persona_id 分区；模型只能通过 knowledge_search 查询。');
     const detail = makeElement('div', 'knowledge-base-detail');
     box.appendChild(status);
     box.appendChild(detail);
+
     const query = async () => {
-      const scope = scopeInput.value.trim();
+      const scope = scopePicker.getValue();
       const personaId = personaInput.value.trim();
       detail.replaceChildren();
       status.textContent = '正在查询…';
@@ -4946,22 +4952,23 @@
         if (!data || data.ok === false) { status.textContent = (data && data.error) || '知识库接口不可用。'; return; }
         if (!data.available) { status.textContent = '该实例还没有用户导入知识库。'; return; }
         const scopes = Array.isArray(data.scopes) ? data.scopes : [];
-        const chips = makeElement('div', 'expression-scope-chips');
-        for (const item of scopes.slice(0, 20)) {
-          const label = `${item.scope}${item.persona_id ? ' / ' + item.persona_id : ''} (${item.total})`;
-          const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', label);
-          chip.type = 'button';
-          chip.addEventListener('click', () => { scopeInput.value = item.scope; personaInput.value = item.persona_id || ''; void query(); });
-          chips.appendChild(chip);
+        if (scopes.length) {
+          const chips = makeElement('div', 'expression-scope-chips');
+          for (const item of scopes.slice(0, 20)) {
+            const label = `${item.scope}${item.persona_id ? ' / ' + item.persona_id : ''} (${item.total})`;
+            const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', label);
+            chip.type = 'button';
+            chip.addEventListener('click', () => { scopePicker.setValue(item.scope); personaInput.value = item.persona_id || ''; void query(); });
+            chips.appendChild(chip);
+          }
+          detail.appendChild(chips);
         }
-        if (chips.childNodes.length) detail.appendChild(chips);
         const entries = Array.isArray(data.entries) ? data.entries : [];
         status.textContent = scope ? `当前 scope 有 ${entries.length} 条资料。` : '点上方 scope 标签查看资料。';
         for (const entry of entries) {
           const row = makeElement('div', 'knowledge-base-row');
-          row.appendChild(makeElement('div', 'knowledge-base-title', entry.title || '(无标题)'));
-          row.appendChild(makeElement('div', 'knowledge-base-content', entry.content || ''));
-          row.appendChild(makeElement('div', 'memory-bank-meta', `${entry.tags || '无标签'} · ${entry.source || ''}`));
+          const head = makeElement('div', 'knowledge-base-row-head');
+          head.appendChild(makeElement('div', 'knowledge-base-title', entry.title || '(无标题)'));
           const remove = makeElement('button', 'btn btn-danger btn-small', '删除');
           remove.type = 'button';
           remove.addEventListener('click', async () => {
@@ -4975,14 +4982,17 @@
               await query();
             } catch (error) { status.textContent = `删除失败：${error.message || error}`; }
           });
-          row.appendChild(remove);
+          head.appendChild(remove);
+          row.appendChild(head);
+          row.appendChild(makeElement('div', 'knowledge-base-row-content', entry.content || ''));
+          row.appendChild(makeElement('div', 'memory-bank-meta', `${entry.tags || '无标签'} · ${entry.source || ''}`));
           detail.appendChild(row);
         }
       } catch (error) { status.textContent = `查询失败：${error.message || error}`; }
     };
     importButton.addEventListener('click', async () => {
-      const scope = scopeInput.value.trim();
-      if (!scope) { status.textContent = '请先填 scope，或先查询并点一个 scope 标签。'; return; }
+      const scope = scopePicker.getValue();
+      if (!scope) { status.textContent = '请选择 scope 类型并填写 ID。'; return; }
       if (!importContent.value.trim()) { status.textContent = '请填写资料正文。'; return; }
       status.textContent = '正在导入…';
       try {
@@ -5008,42 +5018,30 @@
 
   function buildMemoryBankSection(instance) {
     const box = makeElement('div', 'memory-cards-panel memory-bank-panel');
-    const heading = makeElement('div', 'memory-cards-heading');
-    heading.appendChild(makeElement('strong', '', 'AI 记忆库（自动提取）'));
-    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
-    scopeInput.type = 'text';
-    scopeInput.placeholder = 'scope，例如 group:onebot:291690445';
-    scopeInput.setAttribute('aria-label', '知识记忆库 scope');
-    heading.appendChild(scopeInput);
-    const personaInput = makeElement('input', 'input memory-cards-scope', '');
+    const heading = makeElement('div', 'knowledge-base-heading');
+    const headingCopy = makeElement('div', 'knowledge-base-heading-copy');
+    headingCopy.appendChild(makeElement('strong', '', 'AI 记忆库（自动提取）'));
+    headingCopy.appendChild(makeElement('p', 'knowledge-base-subtitle', 'AI 从对话中提取的事实，按 scope + persona + 用户身份隔离；用户导入资料请用上方“知识库（用户导入）”。'));
+    heading.appendChild(headingCopy);
+    box.appendChild(heading);
+
+    const controls = makeElement('div', 'knowledge-base-controls');
+    const scopePicker = buildScopePicker({ ariaLabel: 'AI 记忆库 scope' });
+    const personaInput = makeElement('input', 'input knowledge-base-persona', '');
     personaInput.type = 'text';
     personaInput.placeholder = 'persona_id（可空）';
-    personaInput.setAttribute('aria-label', '知识记忆库人格 ID');
-    heading.appendChild(personaInput);
-    const load = makeElement('button', 'btn btn-quiet btn-small', '查询');
+    personaInput.setAttribute('aria-label', 'AI 记忆库人格 ID');
+    const load = makeElement('button', 'btn btn-primary btn-small', '查询');
     load.type = 'button';
-    heading.appendChild(load);
-    box.appendChild(heading);
-    const importRow = makeElement('div', 'memory-bank-import');
-    const importContent = makeElement('input', 'input memory-cards-scope', '');
-    importContent.type = 'text';
-    importContent.placeholder = '导入一条用户资料，例如：用户喜欢喝无糖可乐';
-    importContent.setAttribute('aria-label', '导入知识内容');
-    const importTags = makeElement('input', 'input memory-cards-scope', '');
-    importTags.type = 'text';
-    importTags.placeholder = '标签，可空';
-    importTags.setAttribute('aria-label', '导入知识标签');
-    const importButton = makeElement('button', 'btn btn-primary btn-small', '导入知识');
-    importButton.type = 'button';
-    importRow.append(importContent, importTags, importButton);
-    importRow.hidden = true;
-    box.appendChild(importRow);
-    const status = makeElement('p', 'instance-v3-status', 'AI 自动提取的记忆，按 scope + persona_id + 用户身份隔离；这里不导入资料，用户资料请用上方“知识库（用户导入）”。');
+    controls.append(scopePicker.element, personaInput, load);
+    box.appendChild(controls);
+
+    const status = makeElement('p', 'instance-v3-status knowledge-base-status', 'AI 自动提取的记忆；用户资料请用“知识库（用户导入）”。');
     const detail = makeElement('div', 'memory-bank-detail');
     box.appendChild(status);
     box.appendChild(detail);
     const query = async () => {
-      const scope = scopeInput.value.trim();
+      const scope = scopePicker.getValue();
       const personaId = personaInput.value.trim();
       detail.replaceChildren();
       status.textContent = '正在查询…';
@@ -5052,71 +5050,35 @@
         if (scope) params.set('scope', scope);
         if (personaId) params.set('persona_id', personaId);
         const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-bank?${params.toString()}`);
-        if (!data || data.ok === false) { status.textContent = (data && data.error) || '知识记忆库接口不可用。'; return; }
-        if (!data.available) { status.textContent = '该实例还没有知识记忆库。'; return; }
+        if (!data || data.ok === false) { status.textContent = (data && data.error) || 'AI 记忆库接口不可用。'; return; }
+        if (!data.available) { status.textContent = '该实例还没有 AI 记忆。'; return; }
         const scopes = Array.isArray(data.scopes) ? data.scopes : [];
-        const chips = makeElement('div', 'expression-scope-chips');
-        for (const item of scopes.slice(0, 20)) {
-          const label = `${item.scope}${item.persona_id ? ' / ' + item.persona_id : ''} (${item.total})`;
-          const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', label);
-          chip.type = 'button';
-          chip.addEventListener('click', () => { scopeInput.value = item.scope; personaInput.value = item.persona_id || ''; void query(); });
-          chips.appendChild(chip);
+        if (scopes.length) {
+          const chips = makeElement('div', 'expression-scope-chips');
+          for (const item of scopes.slice(0, 20)) {
+            const label = `${item.scope}${item.persona_id ? ' / ' + item.persona_id : ''} (${item.total})`;
+            const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', label);
+            chip.type = 'button';
+            chip.addEventListener('click', () => { scopePicker.setValue(item.scope); personaInput.value = item.persona_id || ''; void query(); });
+            chips.appendChild(chip);
+          }
+          detail.appendChild(chips);
         }
-        if (chips.childNodes.length) detail.appendChild(chips);
         const entries = Array.isArray(data.entries) ? data.entries : [];
         status.textContent = scope
-          ? `当前 scope 有 ${entries.length} 条知识。`
-          : '点上方 scope 标签查看知识；每个 persona_id 是独立分区。';
+          ? `当前 scope 有 ${entries.length} 条 AI 记忆。`
+          : '点上方 scope 标签查看 AI 记忆；每个 persona 是独立分区。';
         for (const entry of entries) {
           const row = makeElement('div', 'memory-bank-row');
           row.appendChild(makeElement('div', 'memory-bank-content', entry.content || ''));
           const actor = entry.actor_hash
             ? (entry.actor_label ? `${entry.actor_label} / ${String(entry.actor_hash).slice(0, 8)}` : String(entry.actor_hash).slice(0, 8))
             : '共享';
-          const meta = `${entry.entry_kind || 'legacy'} · actor=${actor} · persona=${entry.persona_id || '(shared)'} · ${entry.tags || '无标签'} · ${entry.source || ''}`;
-          row.appendChild(makeElement('div', 'memory-bank-meta', meta));
-          if (entry.entry_kind === 'curated') {
-            const remove = makeElement('button', 'btn btn-danger btn-small', '删除');
-            remove.type = 'button';
-            remove.addEventListener('click', async () => {
-              status.textContent = '正在删除…';
-              try {
-                const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-bank/delete`, {
-                  method: 'POST',
-                  body: { scope: entry.scope, persona_id: entry.persona_id || '', entry_id: entry.id }
-                });
-                if (!result || result.ok === false) throw new Error((result && result.reason) || '删除失败');
-                await query();
-              } catch (error) { status.textContent = `删除失败：${error.message || error}`; }
-            });
-            row.appendChild(remove);
-          }
+          row.appendChild(makeElement('div', 'memory-bank-meta', `${entry.entry_kind || 'legacy'} · actor=${actor} · persona=${entry.persona_id || '(shared)'} · ${entry.tags || '无标签'} · ${entry.source || ''}`));
           detail.appendChild(row);
         }
       } catch (error) { status.textContent = `查询失败：${error.message || error}`; }
     };
-    importButton.addEventListener('click', async () => {
-      const scope = scopeInput.value.trim();
-      if (!scope) { status.textContent = '请先填 scope，或点一个 scope 标签。'; return; }
-      status.textContent = '正在导入…';
-      try {
-        const result = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-bank`, {
-          method: 'POST',
-          body: {
-            scope,
-            persona_id: personaInput.value.trim(),
-            content: importContent.value,
-            tags: importTags.value.trim()
-          }
-        });
-        if (!result || result.ok === false) throw new Error((result && result.reason) || '导入失败');
-        importContent.value = '';
-        importTags.value = '';
-        status.textContent = result.duplicate ? '这条资料已存在，已更新标签。' : '导入成功。';
-        await query();
-      } catch (error) { status.textContent = `导入失败：${error.message || error}`; }
-    });
     load.addEventListener('click', () => void query());
     return box;
   }
@@ -5170,27 +5132,88 @@
     return box;
   }
 
+  const SCOPE_PICKER_TYPES = [
+    { value: 'group:onebot', label: '群聊 · OneBot', prefix: 'group:onebot:', hint: '数字群号，例如 291690445' },
+    { value: 'group:qq_official', label: '群聊 · QQ 官方', prefix: 'group:qq_official:', hint: '32 位 group_openid' },
+    { value: 'user:onebot', label: '私聊 · OneBot', prefix: 'user:onebot:', hint: '数字 QQ 号' },
+    { value: 'user:qq_official', label: '私聊 · QQ 官方', prefix: 'user:qq_official:', hint: 'user_openid' },
+    { value: 'global', label: '全局（global）', prefix: '', hint: '' },
+    { value: 'custom', label: '自定义完整 scope', prefix: '', hint: '直接输入完整 scope' }
+  ];
+
+  function buildScopePicker(options = {}) {
+    const wrapper = makeElement('div', 'scope-picker');
+    const typeSelect = makeElement('select', 'input scope-picker-type');
+    typeSelect.setAttribute('aria-label', options.ariaLabel ? `${options.ariaLabel} 类型` : 'scope 类型');
+    for (const item of SCOPE_PICKER_TYPES) {
+      const option = makeElement('option', '', item.label);
+      option.value = item.value;
+      typeSelect.appendChild(option);
+    }
+    const idInput = makeElement('input', 'input scope-picker-id');
+    idInput.type = 'text';
+    idInput.autocomplete = 'off';
+    idInput.setAttribute('aria-label', options.ariaLabel || 'scope ID');
+    wrapper.append(typeSelect, idInput);
+
+    const applyType = () => {
+      const item = SCOPE_PICKER_TYPES.find((row) => row.value === typeSelect.value) || SCOPE_PICKER_TYPES[0];
+      idInput.hidden = item.value === 'global';
+      idInput.placeholder = item.hint || '';
+      idInput.disabled = item.value === 'global';
+    };
+    const setValue = (value) => {
+      const raw = textValue(value, '').trim();
+      if (!raw) {
+        typeSelect.value = 'group:onebot';
+        idInput.value = '';
+        applyType();
+        return;
+      }
+      if (raw === 'global') {
+        typeSelect.value = 'global';
+        idInput.value = '';
+        applyType();
+        return;
+      }
+      const item = SCOPE_PICKER_TYPES.find((row) => row.prefix && raw.startsWith(row.prefix));
+      if (item) {
+        typeSelect.value = item.value;
+        idInput.value = raw.slice(item.prefix.length);
+      } else {
+        typeSelect.value = 'custom';
+        idInput.value = raw;
+      }
+      applyType();
+    };
+    const getValue = () => {
+      if (typeSelect.value === 'global') return 'global';
+      if (typeSelect.value === 'custom') return idInput.value.trim();
+      const item = SCOPE_PICKER_TYPES.find((row) => row.value === typeSelect.value) || SCOPE_PICKER_TYPES[0];
+      const id = idInput.value.trim();
+      return id ? `${item.prefix}${id}` : '';
+    };
+    typeSelect.addEventListener('change', () => {
+      if (typeSelect.value === 'custom') idInput.value = '';
+      applyType();
+      if (typeof options.onChange === 'function') options.onChange(getValue());
+    });
+    idInput.addEventListener('input', () => {
+      if (typeof options.onChange === 'function') options.onChange(getValue());
+    });
+    setValue(options.value || '');
+    return { element: wrapper, getValue, setValue, typeSelect, idInput };
+  }
+
   function buildExpressionStateSection(instance) {
     const box = makeElement('div', 'memory-cards-panel expression-state-panel');
     const heading = makeElement('div', 'memory-cards-heading');
     heading.appendChild(makeElement('strong', '', '表达状态 v6'));
-    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
-    scopeInput.type = 'text';
-    scopeInput.placeholder = 'group:onebot:<群号> 或 group:qq_official:<openid>';
-    scopeInput.setAttribute('aria-label', '表达状态 scope');
-    heading.appendChild(scopeInput);
+    const scopePicker = buildScopePicker({ ariaLabel: '表达状态 scope' });
+    heading.appendChild(scopePicker.element);
     const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新');
     refresh.type = 'button';
     heading.appendChild(refresh);
-    const rebuild = makeElement('button', 'btn btn-quiet btn-small', '重建索引');
-    rebuild.type = 'button';
-    heading.appendChild(rebuild);
-    const sweep = makeElement('button', 'btn btn-quiet btn-small', '清理归档');
-    sweep.type = 'button';
-    heading.appendChild(sweep);
-    const exportButton = makeElement('button', 'btn btn-quiet btn-small', '导出');
-    exportButton.type = 'button';
-    heading.appendChild(exportButton);
     box.appendChild(heading);
     const status = makeElement('p', 'instance-v3-status', '正在读取表达状态…');
     const detail = makeElement('div', 'expression-state-detail');
@@ -5204,7 +5227,7 @@
       detail.replaceChildren();
       actions.replaceChildren();
       try {
-        const scope = scopeInput.value.trim();
+        const scope = scopePicker.getValue();
         const query = new URLSearchParams();
         if (scope) query.set('scope', scope);
         const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/expression?${query.toString()}`);
@@ -5224,7 +5247,7 @@
         for (const item of scopes.slice(0, 20)) {
           const chip = makeElement('button', 'btn btn-quiet btn-small expression-scope-chip', item);
           chip.type = 'button';
-          chip.addEventListener('click', () => { scopeInput.value = item; void load(); });
+          chip.addEventListener('click', () => { scopePicker.setValue(item); void load(); });
           scopeChips.appendChild(chip);
         }
         if (scopeChips.childNodes.length) detail.appendChild(scopeChips);
@@ -5312,34 +5335,7 @@
         status.textContent = `读取表达状态失败：${error.message || error}`;
       }
     };
-    const maintain = async (action) => {
-      status.textContent = '正在执行记忆卡片维护…';
-      try {
-        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-cards/maintenance`, {
-          method: 'POST',
-          body: { action, scope: scopeInput.value.trim() }
-        });
-        if (!data || data.ok === false) throw new Error((data && data.error) || '维护失败');
-        if (action === 'export') {
-          status.textContent = `已导出 ${(data.cards || []).length} 张卡片。`;
-        } else if (action === 'rebuild') {
-          status.textContent = `索引已重建：${Number(data.fts_rows || 0)} 行。`;
-        } else if (action === 'sweep') {
-          status.textContent = `已清理 ${Number(data.purged || 0)} 张归档卡片。`;
-        } else {
-          status.textContent = '维护完成。';
-        }
-      } catch (error) {
-        status.textContent = `维护失败：${error.message || error}`;
-      }
-    };
-    rebuild.addEventListener('click', () => void maintain('rebuild'));
-    sweep.addEventListener('click', () => void maintain('sweep'));
-    exportButton.addEventListener('click', () => void maintain('export'));
     refresh.addEventListener('click', () => void load());
-    scopeInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') { event.preventDefault(); void load(); }
-    });
     void load();
     return box;
   }
@@ -5476,14 +5472,20 @@
     const box = makeElement('div', 'memory-cards-panel');
     const heading = makeElement('div', 'memory-cards-heading');
     heading.appendChild(makeElement('strong', '', '记忆卡片 v4'));
-    const scopeInput = makeElement('input', 'input memory-cards-scope', '');
-    scopeInput.type = 'text';
-    scopeInput.placeholder = 'group:qq_official:<openid> 或 group:onebot:<群号>';
-    scopeInput.setAttribute('aria-label', '记忆卡片 scope');
-    heading.appendChild(scopeInput);
+    const scopePicker = buildScopePicker({ ariaLabel: '记忆卡片 scope' });
+    heading.appendChild(scopePicker.element);
     const refresh = makeElement('button', 'btn btn-quiet btn-small', '刷新');
     refresh.type = 'button';
     heading.appendChild(refresh);
+    const rebuild = makeElement('button', 'btn btn-quiet btn-small', '重建索引');
+    rebuild.type = 'button';
+    heading.appendChild(rebuild);
+    const sweep = makeElement('button', 'btn btn-quiet btn-small', '清理归档');
+    sweep.type = 'button';
+    heading.appendChild(sweep);
+    const exportButton = makeElement('button', 'btn btn-quiet btn-small', '导出');
+    exportButton.type = 'button';
+    heading.appendChild(exportButton);
     box.appendChild(heading);
     const status = makeElement('p', 'instance-v3-status', '正在读取记忆卡片…');
     const list = makeElement('div', 'memory-cards-list');
@@ -5493,7 +5495,7 @@
       status.textContent = '正在读取记忆卡片…';
       list.replaceChildren();
       try {
-        const scope = scopeInput.value.trim();
+        const scope = scopePicker.getValue();
         const query = new URLSearchParams({ limit: '50' });
         if (scope) query.set('scope', scope);
         const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-cards?${query.toString()}`);
@@ -5528,13 +5530,26 @@
         status.textContent = `读取记忆卡片失败：${error.message || error}`;
       }
     };
-    refresh.addEventListener('click', () => void load());
-    scopeInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        void load();
+    const maintain = async (action) => {
+      status.textContent = '正在执行记忆卡片维护…';
+      try {
+        const data = await apiRequest(`/api/instances/${encodeURIComponent(instance.id)}/memory-cards/maintenance`, {
+          method: 'POST',
+          body: { action, scope: scopePicker.getValue() }
+        });
+        if (!data || data.ok === false) throw new Error((data && data.error) || '维护失败');
+        if (action === 'export') status.textContent = `已导出 ${(data.cards || []).length} 张卡片。`;
+        else if (action === 'rebuild') status.textContent = `索引已重建：${Number(data.fts_rows || 0)} 行。`;
+        else if (action === 'sweep') status.textContent = `已清理 ${Number(data.purged || 0)} 张归档卡片。`;
+        else status.textContent = '维护完成。';
+      } catch (error) {
+        status.textContent = `维护失败：${error.message || error}`;
       }
-    });
+    };
+    rebuild.addEventListener('click', () => void maintain('rebuild'));
+    sweep.addEventListener('click', () => void maintain('sweep'));
+    exportButton.addEventListener('click', () => void maintain('export'));
+    refresh.addEventListener('click', () => void load());
     void load();
     return box;
   }

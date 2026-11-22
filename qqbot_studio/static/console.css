@@ -2694,3 +2694,169 @@ body.console-modal-open { overflow: hidden; }
     grid-template-columns: 1fr;
   }
 }
+
+/* Scope picker + knowledge base layout polish */
+.scope-picker {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: min(100%, 360px);
+}
+.scope-picker .scope-picker-type {
+  width: auto;
+  min-width: 132px;
+  flex: 0 0 auto;
+}
+.scope-picker .scope-picker-id {
+  min-width: 150px;
+  flex: 1 1 180px;
+}
+.scope-picker .scope-picker-id[hidden] {
+  display: none;
+}
+.knowledge-base-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.knowledge-base-heading-copy {
+  display: grid;
+  gap: 4px;
+}
+.knowledge-base-subtitle {
+  margin: 0;
+  color: var(--muted, #718096);
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 760px;
+}
+.knowledge-base-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 12px;
+  background: var(--surface-2, #f8fafc);
+}
+.knowledge-base-persona {
+  flex: 1 1 180px;
+  min-width: 150px;
+}
+.knowledge-base-import-card {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px dashed var(--line, #cbd5e0);
+  border-radius: 12px;
+  background: var(--surface-1, #fff);
+}
+.knowledge-base-panel .knowledge-base-import {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.8fr);
+  gap: 10px;
+  align-items: start;
+}
+.knowledge-base-panel .knowledge-base-content {
+  grid-column: 1 / -1;
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.65;
+}
+.knowledge-base-panel .knowledge-base-import-button {
+  justify-self: start;
+  min-width: 130px;
+}
+.knowledge-base-panel .knowledge-base-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  margin-top: 8px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 12px;
+  background: var(--surface-2, #f8fafc);
+}
+.knowledge-base-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.knowledge-base-row-content {
+  white-space: pre-wrap;
+  line-height: 1.65;
+  font-size: 13px;
+}
+.knowledge-base-status {
+  margin: 10px 0 2px;
+}
+@media (max-width: 760px) {
+  .knowledge-base-panel .knowledge-base-import {
+    grid-template-columns: 1fr;
+  }
+  .knowledge-base-panel .knowledge-base-content {
+    grid-column: auto;
+  }
+  .knowledge-base-panel .knowledge-base-import-button {
+    width: 100%;
+  }
+  .scope-picker {
+    width: 100%;
+  }
+  .scope-picker .scope-picker-type,
+  .scope-picker .scope-picker-id {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+}
+
+/* Unified input/button polish for memory and policy panels */
+.memory-cards-panel .input,
+.memory-cards-panel input[type="text"],
+.memory-cards-panel input[type="search"],
+.memory-cards-panel input[type="number"],
+.memory-cards-panel select,
+.memory-cards-panel textarea,
+.group-policy-panel .input,
+.group-policy-panel input[type="text"],
+.group-policy-panel select {
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--line, #cbd5e0);
+  border-radius: 10px;
+  background: var(--surface-1, #fff);
+  color: inherit;
+  font: inherit;
+  box-sizing: border-box;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.memory-cards-panel .input:focus,
+.memory-cards-panel input:focus,
+.memory-cards-panel select:focus,
+.memory-cards-panel textarea:focus,
+.group-policy-panel .input:focus,
+.group-policy-panel input:focus,
+.group-policy-panel select:focus {
+  outline: none;
+  border-color: var(--accent, #4299e1);
+  box-shadow: 0 0 0 3px rgba(66, 153, 225, .16);
+}
+.memory-cards-panel .input::placeholder,
+.memory-cards-panel input::placeholder,
+.memory-cards-panel textarea::placeholder {
+  color: var(--muted, #a0aec0);
+}
+.memory-cards-panel .btn-small {
+  min-height: 34px;
+  padding-inline: 12px;
+  border-radius: 9px;
+}
+.memory-cards-panel .memory-cards-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
