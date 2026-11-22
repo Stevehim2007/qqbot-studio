@@ -8,7 +8,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 | 项目 | 版本 |
 |---|---|
-| 主项目 | `5.0.0-beta.39`（tag `v5.0.0-beta.39`） |
+| 主项目 | `5.0.0-beta.40`（tag `v5.0.0-beta.40`） |
 | 插件仓库 tag | `v4.4.0-beta.65` |
 | core_reply | `4.3.13` |
 | safe_tools | `3.4.2` |
@@ -35,12 +35,12 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 ## 当前部署
 
-- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.39`；`/console` HTTP 200。
+- 服务器：`/home/ubuntu/qqbot-studio`，`5.0.0-beta.40`；`/console` HTTP 200。
 - bot-1：QQ 官方，生产实例；健康。
 - bot-11：OneBot + 内置 NapCat，`qq_account=871247845`；AstrBot healthy，aiocqhttp 已连接。
 - bot-4 / bot-7：保留实例；健康。
 - 已部署（2026-11-22）：主项目 beta.35、插件 core_reply 4.3.15 / food 3.0.6 / stickers 3.0.4 / safe_tools 3.4.2（bot-11 只装 core_reply + safe_tools 的更新；其余插件版本不变）。
-- 实测（2026-11-22 直接读容器内 `data/astrbot/plugins/*/metadata.yaml`）：bot-1/4/7/11 全部 core 4.3.12 / safe_tools 3.3.5 / memory_commands 4.3.3；四台 `qqbot_memory_commands/aux.py` 均含 `from . import aux_ai` 相对导入修复。bot-11 另装 memory_bank 0.6.0 / expression 1.0.0。
+- 实测（2026-11-22 直接读容器内 `data/astrbot/plugins/*/metadata.yaml`）：bot-1/4/7/11 全部 core 4.3.12 / safe_tools 3.3.5 / memory_commands 4.3.3；四台 `qqbot_memory_commands/aux.py` 均含 `from . import aux_ai` 相对导入修复。bot-11 另装 memory_bank 0.7.1 / expression 1.0.0。
 - 注意：`studio-plugins/registry.json` 里的版本是旧的（4.1.0 / 3.2.5），插件实际是手工装进容器 data 目录的，判断线上版本要看 `metadata.yaml` 而不是 registry。
 
 ## 已验证
@@ -70,7 +70,7 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 3. 浏览器手工验收 Studio 新面板（人格/群记忆、scope 选择器、知识库导入）。
 4. 视需要补 embedding/BGE 自动召回和知识库切块。
 
-5. 已发布（2026-11-22）：插件 `v4.4.0-beta.64`（overlay）/ `beta.65`（include_schema）/ `beta.66`（core_reply 去死开关）/ `beta.67`（参数简介 + 去重复键）/ `beta.68`（参数分组 + 删点歌文案）/ `beta.69`（硬门消息进上下文），主项目 `v5.0.0-beta.31`–`v5.0.0-beta.39`，均已 push。
+5. 已发布（2026-11-22）：插件 `v4.4.0-beta.64`（overlay）/ `beta.65`（include_schema）/ `beta.66`（core_reply 去死开关）/ `beta.67`（参数简介 + 去重复键）/ `beta.68`（参数分组 + 删点歌文案）/ `beta.69`（硬门消息进上下文）/ `beta.70`/`beta.71`（群聊近况摘要），主项目 `v5.0.0-beta.31`–`v5.0.0-beta.40`，均已 push。
 6. 已部署：服务器 beta.35 + core_reply 4.3.15 / food 3.0.6 / stickers 3.0.4 / safe_tools 3.4.2；备份 `/home/ubuntu/deploy-backup-20261122-180436`。
 7. 待人工验收：浏览器/手机打开 `/console` → 插件参数页点「加入群策略」→ 群策略页出现该参数 → 按群保存 → 日志确认 overlay 生效；再验「显示全部参数」与复杂类型（v2）仅全局提示。
 8. v2 计划：`list` 15 个键（整表替换语义）与 `object` 类型覆盖。

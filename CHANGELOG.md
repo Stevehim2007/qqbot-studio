@@ -1,3 +1,17 @@
+## v5.0.0-beta.40（测试版）— 群聊近况摘要（辅助模型）
+
+- `qqbot_memory_bank 0.7.0`：新增**群聊近况摘要**。`observe_message`（priority 118，早于回复硬门）
+  把每条群消息收进按群的滚动缓冲，累计 `digest_every_turns`（默认 20）条后交给**辅助模型**
+  （`aux_ai.generate`，DeepSeek 等独立 key，不动主 provider）压成一段中文近况；
+  摘要存进 `knowledge.db`（`entry_kind='digest'`，按 scope+persona 隔离，只留最新 `digest_keep` 条）。
+- 注入：`inject_memory_context` 在 prompt 最前面加一段「群聊近况（辅助模型摘要）」，
+  所以机器人被 @ 时才把这段时间的群聊"读"进上下文——不回复的时候只花辅助模型的便宜 token。
+- 新参数（`qqbot_memory_bank` 配置，`ui_group=群聊近况摘要`）：`digest_enabled`（默认开）、
+  `digest_every_turns`（20）、`digest_keep`（2）、`digest_max_chars`（400）。
+- `qqbot_memory_bank 0.7.1`：摘要走独立 `entry_kind='digest'`，并在 `search()` 里排除，
+  避免它混进「个人记忆」/`memory_search` 结果；`add_digest` 只保留最新 `digest_keep` 条。
+- 需配套 `qqbot_memory_bank 0.7.1`（`v4.4.0-beta.71`）。该插件与辅助 AI key 目前只在 bot-11。
+
 ## v5.0.0-beta.39（测试版）— 被 @ 门挡掉的群消息也进入上下文
 
 - `qqbot_core_reply 4.3.17`：`participation.group_mention_only` 的硬门在 `stop_event()` 之前
