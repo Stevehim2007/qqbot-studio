@@ -2836,9 +2836,16 @@ class DeployManager:
                 (layer, owner_id, digest),
             ).fetchone()
             if existing:
+                # Same content is already present; keep the user's existing
+                # title/tags/priority instead of letting a later quick-add with
+                # defaults wipe them.
                 connection.execute(
-                    "UPDATE memory_layer SET title=?, content=?, tags=?, priority=?, updated_at=? WHERE id=?",
-                    (title, text, tags_text, int(priority), now, existing[0]),
+                    "UPDATE memory_layer SET "
+                    "title=CASE WHEN ?='' THEN title ELSE ? END, "
+                    "tags=CASE WHEN ?='' THEN tags ELSE ? END, "
+                    "priority=CASE WHEN ?<=0 THEN priority ELSE ? END, "
+                    "updated_at=? WHERE id=?",
+                    (title, title, tags_text, tags_text, int(priority), int(priority), now, existing[0]),
                 )
                 connection.commit()
                 return {"ok": True, "id": str(existing[0]), "duplicate": True}

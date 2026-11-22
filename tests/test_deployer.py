@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sqlite3
+import socket
 import tempfile
 import time
 import unittest
@@ -231,6 +232,12 @@ class DeployerTests(unittest.TestCase):
             api_client_factory=lambda base, user, password: self.api,
         )
         self.manager.probe_deepseek_key = lambda key: (True, "Key 校验通过", 200)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            free_port = int(probe.getsockname()[1])
+        config = self.store.load_config()
+        config["ports"] = {"astrbot_webui": free_port}
+        self.store.save_config(config)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -278,6 +285,40 @@ class DeployerTests(unittest.TestCase):
         )
         self.assertTrue(deleted["ok"])
         self.assertEqual(self.manager.get_knowledge_base(scope="group:onebot:1")["entries"], [])
+
+    def test_memory_layers_persona_group_and_delete(self):
+        persona = self.manager.add_memory_layer(
+            layer="persona",
+            owner_id="p_demo",
+            title="核心设定",
+            content="麻衣话少，不自称电子羊。",
+            tags="身份",
+            priority=5,
+        )
+        self.assertTrue(persona["ok"], persona)
+        duplicate = self.manager.add_memory_layer(
+            layer="persona",
+            owner_id="p_demo",
+            content="麻衣话少，不自称电子羊。",
+        )
+        self.assertTrue(duplicate.get("duplicate"), duplicate)
+        group = self.manager.add_memory_layer(
+            layer="group",
+            owner_id="group:onebot:1",
+            content="本群门禁 23:00。",
+        )
+        self.assertTrue(group["ok"], group)
+        personas = self.manager.get_memory_layers(layer="persona", owner_id="p_demo")
+        self.assertEqual(len(personas["entries"]), 1)
+        self.assertEqual(personas["entries"][0]["priority"], 5)
+        groups = self.manager.get_memory_layers(layer="group", owner_id="group:onebot:1")
+        self.assertEqual(len(groups["entries"]), 1)
+        self.assertEqual(self.manager.get_memory_layers(layer="persona", owner_id="other")["entries"], [])
+        deleted = self.manager.delete_memory_layer(
+            layer="persona", owner_id="p_demo", layer_id=persona["id"]
+        )
+        self.assertTrue(deleted["ok"])
+        self.assertEqual(self.manager.get_memory_layers(layer="persona", owner_id="p_demo")["entries"], [])
 
     def test_group_policy_prefs_roundtrip(self):
         saved = self.manager.set_group_policy_prefs(

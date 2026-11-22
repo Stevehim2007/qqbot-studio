@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import socket
 import tempfile
 import unittest
 from unittest import mock
@@ -34,6 +35,12 @@ def fake_secrets():
         "snowluma_password": "",
     }
 
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 class StoreTests(unittest.TestCase):
     def test_secrets_are_private_and_stable(self):
@@ -158,7 +165,7 @@ class ConfigGenerationTests(unittest.TestCase):
                 prompt="官方机器人",
                 use_mirror=False,
                 secrets_data=fake_secrets(),
-                ports=choose_ports(probe=False),
+                ports={"astrbot_webui": _free_port()},
                 official_appid="102091266",
                 official_secret="official-secret",
             )
@@ -186,7 +193,7 @@ class ConfigGenerationTests(unittest.TestCase):
                 prompt="OneBot",
                 use_mirror=False,
                 secrets_data=fake_secrets(),
-                ports=choose_ports(probe=False),
+                ports={"astrbot_webui": _free_port()},
                 platform_mode="onebot",
                 onebot_ws_port=6201,
                 onebot_token="onebot-token-for-test",
@@ -213,7 +220,7 @@ class ConfigGenerationTests(unittest.TestCase):
                 prompt="内置 OneBot",
                 use_mirror=False,
                 secrets_data=fake_secrets(),
-                ports=choose_ports(probe=False),
+                ports={"astrbot_webui": _free_port()},
                 platform_mode="onebot",
                 onebot_gateway="builtin",
                 qq_account="12345678",
@@ -248,7 +255,7 @@ class ConfigGenerationTests(unittest.TestCase):
     def test_all_generated_files_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             secrets_data = fake_secrets()
-            ports = choose_ports(probe=False)
+            ports = {"astrbot_webui": _free_port()}
             api_key = "sk-test-very-secret-key"
             prompt = "你是测试机器人。"
             result = generate_artifacts(
@@ -299,7 +306,7 @@ class ConfigGenerationTests(unittest.TestCase):
                 api_key="sk-test",
                 prompt="prompt",
                 secrets_data=fake_secrets(),
-                ports=choose_ports(probe=False),
+                ports={"astrbot_webui": _free_port()},
                 bind_address="0.0.0.0",
                 project_name="qqbot-studio-bot-1",
                 astrbot_container="qqbot-bot-1-astrbot",
@@ -322,7 +329,7 @@ class ConfigGenerationTests(unittest.TestCase):
                 prompt="test prompt",
                 use_mirror=True,
                 secrets_data=fake_secrets(),
-                ports=choose_ports(probe=False),
+                ports={"astrbot_webui": _free_port()},
             )
             env = result["env"].read_text(encoding="utf-8")
             self.assertIn("m.daocloud.io/docker.io/soulter/astrbot:latest", env)
