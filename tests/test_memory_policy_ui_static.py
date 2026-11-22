@@ -582,7 +582,10 @@ class GroupPolicyRegistrationStaticTests(unittest.TestCase):
             "group-policy-collapse",
             "collapsedPolicyPlugins",
             "const expandedPolicyPlugins = new Set();",
-            "function policyCardCollapsed(pluginId) {",
+            # Regression guard: the helpers must live inside buildGroupPolicySection;
+            # at module scope they referenced locals that do not exist (ReferenceError).
+            "\n    function policyCardCollapsed(pluginId) {",
+            "\n    function togglePolicyCard(pluginId) {",
             "return policyShowAll;",
             "function togglePolicyCard(pluginId) {",
             "const cardBody = makeElement('div', 'group-policy-card-body');",

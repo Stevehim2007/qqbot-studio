@@ -3599,28 +3599,6 @@
     return { label, description: description || (known ? known[1] : ''), title: `${label}（${name}）\n${details.join('；')}` };
   }
 
-  // In "show all" mode every plugin card starts collapsed: the grid keeps the
-  // same footprint and each card opens on demand.  A plugin picked from the
-  // dropdown, or one the operator expanded by hand, stays open.
-  function policyCardCollapsed(pluginId) {
-    const key = String(pluginId);
-    if (collapsedPolicyPlugins.has(key)) return true;
-    if (expandedPolicyPlugins.has(key)) return false;
-    if (policyPluginFilter && String(policyPluginFilter) === key) return false;
-    return policyShowAll;
-  }
-
-  function togglePolicyCard(pluginId) {
-    const key = String(pluginId);
-    if (policyCardCollapsed(key)) {
-      collapsedPolicyPlugins.delete(key);
-      expandedPolicyPlugins.add(key);
-    } else {
-      collapsedPolicyPlugins.add(key);
-      expandedPolicyPlugins.delete(key);
-    }
-  }
-
   function buildGroupPolicySection(instance) {
     const section = makeElement('section', 'instance-v3-section group-policy-section');
     const heading = makeElement('div', 'instance-v3-section-heading');
@@ -3660,6 +3638,28 @@
     let policyPluginFilter = '';
     const collapsedPolicyPlugins = new Set();
     const expandedPolicyPlugins = new Set();
+    // In "show all" mode every plugin card starts collapsed: the grid keeps the
+    // same footprint and each card opens on demand.  A plugin picked from the
+    // dropdown, or one the operator expanded by hand, stays open.
+    function policyCardCollapsed(pluginId) {
+      const key = String(pluginId);
+      if (collapsedPolicyPlugins.has(key)) return true;
+      if (expandedPolicyPlugins.has(key)) return false;
+      if (policyPluginFilter && String(policyPluginFilter) === key) return false;
+      return policyShowAll;
+    }
+
+    function togglePolicyCard(pluginId) {
+      const key = String(pluginId);
+      if (policyCardCollapsed(key)) {
+        collapsedPolicyPlugins.delete(key);
+        expandedPolicyPlugins.add(key);
+      } else {
+        collapsedPolicyPlugins.add(key);
+        expandedPolicyPlugins.delete(key);
+      }
+    }
+
     // The knobs operators actually tune per group. Everything else stays
     // behind "显示全部参数" (or the "加入群策略" button in the plugin editor).
     const GROUP_POLICY_IMPORTANT = {

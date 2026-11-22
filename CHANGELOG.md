@@ -1,3 +1,9 @@
+## v5.0.0-beta.37（测试版）— 修复群策略页 ReferenceError
+
+- 修复 beta.36 引入的 `collapsedPolicyPlugins is not defined`：卡片收起判定的两个辅助函数
+  原先定义在模块作用域，引用了 `buildGroupPolicySection()` 内部的局部状态，导致整段群策略页脚本报错。
+  现已移入 `buildGroupPolicySection()` 内部，并加静态测试守住作用域（断言函数带 4 空格缩进、位于函数体内）。
+
 ## v5.0.0-beta.36（测试版）— 全量显示时插件卡片不再一次全展开
 
 - 群策略页勾选「显示全部参数」后，每个插件卡片默认**收起**，只保留标题栏（插件名、参数个数、启用开关）；
