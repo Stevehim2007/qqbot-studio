@@ -8,8 +8,8 @@ QQ Bot Studio 5.0 测试线：QQ 官方 + OneBot/NapCat 双平台，12 个独立
 
 | 项目 | 版本 |
 |---|---|
-| 主项目 | `5.0.0-beta.24` |
-| 插件仓库 tag | `v4.4.0-beta.60` |
+| 主项目 | `5.0.0-beta.24` / `31147ec` |
+| 插件仓库 tag | `v4.4.0-beta.60` / `5909f71` |
 | core_reply | `4.3.12` |
 | safe_tools | `3.3.5` |
 | memory_commands | `4.3.1` |
