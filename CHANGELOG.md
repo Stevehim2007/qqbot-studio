@@ -1,3 +1,13 @@
+## v5.0.0-beta.42（测试版）— 入站可见 + 重复投递去重
+
+- `qqbot_core_reply 4.3.19`：每条进站消息先记 `event received: umo=… private=… text=…`，
+  平台没把消息送进来 vs 插件把消息静默丢掉，一眼可分。
+- 重复投递去重：同 `umo + 平台 message_id` 在 15 秒内只处理一次，第二次记
+  `duplicate inbound event ignored` 后直接返回——QQ 官方通道会重投同一条消息，之前会回两遍。
+- 实测：bot-1 容器有到腾讯 443 的 established 连接（QQ 官方 ws 在线）；
+  bot-11 的 NapCat 容器里 QQ 进程已死（只剩 entrypoint），重启后需要扫二维码登录才能收 OneBot 消息。
+- 验证：core_reply 270 tests、主项目全量 898 tests OK。
+
 ## v5.0.0-beta.41（测试版）— 群消息静默跳过可见 + 防「装死」
 
 - `qqbot_core_reply 4.3.18`：非 @ 群消息按概率跳过时**不再毫无日志**，每条都记
