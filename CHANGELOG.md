@@ -1,3 +1,15 @@
+## v5.0.0-beta.41（测试版）— 群消息静默跳过可见 + 防「装死」
+
+- `qqbot_core_reply 4.3.18`：非 @ 群消息按概率跳过时**不再毫无日志**，每条都记
+  `group participation skipped: probability=… ignored=… group=… text=…`，排查"机器人不理我"有据可依。
+- 新增 `participation.silence_nudge_after`（默认 4，0=关闭）：同一个群连续这么多条消息没被回复后，
+  下一条强制参与一次（概率按 1.0 走冷却门），日志记 `group participation nudged after N silent skips`，
+  避免 12% 概率下看起来像掉线。成功参与后计数清零。
+- `qqbot_memory_bank 0.7.1` 部署到 bot-1，辅助 AI key 复制到位：bot-1 现在也有群聊近况摘要与四层记忆。
+- 说明：bot-1 此前"只回第一条"是策略问题——`participation.mode=probability`、`group_probability=0.12`
+  下 88% 的非 @ 群消息会被静默丢弃；重启无效，因为不是卡死。
+- 验证：core_reply 268 tests、memory_bank 19 tests、主项目全量 898 tests OK。
+
 ## v5.0.0-beta.40（测试版）— 群聊近况摘要（辅助模型）
 
 - `qqbot_memory_bank 0.7.0`：新增**群聊近况摘要**。`observe_message`（priority 118，早于回复硬门）
