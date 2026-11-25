@@ -1,3 +1,12 @@
+## v5.0.0-beta.45（测试版）— 群聊上下文不再漏记「没被回复的消息」
+
+- `qqbot_core_reply 4.3.22`：把「记录群消息」提到参与判定之前。此前 `participation.group_probability=0`
+  的群会在概率门处直接返回、什么都不记 → 群聊上下文永远为空。现在每条进站群消息先落 history，
+  再决定回不回；被 @ 时模型能看到群里完整的对话。
+- 配套 `4.3.21`：注入时记 `group context injected: messages=… chars=… group=…`，方便确认上下文真的进了 prompt。
+- 插件仓 tag `v4.4.0-beta.76`；四台实例已升级（bot-1/4/7/11 = 4.3.22）。
+- 验证：core_reply 274 tests、插件仓 8 tests、主项目 901 tests OK。
+
 ## v5.0.0-beta.44（测试版）— 群聊上下文可观测（core_reply 4.3.21）
 
 - `qqbot_core_reply 4.3.21`：每次把群聊上下文注入 system prompt 时记一行
