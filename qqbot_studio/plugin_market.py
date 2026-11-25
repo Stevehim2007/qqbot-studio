@@ -72,6 +72,38 @@ DEFAULT_MARKET_TRUSTED_HOSTS = (
     "github.com",
     "objects.githubusercontent.com",
 )
+
+MARKET_MIRROR_ENV = "QQBOT_PLUGIN_MARKET_MIRROR"
+MIRRORABLE_HOSTS = (
+    "raw.githubusercontent.com",
+    "gist.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "github.com",
+)
+
+
+def _mirror_prefix() -> str:
+    """Return the configured mirror prefix (e.g. https://gh-proxy.com/)."""
+
+    raw = str(os.environ.get(MARKET_MIRROR_ENV, "") or "").strip()
+    if not raw.startswith("https://"):
+        return ""
+    return raw if raw.endswith("/") else raw + "/"
+
+
+def _mirror_url(url: str) -> str:
+    """Rewrite GitHub-hosted URLs through the configured mirror, if any."""
+
+    prefix = _mirror_prefix()
+    if not prefix:
+        return url
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https":
+        return url
+    if (parsed.hostname or "").lower() not in MIRRORABLE_HOSTS:
+        return url
+    return prefix + url
+
 MANIFEST_SCHEMA_VERSION = 2
 MANIFEST_V1_MAX_SCHEMA_VERSION = 1
 SUPPORTED_MANIFEST_SCHEMA_VERSIONS = frozenset({1, 2})
@@ -1711,9 +1743,10 @@ def _http_get_bytes(
     trusted_hosts: Iterable[str],
     max_bytes: int,
     accept: str = "application/octet-stream",
-    timeout: float = 15.0,
+    timeout: float = 30.0,
+    attempts: int = 2,
 ) -> tuple[bytes, str]:
-    starting_url = _validate_remote_url(url, trusted_hosts)
+    starting_url = _validate_remote_url(_mirror_url(url), trusted_hosts)
     request = urllib.request.Request(
         starting_url.geturl(),
         headers={
@@ -1726,27 +1759,49 @@ def _http_get_bytes(
         urllib.request.ProxyHandler({}),
         _TrustedRedirectHandler(tuple(trusted_hosts)),
     )
-    try:
-        with opener.open(request, timeout=max(1.0, float(timeout))) as response:
-            final_url = str(response.geturl() or starting_url.geturl())
-            _validate_remote_url(final_url, trusted_hosts)
-            chunks: list[bytes] = []
-            total = 0
-            while True:
-                chunk = response.read(min(1024 * 1024, max_bytes - total + 1))
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > max_bytes:
-                    raise PluginMarketError("远程插件市场响应超过大小限制。")
-                chunks.append(chunk)
-            return b"".join(chunks), final_url
-    except PluginMarketError:
-        raise
-    except urllib.error.HTTPError as exc:
-        raise PluginMarketError("远程插件市场返回 HTTP 错误。", detail=str(exc.code)) from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise PluginMarketError("无法连接远程插件市场。", detail=exc.__class__.__name__) from exc
+    tries = max(1, int(attempts))
+    for attempt in range(1, tries + 1):
+        try:
+            return _read_response(
+                opener, request, starting_url, trusted_hosts, max_bytes, timeout
+            )
+        except PluginMarketError:
+            raise
+        except urllib.error.HTTPError as exc:
+            raise PluginMarketError(
+                "远程插件市场返回 HTTP 错误。", detail=str(exc.code)
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt >= tries:
+                raise PluginMarketError(
+                    "无法连接远程插件市场。", detail=exc.__class__.__name__
+                ) from exc
+            time.sleep(0.8)
+    raise PluginMarketError("无法连接远程插件市场。", detail="retry_exhausted")
+
+
+def _read_response(
+    opener: Any,
+    request: urllib.request.Request,
+    starting_url: urllib.parse.SplitResult,
+    trusted_hosts: Iterable[str],
+    max_bytes: int,
+    timeout: float,
+) -> tuple[bytes, str]:
+    with opener.open(request, timeout=max(1.0, float(timeout))) as response:
+        final_url = str(response.geturl() or starting_url.geturl())
+        _validate_remote_url(final_url, trusted_hosts)
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = response.read(min(1024 * 1024, max_bytes - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise PluginMarketError("远程插件市场响应超过大小限制。")
+            chunks.append(chunk)
+        return b"".join(chunks), final_url
 
 
 @dataclass(frozen=True)
@@ -2682,6 +2737,11 @@ class PluginMarket:
         env = os.environ.get("QQBOT_PLUGIN_MARKET_HOSTS", "")
         if env.strip():
             hosts.extend(item for item in re.split(r"[,;\s]+", env) if item)
+        prefix = _mirror_prefix()
+        if prefix:
+            mirror_host = urllib.parse.urlsplit(prefix).hostname
+            if mirror_host:
+                hosts.append(mirror_host)
         config_path = self.market_dir / "trusted-hosts.json"
         if config_path.exists():
             raw = _read_json_object(config_path, max_bytes=128 * 1024)

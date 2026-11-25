@@ -1,3 +1,17 @@
+## v5.0.0-beta.43（测试版）— 群聊上下文进模型 + 插件市场镜像/重试
+
+- `qqbot_core_reply 4.3.20`：新增「群聊上下文」注入——把最近 N 条群消息（含群友之间、非 @ 的对话）
+  按时间顺序塞进 system prompt，模型终于能看到群里发生了什么，而不是只看到自己参与的轮次。
+  新增四个参数（`群内参与`分组）：`group_context_enabled`（默认开）、`group_context_limit`（默认 30 条）、
+  `group_context_ttl_seconds`（默认 3600 秒）、`group_context_max_chars`（默认 3000）。关闭后回落到旧的
+  「群聊说话人参考」块（8 条 / 10 分钟，仅用于区分谁在说话）。
+  代价：每次被 @ 时多带一些上下文，token 与延迟略增，可用 `group_context_limit` 调小。
+- 插件市场：新增 `QQBOT_PLUGIN_MARKET_MIRROR` 环境变量（例如 `https://gh-proxy.com/`），
+  把 GitHub 上的 `catalog.json` 与插件 ZIP 自动改写走镜像；镜像主机自动计入受信主机。
+  远程拉取超时 15s → 30s，并对连接类失败重试一次——国内服务器直连
+  `raw.githubusercontent.com` 常见 16–30s 或只有 IPv6 解析，之前表现为「远程插件市场返回 HTTP 错误」。
+- 验证：core_reply 273 tests、插件仓 8 tests、主项目 901 tests OK。
+
 ## v5.0.0-beta.42（测试版）— 入站可见 + 重复投递去重
 
 - `qqbot_core_reply 4.3.19`：每条进站消息先记 `event received: umo=… private=… text=…`，

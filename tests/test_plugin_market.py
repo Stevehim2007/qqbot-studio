@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
 from unittest import mock
@@ -882,3 +883,68 @@ class ConfigMigrationPreviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class MarketMirrorTests(PluginMarketTestBase):
+    def test_mirror_prefix_rewrites_github_urls(self):
+        from qqbot_studio import plugin_market as pm
+
+        raw = "https://raw.githubusercontent.com/o/r/main/market/catalog.json"
+        with mock.patch.dict(os.environ, {pm.MARKET_MIRROR_ENV: "https://gh-proxy.com"}):
+            self.assertEqual(pm._mirror_url(raw), "https://gh-proxy.com/" + raw)
+            self.assertEqual(
+                pm._mirror_url("https://cdn.example.com/x.json"),
+                "https://cdn.example.com/x.json",
+            )
+            self.assertEqual(
+                pm._mirror_url("http://raw.githubusercontent.com/o/r"),
+                "http://raw.githubusercontent.com/o/r",
+            )
+        with mock.patch.dict(os.environ, {pm.MARKET_MIRROR_ENV: ""}):
+            self.assertEqual(pm._mirror_url(raw), raw)
+
+    def test_mirror_host_counts_as_trusted(self):
+        from qqbot_studio import plugin_market as pm
+
+        with mock.patch.dict(os.environ, {pm.MARKET_MIRROR_ENV: "https://gh-proxy.com/"}):
+            hosts = self.market._trusted_hosts()
+        self.assertIn("gh-proxy.com", hosts)
+
+    def test_transient_failure_is_retried(self):
+        from qqbot_studio import plugin_market as pm
+
+        class FakeResponse:
+            def __init__(self, body: bytes):
+                self._body = body
+
+            def geturl(self):
+                return "https://raw.githubusercontent.com/o/r/catalog.json"
+
+            def read(self, size=-1):
+                body, self._body = self._body, b""
+                return body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        calls = {"n": 0}
+
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise urllib.error.URLError("temporary")
+                return FakeResponse(b'{"plugins": []}')
+
+        with mock.patch.object(pm.urllib.request, "build_opener", return_value=FakeOpener()):
+            with mock.patch.object(pm.time, "sleep"):
+                body, final = pm._http_get_bytes(
+                    "https://raw.githubusercontent.com/o/r/catalog.json",
+                    trusted_hosts=("raw.githubusercontent.com",),
+                    max_bytes=1024,
+                )
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(body, b'{"plugins": []}')
+        self.assertEqual(final, "https://raw.githubusercontent.com/o/r/catalog.json")
