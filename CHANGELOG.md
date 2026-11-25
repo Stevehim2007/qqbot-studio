@@ -1,3 +1,12 @@
+## v5.0.0-beta.44（测试版）— 群聊上下文可观测（core_reply 4.3.21）
+
+- `qqbot_core_reply 4.3.21`：每次把群聊上下文注入 system prompt 时记一行
+  `group context injected: messages=… chars=… group=…`，便于确认「到底有没有读到群里的对话」。
+- 插件仓 tag `v4.4.0-beta.75`；主项目 `v5.0.0-beta.43` 起已含 `QQBOT_PLUGIN_MARKET_MIRROR` 与 30s/重试，
+  服务器实测：镜像取 catalog 1.1s、取 132KB ZIP 1.6s，bot-1 插件市场已从陈旧的本地 catalog（4.0.x）
+  切到线上 4.3.20/3.4.2。
+- 验证：core_reply 273 tests、插件仓 8 tests、主项目 901 tests OK。
+
 ## v5.0.0-beta.43（测试版）— 群聊上下文进模型 + 插件市场镜像/重试
 
 - `qqbot_core_reply 4.3.20`：新增「群聊上下文」注入——把最近 N 条群消息（含群友之间、非 @ 的对话）
