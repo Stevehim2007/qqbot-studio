@@ -1,3 +1,16 @@
+## v5.0.0-beta.46（测试版）— 记忆抽取终于会真的跑（memory_bank 0.7.2）
+
+- 现象：bot 在群里挂了几天，`knowledge.db` 一条新记忆都没有，辅助 AI 花费为 0。
+- 根因（两个，都在 `qqbot_memory_bank`）：
+  1. 抽取计数器按「群 + 发送者」分桶，且只在内存里——群里每人都凑不满 4 条就永远不触发，
+     容器一重启计数清零；摘要缓冲同样是内存态（20 条门槛）。
+  2. 抽取成功时不打任何日志，所以"没跑"和"跑了没抽到"看起来一样。
+- 修复（0.7.2）：新增 `buffers.py`，把抽取/摘要缓冲落到 `plugin_data/qqbot_memory_bank/buffers.json`（0600，原子写），
+  门槛改为按**群内总消息数**计算，触发时按发送者分组分别抽取；新增 `memory extract: scope=… actor=… messages=… routes=… source=…` 日志。
+- 辅助 AI 本身没坏：容器内实测 `aux_ai.generate` 0.7s 返回 `OK`（deepseek-chat，key 有效）；
+  花费为 0 是因为一次都没调用过。
+- 验证：memory_bank 23 tests、插件仓 8 tests、主项目 901 tests OK；bot-1/bot-11 已升级 0.7.2。
+
 ## v5.0.0-beta.45（测试版）— 群聊上下文不再漏记「没被回复的消息」
 
 - `qqbot_core_reply 4.3.22`：把「记录群消息」提到参与判定之前。此前 `participation.group_probability=0`
